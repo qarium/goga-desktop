@@ -1,6 +1,7 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   mkdtemp,
+  rm,
   mkdir,
   open,
   readFile,
@@ -17,21 +18,38 @@ import { NodeRunner, type Runner } from "../src/host/process";
 import { readCommittedTask } from "../src/host/topic-task";
 import { worktreeContextRef } from "../src/shared/worktrees";
 
-vi.setConfig({ testTimeout: 30000 });
-const disposables: { dispose(): Promise<void> }[] = [];
-afterEach(async () => {
-  vi.unstubAllEnvs();
-  vi.restoreAllMocks();
-  await Promise.all(disposables.splice(0).map((x) => x.dispose()));
+import { FixtureScope, gitIntegrationBudget } from "./helpers/git-integration";
+vi.setConfig({ testTimeout: gitIntegrationBudget(30000) });
+let scope: FixtureScope;
+beforeEach(() => {
+  if (scope && !scope.settled)
+    throw Error("Previous fixture work has not settled");
+  scope = new FixtureScope();
 });
+afterEach(async () => {
+  try {
+    await scope.close(gitIntegrationBudget(10000));
+  } finally {
+    if (scope.settled) vi.unstubAllEnvs();
+    if (scope.settled) vi.restoreAllMocks();
+  }
+}, gitIntegrationBudget(30000));
 const gitEnv = { GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_NOSYSTEM: "1" };
-async function fixture() {
+function fixture() {
+  const owner = scope;
+  return owner.track(createFixture(owner));
+}
+async function createFixture(scope: FixtureScope) {
   const root = await mkdtemp(
       "/private/tmp/goga-context-ab-research-20261020-completion-cwd-",
     ),
     primary = path.join(root, "primary"),
     home = path.join(root, "home"),
-    native = new NodeRunner(15000, gitEnv);
+    node = new NodeRunner(15000, gitEnv);
+  scope.cleanup(() => rm(root, { recursive: true, force: true }));
+  scope.cleanup(() => node.dispose());
+  scope.cancelOnTimeout(() => node.dispose());
+  const native = scope.own(node);
   await mkdir(primary);
   await mkdir(home);
   const git = async (cwd: string, ...args: string[]) => {
@@ -108,15 +126,15 @@ async function fixture() {
       throw Error("No payload is allowed in CWD contract tests");
     }),
     kill: vi.fn(),
-    dispose: () => native.dispose(),
   };
-  const service = new HostService({
+  const rawService = new HostService({
     home,
     dataDir: path.join(root, "data"),
     goga: "fixture-goga",
     runner,
   });
-  disposables.push(service);
+  scope.cleanup(() => rawService.dispose());
+  const service = scope.own(rawService);
   const project = await service.addProject(primary);
   const a = await service.ensureTopicContext({
     projectId: project.id,
@@ -322,10 +340,12 @@ it("aggregates the global topic board from each real owner instead of substituti
 });
 
 it("serializes registry reads across store instances before a sibling can inspect a partially published lock", async () => {
+  const owner = scope;
   const root = await mkdtemp(
       "/private/tmp/goga-context-ab-research-20261020-completion-registry-",
     ),
     home = path.join(root, "home");
+  owner.cleanup(() => rm(root, { recursive: true, force: true }));
   await mkdir(home);
   const firstStore = new CloneStore(home),
     secondStore = new CloneStore(home);
@@ -361,18 +381,21 @@ it("serializes registry reads across store instances before a sibling can inspec
     await assertSecondRoot();
     secondEntered();
   });
-  const first = firstStore.read();
+  owner.releaseOnCleanup(() => publish());
+  const first = owner.track(firstStore.read());
   await transientCreated;
-  const second = secondStore.read().then(
-    (value) => {
-      secondSettled = true;
-      return value;
-    },
-    (error) => {
-      secondSettled = true;
-      trace.push({ event: "second-error", message: String(error) });
-      throw error;
-    },
+  const second = owner.track(
+    secondStore.read().then(
+      (value) => {
+        secondSettled = true;
+        return value;
+      },
+      (error) => {
+        secondSettled = true;
+        trace.push({ event: "second-error", message: String(error) });
+        throw error;
+      },
+    ),
   );
   // Attach the observer immediately; the red run legitimately fails closed.
   void second.catch(() => {});

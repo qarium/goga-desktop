@@ -10,9 +10,21 @@ concurrency:
   cancel-in-progress: true
 jobs:
   check:
-    runs-on: macos-15
-    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+            testProfile: default
+          - arch: x64
+            runner: macos-15-intel
+            testProfile: slow-git
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
     env:
+      EXPECTED_ARCH: ${{ matrix.arch }}
+      GOGA_TEST_PROFILE: ${{ matrix.testProfile }}
       GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
@@ -22,12 +34,20 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
+      - name: Assert native runner and Node architecture
+        run: |
+          case "$EXPECTED_ARCH" in
+            arm64) test "$(uname -m)" = arm64 ;;
+            x64) test "$(uname -m)" = x86_64 ;;
+            *) exit 1 ;;
+          esac
+          node -e 'if(process.platform !== "darwin" || process.arch !== process.env.EXPECTED_ARCH) process.exit(1)'
       - run: npm ci
       - run: npm run test:release
       - name: Tests (native Goga CLI deliberately unavailable)
         run: |
           mkdir -p work
-          npm test -- --maxWorkers=1 --testTimeout=15000 --reporter=default --reporter=json --outputFile=work/vitest.json
+          npm test -- --maxWorkers=1 --testTimeout=15000 --reporter=verbose --reporter=json --outputFile=work/vitest.json
       - name: Exact skipped test report
         if: always()
         run: node scripts/test-summary.mjs work/vitest.json

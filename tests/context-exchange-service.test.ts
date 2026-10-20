@@ -1,25 +1,47 @@
-import { expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID, createHash } from "node:crypto";
 import { HostService } from "../src/host/service";
 import { NodeRunner } from "../src/host/process";
 import { CloneManager } from "../src/host/clones";
 import { worktreeContextRef } from "../src/shared/worktrees";
-vi.setConfig({ testTimeout: 30000 });
-async function fixture() {
+import { FixtureScope, gitIntegrationBudget } from "./helpers/git-integration";
+vi.setConfig({ testTimeout: gitIntegrationBudget(30000) });
+let scope: FixtureScope;
+beforeEach(() => {
+  if (scope && !scope.settled)
+    throw Error("Previous fixture work has not settled");
+  scope = new FixtureScope();
+});
+afterEach(async () => {
+  try {
+    await scope.close(gitIntegrationBudget(10000));
+  } finally {
+    if (scope.settled) vi.restoreAllMocks();
+  }
+}, gitIntegrationBudget(30000));
+function fixture() {
+  const owner = scope;
+  return owner.track(createFixture(owner));
+}
+async function createFixture(scope: FixtureScope) {
   const root = await mkdtemp(
       "/private/tmp/goga-context-ab-research-20261020-completion-exchange-service-",
     ),
     repo = path.join(root, "primary"),
     home = path.join(root, "home"),
     upstream = path.join(root, "upstream.git");
+  scope.cleanup(() => rm(root, { recursive: true, force: true }));
   for (const d of [repo, home, upstream]) await mkdir(d);
-  const node = new NodeRunner(10000, {
-      HOME: home,
-      GIT_CONFIG_GLOBAL: "/dev/null",
-      GIT_CONFIG_NOSYSTEM: "1",
-    }),
+  const native = new NodeRunner(10000, {
+    HOME: home,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+  });
+  scope.cleanup(() => native.dispose());
+  scope.cancelOnTimeout(() => native.dispose());
+  const node = scope.own(native),
     git = (...args: string[]) => node.command("git", args, repo);
   await git("init", "-b", "main");
   await git("config", "user.name", "Fixture");
@@ -47,12 +69,14 @@ async function fixture() {
     start: vi.fn(),
     kill: vi.fn(),
   };
-  const service = new HostService({
-      home,
-      dataDir: path.join(root, "data"),
-      runner,
-      goga: "fixture-goga",
-    }),
+  const rawService = new HostService({
+    home,
+    dataDir: path.join(root, "data"),
+    runner,
+    goga: "fixture-goga",
+  });
+  scope.cleanup(() => rawService.dispose());
+  const service = scope.own(rawService),
     project = await service.addProject(repo),
     manager = new CloneManager(home, runner);
   const a = await manager.ensure(project, {

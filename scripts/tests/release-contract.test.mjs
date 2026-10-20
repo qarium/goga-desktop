@@ -50,8 +50,8 @@ test("release gates native two-architecture builds and narrowly scoped publisher
   assert.deepEqual(w.on.push.tags, ["v*"]);
   assert.equal(w.concurrency["cancel-in-progress"], false);
   assert.deepEqual(w.jobs.build.strategy.matrix.include, [
-    { arch: "arm64", runner: "macos-15" },
-    { arch: "x64", runner: "macos-15-intel" },
+    { arch: "arm64", runner: "macos-15", testProfile: "default" },
+    { arch: "x64", runner: "macos-15-intel", testProfile: "slow-git" },
   ]);
   assert.equal(w.jobs.publish.needs, "build");
   assert.deepEqual(w.jobs.publish.permissions, { contents: "write" });
@@ -101,4 +101,36 @@ test("packaging keeps adhoc-only settings and architecture-qualified names", asy
   assert.ok(
     p.scripts["package:release"].includes("CSC_IDENTITY_AUTO_DISCOVERY=false"),
   );
+});
+
+// Intel must be exercised on main/PR before choosing another release tag.
+test("CI and release exercise both native architectures with scoped Intel test budgets", async () => {
+  const expected = [
+    { arch: "arm64", runner: "macos-15", testProfile: "default" },
+    { arch: "x64", runner: "macos-15-intel", testProfile: "slow-git" },
+  ];
+  for (const name of ["ci", "release"]) {
+    const workflow = await load(name);
+    const job = workflow.jobs[name === "ci" ? "check" : "build"];
+    assert.ok(job.strategy?.matrix?.include, "Native test matrix is required");
+    assert.deepEqual(job.strategy.matrix.include, expected);
+    assert.equal(job.strategy["fail-fast"], false);
+    assert.equal(job["runs-on"], "${{ matrix.runner }}");
+    assert.equal(job["timeout-minutes"], 60);
+    assert.equal(job.env.GOGA_TEST_PROFILE, "${{ matrix.testProfile }}");
+    assert.equal(job.env.EXPECTED_ARCH, "${{ matrix.arch }}");
+    const commands = job.steps.map((step) => step.run ?? "").join("\n");
+    assert.ok(commands.includes("process.arch !== process.env.EXPECTED_ARCH"));
+    assert.ok(
+      commands.includes("--reporter=verbose"),
+      "Per-test progress must be visible",
+    );
+    assert.ok(commands.includes("--reporter=json"));
+    assert.ok(
+      !/--(?:retry|bail|isolate=false)|continue-on-error/.test(commands),
+    );
+    assert.notEqual(job["continue-on-error"], true);
+    for (const step of job.steps)
+      assert.notEqual(step["continue-on-error"], true);
+  }
 });

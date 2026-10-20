@@ -1,8 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { HostService } from "../src/host/service";
@@ -15,15 +13,28 @@ import type { ScopeRef } from "../src/shared/context";
 import type { ProjectDocumentTarget } from "../src/shared/project-documents";
 import type { Runner } from "../src/host/process";
 
-const exec = promisify(execFile);
-const cleanup: (() => Promise<unknown>)[] = [];
-afterEach(async () => {
-  vi.restoreAllMocks();
-  for (const fn of cleanup.splice(0).reverse()) await fn();
+import {
+  FixtureScope,
+  fixtureExecFile as exec,
+  gitIntegrationBudget,
+} from "./helpers/git-integration";
+let scope: FixtureScope;
+beforeEach(() => {
+  if (scope && !scope.settled)
+    throw Error("Previous fixture work has not settled");
+  scope = new FixtureScope();
 });
+afterEach(async () => {
+  try {
+    await scope.close(gitIntegrationBudget(10000));
+  } finally {
+    if (scope.settled) vi.restoreAllMocks();
+  }
+}, gitIntegrationBudget(30000));
 function barrier() {
   let release!: () => void;
   const promise = new Promise<void>((resolve) => (release = resolve));
+  scope.releaseOnCleanup(() => release());
   return { promise, release };
 }
 async function bytes(root: string): Promise<Record<string, string>> {
@@ -35,9 +46,13 @@ async function bytes(root: string): Promise<Record<string, string>> {
   }
   return result;
 }
-async function fixture() {
+function fixture() {
+  const owner = scope;
+  return owner.track(createFixture(owner));
+}
+async function createFixture(scope: FixtureScope) {
   const root = await fs.mkdtemp("/private/tmp/goga-unified51-host-");
-  cleanup.push(() =>
+  scope.cleanup(() =>
     fs.rm(root, { recursive: true, force: true, maxRetries: 5 }),
   );
   const home = path.join(root, "home"),
@@ -55,11 +70,13 @@ async function fixture() {
     GIT_COMMITTER_NAME: "Fixture",
     GIT_COMMITTER_EMAIL: "fixture@example.invalid",
   };
+  const command = scope.own({ exec }).exec;
   const git = async (args: string[], cwd = primary) =>
     (
-      await exec("git", ["-c", "core.hooksPath=/dev/null", ...args], {
+      await command("git", ["-c", "core.hooksPath=/dev/null", ...args], {
         cwd,
         env,
+        signal: scope.signal,
       })
     ).stdout;
   await git(["init", "-b", "primary-current"]);
@@ -75,9 +92,10 @@ async function fixture() {
     command: async (exe, args, cwd, overrides) => {
       calls.push({ exe, args, cwd });
       if (exe === "git")
-        return exec("git", args, {
+        return command("git", args, {
           cwd,
           env: { ...env, ...overrides, HOME: home },
+          signal: scope.signal,
         });
       // No native Goga, Docker, pipeline or build is ever executed.
       const label = labels.get(cwd);
@@ -133,13 +151,19 @@ async function fixture() {
       child.emit("close", 0, null);
     },
   };
-  const service = new HostService({
+  const rawService = new HostService({
     home,
     dataDir: path.join(home, "data"),
     goga: "synthetic-goga",
     runner,
   });
-  cleanup.push(() => service.dispose());
+  scope.cleanup(async () => {
+    await Promise.allSettled(
+      rawService.runs().map((run) => rawService.stop(run.id)),
+    );
+    await rawService.dispose();
+  });
+  const service = scope.own(rawService);
   const project = await service.addProject(primary);
   const manager = new CloneManager(home, runner);
   const a = await manager.ensure(project, {
@@ -227,7 +251,7 @@ async function fixture() {
 
 describe(
   "unified primary and exact owned clone host scope",
-  { timeout: 30000 },
+  { timeout: gitIntegrationBudget(30000) },
   () => {
     it("characterizes settings reads as one shared execution document with owner-local profile catalogs", async () => {
       const f = await fixture();
@@ -539,7 +563,7 @@ describe(
     });
     it(
       "characterizes primary and clone synthetic pipeline/build launches with exact cwd, task gates and saved repeat owner",
-      { timeout: 60000 },
+      { timeout: gitIntegrationBudget(60000) },
       async () => {
         const f = await fixture();
         for (const owner of f.owners) {

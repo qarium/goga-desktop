@@ -17,12 +17,15 @@ jobs:
         include:
           - arch: arm64
             runner: macos-15
+            testProfile: default
           - arch: x64
             runner: macos-15-intel
+            testProfile: slow-git
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
       EXPECTED_ARCH: ${{ matrix.arch }}
+      GOGA_TEST_PROFILE: ${{ matrix.testProfile }}
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
       GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
     steps:
@@ -54,7 +57,7 @@ jobs:
       - name: Tests (native Goga CLI deliberately unavailable)
         run: |
           mkdir -p work
-          npm test -- --maxWorkers=1 --testTimeout=15000 --reporter=default --reporter=json --outputFile=work/vitest.json
+          npm test -- --maxWorkers=1 --testTimeout=15000 --reporter=verbose --reporter=json --outputFile=work/vitest.json
       - name: Exact skipped test report
         if: always()
         run: node scripts/test-summary.mjs work/vitest.json

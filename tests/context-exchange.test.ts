@@ -1,8 +1,6 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 import { randomUUID } from "node:crypto";
 import { ContextExchangeManager } from "../src/host/context-exchange";
 import { CloneManager } from "../src/host/clones";
@@ -12,13 +10,35 @@ import {
   type WorktreeRecord,
 } from "../src/shared/worktrees";
 import type { Runner } from "../src/host/process";
-vi.setConfig({ testTimeout: 30000 });
-const exec = promisify(execFile);
-// Retained, synthetic Git-only fixtures. No external push, native Goga or real HOME.
-async function fixture() {
+import {
+  FixtureScope,
+  fixtureExecFile as exec,
+  gitIntegrationBudget,
+} from "./helpers/git-integration";
+vi.setConfig({ testTimeout: gitIntegrationBudget(30000) });
+let scope: FixtureScope;
+beforeEach(() => {
+  if (scope && !scope.settled)
+    throw Error("Previous fixture work has not settled");
+  scope = new FixtureScope();
+});
+afterEach(async () => {
+  try {
+    await scope.close(gitIntegrationBudget(10000));
+  } finally {
+    if (scope.settled) vi.restoreAllMocks();
+  }
+}, gitIntegrationBudget(30000));
+// Owned, synthetic Git-only fixtures. No external push, native Goga or real HOME.
+function fixture() {
+  const owner = scope;
+  return owner.track(createFixture(owner));
+}
+async function createFixture(scope: FixtureScope) {
   const root = await fs.mkdtemp(
     "/private/tmp/goga-context-ab-research-20261020-completion-exchange-",
   );
+  scope.cleanup(() => fs.rm(root, { recursive: true, force: true }));
   const home = path.join(root, "home"),
     repo = path.join(root, "primary"),
     upstream = path.join(root, "upstream.git");
@@ -49,11 +69,13 @@ async function fixture() {
       ].includes(key)
     )
       delete env[key];
+  const command = scope.own({ exec }).exec;
   const git = async (args: string[], cwd = repo) =>
     (
-      await exec("git", ["-c", "core.hooksPath=/dev/null", ...args], {
+      await command("git", ["-c", "core.hooksPath=/dev/null", ...args], {
         cwd,
         env,
+        signal: scope.signal,
       })
     ).stdout.trim();
   await git(["init", "-b", "main"]);
@@ -100,7 +122,11 @@ async function fixture() {
   const runner: Pick<Runner, "command"> = {
     command: async (exe, args, cwd, overrides) => {
       calls.push({ args, cwd });
-      const r = await exec(exe, args, { cwd, env: { ...env, ...overrides } });
+      const r = await command(exe, args, {
+        cwd,
+        env: { ...env, ...overrides },
+        signal: scope.signal,
+      });
       return { stdout: r.stdout, stderr: r.stderr };
     },
   };
@@ -113,10 +139,11 @@ async function fixture() {
     isProjectActive: () => projectActive,
     nativeEnvironment: () => env,
   };
-  const manager = new ContextExchangeManager(home, runner, deps),
+  const manager = scope.own(new ContextExchangeManager(home, runner, deps)),
     ref = worktreeContextRef(record),
-    clones = new CloneManager(home, runner);
+    clones = scope.own(new CloneManager(home, runner));
   return {
+    scope,
     root,
     home,
     repo,
@@ -422,10 +449,13 @@ describe("genuine upstream publication policy", () => {
     const tree = await f.git(["rev-parse", "HEAD^{tree}"], f.record.path),
       old = await f.git(["rev-parse", "HEAD"], f.record.path);
     const divergent = (
-      await exec("git", ["commit-tree", tree, "-p", old, "-m", "other"], {
-        cwd: f.record.path,
-        env: f.env,
-      })
+      await f.scope
+        .own({ exec })
+        .exec("git", ["commit-tree", tree, "-p", old, "-m", "other"], {
+          cwd: f.record.path,
+          env: f.env,
+          signal: f.scope.signal,
+        })
     ).stdout.trim();
     await f.git(["update-ref", "refs/heads/main", divergent], f.record.path);
     await expect(
@@ -558,27 +588,36 @@ describe("publication guard continuity", () => {
 it("prepares with the real locking CloneManager resolver and an owner-bound native environment callback", async () => {
   const f = await fixture();
   await f.git(["remote", "add", "origin", f.upstream]);
-  const manager = new ContextExchangeManager(f.home, f.runner, {
-    ...f.deps,
-    resolve: (ref) => f.clones.resolve(ref),
-    nativeEnvironment: async (ref) => {
-      await f.clones.resolve(ref);
-      return f.env;
-    },
-  });
+  const manager = f.scope.own(
+    new ContextExchangeManager(f.home, f.runner, {
+      ...f.deps,
+      resolve: (ref) => f.clones.resolve(ref),
+      nativeEnvironment: async (ref) => {
+        await f.clones.resolve(ref);
+        return f.env;
+      },
+    }),
+  );
   let timer: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timer = setTimeout(
-      () => reject(new Error("nested repository lock deadlock")),
-      2500,
+      () =>
+        reject(
+          new Error(
+            "real CloneManager exchange exceeded its finite Git budget (possible nested lock deadlock)",
+          ),
+        ),
+      gitIntegrationBudget(10000),
     );
   });
   try {
     const snapshot = await Promise.race([
-      manager.preparePublication(f.ref, {
-        action: "propagate",
-        baseRef: "main",
-      }),
+      f.scope.track(
+        manager.preparePublication(f.ref, {
+          action: "propagate",
+          baseRef: "main",
+        }),
+      ),
       deadline,
     ]);
     await manager.verifyPublication(snapshot);
@@ -609,7 +648,9 @@ it("never overwrites a collided service ref, even when Git could fast-forward it
       return f.runner.command(exe, args, cwd, env, stdin);
     },
   };
-  const manager = new ContextExchangeManager(f.home, runner, f.deps);
+  const manager = f.scope.own(
+    new ContextExchangeManager(f.home, runner, f.deps),
+  );
   await expect(manager.captureBase(f.ref, "main")).rejects.toThrow(
     /снимок|измен/i,
   );
@@ -675,14 +716,16 @@ describe("physical origin policy versus final native environment", () => {
     await f.git(["remote", "add", "origin", alias]);
     const config = path.join(f.home, "project-native.gitconfig");
     await fs.writeFile(config, `[url "${genuine}"]\n\tinsteadOf = ${alias}\n`);
-    const manager = new ContextExchangeManager(f.home, f.runner, {
-      ...f.deps,
-      resolve: (ref) => f.clones.resolve(ref),
-      nativeEnvironment: async (ref) => {
-        await f.clones.resolve(ref);
-        return { ...f.env, GIT_CONFIG_GLOBAL: config };
-      },
-    });
+    const manager = f.scope.own(
+      new ContextExchangeManager(f.home, f.runner, {
+        ...f.deps,
+        resolve: (ref) => f.clones.resolve(ref),
+        nativeEnvironment: async (ref) => {
+          await f.clones.resolve(ref);
+          return { ...f.env, GIT_CONFIG_GLOBAL: config };
+        },
+      }),
+    );
     const prepared = await manager.preparePublication(f.ref, {
       action: "publish",
     });
@@ -704,14 +747,16 @@ describe("physical origin policy versus final native environment", () => {
     await f.git(["remote", "add", "origin", alias]);
     const config = path.join(f.home, "project-native.gitconfig");
     await fs.writeFile(config, `[url "${genuine}"]\n\tinsteadOf = ${alias}\n`);
-    const manager = new ContextExchangeManager(f.home, f.runner, {
-      ...f.deps,
-      resolve: (ref) => f.clones.resolve(ref),
-      nativeEnvironment: async (ref) => {
-        await f.clones.resolve(ref);
-        return { ...f.env, GIT_CONFIG_GLOBAL: config };
-      },
-    });
+    const manager = f.scope.own(
+      new ContextExchangeManager(f.home, f.runner, {
+        ...f.deps,
+        resolve: (ref) => f.clones.resolve(ref),
+        nativeEnvironment: async (ref) => {
+          await f.clones.resolve(ref);
+          return { ...f.env, GIT_CONFIG_GLOBAL: config };
+        },
+      }),
+    );
     const prepared = await manager.preparePublication(f.ref, {
       action: "publish",
     });

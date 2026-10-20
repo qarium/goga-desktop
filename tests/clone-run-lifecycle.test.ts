@@ -1,5 +1,5 @@
-import { afterEach, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -8,17 +8,52 @@ import { NodeRunner } from "../src/host/process";
 import { CloneManager } from "../src/host/clones";
 import { ContextSyncManager } from "../src/host/context-sync";
 import { worktreeContextRef } from "../src/shared/worktrees";
-vi.setConfig({ testTimeout: 30000 });
-afterEach(() => vi.restoreAllMocks());
-async function fixture() {
+import {
+  FixtureScope,
+  PauseGate,
+  gitIntegrationBudget,
+  hasRunSyncCall,
+} from "./helpers/git-integration";
+vi.setConfig({ testTimeout: gitIntegrationBudget(30000) });
+let scope: FixtureScope;
+beforeEach(() => {
+  if (scope && !scope.settled)
+    throw Error("Previous fixture work has not settled");
+  scope = new FixtureScope();
+});
+afterEach(async () => {
+  try {
+    await scope.close(gitIntegrationBudget(10000));
+  } finally {
+    if (scope.settled) vi.restoreAllMocks();
+  }
+}, gitIntegrationBudget(30000));
+function ownService(service: HostService, owner = scope) {
+  owner.cleanup(async () => {
+    // close events remove children before their persistence/sync flight settles.
+    // stop joins those exact flights, including already-terminal runs.
+    await Promise.allSettled(service.runs().map((run) => service.stop(run.id)));
+    await service.dispose();
+  });
+  return owner.own(service);
+}
+function fixture() {
+  const owner = scope;
+  return owner.track(createFixture(owner));
+}
+async function createFixture(scope: FixtureScope) {
   const root = await mkdtemp(
       "/private/tmp/goga-context-ab-research-20261019-impl-runs-",
     ),
     repo = path.join(root, "primary"),
     home = path.join(root, "home");
+  scope.cleanup(() => rm(root, { recursive: true, force: true }));
   await mkdir(repo);
   await mkdir(home);
-  const native = new NodeRunner();
+  const node = new NodeRunner();
+  scope.cleanup(() => node.dispose());
+  scope.cancelOnTimeout(() => node.dispose());
+  const native = scope.own(node);
   const git = (...args: string[]) =>
     native.command("git", args, repo, {
       GIT_CONFIG_GLOBAL: "/dev/null",
@@ -39,8 +74,8 @@ async function fixture() {
   await git("branch", "second");
   const children: any[] = [];
   const starts: any[] = [];
-  let release: (() => void) | undefined;
-  let pause = false;
+  const gate = new PauseGate();
+  scope.releaseOnCleanup(() => gate.release());
   const runner = {
     command: async (
       exe: string,
@@ -66,19 +101,20 @@ async function fixture() {
         stdout: new PassThrough(),
         stderr: new PassThrough(),
       });
-      children.push(child);
+      children.push(scope.own(child));
       starts.push({ exe, args, cwd });
       return child as any;
     },
-    kill: vi.fn(async () => {
-      if (pause) await new Promise<void>((r) => (release = r));
-    }),
+    kill: vi.fn(() => gate.wait()),
   };
-  const service = new HostService({
-    home,
-    dataDir: path.join(root, "data"),
-    runner,
-  });
+  const service = ownService(
+    new HostService({
+      home,
+      dataDir: path.join(root, "data"),
+      runner,
+    }),
+    scope,
+  );
   const project = await service.addProject(repo);
   const manager = new CloneManager(home, runner);
   const a = await manager.ensure(project, {
@@ -111,6 +147,7 @@ async function fixture() {
   return {
     root,
     home,
+    native,
     service,
     a,
     b,
@@ -118,8 +155,8 @@ async function fixture() {
     children,
     starts,
     runner,
-    pause: () => (pause = true),
-    release: () => release?.(),
+    pause: () => gate.pause(),
+    release: () => gate.release(),
   };
 }
 it("keeps parallel clone runs independent, and syncs only after actual termination with fixed owner", async () => {
@@ -147,11 +184,7 @@ it("keeps parallel clone runs independent, and syncs only after actual terminati
   );
   expect(f.service.runs().find((r) => r.id === r1.id)?.status).toBe("stopped");
   expect(f.service.runs().find((r) => r.id === r2.id)?.status).toBe("running");
-  f.release(); // second run has no paused wait released yet
-  const stopping = f.service.stop(r2.id);
-  await new Promise((r) => setTimeout(r, 0));
-  f.release();
-  await stopping;
+  await f.service.stop(r2.id);
   await f.service.dispose();
 });
 it("requests sync for failing build without rewriting the outcome", async () => {
@@ -161,7 +194,22 @@ it("requests sync for failing build without rewriting the outcome", async () => 
   const f = await fixture();
   const run = await f.service.launchBuild(await f.request(f.a));
   f.children[0].emit("close", 2);
-  await vi.waitFor(() => expect(after).toHaveBeenCalled());
+  await vi.waitFor(
+    () => {
+      expect(
+        hasRunSyncCall(
+          after.mock.calls,
+          f.a.projectPath,
+          worktreeContextRef(f.a),
+          run.id,
+        ),
+      ).toBe(true);
+      expect(f.service.runs().find((r) => r.id === run.id)?.status).toBe(
+        "failed",
+      );
+    },
+    { timeout: gitIntegrationBudget(1000) },
+  );
   const done = f.service.runs().find((r) => r.id === run.id)!;
   expect(done.status).toBe("failed");
   expect(done.error).toContain("кодом 2");
@@ -169,7 +217,7 @@ it("requests sync for failing build without rewriting the outcome", async () => 
 });
 it("imports commits after successful termination in the actual fixed clone without changing primary checkout", async () => {
   const f = await fixture(),
-    native = new NodeRunner();
+    native = f.native;
   const before = (
     await native.command("git", ["rev-parse", "HEAD"], f.a.projectPath)
   ).stdout;
@@ -198,7 +246,7 @@ it("imports commits after successful termination in the actual fixed clone witho
       expect(
         (await f.service.topicSyncStatus(worktreeContextRef(f.a))).status,
       ).toBe("synced"),
-    { timeout: 8000 },
+    { timeout: gitIntegrationBudget(8000) },
   );
   expect(
     (await f.service.topicSyncStatus(worktreeContextRef(f.a))).importedOid,
@@ -218,7 +266,7 @@ it("binds full pipeline preview/task/start to the owner rather than primary", as
       .spyOn(ContextSyncManager.prototype, "afterRun")
       .mockResolvedValue({} as any),
     f = await fixture(),
-    native = new NodeRunner();
+    native = f.native;
   // The pipeline fixture now owns actual task data instead of inventing a board-only task.
   await mkdir(path.join(f.a.path, ".goga/history/2026/first"), {
     recursive: true,
@@ -292,7 +340,9 @@ it("binds full pipeline preview/task/start to the owner rather than primary", as
   expect(run.pipelineName).toBe("Owner pipeline");
   expect(run.pipelineDescription).toBe("Owner description");
   await f.service.stop(run.id);
-  expect(after).toHaveBeenCalled();
+  expect(
+    hasRunSyncCall(after.mock.calls, f.a.projectPath, context, run.id),
+  ).toBe(true);
   await f.service.dispose();
 });
 it("replays durable terminal sync intent after restart when the first attempt failed before journaling", async () => {
@@ -308,11 +358,13 @@ it("replays durable terminal sync intent after restart when the first attempt fa
   );
   await f.service.dispose();
   after.mockResolvedValue({ status: "synced" } as any);
-  const recovered = new HostService({
-    home: f.home,
-    dataDir: path.join(f.root, "data"),
-    runner: f.runner,
-  });
+  const recovered = ownService(
+    new HostService({
+      home: f.home,
+      dataDir: path.join(f.root, "data"),
+      runner: f.runner,
+    }),
+  );
   await recovered.initialize();
   expect(after).toHaveBeenLastCalledWith(
     expect.objectContaining({ path: f.a.projectPath }),
@@ -329,11 +381,13 @@ it("blocks writes, stop, and close for an unreconciled owner after restart", asy
   );
   const f = await fixture(),
     run = await f.service.launchBuild(await f.request(f.a));
-  const recovered = new HostService({
-    home: f.home,
-    dataDir: path.join(f.root, "data"),
-    runner: f.runner,
-  });
+  const recovered = ownService(
+    new HostService({
+      home: f.home,
+      dataDir: path.join(f.root, "data"),
+      runner: f.runner,
+    }),
+  );
   await recovered.initialize();
   expect(recovered.runs()[0].recovery).toBe("unverified");
   await expect(recovered.stop(run.id)).rejects.toThrow(/не подтверждено/);
