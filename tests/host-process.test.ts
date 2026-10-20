@@ -1,4 +1,5 @@
 import { it, expect, vi, afterEach } from "vitest";
+import { observeDashboard } from "./helpers/dashboard-process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -93,69 +94,64 @@ it("captures argv without shell interpretation and rejects failed commands witho
   ).rejects.not.toThrow("SECRET");
 });
 it("accepts actual status-shaped HTTP readiness only then publishes URL", async () => {
-  const runner = new NodeRunner();
-  const child = runner.start(
-    process.execPath,
-    [
-      "-e",
-      `require('http').createServer((q,s)=>{s.setHeader('content-type','application/json');s.end(JSON.stringify({flow_name:'fixture',stages:[]}))}).listen(0,'127.0.0.1',function(){console.log('  dashboard: http://127.0.0.1:'+this.address().port)})`,
-    ],
-    process.cwd(),
+  const result = await observeDashboard(
+    `require('http').createServer((q,s)=>{s.setHeader('content-type','application/json');s.end(JSON.stringify({flow_name:'fixture',stages:[]}))}).listen(0,'127.0.0.1',function(){console.log('  dashboard: http://127.0.0.1:'+this.address().port)})`,
+    3000,
   );
-  const ready = new Promise<string>((resolve, reject) => {
-    watchDashboard(child, {
-      timeoutMs: 3000,
-      onReady: resolve,
-      onFinish: () => reject(new Error("early exit")),
-      onFailure: reject,
-    });
-  });
-  expect(await ready).toMatch(/^http:\/\/127.0.0.1:/);
-  runner.kill(child);
+  expect(result.kind).toBe("ready");
+  if (result.kind === "ready")
+    expect(result.url).toMatch(/^http:\/\/127.0.0.1:/);
 });
-it("rejects exit before ready and timeout, does not publish generic localhost URL", async () => {
-  const runner = new NodeRunner();
-  for (const script of [
+it("rejects actual exit before ready, does not publish generic localhost URL", async () => {
+  const result = await observeDashboard(
     'console.log("server http://localhost:1234")',
-    "setInterval(()=>{},1000)",
-  ]) {
-    const c = runner.start(process.execPath, ["-e", script], process.cwd());
-    const result = await new Promise<string>((resolve) =>
-      watchDashboard(c, {
-        timeoutMs: 100,
-        onReady: () => resolve("bad"),
-        onFailure: (e) => resolve(e.message),
-        onFinish: () => resolve("bad"),
-      }),
+    3000,
+  );
+  expect(result.kind).toBe("failure");
+  if (result.kind === "failure")
+    expect(result.error.message).toContain("код 0");
+});
+it("rejects the dashboard deadline without racing native Node startup", () => {
+  vi.useFakeTimers();
+  const child = Object.assign(new EventEmitter(), {
+    stdout: new PassThrough(),
+    stderr: new PassThrough(),
+  }) as unknown as ChildProcessWithoutNullStreams;
+  const onReady = vi.fn(),
+    onFailure = vi.fn(),
+    onFinish = vi.fn();
+  const cancel = watchDashboard(child, {
+    timeoutMs: 100,
+    onReady,
+    onFailure,
+    onFinish,
+  });
+  try {
+    child.stdout.emit("data", Buffer.from("server http://localhost:1234\n"));
+    vi.advanceTimersByTime(99);
+    expect(onFailure).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1);
+    expect(onFailure).toHaveBeenCalledOnce();
+    expect(onFailure.mock.calls[0][0].message).toContain(
+      "не стала доступна вовремя",
     );
-    expect(result).not.toBe("bad");
-    runner.kill(c);
+    expect(onReady).not.toHaveBeenCalled();
+    expect(onFinish).not.toHaveBeenCalled();
+  } finally {
+    cancel();
+    vi.useRealTimers();
   }
 });
 it("never follows a redirect or treats a generic JSON service as AFM", async () => {
-  const runner = new NodeRunner();
   for (const response of [
     `s.writeHead(302,{location:'http://localhost:1/api/status'});s.end()`,
     `s.end(JSON.stringify({ok:true}))`,
   ]) {
-    const child = runner.start(
-      process.execPath,
-      [
-        "-e",
-        `require('http').createServer((q,s)=>{${response}}).listen(0,'127.0.0.1',function(){console.log('dashboard: http://127.0.0.1:'+this.address().port)})`,
-      ],
-      process.cwd(),
+    const result = await observeDashboard(
+      `require('http').createServer((q,s)=>{${response}}).listen(0,'127.0.0.1',function(){console.log('dashboard: http://127.0.0.1:'+this.address().port)})`,
+      250,
     );
-    const result = await new Promise<string>((resolve) =>
-      watchDashboard(child, {
-        timeoutMs: 250,
-        onReady: () => resolve("bad"),
-        onFinish: () => resolve("bad"),
-        onFailure: (e) => resolve(e.message),
-      }),
-    );
-    expect(result).not.toBe("bad");
-    await runner.kill(child);
+    expect(result.kind).toBe("failure");
   }
 });
 it("disposes long-running metadata processes and propagates explicit home", async () => {

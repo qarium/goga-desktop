@@ -679,38 +679,67 @@ describe("durable owner binding", () => {
 });
 
 describe("non-blocking status and detached import", () => {
-  it("reports the durable syncing state while an import command is still running", async () => {
-    const f = await fixture();
-    let reached!: () => void, release!: () => void;
-    const started = new Promise<void>((resolve) => {
+  it.each([0, 350])(
+    "reports the durable syncing state before releasing import, with %sms delayed status Git",
+    async (statusDelayMs) => {
+      const f = await fixture();
+      let reached!: () => void, release!: () => void;
+      let importBlocked = false,
+        readingStatus = false,
+        delayApplied = false;
+      const started = new Promise<void>((resolve) => {
         reached = resolve;
-      }),
-      gate = new Promise<void>((resolve) => {
+      });
+      const gate = new Promise<void>((resolve) => {
         release = resolve;
       });
-    const runner: Pick<Runner, "command"> = {
-      command: async (...args) => {
-        if (args[1].includes("fetch")) {
-          reached();
-          await gate;
-        }
-        return f.runner.command(...args);
-      },
-    };
-    const manager = new ContextSyncManager(f.home, runner, f.deps),
-      flight = manager.request(f.project, f.ref);
-    await started;
-    try {
-      const status = await Promise.race([
-        manager.status(f.project, f.ref),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 300)),
-      ]);
-      expect(status?.status).toBe("syncing");
-    } finally {
-      release();
-      await flight;
-    }
-  });
+      const runner: Pick<Runner, "command"> = {
+        command: async (...args) => {
+          if (args[1].includes("fetch")) {
+            importBlocked = true;
+            reached();
+            await gate;
+            importBlocked = false;
+          } else if (readingStatus && !delayApplied) {
+            delayApplied = true;
+            await new Promise((resolve) => setTimeout(resolve, statusDelayMs));
+          }
+          return f.runner.command(...args);
+        },
+      };
+      const manager = new ContextSyncManager(f.home, runner, f.deps);
+      const flight = manager.request(f.project, f.ref);
+      // Observe both outcomes immediately, even if setup fails before the gate.
+      void flight.catch(() => {});
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let statusFlight: ReturnType<typeof manager.status> | undefined;
+      try {
+        await started;
+        expect(importBlocked).toBe(true);
+        readingStatus = true;
+        const status = await Promise.race([
+          (statusFlight = manager.status(f.project, f.ref)),
+          // A finite deadlock guard, not a 300ms performance requirement for native Git.
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () =>
+                reject(
+                  Error("Status did not complete while import was blocked"),
+                ),
+              10000,
+            );
+          }),
+        ]);
+        expect(status.status).toBe("syncing");
+        expect(importBlocked).toBe(true);
+        expect(delayApplied).toBe(true);
+      } finally {
+        clearTimeout(timer);
+        release();
+        await Promise.all([flight, statusFlight]);
+      }
+    },
+  );
   it("imports into a detached primary without changing its detached HEAD or files", async () => {
     const f = await fixture();
     await f.git(["checkout", "--detach"]);
