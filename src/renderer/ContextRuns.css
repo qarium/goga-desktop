@@ -1,0 +1,186 @@
+.context-run-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin: 18px 0;
+}
+.context-run-filters button[aria-pressed="true"] {
+  border-color: var(--teal);
+  background: #12332f;
+}
+.context-counter {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 23px;
+  margin-left: 7px;
+  padding: 1px 7px;
+  border-radius: 20px;
+  background: var(--teal);
+  color: #06251f;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.context-run-hint {
+  margin: 12px 0;
+  color: var(--muted);
+  line-height: 1.6;
+}
+.context-run-list {
+  display: grid;
+  gap: 12px;
+}
+.context-run-row {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  min-width: 0;
+}
+.context-run-main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  min-width: 0;
+}
+.context-run-identity {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.context-run-identity strong {
+  font-size: 16px;
+}
+.context-run-description,
+.context-run-identity time {
+  color: var(--muted);
+  line-height: 1.6;
+}
+.context-run-identity time {
+  font-size: 11px;
+}
+.context-run-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  flex-shrink: 0;
+}
+.context-run-status {
+  display: inline-flex;
+  padding: 3px 8px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.context-run-status.is-starting,
+.context-run-status.is-running {
+  color: var(--teal);
+}
+.context-run-status.is-failed {
+  color: #ffadb5;
+}
+.context-run-technical {
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.context-run-technical summary {
+  cursor: pointer;
+}
+.context-run-technical dl {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 0;
+  overflow-wrap: anywhere;
+}
+.context-run-technical dd {
+  margin: 0 0 5px;
+  color: #c4d1e4;
+}
+.context-launch {
+  position: relative;
+}
+.context-launch-trigger {
+  position: relative;
+  padding-right: 36px;
+}
+.context-select-chevron {
+  position: absolute;
+  top: 50%;
+  right: 14px;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: translateY(-70%) rotate(45deg);
+  pointer-events: none;
+}
+.context-launch-menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 280px;
+  max-width: calc(100vw - 32px);
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 12px 32px #0006;
+}
+.context-launch-menu button {
+  display: block;
+  width: 100%;
+  padding: 12px;
+  text-align: left;
+  border: 0;
+  background: transparent;
+}
+.context-launch-menu small {
+  display: block;
+  margin-top: 5px;
+  white-space: normal;
+}
+.context-launch-reason,
+.context-launch-hint {
+  padding: 12px;
+  color: var(--muted);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.context-launch-reason {
+  border-bottom: 1px solid var(--line);
+}
+.context-launch-hint {
+  margin-top: 4px;
+  border-top: 1px solid var(--line);
+}
+@media (max-width: 900px) {
+  .context-run-main {
+    flex-wrap: wrap;
+  }
+  .context-run-actions {
+    flex-shrink: 1;
+  }
+}
+.context-stage > button {
+  margin-top: 18px;
+}
+.context-stage > .muted {
+  margin: 12px 0 20px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.context-stage > details {
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.context-stage > details summary {
+  cursor: pointer;
+}

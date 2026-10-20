@@ -1,0 +1,35 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: macos-15
+    timeout-minutes: 30
+    env:
+      GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - run: npm ci
+      - run: npm run test:release
+      - name: Tests (native Goga CLI deliberately unavailable)
+        run: |
+          mkdir -p work
+          npm test -- --maxWorkers=1 --testTimeout=15000 --reporter=default --reporter=json --outputFile=work/vitest.json
+      - name: Exact skipped test report
+        if: always()
+        run: node scripts/test-summary.mjs work/vitest.json
+      - run: npm run typecheck
+      - run: npm run build

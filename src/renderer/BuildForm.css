@@ -1,0 +1,271 @@
+.build-form {
+  max-width: 1000px;
+  margin: 0 auto;
+  padding: 26px 32px 40px;
+}
+.build-form fieldset {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+.build-form label {
+  display: grid;
+  gap: 8px;
+  font-size: 12px;
+}
+.build-form label.check {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.build-form label small {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.6;
+  font-weight: normal;
+}
+.build-form input:not([type="checkbox"]),
+.build-form select {
+  width: 100%;
+  min-width: 0;
+}
+.build-plan-row {
+  display: flex;
+  gap: 10px;
+  margin-top: 8px;
+}
+.build-plan-row input {
+  flex: 1;
+}
+.build-plan-row button {
+  flex-shrink: 0;
+}
+.build-inline-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 15px 0 24px;
+}
+.build-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 20px;
+  margin: 18px 0;
+}
+.build-group {
+  border-top: 1px solid var(--line);
+  padding: 22px 0;
+}
+.build-group summary {
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+}
+.build-group summary span {
+  font-weight: normal;
+  color: var(--muted);
+  font-size: 11px;
+}
+.build-group .topic-switch {
+  margin-top: 0;
+}
+.build-inherit {
+  font-size: 11px;
+  margin-left: 0;
+}
+.build-pair {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+  gap: 10px;
+  align-items: end;
+  margin-bottom: 0;
+}
+.build-pair button {
+  height: 36px;
+}
+.build-proxy {
+  margin-top: 0;
+}
+/* Local disclosure rhythm; shared TopicModal/card styling stays untouched. */
+.build-group-body {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+  margin-top: 20px;
+}
+.build-group-body .build-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  margin: 0;
+}
+.build-group-body label {
+  min-width: 0;
+  align-content: start;
+  line-height: 1.5;
+}
+.build-group-body label.check {
+  align-items: flex-start;
+}
+.build-group-body label.check input {
+  flex-shrink: 0;
+  margin: 2px 0 0;
+}
+.build-group-body .hint {
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.build-group-body > .error {
+  margin: 0;
+}
+.build-review-choice {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.build-environment {
+  gap: 24px;
+}
+.build-environment-block {
+  display: grid;
+  gap: 12px;
+  min-width: 0;
+}
+.build-environment-block > h3 {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.build-environment-block > button,
+.build-review-choice > button {
+  justify-self: start;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.build-clean {
+  padding: 24px 0;
+  border-block: 1px solid var(--line);
+}
+.build-footer {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-top: 24px;
+}
+.build-footer > .hint {
+  margin-left: auto;
+  font-size: 11px;
+}
+.build-plan-preview {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 55vh;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.7;
+}
+.build-file-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+.build-file-toolbar > button {
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.build-file-location {
+  margin-block: 16px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
+.build-file-list {
+  max-height: 45vh;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.build-file-list > .hint {
+  padding: 16px;
+}
+.build-file-list > button {
+  display: flex;
+  align-items: flex-start;
+  min-width: 0;
+  white-space: normal;
+  line-height: 1.5;
+  width: 100%;
+  text-align: left;
+  gap: 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  padding: 12px;
+}
+.build-file-list > button span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.build-file-list > button span:first-child,
+.build-file-list > button span:last-child:not(:nth-child(2)) {
+  flex-shrink: 0;
+}
+@media (max-width: 1000px) {
+  .build-form {
+    padding: 20px 20px 32px;
+  }
+  .build-grid {
+    gap: 14px;
+  }
+  .build-footer > .hint {
+    max-width: 150px;
+  }
+}
+@media (max-width: 760px) {
+  .build-form {
+    padding: 18px 12px;
+  }
+  .build-grid,
+  .build-group-body .build-grid,
+  .build-pair {
+    grid-template-columns: 1fr;
+  }
+  .build-plan-row,
+  .build-footer {
+    flex-wrap: wrap;
+  }
+}
+
+.build-launch-action {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-width: 0;
+  max-width: 100%;
+  margin-left: auto;
+  flex: 0 1 auto;
+}
+.build-launch-action > .split-launch {
+  flex: 0 0 auto;
+}
+.build-launch-action > .split-launch > button {
+  height: 36px;
+  white-space: nowrap;
+}
+.build-footer:has(.build-launch-reason) {
+  flex-wrap: wrap;
+}
+.build-footer:has(.build-launch-reason) > .hint {
+  margin-left: 0;
+}
+.build-draft-tab.active,
+.launch-draft-tab.active {
+  color: var(--teal);
+}

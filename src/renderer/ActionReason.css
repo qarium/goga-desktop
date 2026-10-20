@@ -1,0 +1,26 @@
+.action-reason {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 1 auto;
+  gap: 8px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 36px;
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(232, 168, 76, 0.32);
+  border-radius: 6px;
+  background: rgba(232, 168, 76, 0.09);
+  color: #edc28a;
+  font-size: 12px;
+  line-height: 18px;
+}
+.action-reason > svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 16px;
+}
+.action-reason-text {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}

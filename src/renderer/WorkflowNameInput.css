@@ -1,0 +1,73 @@
+.new-profile.workflow-name-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+.workflow-name-form > button[type="submit"] {
+  align-self: start;
+  margin-top: 22px;
+}
+.workflow-name-form > .hint {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+.workflow-name-input {
+  position: relative;
+  min-width: 0;
+  width: 100%;
+}
+.workflow-name-input label {
+  min-width: 0;
+}
+.workflow-name-input input {
+  min-width: 0;
+  width: 100%;
+}
+.workflow-name-hint {
+  margin: 8px 0 0;
+  overflow-wrap: anywhere;
+}
+.workflow-name-popup {
+  position: absolute;
+  z-index: 10;
+  inset-inline: 0;
+  width: 100%;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+  border: 1px solid #415572;
+  border-radius: 7px;
+  background: #10192c;
+  box-shadow: 0 12px 28px #0008;
+}
+.workflow-name-option {
+  display: grid;
+  min-width: 0;
+  gap: 5px;
+  padding: 9px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  color: #e4ebf6;
+  font-size: 13px;
+  line-height: 1.5;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.workflow-name-option small {
+  color: #b2c3d9;
+  font:
+    12px ui-monospace,
+    monospace;
+  line-height: 1.5;
+}
+.workflow-name-option[aria-selected="true"] {
+  background: #18362f;
+}
+.workflow-name-option.is-focused {
+  background: #22334f;
+  border-color: var(--teal);
+  outline: 1px solid var(--teal);
+  outline-offset: -1px;
+}

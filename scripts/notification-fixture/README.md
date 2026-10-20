@@ -1,0 +1,12 @@
+# Explicit native notification diagnostic (macOS)
+
+This is **not** part of `npm test` or the shipped app. It emits real, clearly test-labelled macOS notifications. Run only with the user's approval. Never run the main Desktop executable for this diagnostic or use its userData. Do not change system notification permissions automatically.
+
+1. Build Desktop once (`npm run build`) to produce the real sandboxed AFM preload.
+2. Set `AFM_NOTIFICATION_SOURCE` to the absolute, read-only AFM `use-desktop-notifications.ts` path and run `node scripts/notification-fixture/build.mjs` from Desktop.
+3. The command prints a fresh directory under Desktop/work. Package its `builder.json` with the installed electron-builder and a cache under Desktop/work. It uses the same explicit local signing hook as the real package, but bundle ID `local.goga.desktop.notification-fixture` and name `Goga Notification Test`.
+4. Execute **only that fixture bundle's executable**, with `ELECTRON_RUN_AS_NODE` unset, `GOGA_NOTIFICATION_TEST_DIR` set to a fresh absolute directory under Desktop/work, and `ELECTRON_DEBUG_NOTIFICATIONS=1`. Capture stdout/stderr to a file there. An OS permission prompt may need the user; never answer it automatically. Do not click a fixture notification unless a separate click/focus test was authorized.
+
+The hidden BrowserWindow and actual DashboardViews use isolated sessions. Only the per-run application consent dialog is supplied by the fixture; the OS permission and browser Notification API are real and unchanged. AFM hook source is read-only, bundled with event listeners for constructor/show/error/click/close evidence. Nothing is generated in AFM. A synthetic stage changes from running to awaiting_user_input, then the actual hook's disable action suppresses another distinct question episode. A main-process notification separately observes native failed/show. `Notification.getHistory()` reads only the fixture application's history. Only fixture notifications are removed at the end; its hidden window is destroyed.
+
+Interpretation: browser `permission=granted` and enabled bell prove only origin consent. `show` proves scheduling success, **not a visible banner**. History entries establish presence in Notification Center, still not banner visibility or click/focus. Preserve OS authorization errors even when show/history succeed. If banner permission is denied, stop and request the user's manual action; do not alter settings, Focus, profiles, certificates, or keychain.

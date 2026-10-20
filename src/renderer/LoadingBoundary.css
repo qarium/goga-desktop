@@ -1,0 +1,44 @@
+.loading-boundary,
+.loading-content {
+  display: contents;
+}
+.loading-content[hidden] {
+  display: none !important;
+}
+.loading-state,
+.loading-error {
+  min-height: 240px;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 16px;
+  padding: 32px 16px;
+  text-align: center;
+}
+.loading-state p,
+.loading-error p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.loading-spinner {
+  width: 30px;
+  height: 30px;
+  border: 3px solid var(--line);
+  border-top-color: var(--teal);
+  border-radius: 50%;
+  animation: loading-spin 0.9s linear infinite;
+}
+@keyframes loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .loading-spinner {
+    animation: none;
+  }
+}
+
+.launch-panel > .form-actions[hidden] {
+  display: none !important;
+}

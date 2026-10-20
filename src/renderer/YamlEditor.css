@@ -1,0 +1,12 @@
+.yaml-code-editor {
+  min-width: 0;
+  max-width: 100%;
+  margin-top: 6px;
+  border: 1px solid #2d405a;
+  border-radius: 6px;
+  overflow: hidden;
+}
+.yaml-code-editor:focus-within {
+  border-color: #6da9ff;
+  box-shadow: 0 0 0 2px #6da9ff66;
+}

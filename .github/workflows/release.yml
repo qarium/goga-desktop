@@ -1,0 +1,105 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+permissions:
+  contents: read
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+env:
+  RELEASE_TAG: ${{ github.ref_name }}
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      EXPECTED_ARCH: ${{ matrix.arch }}
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Validate tag and main ancestry before installing dependencies
+        run: |
+          node scripts/release-version.mjs --check
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$GITHUB_SHA"
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Assert native runner and Node architecture (never cross-build)
+        run: |
+          case "$EXPECTED_ARCH" in
+            arm64) test "$(uname -m)" = arm64 ;;
+            x64) test "$(uname -m)" = x86_64 ;;
+            *) exit 1 ;;
+          esac
+          node -e 'if(process.platform !== "darwin" || process.arch !== process.env.EXPECTED_ARCH) process.exit(1)'
+      - run: npm ci
+      - run: npm run release:version
+      - run: npm run test:release
+      - name: Tests (native Goga CLI deliberately unavailable)
+        run: |
+          mkdir -p work
+          npm test -- --maxWorkers=1 --testTimeout=15000 --reporter=default --reporter=json --outputFile=work/vitest.json
+      - name: Exact skipped test report
+        if: always()
+        run: node scripts/test-summary.mjs work/vitest.json
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Package only this native architecture, without publishing
+        run: npm run package:release -- --"$EXPECTED_ARCH"
+      - name: Verify mounted DMG, signature, native runtime, versions and isolated UI
+        run: |
+          VERSION="$(node scripts/release-version.mjs --check)"
+          node scripts/verify-dmg.mjs "release/Goga-Desktop-$VERSION-$EXPECTED_ARCH.dmg" "$EXPECTED_ARCH" --ui
+          mkdir -p work/release-artifact
+          cp "release/Goga-Desktop-$VERSION-$EXPECTED_ARCH.dmg" work/release-artifact/
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: dmg-${{ matrix.arch }}
+          path: work/release-artifact/*.dmg
+          if-no-files-found: error
+          retention-days: 7
+          compression-level: 0
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dmg-arm64
+          path: work/release-artifact
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dmg-x64
+          path: work/release-artifact
+      - name: Create exact checksum manifest
+        run: node scripts/publish-release.mjs manifest work/release-artifact
+      - name: Draft, upload, verify server digests, then publish (never overwrite)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/publish-release.mjs publish work/release-artifact

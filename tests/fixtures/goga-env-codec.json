@@ -1,0 +1,282 @@
+[
+  {
+    "label": "empty",
+    "rows": [
+      {
+        "key": "AUDIT_BIG",
+        "value": "",
+        "runtime": true
+      }
+    ],
+    "expected": {
+      "jsonBytes": 16,
+      "payloadLineBytes": 39,
+      "rawLineBytes": [10]
+    }
+  },
+  {
+    "label": "all-controls",
+    "rows": [
+      {
+        "key": "AUDIT_BIG",
+        "value": "\u0000\u0001\u0002\u0003\u0004\u0005\u0006\u0007\b\t\n\u000b\f\r\u000e\u000f\u0010\u0011\u0012\u0013\u0014\u0015\u0016\u0017\u0018\u0019\u001a\u001b\u001c\u001d\u001e\u001f",
+        "runtime": true
+      }
+    ],
+    "expected": {
+      "jsonBytes": 188,
+      "payloadLineBytes": 267,
+      "rawLineBytes": [42]
+    }
+  },
+  {
+    "label": "del",
+    "rows": [
+      {
+        "key": "AUDIT_BIG",
+        "value": "\u007f",
+        "runtime": true
+      }
+    ],
+    "expected": {
+      "jsonBytes": 22,
+      "payloadLineBytes": 47,
+      "rawLineBytes": [11]
+    }
+  },
+  {
+    "label": "quotes",
+    "rows": [
+      {
+        "key": "AUDIT_BIG",
+        "value": "\"\\\b\t\f",
+        "runtime": true
+      }
+    ],
+    "expected": {
+      "jsonBytes": 26,
+      "payloadLineBytes": 51,
+      "rawLineBytes": [15]
+    }
+  },
+  {
+    "label": "unicode",
+    "rows": [
+      {
+        "key": "AUDIT_BIG",
+        "value": "\u00e9 e\u0301 \u042f \u6f22\u5b57 \ud83d\ude42 \ud834\udd1e \u2028\u2029",
+        "runtime": true
+      }
+    ],
+    "expected": {
+      "jsonBytes": 89,
+      "payloadLineBytes": 135,
+      "rawLineBytes": [43]
+    }
+  },
+  {
+    "label": "duplicates",
+    "rows": [
+      {
+        "key": "AUDIT_A",
+        "value": "a",
+        "runtime": true
+      },
+      {
+        "key": "AUDIT_A",
+        "value": "bbbbbbbbb",
+        "runtime": true
+      }
+    ],
+    "expected": {
+      "jsonBytes": 23,
+      "payloadLineBytes": 47,
+      "rawLineBytes": [9, 17]
+    }
+  },
+  {
+    "label": "random-2",
+    "rows": [],
+    "expected": {
+      "jsonBytes": 2,
+      "payloadLineBytes": 19,
+      "rawLineBytes": []
+    }
+  },
+  {
+    "label": "random-5",
+    "rows": [],
+    "expected": {
+      "jsonBytes": 2,
+      "payloadLineBytes": 19,
+      "rawLineBytes": []
+    }
+  },
+  {
+    "label": "random-8",
+    "rows": [
+      {
+        "key": "AUDIT_0",
+        "value": "*\u0015\u001a~8+\u6f22+c\u000b^e\u001dWX\u0017{;Ys<\nU\n\u0004_lc\r_j\u0013\u000fCD%L@\ud834\udd1e;\u6f22Ni.y)vh\u0000z\ud834\udd1eT$/>z=\tCI\u0010M\u000b3Oc|7>\u000bK\u000f\u001e\r>=\u0004=\u000eg\u0007y9xA2*=rM\u0014\u0018!Aonis\u001f\"\fM\u0005~{TK[/m\t\u0011\u6f22r\u0007Bt\u0002x\"\ud83d\ude42F\u000bl1 =j\ud834\udd1eF\u000e4i2\u0007-\u0010\u0013k\u0003`\"T\u0014\u0014\ud83d\ude42\ud834\udd1eRz+o7\ud834\udd1e%.b\u6f22\u0011j\u001c\\*\u0018n|ZAp;O\u000fuU\u001eND1Jfb8F\ud83d\ude42\"\u0004h4|8\u0004=%A:BE\ud83d\ude42",
+        "runtime": true
+      }
+    ],
+    "expected": {
+      "jsonBytes": 537,
+      "payloadLineBytes": 731,
+      "rawLineBytes": [240]
+    }
+  },
+  {
+    "label": "random-10",
+    "rows": [
+      {
+        "key": "AUDIT_0",
+        "value": "4sHO\u001f\ud83d\ude42X:f\u0007Q:\u0016\u001e[LOkL\r\u0014bb9\u0017\u0010 Bo\ud83d\ude42dJ\u0002 \r:\u0018!rUXD\u001eW]\u00064\u6f22hw\u001aoVH\u0011\u0010+B\"\u000e\"U;U\u0019.6\u007fpq_\\\u001f2sci`BH\u001f_]\nBUmr#Zb\u0002\u00144%o>\u042f\t\u001fHyDAa\u000e)\u000e\u6f22T \u0005\u00194I 3#JY-oBXhU\u001dk%BoI\\v\u00177m\u0018=](\u0017\u0006\u0006E2|I+K/wryxViY",
+        "runtime": false
+      }
+    ],
+    "expected": {
+      "jsonBytes": 2,
+      "payloadLineBytes": 19,
+      "rawLineBytes": []
+    }
+  },
+  {
+    "label": "random-16",
+    "rows": [
+      {
+        "key": "AUDIT_0",
+        "value": "%i\u001bS\u001bkO(G;h\tf\u0018&\u0001\ud83d\ude42R\u0006[\u000b\u001f\ud834\udd1e`3I\u000f\u0017\u042f0M_\u001fDyp[R\ud834\udd1eFpK,[\u0001\u001a^I\\\\EJQ<\u0012$\u0001\" \u001b\u0014\u0016m]Qhm!_(PkLY;Ii_\"\u0004\u001fy\b\"B\u0016l\u001ep\u001db\ud834\udd1emdv\u0017vYy\u0011.W<>*8;|\u0004)sq:\u000b,uS=yt\u0010z\u001f.\u0014^O\u0000xE\u001d\u00e9Z\u0007\u001d7)UA\u001fd3h",
+        "runtime": true
+      }
+    ],
+    "expected": {
+      "jsonBytes": 388,
+      "payloadLineBytes": 535,
+      "rawLineBytes": [165]
+    }
+  },
+  {
+    "label": "random-17",
+    "rows": [],
+    "expected": {
+      "jsonBytes": 2,
+      "payloadLineBytes": 19,
+      "rawLineBytes": []
+    }
+  },
+  {
+    "label": "random-23",
+    "rows": [
+      {
+        "key": "AUDIT_0",
+        "value": "4o4fJR q\u0001ya-\"p\"lP\u0002\u0001t\u0014>\";%t2J'\u0003N|\u001enJ4a\u0007\u001d\u007f\u0013\ud83d\ude42:z\"\u0016\u0014\u0006P\u0014aO\b~s6oW7:v\u00028)v#\u001fV\ud83d\ude42Q\u001c u\u0006\ud83d\ude42b9t\\pJiB\u042f\u0006=O=E\u0015\"i\\]<!>hoSe|y\u001e\"k\u0000\tZ=\u0003+R-ak<{\u0007",
+        "runtime": false
+      },
+      {
+        "key": "AUDIT_1",
+        "value": "[- \u0007Y\u0011Jxyn\u0010U26wz\u0003\u0011A5(AX^1h5\tz)",
+        "runtime": true
+      }
+    ],
+    "expected": {
+      "jsonBytes": 70,
+      "payloadLineBytes": 111,
+      "rawLineBytes": [38]
+    }
+  },
+  {
+    "label": "random-28",
+    "rows": [
+      {
+        "key": "AUDIT_0",
+        "value": "\u001fUF;y,G\u0016ax\u0004 9/\u0000>_\"1Mj>2\ud834\udd1eyAF\u001e\u0013[4x\nx\u0012a<~\u0006`nBU\u0003\"\u0016\u001be\u0002MT~2''vpF\b2\u0016\u0003\u001b\u0010=R\u0007\bn&?Ovt\ud834\udd1e\"Z8y)w\u0003\u0007\u0019\r\f\\$Ef\u00039<#,bEzX3\u001c_0B\rt\n{vv\u0001\u000ba\berdffHjki1\u0000\"\u0010\u001d`\r\fU\u6f22\u000e9 \u0012%xmMyl(b\u0001\f,fyy\b\u000f`\t\t\u007f4<$=\u0014hz,CnPME\u0015^\u0003B\u001e\u0006\u001c\rKDE\u001a\u0000IY=\b<]{",
+        "runtime": true
+      }
+    ],
+    "expected": {
+      "jsonBytes": 452,
+      "payloadLineBytes": 619,
+      "rawLineBytes": [206]
+    }
+  },
+  {
+    "label": "random-29",
+    "rows": [],
+    "expected": {
+      "jsonBytes": 2,
+      "payloadLineBytes": 19,
+      "rawLineBytes": []
+    }
+  },
+  {
+    "label": "random-30",
+    "rows": [
+      {
+        "key": "AUDIT_0",
+        "value": ":@O\u0001m\u0012\t8&E\b\u00000Wyxl\ud834\udd1e1 <[\u042f=-k)6,`)\u0010z\u0005C;\ud83d\ude42e1V >\u0010(\u042f\u000e0mvxFeMb&x\u0016mEI\u0019\u000fK3x\u001eyy+\u000eB\u0016\"\u0007\u0012UQ\ud834\udd1eWg\u0015\u001b\ud83d\ude42\u0017\u0011\u0017i,\u001coP[\u0002_\u001awf\u00192^>\u0010Wc\u001f #`<6}g\rL\u001dZ.^\u0016\u001a\u001b\u0016o\u0005{kG,R&M.\u0005w\u0018Mb`y\f\u001e\u0015 W\u0014\ns\\\u0012$B=x\u001a=_T&\u001enb\u0000M{\u0006i4[\u0013O`3=!,HR\n f\rW0J\u0000xd@\u0018EIz70",
+        "runtime": true
+      }
+    ],
+    "expected": {
+      "jsonBytes": 496,
+      "payloadLineBytes": 679,
+      "rawLineBytes": [216]
+    }
+  },
+  {
+    "label": "random-31",
+    "rows": [],
+    "expected": {
+      "jsonBytes": 2,
+      "payloadLineBytes": 19,
+      "rawLineBytes": []
+    }
+  },
+  {
+    "label": "random-32",
+    "rows": [
+      {
+        "key": "AUDIT_0",
+        "value": "t(\u0003\u0005?s\u001fKCk)l ?\u0017BfSAMVU\u042f\u0016lpM\ng\u0011\u0013nW\u0003<c,-\u00058t\u001aN\u042f\u0001 ,I\u042f4\u0006N\u0013'A\u0006HY{\u001b'<\u007fB\"G\u6f22\u0006i\u0000*vB\u0012QXB\u000e\ud83d\ude42x\u0002\u0003yB.*f5p\u00176\u0001}{I\u001eZ.jLhRD8\u0004\u0007v&V\b] AAO+7Mqs{B#^e\u000e\u0015[aC\"G>pV\".M]\u00e9%~0NB\u001fS\\\u0019\u00002\u0000^\ud83d\ude42pP/2!n[}/ \u001bSjQ\r(iRNOMiO6ehP\u0001 \u0001\u0001\u042f6\u001b~4 b\u00e9^I",
+        "runtime": false
+      }
+    ],
+    "expected": {
+      "jsonBytes": 2,
+      "payloadLineBytes": 19,
+      "rawLineBytes": []
+    }
+  },
+  {
+    "label": "random-36",
+    "rows": [
+      {
+        "key": "AUDIT_0",
+        "value": "\u0018\u0011\u0012\r\u0005Bqi!BhtV\u000eZ\u0003%\\ u \fY!<1PH6_\ud83d\ude426\t3k\u007fsF\u0012 QB_\\x\ud834\udd1eB\u000e[_\u0013q\u000edzz1Clq=9@\u00e9#5",
+        "runtime": true
+      }
+    ],
+    "expected": {
+      "jsonBytes": 167,
+      "payloadLineBytes": 239,
+      "rawLineBytes": [81]
+    }
+  },
+  {
+    "label": "random-38",
+    "rows": [
+      {
+        "key": "AUDIT_0",
+        "value": "\u000b-6~\u0014\u001e\u0005V\u001e>w:\u0002~[\u00e9\\4q\u0004\u0002C5 \rr4\u0019>\u0006M\u6f22==BO\u0016g\"\u6f22\u001b52IGkp\u0000k\u042f)Muf\r7\u0006\u0010\"\"xxJA\u0004\u0004}\u0005 \u000b\u042fn_B\u001ezC-\u0018\u001exr\u0006=\u000eXE\u0000\u001bf\u0015JNH4U]x>\u001eP\u0016z`Ug/|/j|5u\t0\u001f%?\fD\u001fX@26~\"\t\u001e\u001e\u007f\u001d\u000b;\r\u000f%G\n%<[]N>\u0019\\.mja\u00057\u0017",
+        "runtime": true
+      }
+    ],
+    "expected": {
+      "jsonBytes": 406,
+      "payloadLineBytes": 559,
+      "rawLineBytes": [169]
+    }
+  }
+]

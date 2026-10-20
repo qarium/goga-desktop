@@ -1,0 +1,41 @@
+# Private documentation at any depth, regardless of letter case
+[dD][oO][cC][sS]/
+
+# Dependencies, generated output and local work
+node_modules/
+dist*/
+release*/
+work/
+outputs/
+coverage/
+.cache/
+cache/
+caches/
+.idea/
+.DS_Store
+*.tsbuildinfo
+
+# Logs and local runtime state
+logs/
+*.log
+.goga/
+*.local
+*.local.*
+
+# Secrets and signing material
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.mobileprovision
+.aws/
+credentials*.json
+
+# Local visual references and historical acceptance harnesses (not portable)
+/reference/
+/scripts/*harness*
+/scripts/intent-sync-preload.ts
+/scripts/prototype-alignment-preload.ts
