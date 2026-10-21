@@ -208,7 +208,7 @@ it("Launch task error and preview error end loading and permit retry", async () 
   api.preview.mockRejectedValueOnce(Error("preview failed"));
   api.readTopicTask.mockRejectedValueOnce(Error("task failed"));
   render(launch());
-  await screen.findByText("preview failed");
+  await screen.findByText("task failed");
   expect(document.querySelector(".loading-state")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Повторить загрузку" }));
   await screen.findByRole("button", { name: "Перечитать задачу" });
@@ -294,16 +294,26 @@ it("YAML explicit read uses shared loader without loading unopened files", async
   ).toBeTruthy();
 });
 
-it("a failed preview ends the whole loading state even if task read is still pending", async () => {
+it("a failed preview exposes selection while a pending task remains disabled and retryable", async () => {
   api.preview.mockRejectedValueOnce(Error("preview unavailable"));
   api.readTopicTask.mockReturnValueOnce(new Promise(() => {}));
   render(launch());
   await screen.findByRole("alert");
   expect(document.querySelector(".loading-state")).toBeNull();
-  expect(screen.queryByRole("combobox", { name: "Конвейер" })).toBeNull();
+  expect(screen.getByRole("combobox", { name: "Конвейер" })).toBeTruthy();
+  expect(
+    (
+      screen.getByRole("textbox", {
+        name: "Что нужно сделать?",
+      }) as HTMLTextAreaElement
+    ).disabled,
+  ).toBe(true);
   expect(
     screen.getByRole("button", { name: "Повторить загрузку" }),
   ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Повторить загрузку" }));
+  await screen.findByDisplayValue("task");
+  expect(api.readTopicTask).toHaveBeenCalledTimes(2);
 });
 it("an empty pipeline catalog finishes without waiting for an irrelevant task", async () => {
   api.discover.mockResolvedValue({ ...catalog, pipelines: [] });

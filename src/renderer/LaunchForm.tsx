@@ -32,7 +32,7 @@ const missingProfileName = (data: Discovery, profile: string) => {
     ? selected
     : "";
 };
-const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+const message = preparationErrorMessage;
 
 export function LaunchForm({
   project,
@@ -112,6 +112,7 @@ export function LaunchForm({
   // token for the preserved selection (including skipped stages).
   const [appliedCatalogEpoch, setAppliedCatalogEpoch] = useState(0);
   const [settingsRefreshError, setSettingsRefreshError] = useState("");
+  const [settingsPreviewFailure, setSettingsPreviewFailure] = useState(false);
   const [catalogAttempt, setCatalogAttempt] = useState(0);
   const catalogKey = JSON.stringify([ownerKey, catalogAttempt]);
   const [catalogSettled, setCatalogSettled] = useState("");
@@ -185,8 +186,10 @@ export function LaunchForm({
     setClean(false);
     setSettingsRefreshing(true);
     setSettingsRefreshError("");
+    setSettingsPreviewFailure(false);
     const selectedTopic = data?.topics[Number(topicIndex)];
     (async () => {
+      let readingPreview = false;
       try {
         const fresh = await read("discover", scope);
         if (!alive || epoch !== discoveryGeneration.current) return;
@@ -235,6 +238,7 @@ export function LaunchForm({
           setPending(false);
           return;
         }
+        readingPreview = true;
         const complete = await read("preview", {
           projectId: project.id,
           ...(owner ? { context: contextRef(owner) } : {}),
@@ -258,6 +262,9 @@ export function LaunchForm({
         setSettingsRefreshing(false);
       } catch (e) {
         if (!alive || epoch !== discoveryGeneration.current) return;
+        // A valid catalog with an invalid composition remains editable, but
+        // cannot launch until an explicit retry or selection change succeeds.
+        setSettingsPreviewFailure(readingPreview);
         setSettingsRefreshError(message(e));
         setSettingsRefreshing(false);
         setPending(false);
@@ -364,6 +371,7 @@ export function LaunchForm({
     setSkips([]);
     setResetNote("Выбор пропуска стадий сброшен для нового состава.");
     fn();
+    if (settingsPreviewFailure) setSettingsRefreshAttempt((n) => n + 1);
   };
   const topic = owner
     ? { topic: owner.topic, branch: owner.branch, remote: false }
@@ -985,9 +993,9 @@ export function LaunchForm({
     (!editor.draft || editor.draft.status === "loading");
   const loadFailure =
     (!data && !catalogLoading ? error : "") ||
-    settingsRefreshError ||
-    (previewSettled === compositionKey ? previewError : "") ||
+    (!settingsPreviewFailure ? settingsRefreshError : "") ||
     (editor.draft?.status === "error" ? editor.draft.error : "");
+  const correctionError = settingsPreviewFailure ? settingsRefreshError : error;
   const formLoading =
     !suspended &&
     !loadFailure &&
@@ -998,7 +1006,16 @@ export function LaunchForm({
       (validComposition &&
         !settingsRefreshError &&
         (pending || previewSettled !== compositionKey)) ||
-      taskLoading);
+      (taskLoading &&
+        !settingsPreviewFailure &&
+        !(previewSettled === compositionKey && previewError)));
+  function retryPreparation() {
+    if (editor.draft?.status === "error" || editor.draft?.status === "loading")
+      void editor.retry();
+    if (settingsRefreshError) setSettingsRefreshAttempt((n) => n + 1);
+    else if (!data) setCatalogAttempt((n) => n + 1);
+    else setPreviewAttempt((n) => n + 1);
+  }
   return (
     <section
       className="launch-panel"
@@ -1025,21 +1042,7 @@ export function LaunchForm({
         retryLabel={
           settingsRefreshError ? "Повторить обновление каталога" : undefined
         }
-        onRetry={() => {
-          if (
-            editor.draft?.status === "error" ||
-            editor.draft?.status === "loading"
-          )
-            void editor.retry();
-          if (settingsRefreshError) setSettingsRefreshAttempt((n) => n + 1);
-          else if (!data) setCatalogAttempt((n) => n + 1);
-          else {
-            if (previewError) {
-              setPreviewError("");
-              setPreviewAttempt((n) => n + 1);
-            }
-          }
-        }}
+        onRetry={retryPreparation}
       >
         {!data ? (
           <div className="loading">
@@ -1485,14 +1488,16 @@ export function LaunchForm({
             </p>
           </fieldset>
         )}
-        {data && error && !loadFailure && (
+        {data && correctionError && !loadFailure && (
           <div role="alert" className="error">
-            {error}
+            {correctionError}
           </div>
         )}
-        {data && error && !pending && (
-          <button type="button" onClick={() => setPreviewAttempt((n) => n + 1)}>
-            Повторить загрузку
+        {data && correctionError && !pending && (
+          <button type="button" onClick={retryPreparation}>
+            {settingsRefreshError
+              ? "Повторить обновление каталога"
+              : "Повторить загрузку"}
           </button>
         )}
       </LoadingBoundary>
