@@ -79,6 +79,7 @@ async function fixture() {
     },
   ];
   const mutations: { args: string[]; input?: string }[] = [];
+  let onBoardRead: (() => Promise<void>) | undefined;
   let failSwitch = false;
   let failMutation = false;
   const runner: Runner = {
@@ -87,6 +88,8 @@ async function fixture() {
     command: async (exe, args, cwd, env, input?: string) => {
       if (exe === "git") return node.command(exe, args, cwd, env);
       if (args.includes("board")) {
+        if (!args.includes("--remote") && !args.includes("--per-host"))
+          await onBoardRead?.();
         const data = args.includes("--remote") ? remote : [...rows, ...remote];
         return {
           stdout: JSON.stringify(
@@ -136,6 +139,9 @@ async function fixture() {
     mutations,
     board,
     request,
+    onBoardRead: (callback: () => Promise<void>) => {
+      onBoardRead = callback;
+    },
     failMutation: () => {
       failMutation = true;
     },
@@ -690,3 +696,57 @@ it.each([false, true])(
     );
   },
 );
+
+it("re-reads a fresh board after pipeline finalization changes files during catalog reading", async () => {
+  const f = await fixture();
+  let reads = 0;
+  f.onBoardRead(async () => {
+    if (++reads === 1) {
+      await writeFile(path.join(f.repo, "pipeline-result.txt"), "Finished");
+      f.rows[0]!.statuses = ["done"];
+    }
+  });
+  const board = await f.board();
+  expect(reads).toBe(2);
+  expect(board.records[0]!.statuses).toEqual(["done"]);
+  expect(board.revision).toBe((await f.board()).revision);
+  expect(f.mutations).toEqual([]);
+});
+it("bounds catalog retries when project state never settles and does not report a stale confirmation", async () => {
+  const f = await fixture();
+  let reads = 0;
+  f.onBoardRead(async () => {
+    await writeFile(path.join(f.repo, "pipeline-result.txt"), String(++reads));
+  });
+  await expect(f.board()).rejects.toThrow(
+    "Данные проекта меняются во время загрузки топиков. Повторите загрузку через несколько секунд.",
+  );
+  expect(reads).toBe(3);
+  expect(f.mutations).toEqual([]);
+});
+it("does not retry unrelated catalog command failures", async () => {
+  const f = await fixture();
+  let reads = 0;
+  f.onBoardRead(async () => {
+    reads++;
+    throw Error("CLI unavailable");
+  });
+  await expect(f.board()).rejects.toThrow("Операция Goga не выполнена");
+  expect(reads).toBe(1);
+  expect(f.mutations).toEqual([]);
+});
+
+it("does not refresh an operation confirmation when its board read retries", async () => {
+  const f = await fixture();
+  const request = await f.request();
+  let reads = 0;
+  f.onBoardRead(async () => {
+    if (++reads === 1)
+      await writeFile(path.join(f.repo, "pipeline-result.txt"), "Finished");
+  });
+  await expect(f.service.prepareTopicOperation(request)).rejects.toThrow(
+    "Каталог изменился; обновите данные.",
+  );
+  expect(reads).toBe(2);
+  expect(f.mutations).toEqual([]);
+});

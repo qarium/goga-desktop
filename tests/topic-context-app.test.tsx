@@ -318,3 +318,65 @@ it("closing a background contextual tab preserves the current project page", asy
     screen.queryByRole("region", { name: "Запуски выбранного топика" }),
   ).toBeNull();
 });
+
+it("keeps completed pipeline output while a readable catalog error and retry sit outside the fixed header", async () => {
+  const pipeline = {
+    ...run,
+    kind: "pipeline",
+    pipeline: "refinement",
+    status: "running",
+  };
+  api.runs.mockResolvedValue([pipeline]);
+  render(<App />);
+  await screen.findByRole("button", { name: /Alpha/ });
+  await waitFor(() => expect(api.readTopicBoard).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Открыть запуск refinement" }),
+  );
+  const reason =
+    "Данные проекта меняются во время загрузки топиков. Повторите загрузку через несколько секунд.";
+  api.readTopicBoard.mockRejectedValueOnce(
+    new Error(
+      `Error invoking remote method 'goga:read-request': Error: ${reason}`,
+    ),
+  );
+  await act(async () => emitRuns([{ ...pipeline, status: "exited" }]));
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).toBe(reason);
+  expect(alert.closest(".project-bar")).toBeNull();
+  expect(
+    screen.getByRole("heading", { name: "Процесс завершён" }),
+  ).toBeTruthy();
+  expect(screen.getByText("Finished fixture")).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Повторить загрузку топиков" }),
+  );
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(screen.getByText("Finished fixture")).toBeTruthy();
+  expect(api.launchBuild).not.toHaveBeenCalled();
+});
+
+it("keeps catalog errors outside the native dashboard column while a pipeline is visible", async () => {
+  const pipeline = {
+    ...run,
+    kind: "pipeline",
+    pipeline: "refinement",
+    status: "running",
+    url: "http://127.0.0.1:8000",
+  };
+  api.runs.mockResolvedValue([pipeline]);
+  api.readTopicBoard.mockRejectedValue(new Error("Catalog unavailable"));
+  render(<App />);
+  await screen.findByRole("button", { name: /Alpha/ });
+  fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Открыть запуск refinement" }),
+  );
+  await waitFor(() =>
+    expect(api.selectRun).toHaveBeenLastCalledWith(pipeline.id),
+  );
+  const alert = await screen.findByRole("alert");
+  expect(alert.closest(".sidebar")).not.toBeNull();
+  expect(document.querySelector(".main-area .context-board-error")).toBeNull();
+});

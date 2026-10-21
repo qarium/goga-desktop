@@ -1355,3 +1355,32 @@ code {
   font-weight: 600;
   font-variant-numeric: tabular-nums;
 }
+
+/* Catalog refresh failures are flow content, not children of the fixed header. */
+.context-board-error {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 16px;
+  padding: 10px 25px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  overflow-wrap: anywhere;
+}
+.context-board-error p {
+  flex: 1 1 320px;
+  min-width: 0;
+  margin: 0;
+}
+.context-board-error button {
+  flex: 0 0 auto;
+  max-width: 100%;
+  white-space: normal;
+}
+
+.sidebar .context-board-error {
+  padding: 10px;
+  max-height: 40%;
+  overflow-y: auto;
+}

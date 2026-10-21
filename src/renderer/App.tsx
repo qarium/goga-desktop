@@ -1,3 +1,4 @@
+import { topicError } from "./TopicsCommon";
 import { preparationErrorMessage } from "./preparation-error";
 import {
   buildRepeatPreparationSchema,
@@ -721,7 +722,7 @@ export function App() {
         if (alive) setCurrentTopics(b);
       },
       (e) => {
-        if (alive) setCurrentTopicsError(message(e));
+        if (alive) setCurrentTopicsError(topicError(e));
       },
     );
     return () => {
@@ -802,6 +803,19 @@ export function App() {
       return;
     action();
   }
+  // Native Dashboard bounds are fixed. Keep errors outside its column while
+  // it is visible; once the run ends the message can use normal main flow.
+  const catalogError = page !== "settings" && currentTopicsError && (
+    <div className="context-board-error">
+      <p role="alert">{currentTopicsError}</p>
+      <button
+        type="button"
+        onClick={() => setTopicsRevision((value) => value + 1)}
+      >
+        Повторить загрузку топиков
+      </button>
+    </div>
+  );
   return (
     <div className="app-shell">
       <header className="titlebar">
@@ -867,6 +881,7 @@ export function App() {
         >
           ⚙ <span>Настройки</span>
         </button>
+        {visibleRun && catalogError}
         <small className="sidebar-footer">
           <span>© Goga 2026</span>
           <span className="app-version">v{version}</span>
@@ -957,17 +972,6 @@ export function App() {
                 ? "Настройки"
                 : (project?.name ?? "Goga Desktop")}
             </h1>
-            {page !== "settings" && currentTopicsError && (
-              <div className="context-board-error">
-                <p role="alert">{currentTopicsError}</p>
-                <button
-                  type="button"
-                  onClick={() => setTopicsRevision((value) => value + 1)}
-                >
-                  Повторить загрузку топиков
-                </button>
-              </div>
-            )}
           </div>
           {error && (
             <p className="close-error" role="alert" title={error}>
@@ -1008,6 +1012,7 @@ export function App() {
             </div>
           )}
         </div>
+        {!visibleRun && catalogError}
         {page === "settings" && (
           <div className="scroll-area">
             <Settings

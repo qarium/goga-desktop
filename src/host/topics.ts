@@ -1,4 +1,5 @@
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { lstat, open, readlink, readdir } from "node:fs/promises";
 import { constants } from "node:fs";
 import { randomUUID, createHash } from "node:crypto";
@@ -77,6 +78,15 @@ const stale = () =>
   new Error(
     "Подтверждение устарело: проект, ветки, задача или настройки изменились. Обновите данные.",
   );
+/** A read raced repository changes; never use this as a mutation retry signal. */
+class TopicSnapshotChangedError extends Error {
+  constructor() {
+    super(
+      "Данные проекта меняются во время загрузки топиков. Повторите загрузку через несколько секунд.",
+    );
+    this.name = "TopicSnapshotChangedError";
+  }
+}
 async function refs(d: TopicsContext): Promise<Ref[]> {
   const raw = await d.git([
     "for-each-ref",
@@ -107,7 +117,7 @@ async function workingFileDigest(file: string): Promise<string> {
   );
   try {
     const before = await handle.stat();
-    if (!before.isFile()) throw stale();
+    if (!before.isFile()) throw new TopicSnapshotChangedError();
     const hash = createHash("sha256"),
       buffer = Buffer.alloc(64 * 1024);
     let offset = 0;
@@ -118,7 +128,7 @@ async function workingFileDigest(file: string): Promise<string> {
         Math.min(buffer.length, before.size - offset),
         offset,
       );
-      if (!bytesRead) throw stale();
+      if (!bytesRead) throw new TopicSnapshotChangedError();
       hash.update(buffer.subarray(0, bytesRead));
       offset += bytesRead;
     }
@@ -135,7 +145,7 @@ async function workingFileDigest(file: string): Promise<string> {
       current.ctimeMs !== before.ctimeMs ||
       current.isSymbolicLink()
     )
-      throw stale();
+      throw new TopicSnapshotChangedError();
     await noSymlinks(file);
     return hash.digest("hex");
   } finally {
@@ -234,6 +244,22 @@ export class TopicsDomain {
   }
   async board(d: TopicsContext, year: string): Promise<TopicBoardSnapshot> {
     topicYearSchema.parse(year);
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await this.boardSnapshot(d, year);
+      } catch (error) {
+        if (!(error instanceof TopicSnapshotChangedError) || attempt >= 2)
+          throw error;
+        // Finalization may still be writing. Restart the complete read, never
+        // accept a mixed snapshot or retry a prepared mutation/confirmation.
+        await delay(100 * (attempt + 1));
+      }
+    }
+  }
+  private async boardSnapshot(
+    d: TopicsContext,
+    year: string,
+  ): Promise<TopicBoardSnapshot> {
     const before = await state(d, year);
     const args = ["topics", "--year", year, "board", "--json"];
     let entries, records, remoteEntries, remoteRecords;
@@ -254,7 +280,8 @@ export class TopicsDomain {
       throw error;
     }
     const after = await state(d, year);
-    if (before.revision !== after.revision) throw stale();
+    if (before.revision !== after.revision)
+      throw new TopicSnapshotChangedError();
     const own = records.find(
       (r) =>
         !r.remote &&
