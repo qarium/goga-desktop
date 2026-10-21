@@ -50,7 +50,7 @@ export function LaunchForm({
 }: {
   project: Project;
   owner?: TopicContextRef;
-  blocked?: boolean;
+  blocked?: boolean | string;
   onLaunched: (run: Run, stale?: boolean) => void;
   onCancel: () => void;
   onBusyChange?: (projectId: string, busy: boolean) => void;
@@ -1254,7 +1254,7 @@ export function LaunchForm({
             )}
             {blocked && (
               <p className="error" role="status">
-                В этой рабочей копии уже выполняется запуск.
+                {typeof blocked === "string" ? blocked : "Запуск в этой рабочей копии временно недоступен."}
               </p>
             )}
             <div

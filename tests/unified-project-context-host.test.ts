@@ -4,6 +4,7 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { HostService } from "../src/host/service";
+import type { RunRecoveryManager } from "../src/host/run-recovery";
 import { CloneManager } from "../src/host/clones";
 import { WorktreeManager } from "../src/host/worktrees";
 import { DesktopStateStore } from "../src/host/desktop-state";
@@ -157,7 +158,9 @@ async function createFixture(scope: FixtureScope) {
     goga: "synthetic-goga",
     runner,
   });
+  let crashed = false;
   scope.cleanup(async () => {
+    if (crashed) return;
     await Promise.allSettled(
       rawService.runs().map((run) => rawService.stop(run.id)),
     );
@@ -240,6 +243,20 @@ async function createFixture(scope: FixtureScope) {
     calls,
     starts,
     runner,
+    rawService,
+    // Simulate host loss with synthetic EventEmitter children only: release local
+    // observers/timers, leave the durable active run untouched for real initialize().
+    crash: async () => {
+      const internal = rawService as any;
+      await internal.runSaveTail;
+      for (const entry of internal.children.values()) {
+        entry.cancel();
+        entry.output.dispose();
+      }
+      internal.children.clear();
+      internal.disposed = true;
+      crashed = true;
+    },
     service,
     project,
     manager,
@@ -692,6 +709,295 @@ describe(
           await expect(read()).rejects.toThrow();
         expect(await bytes(f.primary)).toEqual(before);
         expect(f.starts).toHaveLength(0);
+      },
+    );
+  },
+);
+
+async function launchRequests(
+  f: Awaited<ReturnType<typeof fixture>>,
+  index: number,
+) {
+  const owner = f.owners[index];
+  const context = typeof owner.scope === "string" ? undefined : owner.scope;
+  return {
+    owner,
+    context,
+    pipeline: async () => {
+      const pipeline = {
+        projectId: f.project.id,
+        context,
+        pipeline: "work",
+        workflow: "none",
+        profile: "",
+        skips: [],
+      };
+      const preview = await f.service.preview(pipeline);
+      const task = await f.service.readTopicTask({
+        projectId: f.project.id,
+        context,
+        branch: owner.branch,
+        topic: owner.branch,
+      });
+      return {
+        ...pipeline,
+        previewToken: preview.token,
+        topic: {
+          mode: "existing" as const,
+          branch: owner.branch,
+          topic: owner.branch,
+        },
+        task: task.text,
+        taskVersion: task.version,
+        confirmEmptyTask: true,
+        expectedBranch: owner.branch,
+        confirmBranchSwitch: false,
+        clean: false,
+      };
+    },
+    build: async () => {
+      const build = await f.service.buildContext(owner.scope);
+      const plan = await f.service.readBuildPlan(owner.scope, "plan.md");
+      return {
+        projectId: f.project.id,
+        context,
+        expectedBranch: owner.branch,
+        contextRevision: build.revision,
+        planPath: plan.path,
+        planVersion: plan.version,
+        options: {},
+        confirmClean: false,
+      };
+    },
+  };
+}
+
+describe.each([0, 1])(
+  "concurrent runs in owner %s (primary / clone)",
+  { timeout: gitIntegrationBudget(60000) },
+  (index) => {
+    it("admits pipelines and one racing build; keeps siblings/output/guards after independent stops", async () => {
+      const f = await fixture();
+      const r = await launchRequests(f, index);
+      const first = await f.service.launch(await r.pipeline());
+      const second = await f.service.launch(await r.pipeline());
+      const buildRequest = await r.build();
+      const builds = await Promise.allSettled([
+        f.service.launchBuild(buildRequest),
+        f.service.launchBuild(buildRequest),
+      ]);
+      expect(builds.filter((x) => x.status === "fulfilled")).toHaveLength(1);
+      expect(builds.filter((x) => x.status === "rejected")).toHaveLength(1);
+      const build = builds.find((x) => x.status === "fulfilled")!;
+      if (build.status !== "fulfilled") throw Error("build expected");
+      // A build must not block new pipeline admission either.
+      const third = await f.service.launch(await r.pipeline());
+      expect(f.starts).toHaveLength(4);
+      expect(f.starts.every((x) => x.cwd === r.owner.path)).toBe(true);
+      f.starts[0].child.stdout.write("first-only\n");
+      f.starts[1].child.stdout.write("second-only\n");
+      await vi.waitFor(() =>
+        expect(
+          f.service.runs().find((x) => x.id === first.id)?.output?.text,
+        ).toContain("first-only"),
+      );
+      expect(
+        f.service.runs().find((x) => x.id === second.id)?.output?.text,
+      ).not.toContain("first-only");
+      await f.service.stop(third.id); // newest membership must not release older siblings
+      await f.service.stop(build.value.id);
+      await f.service.stop(first.id);
+      expect(f.service.runs().find((x) => x.id === second.id)?.status).toBe(
+        "starting",
+      );
+      const config = await f.service.readProjectDocument(r.owner.scope, {
+        kind: "config",
+      });
+      await expect(
+        f.service.saveProjectDocument(
+          r.owner.scope,
+          { kind: "config" },
+          "# denied\n",
+          config.version,
+        ),
+      ).rejects.toThrow(/занят/);
+      // Check membership independently of run-list fallback guards.
+      const memberships = (
+        f.rawService as unknown as { activeKeys: Map<string, Set<string>> }
+      ).activeKeys;
+      expect([...memberships.values()].flatMap((x) => [...x])).toContain(
+        second.id,
+      );
+      if (r.context) {
+        expect((await f.service.syncTopicContext(r.context)).status).toBe(
+          "waiting",
+        );
+        await expect(
+          f.service.prepareContextApply(r.context),
+        ).rejects.toThrow();
+        await expect(
+          f.service.prepareContextDeletion(r.context),
+        ).rejects.toThrow();
+        expect(
+          (await f.service.topicSyncStatus(r.context)).waitingRunIds,
+        ).toEqual(expect.arrayContaining([first.id, third.id, build.value.id]));
+      } else {
+        const request = await r.pipeline();
+        await expect(
+          f.service.launch({
+            ...request,
+            topic: { mode: "new", name: "other", baseRef: "HEAD" },
+            taskVersion: undefined,
+            confirmBranchSwitch: true,
+          }),
+        ).rejects.toThrow(/актив|работает|занят/i);
+        await expect(
+          f.service.launch({
+            ...request,
+            topic: { mode: "existing", branch: "alpha", topic: "alpha" },
+            confirmBranchSwitch: true,
+          }),
+        ).rejects.toThrow(/актив|работает|занят/i);
+        expect(await f.service.checkoutBranch(f.project.id)).toBe(
+          r.owner.branch,
+        );
+      }
+      await f.service.stop(second.id);
+      expect(memberships.size).toBe(0);
+      if (r.context) {
+        const sync = await f.service.topicSyncStatus(r.context);
+        expect(sync.status).toBe("synced");
+        expect(sync.waitingRunIds).toEqual([]);
+      }
+    });
+    it("failed spawn and failed kill never release a sibling or admit a second build", async () => {
+      const f = await fixture();
+      const r = await launchRequests(f, index);
+      const first = await f.service.launch(await r.pipeline());
+      const start = vi.spyOn(f.runner, "start");
+      start.mockImplementationOnce(() => {
+        throw Error("synthetic spawn failure");
+      });
+      await expect(f.service.launchBuild(await r.build())).rejects.toThrow(
+        /запустить сборку/,
+      );
+      start.mockImplementationOnce(() => {
+        throw Error("synthetic pipeline failure");
+      });
+      await expect(f.service.launch(await r.pipeline())).rejects.toThrow(
+        /synthetic pipeline failure/,
+      );
+      expect(
+        [...(f.rawService as any).activeKeys.values()].flatMap((x: any) => [
+          ...x,
+        ]),
+      ).toContain(first.id);
+      const build = await f.service.launchBuild(await r.build());
+      const kill = vi.spyOn(f.runner, "kill");
+      kill.mockRejectedValueOnce(Error("synthetic kill failure"));
+      await expect(f.service.stop(build.id)).rejects.toThrow(/остановить/);
+      await expect(f.service.launchBuild(await r.build())).rejects.toThrow(
+        /сборк|работает/i,
+      );
+      await f.service.stop(first.id);
+      expect(f.service.runs().find((x) => x.id === build.id)?.status).toBe(
+        "running",
+      );
+      await f.service.stop(build.id);
+      const sibling = await f.service.launch(await r.pipeline());
+      const replacement = await f.service.launchBuild(await r.build());
+      expect(replacement.status).toBe("running");
+      f.starts.at(-1)!.child.emit("close", 1, null);
+      await vi.waitFor(() =>
+        expect(
+          f.service.runs().find((x) => x.id === replacement.id)?.status,
+        ).toBe("failed"),
+      );
+      expect(f.service.runs().find((x) => x.id === sibling.id)?.status).toBe(
+        "starting",
+      );
+      expect(
+        [...(f.rawService as any).activeKeys.values()].flatMap((x: any) => [
+          ...x,
+        ]),
+      ).toContain(sibling.id);
+    });
+  },
+);
+
+describe.each([0, 1])(
+  "recovered concurrent owner %s",
+  { timeout: gitIntegrationBudget(60000) },
+  (index) => {
+    it.each(["unverified", "confirmed-pipeline", "confirmed-build"])(
+      "preserves admission for %s after persisted restart",
+      async (mode) => {
+        const f = await fixture();
+        const r = await launchRequests(f, index);
+        const previous =
+          mode === "confirmed-build"
+            ? await f.service.launchBuild(await r.build())
+            : await f.service.launch(await r.pipeline());
+        await f.crash();
+        const restored = new HostService({
+          home: f.home,
+          dataDir: path.join(f.home, "data"),
+          goga: "synthetic-goga",
+          runner: f.runner,
+          ...(mode === "unverified"
+            ? {}
+            : {
+                recovery: {
+                  reconcile: async () => ({ state: "alive" }),
+                  launch: async (input: {
+                    exe: string;
+                    args: string[];
+                    cwd: string;
+                    env: NodeJS.ProcessEnv;
+                  }) => ({
+                    child: f.runner.start(
+                      input.exe,
+                      input.args,
+                      input.cwd,
+                      input.env,
+                    ),
+                  }),
+                } as unknown as RunRecoveryManager,
+              }),
+        });
+        scope.cleanup(() => restored.dispose());
+        await restored.initialize();
+        expect(
+          restored.runs().find((x) => x.id === previous.id)?.recovery,
+        ).toBe(mode === "unverified" ? "unverified" : "confirmed");
+        // Obtain fresh tokens from the restored host, never reuse another host's consent.
+        const requests = await launchRequests(
+          { ...f, service: restored },
+          index,
+        );
+        if (mode === "unverified") {
+          await expect(
+            restored.launch(await requests.pipeline()),
+          ).rejects.toThrow(/не подтверждено/);
+          await expect(
+            restored.launchBuild(await requests.build()),
+          ).rejects.toThrow(/не подтверждено/);
+        } else {
+          expect(
+            (await restored.launch(await requests.pipeline())).status,
+          ).toBe("starting");
+          if (mode === "confirmed-build") {
+            await expect(
+              restored.launchBuild(await requests.build()),
+            ).rejects.toThrow(/сборка/);
+          } else {
+            expect(
+              (await restored.launchBuild(await requests.build())).status,
+            ).toBe("running");
+          }
+        }
+        // Only synthetic children owned by the restored service are stopped here.
+        await restored.dispose();
       },
     );
   },

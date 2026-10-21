@@ -49,3 +49,22 @@ export function workspacePath(
     );
   return { full, display };
 }
+
+/** UI admission mirrors host policy; it never grants execution authority. */
+export function workspaceLaunchBlockReason(
+  runs: Run[],
+  projectId: string,
+  owner: TopicContextIdentity | null,
+  kind: "pipeline" | "build",
+): string {
+  const active = runs.filter(
+    (run) =>
+      runMatchesWorkspace(run, projectId, owner) &&
+      (run.status === "starting" || run.status === "running"),
+  );
+  if (active.some((run) => run.recovery === "unverified"))
+    return "Сначала проверьте состояние процесса после перезапуска.";
+  if (kind === "build" && active.some((run) => run.kind === "build"))
+    return "В этой рабочей копии уже выполняется сборка.";
+  return "";
+}

@@ -1,11 +1,11 @@
 import { useEffect, useId, useRef, useState } from "react";
 import {
   contextKey,
-  contextRunActivity,
   type RunKind,
   type RunWithContext,
   type TopicContextIdentity,
 } from "./topic-context";
+import { workspaceLaunchBlockReason } from "./workspace-context";
 import "./ContextRuns.css";
 
 export interface ContextLaunchMenuProps {
@@ -15,6 +15,7 @@ export interface ContextLaunchMenuProps {
   disabled?: boolean;
   blockedReason?: string;
   prepareWithoutContext?: boolean;
+  primaryProjectId?: string;
 }
 
 /** Opens preparation only; writer guards remain enforced by the host as well. */
@@ -25,6 +26,7 @@ export function ContextLaunchMenu({
   disabled = false,
   blockedReason,
   prepareWithoutContext = false,
+  primaryProjectId,
 }: ContextLaunchMenuProps) {
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -33,16 +35,28 @@ export function ContextLaunchMenu({
   const focusEdge = useRef<"first" | "last">("first");
   const id = useId();
   const key = context ? contextKey(context) : null;
-  const { activeBuild, activePipeline } = contextRunActivity(runs, context);
+  const projectId = context?.projectId ?? primaryProjectId ?? "";
+  const pipelineReason = workspaceLaunchBlockReason(
+    runs,
+    projectId,
+    context,
+    "pipeline",
+  );
+  const buildReason = workspaceLaunchBlockReason(
+    runs,
+    projectId,
+    context,
+    "build",
+  );
+  const activeBuild = !!buildReason && !pipelineReason;
   const inactive = disabled;
   const reason =
     blockedReason ||
+    pipelineReason ||
     (!context && !prepareWithoutContext
       ? "Выберите топик и проверенную рабочую копию для подготовки запуска."
-      : activePipeline
-        ? "В этой рабочей копии выполняется конвейер. Новый запуск доступен после его завершения."
-        : "");
-  const blocked = Boolean(reason || activeBuild);
+      : "");
+  const blocked = Boolean(reason);
   const reasonId = `${id}-reason`;
   const buildHintId = `${id}-build-hint`;
   const describedBy =
@@ -71,7 +85,7 @@ export function ContextLaunchMenu({
     if (restoreFocus) trigger.current?.focus();
   };
   const prepare = (kind: RunKind) => {
-    if (inactive || blocked) return;
+    if (inactive || blocked || (kind === "build" && activeBuild)) return;
     close(true);
     onPrepare(kind);
   };
@@ -162,7 +176,7 @@ export function ContextLaunchMenu({
             type="button"
             role="menuitem"
             disabled={blocked}
-            aria-describedby={describedBy}
+            aria-describedby={reason ? reasonId : undefined}
             onClick={() => prepare("pipeline")}
           >
             Конвейер<small>Описать задачу и настроить запуск</small>

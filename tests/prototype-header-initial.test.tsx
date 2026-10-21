@@ -242,7 +242,7 @@ it("primary header shows only original-folder runs, activity and launch guards",
     screen
       .getAllByRole("menuitem")
       .every((item) => item.hasAttribute("disabled")),
-  ).toBe(true);
+  ).toBe(false);
   expect(api.ensureTopicContext).not.toHaveBeenCalled();
   expect(api.resolveTopicContext).not.toHaveBeenCalled();
   assertNoExecution();
@@ -378,7 +378,7 @@ it.each(["missing", "linked"])(
   },
 );
 it.each(["build", "pipeline"])(
-  "ready %s owner activity is scoped and preparation stays guarded",
+  "ready %s owner activity blocks only a second build",
   async (kind) => {
     api.listTopicContexts.mockResolvedValue([owner]);
     api.runs.mockResolvedValue([
@@ -400,14 +400,8 @@ it.each(["build", "pipeline"])(
       expect(screen.queryByRole("menuitem", { name: /^Сборка/ })).toBeNull();
       expect(screen.getByText("Сборка уже выполняется")).toBeTruthy();
     } else
-      expect(
-        screen.getByText(/В этой рабочей копии выполняется конвейер/),
-      ).toBeTruthy();
-    expect(
-      screen
-        .getAllByRole("menuitem")
-        .every((item) => item.hasAttribute("disabled")),
-    ).toBe(true);
+      expect(screen.getByRole("menuitem", { name: /^Сборка/ }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("menuitem", { name: /^Конвейер/ }).hasAttribute("disabled")).toBe(false);
     assertNoExecution();
   },
 );
@@ -511,7 +505,7 @@ it("times out preparation finitely and reuses the in-flight write on explicit re
     vi.useRealTimers();
   }
 });
-it("an initial verified owner that becomes busy returns to its contextual history instead of leaving inert preparation", async () => {
+it("an initial verified owner with another pipeline continues preparing a new pipeline", async () => {
   let finish!: (value: any) => void;
   api.listTopicContexts.mockResolvedValue([owner]);
   api.resolveTopicContext.mockReturnValue(
@@ -525,18 +519,18 @@ it("an initial verified owner that becomes busy returns to its contextual histor
     emitRuns([historical(owner, { status: "starting" })]);
     finish(owner);
   });
-  await screen.findByRole("region", { name: "Запуски выбранного топика" });
+  await screen.findByRole("textbox", { name: "Что нужно сделать?" });
   expect(
     screen
       .getByRole("button", { name: "Запуски" })
       .querySelector(".context-active-count")?.textContent,
   ).toBe("1");
-  expect(api.discover).not.toHaveBeenCalled();
+  expect(api.discover).toHaveBeenCalled();
   assertNoExecution();
 });
 
 it.each(["build", "pipeline"])(
-  "explicit known %s owner supplies exact activity and writer guards",
+  "explicit known %s owner supplies exact activity and kind-specific admission",
   async (kind) => {
     const other = {
       ...owner,
@@ -565,14 +559,8 @@ it.each(["build", "pipeline"])(
       expect(screen.queryByRole("menuitem", { name: /^Сборка/ })).toBeNull();
       expect(screen.getByText("Сборка уже выполняется")).toBeTruthy();
     } else
-      expect(
-        screen.getByText(/В этой рабочей копии выполняется конвейер/),
-      ).toBeTruthy();
-    expect(
-      screen
-        .getAllByRole("menuitem")
-        .every((item) => item.hasAttribute("disabled")),
-    ).toBe(true);
+      expect(screen.getByRole("menuitem", { name: /^Сборка/ }).hasAttribute("disabled")).toBe(false);
+    expect(screen.getByRole("menuitem", { name: /^Конвейер/ }).hasAttribute("disabled")).toBe(false);
     expect(api.selectTopicContext).toHaveBeenLastCalledWith(
       expect.objectContaining({ contextId: owner.contextId }),
     );

@@ -715,7 +715,7 @@ it("prepares a restart repeat with safe options and missing secret inputs, never
     }),
   ).rejects.toThrow(/CANARY_TOKEN|окружени|значени/);
 });
-it("keeps a confirmed recovered primary run reserved against another writer", async () => {
+it("keeps an unverified recovered primary run reserved against another writer", async () => {
   const f = await setup();
   const request = await f.request();
   (f.service as any).runList.push({
@@ -728,7 +728,7 @@ it("keeps a confirmed recovered primary run reserved against another writer", as
     workflow: null,
     profile: null,
     startedAt: new Date().toISOString(),
-    recovery: "confirmed",
+    recovery: "unverified",
   });
   await expect(f.service.launchBuild(request)).rejects.toThrow(
     /уже работает|не подтверждено/,

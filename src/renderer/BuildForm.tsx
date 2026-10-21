@@ -116,7 +116,7 @@ export function BuildForm({
   draftId?: string;
   revision?: string;
   suspended?: boolean;
-  blocked?: boolean;
+  blocked?: boolean | string;
   onBusyChange?: (projectId: string, busy: boolean) => void;
 }) {
   const scope = owner ? contextRef(owner) : project.id;
@@ -382,7 +382,7 @@ export function BuildForm({
     suspended ||
     contextSettled !== contextKey ||
     planSettled !== planKey ||
-    blocked ||
+    !!blocked ||
     loading ||
     planLoading ||
     !plan ||
@@ -1050,8 +1050,7 @@ export function BuildForm({
           </div>
           {blocked && (
             <p className="hint">
-              В этом checkout уже работает запуск. Дождитесь завершения или
-              остановите его.
+              {typeof blocked === "string" ? blocked : "В этой рабочей копии уже выполняется сборка."}
             </p>
           )}
         </fieldset>

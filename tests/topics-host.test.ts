@@ -410,7 +410,7 @@ it("active repo blocks preparation and execution, but permits board and details 
   const f = await fixture();
   const p = await f.service.prepareTopicOperation(await f.request());
   const key = await (f.service as any).key(f.project);
-  (f.service as any).activeKeys.set(key, "running-fixture");
+  (f.service as any).activeKeys.set(key, new Set(["running-fixture"]));
   expect((await f.board()).active).toBe(true);
   const d = await f.service.readTopicDetails(f.project.id, "2025", {
     topic: "main",
@@ -512,7 +512,7 @@ it("reads board and task during an active run with a large unrelated untracked f
     Buffer.alloc(9 * 1024 * 1024, 65),
   );
   const key = await (f.service as any).key(f.project);
-  (f.service as any).activeKeys.set(key, "running-fixture");
+  (f.service as any).activeKeys.set(key, new Set(["running-fixture"]));
   try {
     const board = await f.board();
     expect(board.active).toBe(true);

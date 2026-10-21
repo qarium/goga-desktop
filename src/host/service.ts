@@ -196,7 +196,7 @@ export class HostService extends EventEmitter {
   >();
   private closeFlights = new Map<string, Promise<boolean>>();
   private stopFlights = new Map<string, Promise<void>>();
-  private activeKeys = new Map<string, string>();
+  private activeKeys = new Map<string, Set<string>>();
   private worktrees: WorktreeManager;
   private contextPreparations = new Map<string, Promise<WorktreeRecord>>();
   private disposed = false;
@@ -307,21 +307,45 @@ export class HostService extends EventEmitter {
     });
     return work;
   }
-  private assertRunIdle(p: Project, key: string) {
+  private activeRuns(p: Project, key: string): Run[] {
+    const binding = this.binding(p);
+    const members = this.activeKeys.get(key);
+    return this.runList.filter(
+      (run) =>
+        members?.has(run.id) ||
+        ((binding
+          ? run.context?.contextId === binding.contextId
+          : run.projectId === p.id && !run.context) &&
+          (["starting", "running"].includes(run.status) ||
+            this.children.has(run.id))),
+    );
+  }
+  private assertRunAdmission(
+    p: Project,
+    key: string,
+    kind: "pipeline" | "build",
+  ) {
+    const active = this.activeRuns(p, key);
     if (
-      this.activeKeys.has(key) ||
-      (this.binding(p) && this.contextActive(this.binding(p)!.contextId)) ||
-      (!this.binding(p) &&
-        this.runList.some(
-          (r) =>
-            r.projectId === p.id &&
-            !r.context &&
-            (r.status === "starting" || r.status === "running"),
-        ))
+      active.some(
+        (run) => !this.children.has(run.id) && run.recovery !== "confirmed",
+      )
     )
       throw Error(
-        "В этом репозитории уже работает процесс или его состояние не подтверждено после перезапуска.",
+        "Состояние процесса не подтверждено после перезапуска. Проверьте запуск перед продолжением.",
       );
+    if (kind === "build" && active.some((run) => run.kind === "build"))
+      throw Error("В этом репозитории уже работает сборка.");
+  }
+  private addActiveRun(key: string, id: string) {
+    const members = this.activeKeys.get(key) ?? new Set<string>();
+    members.add(id);
+    this.activeKeys.set(key, members);
+  }
+  private removeActiveRun(key: string, id: string) {
+    const members = this.activeKeys.get(key);
+    members?.delete(id);
+    if (!members?.size) this.activeKeys.delete(key);
   }
   private check() {
     if (this.disposed) throw new Error("Приложение завершает работу");
@@ -1832,7 +1856,7 @@ export class HostService extends EventEmitter {
     request: BuildRequest,
   ): Promise<Run> {
     this.check();
-    this.assertRunIdle(p, key);
+    this.assertRunAdmission(p, key, "build");
     if (request.options.clean && !request.confirmClean)
       throw new Error("Подтвердите очистку состояния сборки.");
     const selection = {
@@ -1949,7 +1973,7 @@ export class HostService extends EventEmitter {
     let child: ChildProcessWithoutNullStreams;
     try {
       await this.validateBinding(p);
-      this.activeKeys.set(key, run.id);
+      this.addActiveRun(key, run.id);
       this.runList.push(run);
       await this.persistRuns();
       child = await this.startRun(
@@ -1960,7 +1984,7 @@ export class HostService extends EventEmitter {
         invocation.env,
       );
     } catch {
-      this.activeKeys.delete(key);
+      this.removeActiveRun(key, run.id);
       run.status = "failed";
       run.endedAt = new Date().toISOString();
       if (this.runList.includes(run)) await this.persistRuns().catch(() => {});
@@ -1990,7 +2014,7 @@ export class HostService extends EventEmitter {
         /* schema already validates URL */
       }
     }
-    this.activeKeys.set(key, run.id);
+    this.addActiveRun(key, run.id);
     if (!this.runList.includes(run)) this.runList.push(run);
     this.buildRequests.set(run.id, structuredClone(request));
     const output = captureRunOutput(child, secrets, (snapshot) => {
@@ -2512,7 +2536,7 @@ export class HostService extends EventEmitter {
     request: LaunchRequest,
   ): Promise<Run> {
     this.check();
-    this.assertRunIdle(p, key);
+    this.assertRunAdmission(p, key, "pipeline");
     const saved = this.previews.get(request.previewToken);
     if (
       !saved ||
@@ -2559,6 +2583,13 @@ export class HostService extends EventEmitter {
       !request.confirmBranchSwitch
     )
       throw new Error("Подтвердите переключение ветки перед запуском.");
+    if (
+      (selection.mode === "new" || selection.branch !== current) &&
+      this.activeRuns(p, key).length
+    )
+      throw new Error(
+        "Нельзя переключать или создавать ветку, пока в этой папке работает процесс.",
+      );
     let branch: string, topic: string, launchTaskPath: string;
     let mutated = false;
     let taskSnapshot: TopicTaskDocument | undefined;
@@ -2868,7 +2899,7 @@ export class HostService extends EventEmitter {
         branch,
       };
       await this.validateBinding(p);
-      this.activeKeys.set(key, run.id);
+      this.addActiveRun(key, run.id);
       this.runList.push(run);
       await this.persistRuns();
       let child: ChildProcessWithoutNullStreams;
@@ -2888,13 +2919,13 @@ export class HostService extends EventEmitter {
           invocation.env,
         );
       } catch (error) {
-        this.activeKeys.delete(key);
+        this.removeActiveRun(key, run.id);
         run.status = "failed";
         run.endedAt = new Date().toISOString();
         await this.persistRuns().catch(() => {});
         throw error;
       }
-      this.activeKeys.set(key, run.id);
+      this.addActiveRun(key, run.id);
       if (!this.runList.includes(run)) this.runList.push(run);
       this.previews.delete(request.previewToken);
       // Capture only child output, never command arguments/environment metadata.
@@ -3148,8 +3179,7 @@ export class HostService extends EventEmitter {
     }
     entry.output.dispose();
     run.output = entry.output.snapshot();
-    if (this.activeKeys.get(entry.key) === id)
-      this.activeKeys.delete(entry.key);
+    this.removeActiveRun(entry.key, id);
     this.children.delete(id);
     run.status = status;
     delete run.recovery;

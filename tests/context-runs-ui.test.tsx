@@ -236,7 +236,7 @@ describe("unified preparation menu", () => {
       expect(screen.getByText("Сборка уже выполняется")).toBeTruthy();
       expect(screen.getByText(/Открыть её можно через «Запуски»/)).toBeTruthy();
       fireEvent.click(screen.getByRole("menuitem", { name: /^Конвейер/ }));
-      expect(onPrepare).not.toHaveBeenCalled();
+      expect(onPrepare).toHaveBeenCalledExactlyOnceWith("pipeline");
     },
   );
   it("restores build preparation for completed runs and ignores activity in other copies", () => {
@@ -263,7 +263,7 @@ describe("unified preparation menu", () => {
     ).toBe(false);
     expect(screen.queryByText("Сборка уже выполняется")).toBeNull();
   });
-  it("retains the same-copy writer guard with one shared reason", () => {
+  it("allows both choices while another pipeline is starting in this copy", () => {
     const onPrepare = vi.fn();
     render(
       <ContextLaunchMenu
@@ -272,17 +272,16 @@ describe("unified preparation menu", () => {
         onPrepare={onPrepare}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
-    expect(
-      screen.getAllByText(
-        "В этой рабочей копии выполняется конвейер. Новый запуск доступен после его завершения.",
-      ),
-    ).toHaveLength(1);
-    for (const item of screen.getAllByRole("menuitem")) {
-      expect(item.hasAttribute("disabled")).toBe(true);
+    for (const [label, kind] of [
+      [/^Конвейер/, "pipeline"],
+      [/^Сборка/, "build"],
+    ] as const) {
+      fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+      const item = screen.getByRole("menuitem", { name: label });
+      expect(item.hasAttribute("disabled")).toBe(false);
       fireEvent.click(item);
+      expect(onPrepare).toHaveBeenLastCalledWith(kind);
     }
-    expect(onPrepare).not.toHaveBeenCalled();
   });
   it("supports keyboard choices, Escape focus restoration, Tab and outside dismissal", async () => {
     const user = userEvent.setup();

@@ -3,6 +3,7 @@ import {
   matchesWorkspace,
   runMatchesWorkspace,
   workspacePath,
+  workspaceLaunchBlockReason,
 } from "../src/renderer/workspace-context";
 const owner = {
   projectId: "p",
@@ -67,4 +68,53 @@ it("shows the selected owner's path without substituting the primary for a missi
   expect(
     workspacePath(project, { ...owner, ownership: "external" }).display,
   ).toBe(owner.path);
+});
+
+it("limits builds only in the exact workspace and retains uncertain recovery protection", () => {
+  const pipeline = {
+    projectId: "p",
+    topic: "a",
+    branch: "a",
+    context: owner,
+    status: "running",
+  } as any;
+  const build = { ...pipeline, kind: "build" };
+  expect(
+    workspaceLaunchBlockReason([pipeline, pipeline], "p", owner, "pipeline"),
+  ).toBe("");
+  expect(
+    workspaceLaunchBlockReason([pipeline, pipeline], "p", owner, "build"),
+  ).toBe("");
+  expect(
+    workspaceLaunchBlockReason([pipeline, build], "p", owner, "pipeline"),
+  ).toBe("");
+  expect(
+    workspaceLaunchBlockReason([pipeline, build], "p", owner, "build"),
+  ).toMatch(/сборка/);
+  expect(workspaceLaunchBlockReason([build], "p", null, "build")).toBe("");
+  expect(
+    workspaceLaunchBlockReason(
+      [build],
+      "p",
+      { ...owner, year: "2025" },
+      "build",
+    ),
+  ).toBe("");
+  expect(
+    workspaceLaunchBlockReason(
+      [{ ...build, context: undefined }],
+      "p",
+      null,
+      "build",
+    ),
+  ).toMatch(/сборка/);
+  for (const kind of ["pipeline", "build"] as const)
+    expect(
+      workspaceLaunchBlockReason(
+        [{ ...pipeline, recovery: "unverified" }],
+        "p",
+        owner,
+        kind,
+      ),
+    ).toMatch(/проверьте состояние/);
 });

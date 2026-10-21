@@ -134,7 +134,7 @@ it("duplicate physical preparation joins one promise and never starts a process"
 });
 it("primary source writer reservation remains protected while preparing clones", async () => {
   const f = await setup();
-  (f.service as any).activeKeys.set(f.repo, "running");
+  (f.service as any).activeKeys.set(f.repo, new Set(["running"]));
   await expect(f.service.ensureTopicContext(f.identity)).rejects.toThrow(
     /активного запуска/,
   );

@@ -206,7 +206,7 @@ it("starts independent process, holds checkout lock until stop, preserves run co
   };
   const run = await service.launch(request);
   expect(run.status).toBe("starting");
-  await expect(service.launch(request)).rejects.toThrow(/уже работает/);
+  await expect(service.launch(request)).rejects.toThrow(/Предпросмотр устарел/);
   await new Promise<void>((resolve, reject) => {
     const timeout = setTimeout(() => reject(Error("readiness")), 3000);
     service.on("runs", (runs) => {

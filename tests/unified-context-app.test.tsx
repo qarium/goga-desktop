@@ -28,22 +28,24 @@ vi.mock("../src/renderer/ProjectSettings", () => ({
 }));
 const completions = new Map<string, (run: any, stale: boolean) => void>();
 vi.mock("../src/renderer/LaunchForm", () => ({
-  LaunchForm: ({ owner, onLaunched }: any) => {
+  LaunchForm: ({ owner, onLaunched, blocked }: any) => {
     completions.set(`pipeline:${owner?.contextId ?? "primary"}`, onLaunched);
     return (
       <textarea
         aria-label="Pipeline draft"
+        disabled={!!blocked}
         data-owner={JSON.stringify(owner ?? null)}
       />
     );
   },
 }));
 vi.mock("../src/renderer/BuildForm", () => ({
-  BuildForm: ({ owner, onLaunched }: any) => {
+  BuildForm: ({ owner, onLaunched, blocked }: any) => {
     completions.set(`build:${owner?.contextId ?? "primary"}`, onLaunched);
     return (
       <textarea
         aria-label="Build draft"
+        disabled={!!blocked}
         data-owner={JSON.stringify(owner ?? null)}
       />
     );
@@ -292,7 +294,7 @@ it("shows primary history and activity only for ownerless runs of this project",
     screen
       .getByRole("menuitem", { name: /^Конвейер/ })
       .hasAttribute("disabled"),
-  ).toBe(true);
+  ).toBe(false);
 });
 
 it("keeps Without topic usable even without clone APIs or a readable topic catalog", async () => {
@@ -512,5 +514,71 @@ it.each(["pipeline", "build"])(
       await screen.findByRole("button", { name: "Открыть запуск late-a" }),
     );
     expect(screen.getByRole("tab", { selected: true })).toBeTruthy();
+  },
+);
+
+it.each(["primary", "clone"])(
+  "allows many pipelines plus one build in %s, retaining independent form gates",
+  async (scope) => {
+    const owner = scope === "clone" ? ownerA : undefined;
+    const pipeline = ownedRun("pipeline-1", owner);
+    api.runs.mockResolvedValue([pipeline]);
+    await mount();
+    if (owner) await choose("alpha");
+    launch("Конвейер");
+    const pipelineDraft = await screen.findByLabelText("Pipeline draft");
+    expect(pipelineDraft.hasAttribute("disabled")).toBe(false);
+    launch("Сборка");
+    const buildDraft = await screen.findByLabelText("Build draft");
+    expect(buildDraft.hasAttribute("disabled")).toBe(false);
+    const build = {
+      ...ownedRun("build-1", owner),
+      kind: "build",
+      build: { planPath: "plan.md", clean: false },
+    };
+    await act(async () => emitRuns([pipeline, build]));
+    expect(buildDraft.hasAttribute("disabled")).toBe(true);
+    launch("Конвейер");
+    expect(pipelineDraft.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+    expect(screen.queryByRole("menuitem", { name: /^Сборка/ })).toBeNull();
+    expect(screen.getByText("Сборка уже выполняется")).toBeTruthy();
+    await act(async () => emitRuns([pipeline, { ...build, status: "exited" }]));
+    fireEvent.click(screen.getByRole("menuitem", { name: /^Сборка/ }));
+    expect(buildDraft.hasAttribute("disabled")).toBe(false);
+    expect(api.stopRun).not.toHaveBeenCalled();
+  },
+);
+it.each(["primary", "clone"])(
+  "permits repeating a finished build alongside pipelines but not another build in %s",
+  async (scope) => {
+    const owner = scope === "clone" ? ownerA : undefined;
+    const pipeline = ownedRun("pipeline", owner);
+    const finished = {
+      ...ownedRun("finished", owner),
+      kind: "build",
+      status: "exited",
+      build: { planPath: "plan.md", clean: false },
+    };
+    api.runs.mockResolvedValue([pipeline, finished]);
+    await mount();
+    if (owner) await choose("alpha");
+    fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
+    fireEvent.click(screen.getByRole("button", { name: "Сборка" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Открыть запуск plan.md" }),
+    );
+    const repeat = screen.getByRole<HTMLButtonElement>("button", {
+      name: "Повторить сборку",
+    });
+    expect(repeat.disabled).toBe(false);
+    await act(async () =>
+      emitRuns([
+        pipeline,
+        finished,
+        { ...finished, id: "active-build", status: "starting" },
+      ]),
+    );
+    expect(repeat.disabled).toBe(true);
   },
 );

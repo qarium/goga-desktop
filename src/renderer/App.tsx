@@ -2,6 +2,7 @@ import {
   matchesWorkspace,
   runMatchesWorkspace,
   workspacePath,
+  workspaceLaunchBlockReason,
 } from "./workspace-context";
 import { topicError } from "./TopicsCommon";
 import { preparationErrorMessage } from "./preparation-error";
@@ -308,8 +309,7 @@ export function App() {
       owner.ownership !== "managed" ||
       owner.preparation ||
       owner.deletedAt ||
-      contextRunActivity(runsRef.current as RunWithContext[], owner)
-        .activeCount > 0
+      workspaceLaunchBlockReason(runsRef.current, owner.projectId, owner, kind)
     )
       return;
     if (
@@ -788,13 +788,10 @@ export function App() {
           ? "Рабочая копия не готова к запуску. Выберите проверенный автономный клон."
           : ""
     : "";
-  const launchUnavailable =
-    contextUnavailable ||
-    (!selectedContext && primaryActive.length
-      ? "В исходной папке проекта уже выполняется запуск. Новый запуск доступен после его завершения."
-      : "");
+  const launchUnavailable = contextUnavailable ||
+    workspaceLaunchBlockReason(runs, projectId, selectedContext, "pipeline");
   function prepareFromHeader(kind: RunKind) {
-    if (launchUnavailable) return;
+    if (contextUnavailable || workspaceLaunchBlockReason(runsRef.current, projectId, selectedContext, kind)) return;
     if (selectedContext) showContextPreparation(kind, selectedContext);
     else if (kind === "build") showBuild(projectId);
     else showLaunch(projectId);
@@ -1026,6 +1023,7 @@ export function App() {
                 disabled={settingsBusy}
                 blockedReason={launchUnavailable}
                 prepareWithoutContext={!selectedContext}
+                primaryProjectId={projectId}
                 onPrepare={(kind) => navigate(() => prepareFromHeader(kind))}
               />
             </div>
@@ -1322,12 +1320,10 @@ export function App() {
                     <button
                       disabled={
                         repeatBusy ||
-                        ((run as RunWithContext).context
-                          ? contextRunActivity(
-                              runs as RunWithContext[],
-                              (run as RunWithContext).context!,
-                            ).activeCount > 0
-                          : active)
+                        !!contextUnavailable ||
+                        !!workspaceLaunchBlockReason(
+                          runs, run.projectId, run.context ?? null, "build",
+                        )
                       }
                       onClick={() => void repeatBuild(run)}
                     >
@@ -1464,10 +1460,9 @@ export function App() {
                       record,
                     ]);
                     if (
-                      contextRunActivity(
-                        runsRef.current as RunWithContext[],
-                        record,
-                      ).activeCount > 0
+                      workspaceLaunchBlockReason(
+                        runsRef.current, record.projectId, record, initialPreparation.kind,
+                      )
                     )
                       setPage("context-runs");
                     else
@@ -1535,15 +1530,7 @@ export function App() {
                       activeDraft !== id ||
                       !matchesWorkspace(buildProject.id, owner, projectId, selectedContext)
                     }
-                    blocked={runs.some(
-                      (r) =>
-                        (owner
-                          ? (r as RunWithContext).context?.contextId ===
-                            owner.contextId
-                          : r.projectId === buildProject.id &&
-                            !(r as RunWithContext).context) &&
-                        (r.status === "starting" || r.status === "running"),
-                    )}
+                    blocked={workspaceLaunchBlockReason(runs, buildProject.id, owner ?? null, "build")}
                     revision={JSON.stringify([
                       settingsRevision[buildProject.id],
                       settingsDocuments.projectRevision(
@@ -1642,18 +1629,7 @@ export function App() {
                     }
                     key={id}
                     owner={owner ? contextRef(owner) : undefined}
-                    blocked={
-                      owner
-                        ? contextRunActivity(runs as RunWithContext[], owner)
-                            .activeCount > 0
-                        : runs.some(
-                            (r) =>
-                              r.projectId === launchProject.id &&
-                              !(r as RunWithContext).context &&
-                              (r.status === "starting" ||
-                                r.status === "running"),
-                          )
-                    }
+                    blocked={workspaceLaunchBlockReason(runs, launchProject.id, owner ?? null, "pipeline")}
                     draftStore={draftStore.current}
                     project={launchProject}
                     onCancel={() => closeLaunch(id)}
@@ -1746,7 +1722,7 @@ export function App() {
                 </p>
                 <button
                   className="primary"
-                  disabled={active || settingsBusy}
+                  disabled={!!launchUnavailable || settingsBusy}
                   onClick={() => navigate(() => prepareFromHeader("pipeline"))}
                 >
                   Создать запуск

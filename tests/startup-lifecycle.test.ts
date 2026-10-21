@@ -236,9 +236,17 @@ it("timeout kill failure stays explicit and retains ownership until successful r
   expect(f.service.runs()[0].error).toMatch(/остановить|остановк/);
   expect(f.service.runs()[0].status).toBe("starting");
   expect(f.service.runs()[0].url).toBeUndefined();
-  await expect(f.launch()).rejects.toThrow(/уже работает/);
+  const sibling = await f.launch();
+  expect(sibling.status).toBe("starting");
+  expect(f.service.runs().find((r) => r.id === run.id)?.status).toBe("starting");
   await f.service.stop(run.id);
   expect(f.service.runs()[0].status).toBe("stopped");
+  expect(f.service.runs().find((r) => r.id === sibling.id)?.status).toBe("starting");
+  expect(f.runner.kill).toHaveBeenCalledTimes(2);
+  expect(f.runner.kill).toHaveBeenNthCalledWith(1, f.children[0]);
+  expect(f.runner.kill).toHaveBeenNthCalledWith(2, f.children[0]);
+  await f.service.stop(sibling.id);
+  expect(f.service.runs().find((r) => r.id === sibling.id)?.status).toBe("stopped");
 });
 it("output is isolated across runs, masked before events and retained on exit/error", async () => {
   const f = await fixture();

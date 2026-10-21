@@ -346,6 +346,6 @@ it("disables closing a pending draft and consumes it after a successful owner la
   expect(
     (screen.getByRole("menuitem", { name: /^Конвейер/ }) as HTMLButtonElement)
       .disabled,
-  ).toBe(true);
+  ).toBe(false);
   expect(api.launchBuild).toHaveBeenCalledTimes(1);
 });
