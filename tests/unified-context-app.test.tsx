@@ -26,21 +26,28 @@ vi.mock("../src/renderer/ProjectSettings", () => ({
   },
   ProjectSettingsConfirmation: () => null,
 }));
+const completions = new Map<string, (run: any, stale: boolean) => void>();
 vi.mock("../src/renderer/LaunchForm", () => ({
-  LaunchForm: ({ owner }: any) => (
-    <textarea
-      aria-label="Pipeline draft"
-      data-owner={JSON.stringify(owner ?? null)}
-    />
-  ),
+  LaunchForm: ({ owner, onLaunched }: any) => {
+    completions.set(`pipeline:${owner?.contextId ?? "primary"}`, onLaunched);
+    return (
+      <textarea
+        aria-label="Pipeline draft"
+        data-owner={JSON.stringify(owner ?? null)}
+      />
+    );
+  },
 }));
 vi.mock("../src/renderer/BuildForm", () => ({
-  BuildForm: ({ owner }: any) => (
-    <textarea
-      aria-label="Build draft"
-      data-owner={JSON.stringify(owner ?? null)}
-    />
-  ),
+  BuildForm: ({ owner, onLaunched }: any) => {
+    completions.set(`build:${owner?.contextId ?? "primary"}`, onLaunched);
+    return (
+      <textarea
+        aria-label="Build draft"
+        data-owner={JSON.stringify(owner ?? null)}
+      />
+    );
+  },
   createBuildDrafts: () => new Map(),
   BuildCleanConfirmation: () => null,
 }));
@@ -68,19 +75,26 @@ const ownerB = {
 };
 let api: any;
 let focusRun: (id: string) => void;
+let emitRuns: (runs: any[]) => void;
 beforeEach(() => {
+  completions.clear();
   api = {
     listProjects: vi.fn(async () => [
       { id: "p", name: "Fixture", path: "/fixture/project" },
     ]),
     runs: vi.fn(async () => []),
-    onRuns: () => () => {},
+    onRuns: (cb: typeof emitRuns) => {
+      emitRuns = cb;
+      return () => {};
+    },
     onFocusRun: (cb: typeof focusRun) => {
       focusRun = cb;
       return () => {};
     },
     onViewError: () => () => {},
     selectRun: vi.fn(async () => {}),
+    stopRun: vi.fn(async () => {}),
+    closeRun: vi.fn(async () => true),
     selectTopicContext: vi.fn(async () => {}),
     cancelRead: vi.fn(async () => {}),
     readTopicBoard: vi.fn(async () => ({
@@ -128,6 +142,9 @@ async function choose(name: string) {
     screen.getByRole("row", { name: new RegExp(`^${name}( |$)`) }),
   );
   await waitFor(() => expect(screen.queryByRole("grid")).toBeNull());
+  await screen.findByRole("button", {
+    name: name === "Без топика" ? name : `Открыть карточку топика ${name}`,
+  });
 }
 function settings() {
   fireEvent.click(screen.getByRole("button", { name: "Проект" }));
@@ -337,5 +354,163 @@ it.each([
     ).toBe(true);
     expect(api.ensureTopicContext).not.toHaveBeenCalled();
     expect(api.resolveTopicContext).not.toHaveBeenCalled();
+  },
+);
+
+const ownedRun = (id: string, owner?: typeof ownerA) => ({
+  id,
+  projectId: "p",
+  kind: "pipeline",
+  pipeline: id,
+  topic: owner?.topic ?? "primary",
+  branch: owner?.branch ?? "main",
+  ...(owner ? { context: owner } : {}),
+  status: "running",
+  url: `http://127.0.0.1:8000/${id}`,
+  startedAt: "2026-10-21T10:00:00Z",
+});
+async function openRun(id: string) {
+  fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: `Открыть запуск ${id}` }),
+  );
+}
+it("shows only the selected owner's open run tabs and restores them without closing or stopping runs", async () => {
+  api.runs.mockResolvedValue([
+    ownedRun("primary"),
+    ownedRun("run-a", ownerA),
+    ownedRun("run-b", ownerB),
+  ]);
+  await mount();
+  await openRun("primary");
+  await choose("alpha");
+  expect(screen.queryByRole("tab", { name: /^primary ·/ })).toBeNull();
+  await openRun("run-a");
+  await choose("beta");
+  expect(screen.queryByRole("tab", { name: /^run-a ·/ })).toBeNull();
+  await waitFor(() => expect(api.selectRun).toHaveBeenLastCalledWith(null));
+  await openRun("run-b");
+  await choose("alpha");
+  expect(screen.queryByRole("tab", { name: /^run-b ·/ })).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: /^run-a ·/ }));
+  await waitFor(() => expect(api.selectRun).toHaveBeenLastCalledWith("run-a"));
+  await choose("Без топика");
+  expect(screen.queryByRole("tab", { name: /^run-a ·/ })).toBeNull();
+  expect(screen.getByRole("tab", { name: /^primary ·/ })).toBeTruthy();
+  expect(api.stopRun).not.toHaveBeenCalled();
+  expect(api.closeRun).not.toHaveBeenCalled();
+});
+it("filters draft tabs by owner while retaining their mounted drafts across A/B/primary switches", async () => {
+  await mount();
+  launch("Конвейер");
+  const primary = await screen.findByLabelText("Pipeline draft");
+  fireEvent.change(primary, { target: { value: "primary text" } });
+  await choose("alpha");
+  expect(screen.queryByRole("tab", { name: "Новый запуск" })).toBeNull();
+  launch("Конвейер");
+  await screen.findByRole("tab", { name: /Новый конвейер · alpha/ });
+  const alpha = screen
+    .getAllByLabelText("Pipeline draft")
+    .find((e) => e.dataset.owner !== "null")!;
+  fireEvent.change(alpha, { target: { value: "alpha text" } });
+  await choose("beta");
+  expect(
+    screen.queryByRole("tab", { name: /Новый конвейер · alpha/ }),
+  ).toBeNull();
+  launch("Сборка");
+  await screen.findByRole("tab", { name: /Новая сборка · beta/ });
+  await choose("alpha");
+  expect(screen.queryByRole("tab", { name: /Новая сборка · beta/ })).toBeNull();
+  fireEvent.click(screen.getByRole("tab", { name: /Новый конвейер · alpha/ }));
+  expect(alpha.closest('[role="tabpanel"]')?.hasAttribute("hidden")).toBe(
+    false,
+  );
+  expect((alpha as HTMLTextAreaElement).value).toBe("alpha text");
+  expect(primary.closest('[role="tabpanel"]')?.hasAttribute("hidden")).toBe(
+    true,
+  );
+  await choose("Без топика");
+  fireEvent.click(screen.getByRole("tab", { name: "Новый запуск" }));
+  expect((primary as HTMLTextAreaElement).value).toBe("primary text");
+});
+it("keeps Project open and remounts it in the selected scope with its actual path", async () => {
+  const a = { ...ownerA, path: "/Users/fixture/.goga/desktop/clones/a" };
+  api.listTopicContexts.mockResolvedValue([a, ownerB]);
+  api.resolveTopicContext.mockImplementation(async (r: any) =>
+    r.topic === a.topic ? a : ownerB,
+  );
+  api.checkTopicContextReadiness.mockImplementation(async (r: any) =>
+    r.contextId === a.contextId ? a : ownerB,
+  );
+  await mount();
+  await choose("alpha");
+  expect(screen.getByTestId("settings").dataset.mountedOwner).toBe(a.contextId);
+  let path = screen.getByLabelText("Путь выбранного контекста");
+  expect(path.textContent).toBe("~/.goga/desktop/clones/a");
+  expect(path.title).toBe(a.path);
+  await choose("beta");
+  expect(screen.getByTestId("settings").dataset.mountedOwner).toBe(
+    ownerB.contextId,
+  );
+  expect(screen.getByLabelText("Путь выбранного контекста").textContent).toBe(
+    ownerB.path,
+  );
+  await choose("Без топика");
+  expect(screen.getByTestId("settings").dataset.mountedOwner).toBe("p");
+  expect(screen.getByLabelText("Путь выбранного контекста").textContent).toBe(
+    "/fixture/project",
+  );
+});
+it("does not display a foreign clone when the selected primary run disappears", async () => {
+  const primary = ownedRun("primary"),
+    foreign = ownedRun("run-a", ownerA);
+  api.runs.mockResolvedValue([primary, foreign]);
+  await mount();
+  await openRun("primary");
+  await act(async () => emitRuns([foreign]));
+  await waitFor(() => expect(api.selectRun).toHaveBeenLastCalledWith(null));
+  expect(screen.queryByRole("tab", { name: /^run-a ·/ })).toBeNull();
+  expect(screen.getByRole("button", { name: "Без топика" })).toBeTruthy();
+});
+
+it.each(["pipeline", "build"])(
+  "a late %s launch stays registered but cannot navigate from B back to A",
+  async (kind) => {
+    await mount();
+    await choose("alpha");
+    launch(kind === "build" ? "Сборка" : "Конвейер");
+    await waitFor(() =>
+      expect(completions.has(`${kind}:${ownerA.contextId}`)).toBe(true),
+    );
+    const complete = completions.get(`${kind}:${ownerA.contextId}`)!;
+    await choose("beta");
+    settings();
+    await act(async () =>
+      complete(
+        {
+          ...ownedRun("late-a", ownerA),
+          kind,
+          build:
+            kind === "build" ? { planPath: "late-a", clean: false } : undefined,
+        },
+        false,
+      ),
+    );
+    expect(screen.getByTestId("settings").dataset.mountedOwner).toBe(
+      ownerB.contextId,
+    );
+    expect(screen.getByLabelText("Путь выбранного контекста").textContent).toBe(
+      ownerB.path,
+    );
+    expect(screen.queryByRole("tab")).toBeNull();
+    expect(api.selectRun).not.toHaveBeenCalledWith("late-a");
+    await choose("alpha");
+    fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
+    if (kind === "build")
+      fireEvent.click(screen.getByRole("button", { name: "Сборка" }));
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Открыть запуск late-a" }),
+    );
+    expect(screen.getByRole("tab", { selected: true })).toBeTruthy();
   },
 );

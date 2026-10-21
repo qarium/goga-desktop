@@ -1,3 +1,8 @@
+import {
+  matchesWorkspace,
+  runMatchesWorkspace,
+  workspacePath,
+} from "./workspace-context";
 import { topicError } from "./TopicsCommon";
 import { preparationErrorMessage } from "./preparation-error";
 import {
@@ -181,8 +186,7 @@ export function App() {
         ...Object.values(contextSelections),
       ].find(
         (record) =>
-          record?.contextId === ref.contextId &&
-          record.projectId === ref.projectId,
+          record != null && contextKey(record) === contextKey(ref),
       );
       // History remains viewable even if its clone has disappeared. Never ensure
       // or recreate a working copy merely to show recorded output.
@@ -426,7 +430,9 @@ export function App() {
           );
         return;
       }
-      const siblings = previous.filter((r) => r.projectId === old?.projectId);
+      const inCurrentWorkspace = (r: Run) =>
+        runMatchesWorkspace(r, projectIdRef.current, selectedContextRef.current);
+      const siblings = previous.filter(inCurrentWorkspace);
       const index = siblings.findIndex((r) => r.id === id);
       const order = [
         ...siblings.slice(index + 1),
@@ -434,7 +440,7 @@ export function App() {
       ];
       const neighbour =
         order.find((r) => next.some((n) => n.id === r.id))?.id ??
-        next.find((r) => r.projectId === old?.projectId)?.id ??
+        next.find(inCurrentWorkspace)?.id ??
         null;
       selectedRef.current = neighbour;
       setSelected(neighbour);
@@ -490,7 +496,10 @@ export function App() {
   }
   const read = useReadScope(projectId);
   const project = projects.find((p) => p.id === projectId),
-    run = runs.find((r) => r.id === selected);
+    run = runs.find(
+      (r) => r.id === selected && runMatchesWorkspace(r, projectId, selectedContext),
+    );
+  const displayedPath = workspacePath(project, selectedContext);
   useEffect(() => {
     let alive = true;
     readRequest("listProjects").then(
@@ -889,9 +898,11 @@ export function App() {
       </aside>
       <main className="main-area">
         <div className="project-bar">
-          <div>
-            <span className="eyebrow">
-              Мой компьютер / {page === "settings" ? "НАСТРОЙКИ" : "ПРОЕКТ"}
+          <div className="project-heading">
+            <div className="project-heading-context">
+              <span className="eyebrow">
+                Мой компьютер / {page === "settings" ? "НАСТРОЙКИ" : "ПРОЕКТ"}
+              </span>
               {page !== "settings" && project && (
                 <TopicContextPicker
                   key={project.id}
@@ -938,8 +949,14 @@ export function App() {
                         ),
                         record,
                       ]);
+                      selectedRef.current = null;
+                      selectedContextRef.current = record;
                       setSelected(null);
-                      setPage("context-runs");
+                      setPage(
+                        pageRef.current === "project-settings"
+                          ? "project-settings"
+                          : "context-runs",
+                      );
                       setError("");
                     })
                   }
@@ -949,6 +966,8 @@ export function App() {
                         ...values,
                         [projectId]: null,
                       }));
+                      selectedRef.current = null;
+                      selectedContextRef.current = null;
                       setSelected(null);
                       setPage("project-settings");
                     })
@@ -966,8 +985,8 @@ export function App() {
                   }
                 />
               )}
-            </span>
-            <h1>
+            </div>
+            <h1 title={page === "settings" ? "Настройки" : project?.name}>
               {page === "settings"
                 ? "Настройки"
                 : (project?.name ?? "Goga Desktop")}
@@ -1053,7 +1072,10 @@ export function App() {
             ).flatMap(([ids, kind]) =>
               preparationEntries(ids)
                 .filter(
-                  ({ project: ownerProject }) => ownerProject.id === projectId,
+                  ({ project: ownerProject, owner }) =>
+                    matchesWorkspace(
+                      ownerProject.id, owner, projectId, selectedContext,
+                    ),
                 )
                 .map(({ id, owner }) => {
                   const label =
@@ -1138,7 +1160,7 @@ export function App() {
             {runs
               .filter(
                 (r) =>
-                  r.projectId === projectId &&
+                  runMatchesWorkspace(r, projectId, selectedContext) &&
                   ((r as RunWithContext).context
                     ? contextOpenRuns.has(r.id)
                     : contextsEnabled
@@ -1208,6 +1230,13 @@ export function App() {
               ))}
           </div>
           <div className="run-context">
+            <span
+              className="workspace-path"
+              aria-label="Путь выбранного контекста"
+              title={displayedPath.full}
+            >
+              {displayedPath.display}
+            </span>
             {run && page === "project" ? (
               <>
                 {run.kind === "build" ? (
@@ -1327,11 +1356,7 @@ export function App() {
                 Рабочая копия{" "}
                 {displayOwner.state === "ready" ? "готова" : "недоступна"}
               </span>
-            ) : (
-              <span>
-                {project?.path ?? "Выберите папку существующего проекта"}
-              </span>
-            )}
+            ) : null}
           </div>
           <div className="scroll-area">
             {page === "project" && run?.recoveryMessage && (
@@ -1492,7 +1517,7 @@ export function App() {
                   hidden={
                     page !== "build" ||
                     activeDraft !== id ||
-                    projectId !== buildProject.id
+                    !matchesWorkspace(buildProject.id, owner, projectId, selectedContext)
                   }
                   id={`build-draft-panel-${encodeURIComponent(id)}`}
                   role="tabpanel"
@@ -1508,7 +1533,7 @@ export function App() {
                     suspended={
                       page !== "build" ||
                       activeDraft !== id ||
-                      projectId !== buildProject.id
+                      !matchesWorkspace(buildProject.id, owner, projectId, selectedContext)
                     }
                     blocked={runs.some(
                       (r) =>
@@ -1532,7 +1557,12 @@ export function App() {
                     onLaunched={(r, stale) => {
                       if (!runsRef.current.some((i) => i.id === r.id))
                         applyRuns([...runsRef.current, r]);
-                      if (stale) return;
+                      if (
+                        stale || !matchesWorkspace(
+                          buildProject.id, owner,
+                          projectIdRef.current, selectedContextRef.current,
+                        )
+                      ) return;
                       if (owner || repeatSeeds[id])
                         setOpenBuilds((values) => {
                           const next = new Set(values);
@@ -1562,7 +1592,7 @@ export function App() {
                   hidden={
                     page !== "launch" ||
                     activeDraft !== id ||
-                    projectId !== launchProject.id
+                    !matchesWorkspace(launchProject.id, owner, projectId, selectedContext)
                   }
                   id={`pipeline-draft-panel-${encodeURIComponent(id)}`}
                   role="tabpanel"
@@ -1580,7 +1610,7 @@ export function App() {
                     suspended={
                       page !== "launch" ||
                       activeDraft !== id ||
-                      projectId !== launchProject.id ||
+                      !matchesWorkspace(launchProject.id, owner, projectId, selectedContext) ||
                       !!topicCard
                     }
                     preparedTopic={
@@ -1633,7 +1663,10 @@ export function App() {
                       // is blocked. Only the current guard may leave the editor.
                       if (r && !runsRef.current.some((i) => i.id === r.id))
                         applyRuns([...runsRef.current, r]);
-                      if (projectIdRef.current !== launchProject.id) return;
+                      if (!matchesWorkspace(
+                        launchProject.id, owner,
+                        projectIdRef.current, selectedContextRef.current,
+                      )) return;
                       if (stale && pageRef.current !== "project-settings")
                         return;
                       if (owner)

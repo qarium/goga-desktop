@@ -299,6 +299,8 @@ it.each(["current-header", "selector", "board"])(
       fireEvent.click(
         await screen.findByRole("row", { name: /^feature-test / }),
       );
+      await screen.findByRole("button", { name: "Открыть карточку топика feature-test" });
+      fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
       await screen.findByRole("region", { name: "Запуски выбранного топика" });
       api.resolveTopicContext.mockClear();
     }

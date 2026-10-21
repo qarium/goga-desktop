@@ -210,9 +210,12 @@ async function mountContexts(extraRuns: any[] = []) {
 async function chooseFeature() {
   fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
   fireEvent.click(screen.getByRole("row", { name: /^feature / }));
+  await waitFor(() => expect(screen.queryByRole("grid")).toBeNull());
+  await screen.findByRole("button", { name: "Открыть карточку топика feature" });
+  fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
   await screen.findByRole("region", { name: "Запуски выбранного топика" });
 }
-it("App selection prepares only the worktree and opens its list, not an arbitrary first run", async () => {
+it("explicit run list after topic selection does not open an arbitrary first run", async () => {
   await mountContexts();
   expect(screen.queryByRole("tab", { name: /verify/ })).toBeNull();
   await chooseFeature();
@@ -379,4 +382,17 @@ it("keeps catalog errors outside the native dashboard column while a pipeline is
   const alert = await screen.findByRole("alert");
   expect(alert.closest(".sidebar")).not.toBeNull();
   expect(document.querySelector(".main-area .context-board-error")).toBeNull();
+});
+
+it("separates header breadcrumb and topic picker as centered siblings above the project title", async () => {
+  render(<App />);
+  const title = await screen.findByRole("heading", { name: "Alpha" });
+  const heading = title.closest(".project-heading");
+  expect(heading).not.toBeNull();
+  const row = heading!.querySelector(".project-heading-context")!;
+  expect(row).not.toBeNull();
+  expect(row.querySelector(".eyebrow")?.textContent).toContain("Мой компьютер / ПРОЕКТ");
+  expect(row.querySelector(".topic-context-picker")?.parentElement).toBe(row);
+  expect(title.parentElement).toBe(heading);
+  expect(title.previousElementSibling).toBe(row);
 });

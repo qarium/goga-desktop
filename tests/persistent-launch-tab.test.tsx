@@ -131,10 +131,13 @@ beforeEach(() => {
     checkoutBranch: vi.fn(async () => "main"),
     launchBuild: vi.fn(async () => ({ ...run, id: "new", status: "running" })),
   };
-  installPrototypeContextFixture(api, [
+  const fixture = installPrototypeContextFixture(api, [
     { id: "p", path: "/fixture/a", topic: "main", branch: "main" },
     { id: "q", path: "/fixture/b", topic: "main", branch: "main" },
   ]);
+  // Navigation between tabs is tested within one explicit owner.
+  api.listTopicContexts.mockImplementation(async (id: string) => fixture.records.filter(r => r.projectId === id));
+  api.runs.mockResolvedValue([{ ...run, topic: fixture.owner("p").topic, context: fixture.owner("p") }]);
   window.goga = api;
 });
 afterEach(cleanup);
@@ -176,7 +179,7 @@ it("keeps a clickable launch tab and the same draft across Home, Topics and a ru
   click("Топики");
   fireEvent.click(screen.getByRole("tab", { name: /^Новый конвейер · / }));
   await screen.findByRole("textbox", { name: "Что нужно сделать?" });
-  fireEvent.click(screen.getByRole("tab", { name: /Сборка · topic/ }));
+  fireEvent.click(screen.getByRole("tab", { name: /Сборка · main/ }));
   fireEvent.click(screen.getByRole("tab", { name: /^Новый конвейер · / }));
   await screen.findByRole("textbox", { name: "Что нужно сделать?" });
   await openPrototypeLaunch();
@@ -290,7 +293,7 @@ it("blocks closing while pending and closes the preparation after successful sta
     (screen.getByRole("button", { name: "Закрыть форму" }) as HTMLButtonElement)
       .disabled,
   ).toBe(true);
-  const owner = await api.ensureTopicContext.mock.results[0].value;
+  const owner = (await api.listTopicContexts("p"))[0];
   await act(async () =>
     finish({
       ...run,

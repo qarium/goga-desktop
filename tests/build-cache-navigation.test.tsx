@@ -130,10 +130,13 @@ beforeEach(() => {
     cancelRead: vi.fn(async () => {}),
     launchBuild: vi.fn(async () => ({ ...run, id: "new", status: "running" })),
   };
-  installPrototypeContextFixture(api, [
+  const fixture = installPrototypeContextFixture(api, [
     { id: "p", path: "/fixture/a", topic: "main", branch: "main" },
     { id: "q", path: "/fixture/b", topic: "main", branch: "main" },
   ]);
+  // Navigation between tabs is tested within one explicit owner.
+  api.listTopicContexts.mockImplementation(async (id: string) => fixture.records.filter(r => r.projectId === id));
+  api.runs.mockResolvedValue([{ ...run, topic: fixture.owner("p").topic, context: fixture.owner("p") }]);
   window.goga = api;
 });
 afterEach(() => {
@@ -395,7 +398,7 @@ it("App navigation through Project, Topics, launch, runs and settings does not r
       await openPrototypeLaunch();
       await screen.findByRole("textbox", { name: "Что нужно сделать?" });
     } else if (section === "run")
-      fireEvent.click(screen.getByRole("tab", { name: /Сборка · topic/ }));
+      fireEvent.click(screen.getByRole("tab", { name: /Сборка · main/ }));
     else if (section === "settings") {
       click(/Настройки$/);
       click(/Назад/);

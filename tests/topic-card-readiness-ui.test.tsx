@@ -463,6 +463,8 @@ it.each(["current-header", "selector", "board"])(
         screen.getByRole("button", { name: "Выбрать другой топик" }),
       );
       fireEvent.click(screen.getByRole("row", { name: /^feature-test / }));
+      await screen.findByRole("button", { name: "Открыть карточку топика feature-test" });
+      fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
       await screen.findByRole("region", { name: "Запуски выбранного топика" });
       // Explicit selector transition validates its owner once; opening the card does not.
       expect(api.resolveTopicContext).toHaveBeenCalledExactlyOnceWith(

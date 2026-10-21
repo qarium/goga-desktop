@@ -235,6 +235,9 @@ async function mountContexts(
 async function chooseFeature() {
   fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
   fireEvent.click(screen.getByRole("row", { name: /^feature / }));
+  await waitFor(() => expect(screen.queryByRole("grid")).toBeNull());
+  await screen.findByRole("button", { name: "Открыть карточку топика feature" });
+  fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
   await screen.findByRole("region", { name: "Запуски выбранного топика" });
 }
 
@@ -361,6 +364,8 @@ it("keeps two context drafts independent and restores selector ownership without
   });
   fireEvent.change(taskB, { target: { value: "Task B retained" } });
   const calls = api.discover.mock.calls.length;
+  expect(screen.queryByRole("tab", { name: "Новый конвейер · feature" })).toBeNull();
+  await chooseFeature();
   fireEvent.click(
     screen.getByRole("tab", { name: "Новый конвейер · feature" }),
   );
@@ -374,6 +379,11 @@ it("keeps two context drafts independent and restores selector ownership without
       }) as HTMLTextAreaElement
     ).value,
   ).toBe("Task A retained");
+  expect(screen.queryByRole("tab", { name: "Новый конвейер · main" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
+  fireEvent.click(screen.getByRole("row", { name: /^main / }));
+  await waitFor(() => expect(screen.queryByRole("grid")).toBeNull());
+  await screen.findByRole("button", { name: "Открыть карточку топика main" });
   fireEvent.click(screen.getByRole("tab", { name: "Новый конвейер · main" }));
   expect(
     (

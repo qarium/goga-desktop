@@ -2,6 +2,7 @@
 import {
   installPrototypeContextFixture,
   openPrototypeLaunch,
+  openCurrentLaunch,
   executionButton,
 } from "./helpers/prototype-context-fixture";
 import React from "react";
@@ -417,7 +418,7 @@ it("closing a nonselected tab preserves selection and an in-progress launch form
   expect(
     screen.getByRole("tab", { name: /^a ·/ }).getAttribute("aria-selected"),
   ).toBe("true");
-  await openPrototypeLaunch();
+  await openCurrentLaunch();
   const draftEditor = (await screen.findByRole("textbox", {
     name: /Что нужно сделать/,
   })) as HTMLTextAreaElement;

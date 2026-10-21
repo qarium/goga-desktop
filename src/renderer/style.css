@@ -1384,3 +1384,53 @@ code {
   max-height: 40%;
   overflow-y: auto;
 }
+
+/* Keep the breadcrumb and topic control on one centerline, with an explicit
+   second row for the project name. Do not change native Dashboard offsets. */
+.project-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+}
+.project-heading-context {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  min-height: 36px;
+}
+.project-heading-context > .eyebrow {
+  flex-shrink: 0;
+  white-space: nowrap;
+  line-height: 16px;
+}
+.project-heading-context > .topic-context-picker {
+  margin-left: 0;
+}
+.project-heading-context .topic-context-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-heading > h1 {
+  margin: 0;
+  line-height: 26px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-bar > .project-actions {
+  flex-shrink: 0;
+}
+
+/* Keep the selected workspace visible without moving the native dashboard. */
+.run-context > .workspace-path {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 0 1 auto;
+}
+.run-context > .workspace-path:not(:last-child) { max-width: 40%; }
+.run-context > button { flex-shrink: 0; }

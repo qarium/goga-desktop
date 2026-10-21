@@ -108,10 +108,13 @@ beforeEach(() => {
     })),
     launchBuild: vi.fn(async () => ({ ...run, id: "new", status: "running" })),
   };
-  installPrototypeContextFixture(api, [
+  const fixture = installPrototypeContextFixture(api, [
     { id: "p", path: "/fixture/a", topic: "main", branch: "main" },
     { id: "q", path: "/fixture/b", topic: "main", branch: "main" },
   ]);
+  // Navigation between tabs is tested within one explicit owner.
+  api.listTopicContexts.mockImplementation(async (id: string) => fixture.records.filter(r => r.projectId === id));
+  api.runs.mockResolvedValue([{ ...run, topic: fixture.owner("p").topic, context: fixture.owner("p") }]);
   window.goga = api;
 });
 afterEach(cleanup);
@@ -199,7 +202,7 @@ it("keeps one clickable build tab and all draft values through Home, Topics, run
   fireEvent.click(field("Разрешить сборку с незакоммиченными контрактами"));
   for (const destination of ["Проект", "Топики", "run"]) {
     if (destination === "run")
-      fireEvent.click(screen.getByRole("tab", { name: /Сборка · topic/ }));
+      fireEvent.click(screen.getByRole("tab", { name: /Сборка · main/ }));
     else click(destination);
     expect(draftTab().getAttribute("aria-selected")).toBe("false");
     expect(screen.queryByRole("region", { name: "Новая сборка" })).toBeNull();
@@ -298,7 +301,7 @@ it("guards dirty Home before returning to a draft and keyboard navigates between
   await waitFor(() => executionButton());
   fireEvent.keyDown(draftTab(), { key: "ArrowLeft" });
   expect(await screen.findByText("Finished fixture")).toBeTruthy();
-  fireEvent.keyDown(screen.getByRole("tab", { name: /Сборка · topic/ }), {
+  fireEvent.keyDown(screen.getByRole("tab", { name: /Сборка · main/ }), {
     key: "ArrowRight",
   });
   await screen.findByRole("textbox", { name: "План сборки" });
@@ -324,7 +327,7 @@ it("disables closing a pending draft and consumes it after a successful owner la
       }) as HTMLButtonElement
     ).disabled,
   ).toBe(true);
-  const owner = await api.ensureTopicContext.mock.results[0].value;
+  const owner = (await api.listTopicContexts("p"))[0];
   await act(async () =>
     resolve({
       ...run,

@@ -720,6 +720,8 @@ it("Topics current-context marker follows selected clone B without rewriting nat
   await mount();
   fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
   fireEvent.click(screen.getByRole("row", { name: /^feature / }));
+  await screen.findByRole("button", { name: "Открыть карточку топика feature" });
+  fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
   await screen.findByRole("region", { name: "Запуски выбранного топика" });
   fireEvent.click(screen.getByRole("button", { name: "Топики" }));
   const featureRow = (
@@ -794,6 +796,8 @@ it.each(["missing", "linked"])(
     expect(
       screen.getByRole("button", { name: "Открыть карточку топика feature" }),
     ).toBeTruthy();
+    expect(screen.getByRole("region", { name: "Контекст недоступен" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
     expect(
       screen.getByRole("region", { name: "Запуски выбранного топика" }),
     ).toBeTruthy();
