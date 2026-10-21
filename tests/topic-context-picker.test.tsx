@@ -698,3 +698,87 @@ it("uses short readiness badges while retaining the full explanation for assisti
     "Копия подготовится при переходе",
   );
 });
+
+it("scrolls keyboard selection in the native portal's document", async () => {
+  const frame = document.createElement("iframe");
+  document.body.append(frame);
+  const child = frame.contentWindow!;
+  Object.assign(api, {
+    setTopicPopupBounds: vi.fn(async () => {}),
+    closeTopicPopup: vi.fn(async () => {}),
+    onTopicPopupClosed: vi.fn(() => () => {}),
+  });
+  const opener = vi.spyOn(window, "open").mockReturnValue(child);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  const view = mount();
+  try {
+    open();
+    const local = within(child.document.body);
+    const search = await local.findByRole("combobox");
+    const list = local.getByRole("grid");
+    const last = local.getAllByRole("row").at(-1)!;
+    Object.defineProperty(list, "clientHeight", { value: 100 });
+    Object.defineProperty(last, "offsetTop", { value: 300 });
+    Object.defineProperty(last, "offsetHeight", { value: 20 });
+    fireEvent.keyDown(search, { key: "End" });
+    await waitFor(() => expect(list.scrollTop).toBe(220));
+    fireEvent.keyDown(search, { key: "Escape" });
+    await waitFor(() => expect(window.goga.closeTopicPopup).toHaveBeenCalled());
+  } finally {
+    view.unmount();
+    frame.remove();
+    opener.mockRestore();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("does not steal focus back from an outside control when the native layer closes", async () => {
+  const frame = document.createElement("iframe");
+  document.body.append(frame);
+  const outside = document.createElement("button");
+  outside.textContent = "Outside menu";
+  document.body.append(outside);
+  let dismiss!: (id: string) => void;
+  const bounds = vi.fn(async () => {});
+  Object.assign(api, {
+    setTopicPopupBounds: bounds,
+    closeTopicPopup: vi.fn(async () => {}),
+    onTopicPopupClosed: (fn: typeof dismiss) => {
+      dismiss = fn;
+      return () => {};
+    },
+  });
+  const opener = vi.spyOn(window, "open").mockReturnValue(frame.contentWindow);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  const view = mount();
+  try {
+    open();
+    await waitFor(() => expect(bounds).toHaveBeenCalled());
+    outside.focus();
+    act(() => dismiss((bounds.mock.calls[0] as unknown as [string])[0]));
+    expect(document.activeElement).toBe(outside);
+    expect(
+      screen
+        .getByRole("button", { name: "Выбрать другой топик" })
+        .getAttribute("aria-expanded"),
+    ).toBe("false");
+  } finally {
+    view.unmount();
+    frame.remove();
+    outside.remove();
+    opener.mockRestore();
+    vi.unstubAllGlobals();
+  }
+});

@@ -1,3 +1,8 @@
+import {
+  topicPopupBoundsSchema,
+  topicPopupIdSchema,
+  type TopicPopupBounds,
+} from "../shared/topic-popup";
 import { IPC_SCOPES } from "../shared/operation-scopes";
 import { scopeRefSchema } from "../shared/context";
 import {
@@ -126,6 +131,10 @@ const launch = pipeline
     },
   );
 interface Dependencies {
+  topicPopup?: {
+    setBounds(id: string, bounds: TopicPopupBounds): void;
+    close(id: string): void;
+  };
   service: HostService;
   settings: SettingsStore;
   window: BrowserWindow;
@@ -158,6 +167,15 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
       },
     );
   }
+  handle("set-topic-popup-bounds", (id, bounds) => {
+    const popupId = topicPopupIdSchema.parse(id);
+    const parsedBounds = topicPopupBoundsSchema.parse(bounds);
+    d.topicPopup?.setBounds(popupId, parsedBounds);
+  });
+  handle("close-topic-popup", (id) => {
+    const popupId = topicPopupIdSchema.parse(id);
+    d.topicPopup?.close(popupId);
+  });
   handle("prepare-build-repeat", (runId) =>
     d.service.prepareBuildRepeat(id.parse(runId)),
   );

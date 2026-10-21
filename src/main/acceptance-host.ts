@@ -8,3 +8,5 @@ export { NodeRunner } from "../host/process";
 export { RunRecoveryManager } from "../host/run-recovery";
 export { registerIPC } from "./ipc";
 export { worktreeContextRef } from "../shared/worktrees";
+
+export { TopicPopup } from "./topic-popup";

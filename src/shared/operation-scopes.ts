@@ -12,6 +12,8 @@ export type OperationScope =
 export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
   "prepare-build-repeat":"run",
   "reconcile-run":"run",
+  "set-topic-popup-bounds": "transport",
+  "close-topic-popup": "transport",
   "cancel-read": "transport",
   "read-request": "transport",
   "ensure-topic-context": "context-lifecycle",

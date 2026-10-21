@@ -21,6 +21,7 @@ import {
 } from "./topic-context";
 import "./TopicContextPicker.css";
 import { TopicQuickSync } from "./TopicQuickSync";
+import { TopicPickerPopup, hasNativeTopicPopup } from "./TopicPickerPopup";
 
 export interface TopicContextPickerProps {
   project: Project;
@@ -255,8 +256,10 @@ export function TopicContextPicker({
   const activeOption = activeIndex >= 0 ? optionId(activeIndex) : undefined;
   useEffect(() => {
     if (!expanded || activeIndex < 0) return;
-    const option = document.getElementById(optionId(activeIndex));
     const container = list.current;
+    const option = container?.ownerDocument.getElementById(
+      optionId(activeIndex),
+    );
     if (!option || !container) return;
     if (option.offsetTop < container.scrollTop)
       container.scrollTop = option.offsetTop;
@@ -542,7 +545,11 @@ export function TopicContextPicker({
       className="topic-context-picker"
       ref={root}
       onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node)) close();
+        if (
+          !hasNativeTopicPopup() &&
+          !event.currentTarget.contains(event.relatedTarget as Node)
+        )
+          close();
       }}
     >
       <span className="topic-context-label">Топик:</span>
@@ -585,176 +592,185 @@ export function TopicContextPicker({
         </button>
       </div>
       {expanded && (
-        <div
-          className="topic-context-popup"
-          role="region"
-          aria-label="Выбор топика"
-          onKeyDown={keyDown}
-        >
-          <label htmlFor={`${id}-search`}>Найти топик</label>
-          <input
-            id={`${id}-search`}
-            ref={search}
-            type="search"
-            role="combobox"
-            aria-haspopup="grid"
-            aria-expanded="true"
-            aria-autocomplete="list"
-            aria-controls={listId}
-            aria-activedescendant={activeOption}
-            autoComplete="off"
-            value={query}
-            placeholder="Название топика или ветки"
-            onChange={(event) => {
-              setQuery(event.target.value);
-              setFocused(0);
-            }}
-          />
+        <TopicPickerPopup anchor={root} onClose={() => close()}>
           <div
-            className="topic-context-options"
-            id={listId}
-            role="grid"
-            aria-label="Топики проекта"
-            ref={list}
+            className="topic-context-popup"
+            role="region"
+            aria-label="Выбор топика"
+            onKeyDown={keyDown}
           >
-            {!current && primaryRow()}
-            {topics.map((topic, topicIndex) => {
-              const index = current ? topicIndex : topicIndex + 1;
-              const isCurrent = topic.isCurrent;
-              const status = copyStatus(topic.record);
-              const activity = contextRunActivity(runs, topic.record ?? null);
-              const active = activity.activeBuild ?? activity.activePipeline;
-              const activityLabel = active
-                ? `● ${active.kind === "build" ? "Сборка" : "Конвейер"}${active.kind !== "build" && active.pipelineName ? ` «${active.pipelineName}»` : ""}${activity.activeCount > 1 ? ` · ещё ${activity.activeCount - 1}` : ""}`
-                : null;
-              const pending =
-                preparation?.state === "busy" &&
-                identityKey(preparation.identity) ===
-                  identityKey(topic.identity) &&
-                preparation.owner?.contextId === topic.record?.contextId;
-              return (
-                <div
-                  key={topic.key}
-                  id={optionId(index)}
-                  role="row"
-                  aria-label={`${topic.identity.topic} ${topic.identity.branch} ${topic.identity.year}${topic.ownerLabel ? ` ${topic.record?.contextId}` : ""} ${status}${isCurrent ? " Текущий" : ""}${activity.activeCount ? ` Активных: ${activity.activeCount}` : ""}`}
-                  aria-selected={isCurrent}
-                  aria-disabled={pending}
-                  className={`topic-context-option${index === activeIndex ? " is-focused" : ""}`}
-                  onPointerDown={(event) => {
-                    if (!(
-                      event.target instanceof Element &&
-                      event.target.closest("button")
-                    ))
-                      event.preventDefault();
-                  }}
-                  onPointerMove={() => setFocused(index)}
-                  onClick={() => choose(index)}
-                >
-                  <div className="topic-context-lines" role="gridcell">
-                    <strong>
-                      {topic.identity.topic}
-                      {topic.showYear && (
-                        <span className="topic-context-disambiguation">
-                          {" "}
-                          · {topic.identity.year}
+            <label htmlFor={`${id}-search`}>Найти топик</label>
+            <input
+              id={`${id}-search`}
+              ref={search}
+              type="search"
+              role="combobox"
+              aria-haspopup="grid"
+              aria-expanded="true"
+              aria-autocomplete="list"
+              aria-controls={listId}
+              aria-activedescendant={activeOption}
+              autoComplete="off"
+              value={query}
+              placeholder="Название топика или ветки"
+              onChange={(event) => {
+                setQuery(event.target.value);
+                setFocused(0);
+              }}
+            />
+            <div
+              className="topic-context-options"
+              id={listId}
+              role="grid"
+              aria-label="Топики проекта"
+              ref={list}
+            >
+              {!current && primaryRow()}
+              {topics.map((topic, topicIndex) => {
+                const index = current ? topicIndex : topicIndex + 1;
+                const isCurrent = topic.isCurrent;
+                const status = copyStatus(topic.record);
+                const activity = contextRunActivity(runs, topic.record ?? null);
+                const active = activity.activeBuild ?? activity.activePipeline;
+                const activityLabel = active
+                  ? `● ${active.kind === "build" ? "Сборка" : "Конвейер"}${active.kind !== "build" && active.pipelineName ? ` «${active.pipelineName}»` : ""}${activity.activeCount > 1 ? ` · ещё ${activity.activeCount - 1}` : ""}`
+                  : null;
+                const pending =
+                  preparation?.state === "busy" &&
+                  identityKey(preparation.identity) ===
+                    identityKey(topic.identity) &&
+                  preparation.owner?.contextId === topic.record?.contextId;
+                return (
+                  <div
+                    key={topic.key}
+                    id={optionId(index)}
+                    role="row"
+                    aria-label={`${topic.identity.topic} ${topic.identity.branch} ${topic.identity.year}${topic.ownerLabel ? ` ${topic.record?.contextId}` : ""} ${status}${isCurrent ? " Текущий" : ""}${activity.activeCount ? ` Активных: ${activity.activeCount}` : ""}`}
+                    aria-selected={isCurrent}
+                    aria-disabled={pending}
+                    className={`topic-context-option${index === activeIndex ? " is-focused" : ""}`}
+                    onPointerDown={(event) => {
+                      if (!(
+                        (event.target as Element).nodeType === 1 &&
+                        (event.target as Element).closest("button")
+                      ))
+                        event.preventDefault();
+                    }}
+                    onPointerMove={() => setFocused(index)}
+                    onClick={() => choose(index)}
+                  >
+                    <div className="topic-context-lines" role="gridcell">
+                      <strong>
+                        {topic.identity.topic}
+                        {topic.showYear && (
+                          <span className="topic-context-disambiguation">
+                            {" "}
+                            · {topic.identity.year}
+                          </span>
+                        )}
+                      </strong>
+                      <small>
+                        {topic.identity.branch}
+                        {topic.ownerLabel && <span> · {topic.ownerLabel}</span>}
+                      </small>
+                      <small className="topic-context-status">
+                        <span
+                          className="topic-context-readiness"
+                          title={status}
+                        >
+                          {readinessLabel[status]}
+                        </span>
+                        {isCurrent && (
+                          <span className="topic-context-current">Текущий</span>
+                        )}
+                      </small>
+                      {activity.activeCount > 0 && (
+                        <span className="topic-context-activity">
+                          {activityLabel}
                         </span>
                       )}
-                    </strong>
-                    <small>
-                      {topic.identity.branch}
-                      {topic.ownerLabel && <span> · {topic.ownerLabel}</span>}
-                    </small>
-                    <small className="topic-context-status">
-                      <span className="topic-context-readiness" title={status}>
-                        {readinessLabel[status]}
-                      </span>
-                      {isCurrent && (
-                        <span className="topic-context-current">Текущий</span>
-                      )}
-                    </small>
-                    {activity.activeCount > 0 && (
-                      <span className="topic-context-activity">
-                        {activityLabel}
-                      </span>
-                    )}
+                    </div>
+                    <div
+                      className="topic-context-option-actions"
+                      role="gridcell"
+                    >
+                      <TopicQuickSync
+                        identity={topic.identity}
+                        record={topic.record}
+                      />
+                    </div>
                   </div>
-                  <div className="topic-context-option-actions" role="gridcell">
-                    <TopicQuickSync
-                      identity={topic.identity}
-                      record={topic.record}
-                    />
-                  </div>
-                </div>
-              );
-            })}
-            {current && primaryRow()}
-            {topics.length === 0 && (
-              <p className="topic-context-empty">
-                {!snapshot && !knownContexts.length
-                  ? "Список топиков пока недоступен."
-                  : "Совпадений нет."}
+                );
+              })}
+              {current && primaryRow()}
+              {topics.length === 0 && (
+                <p className="topic-context-empty">
+                  {!snapshot && !knownContexts.length
+                    ? "Список топиков пока недоступен."
+                    : "Совпадений нет."}
+                </p>
+              )}
+            </div>
+            {preparation?.state === "busy" && (
+              <p className="topic-context-feedback" role="status">
+                {preparation.owner
+                  ? "Проверяем рабочую копию…"
+                  : "Подготавливаем рабочую копию…"}
               </p>
             )}
+            {preparation?.state === "error" && (
+              <div className="topic-context-feedback">
+                <p role="alert">{preparation.message}</p>
+                <button
+                  type="button"
+                  onClick={() =>
+                    prepare(
+                      preparation.identity,
+                      preparation.create,
+                      preparation.owner,
+                    )
+                  }
+                >
+                  Повторить
+                </button>
+              </div>
+            )}
+            {newName && !hasExact && (
+              <div className="topic-context-create">
+                <button
+                  type="button"
+                  disabled={
+                    !creationAvailable ||
+                    !validNewName ||
+                    preparation?.state === "busy"
+                  }
+                  onClick={() =>
+                    prepare(
+                      {
+                        projectId: project.id,
+                        year:
+                          snapshot?.year ?? String(new Date().getFullYear()),
+                        topic: newName,
+                        branch: newName,
+                      },
+                      true,
+                    )
+                  }
+                  aria-describedby={`${id}-creation-reason`}
+                >
+                  Создать «{newName}» и подготовить конвейер
+                </button>
+                <small id={`${id}-creation-reason`}>
+                  {!creationAvailable
+                    ? "Создание топика недоступно в этой версии хоста."
+                    : validNewName
+                      ? "Задачу можно описать на следующем шаге. Конвейер сам не запустится."
+                      : "Используйте буквы, цифры, дефис, подчёркивание или /. До 80 символов."}
+                </small>
+              </div>
+            )}
           </div>
-          {preparation?.state === "busy" && (
-            <p className="topic-context-feedback" role="status">
-              {preparation.owner
-                ? "Проверяем рабочую копию…"
-                : "Подготавливаем рабочую копию…"}
-            </p>
-          )}
-          {preparation?.state === "error" && (
-            <div className="topic-context-feedback">
-              <p role="alert">{preparation.message}</p>
-              <button
-                type="button"
-                onClick={() =>
-                  prepare(
-                    preparation.identity,
-                    preparation.create,
-                    preparation.owner,
-                  )
-                }
-              >
-                Повторить
-              </button>
-            </div>
-          )}
-          {newName && !hasExact && (
-            <div className="topic-context-create">
-              <button
-                type="button"
-                disabled={
-                  !creationAvailable ||
-                  !validNewName ||
-                  preparation?.state === "busy"
-                }
-                onClick={() =>
-                  prepare(
-                    {
-                      projectId: project.id,
-                      year: snapshot?.year ?? String(new Date().getFullYear()),
-                      topic: newName,
-                      branch: newName,
-                    },
-                    true,
-                  )
-                }
-                aria-describedby={`${id}-creation-reason`}
-              >
-                Создать «{newName}» и подготовить конвейер
-              </button>
-              <small id={`${id}-creation-reason`}>
-                {!creationAvailable
-                  ? "Создание топика недоступно в этой версии хоста."
-                  : validNewName
-                    ? "Задачу можно описать на следующем шаге. Конвейер сам не запустится."
-                    : "Используйте буквы, цифры, дефис, подчёркивание или /. До 80 символов."}
-              </small>
-            </div>
-          )}
-        </div>
+        </TopicPickerPopup>
       )}
     </div>
   );

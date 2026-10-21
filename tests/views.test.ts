@@ -74,6 +74,33 @@ describe("independent AFM views", () => {
       opened,
     };
   }
+  it("inserts new dashboards below any existing native overlay", async () => {
+    const { views, win } = fixture();
+    const overlay = { kind: "topic-popup" };
+    const children: any[] = [overlay];
+    win.contentView.addChildView.mockImplementation((view: any, index?: number) => {
+      children.splice(index ?? children.length, 0, view);
+    });
+    await views.ensure("a", "http://localhost:4101");
+    await views.ensure("b", "http://localhost:4102");
+    expect(children.at(-1)).toBe(overlay);
+    expect(children).toEqual([fake.created[1], fake.created[0], overlay]);
+  });
+  it("inserts a dashboard above the native shell but below existing dashboards and overlay", async () => {
+    const { views, win } = fixture();
+    const shellContents = { id: 1 };
+    const shellView = { webContents: shellContents };
+    const oldDashboard = { kind: "retained-dashboard" };
+    const overlay = { kind: "topic-popup" };
+    const children: any[] = [shellView, oldDashboard, overlay];
+    Object.assign(win, { webContents: shellContents });
+    Object.assign(win.contentView, { children });
+    win.contentView.addChildView.mockImplementation((view: any, index?: number) => {
+      children.splice(index ?? children.length, 0, view);
+    });
+    await views.ensure("a", "http://localhost:4101");
+    expect(children).toEqual([shellView, fake.created[0], oldDashboard, overlay]);
+  });
   it("loads once per run and switching preserves independent page state", async () => {
     const { views } = fixture();
     await views.ensure("a", "http://localhost:4101");

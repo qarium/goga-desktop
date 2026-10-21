@@ -1,0 +1,36 @@
+/* This document belongs to the menu's native layer, never to the Dashboard. */
+html.topic-popup-document {
+  background: transparent;
+  overflow: hidden;
+}
+.topic-context-native-root {
+  padding: 8px;
+  width: 100%;
+}
+.topic-context-native-root .topic-context-popup {
+  position: relative;
+  top: auto;
+  left: auto;
+  width: 100%;
+  max-width: none;
+  /* Limit against the parent window, not the previously shrunk child view. */
+  max-height: var(--topic-popup-max-height);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+.topic-context-native-root .topic-context-popup > * {
+  flex-shrink: 0;
+}
+.topic-context-native-root .topic-context-options {
+  flex-shrink: 1;
+  min-height: 0;
+}
+.topic-popup-error {
+  position: absolute;
+  top: 100%;
+  z-index: 35;
+  padding: 8px;
+  width: 420px;
+  background: var(--surface);
+}

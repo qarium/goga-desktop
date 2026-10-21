@@ -14,6 +14,7 @@ import { mkdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { HostService } from "../host/service";
 import { SettingsStore } from "../host/settings";
+import { TopicPopup } from "./topic-popup";
 import { DashboardViews } from "./views";
 import { registerIPC } from "./ipc";
 import { loadShell } from "./load-shell";
@@ -107,7 +108,9 @@ if (!app.requestSingleInstanceLock()) {
       );
       const html = path.join(__dirname, "../dist/index.html"),
         shellURL = pathToFileURL(html).href;
+      const topicPopup = new TopicPopup(win, shellURL);
       registerIPC(ipcMain, {
+        topicPopup,
         service,
         settings,
         window: win,
@@ -151,7 +154,6 @@ if (!app.requestSingleInstanceLock()) {
             });
         }
       });
-      win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
       win.webContents.on("will-navigate", (event) => event.preventDefault());
       win.webContents.on("will-attach-webview", (event) =>
         event.preventDefault(),
@@ -193,6 +195,7 @@ if (!app.requestSingleInstanceLock()) {
           }
           await service.dispose();
           exiting = true;
+          topicPopup.dispose();
           views.dispose();
           app.quit();
         } finally {

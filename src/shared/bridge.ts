@@ -1,3 +1,4 @@
+import type { TopicPopupBounds } from "./topic-popup";
 import type {BuildRepeatPreparation} from "./build-repeat";
 import type { ScopeRef } from "./context";
 import type {
@@ -59,6 +60,9 @@ export interface SettingsFile {
   version: string;
 }
 export interface DesktopAPI {
+  setTopicPopupBounds?(id: string, bounds: TopicPopupBounds): Promise<void>;
+  closeTopicPopup?(id: string): Promise<void>;
+  onTopicPopupClosed?(callback: (id: string) => void): () => void;
   prepareBuildRepeat?(runId:string):Promise<BuildRepeatPreparation>;
   reconcileRun?(runId:string):Promise<Run>;
   createTopicContext(input: {

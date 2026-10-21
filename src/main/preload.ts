@@ -8,6 +8,10 @@ function listen<T>(name: string, callback: (value: T) => void) {
   return () => ipcRenderer.removeListener(`goga:${name}`, fn);
 }
 const api: DesktopAPI = {
+  setTopicPopupBounds: (id, bounds) =>
+    invoke("set-topic-popup-bounds", id, bounds),
+  closeTopicPopup: (id) => invoke("close-topic-popup", id),
+  onTopicPopupClosed: (callback) => listen("topic-popup-closed", callback),
   prepareBuildRepeat: (id) => invoke("prepare-build-repeat", id),
   reconcileRun: (id) => invoke("reconcile-run", id),
   createTopicContext: (v) => invoke("create-topic-context", v),

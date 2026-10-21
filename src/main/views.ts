@@ -168,7 +168,12 @@ export class DashboardViews {
         void isolated.clearStorageData().catch(() => {});
       },
     });
-    this.win.contentView.addChildView(view);
+    // BrowserWindow's own shell is a native child too. Dashboards must stay
+    // above that opaque surface, but below any already-mounted topic overlay.
+    const shellIndex = this.win.contentView.children?.findIndex(
+      (child) => "webContents" in child && child.webContents === this.win.webContents,
+    ) ?? -1;
+    this.win.contentView.addChildView(view, shellIndex + 1);
     view.setVisible(false);
     this.layout();
     try {
