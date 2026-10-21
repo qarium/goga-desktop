@@ -635,13 +635,16 @@ it("missing card retry retains a stale-version local draft and the save host rej
     version: "old-v",
   });
   render(<TopicCard {...card} />);
-  await screen.findByText("Local failure");
-  fireEvent.click(screen.getByRole("button", { name: "Повторить загрузку" }));
-  await screen.findByText(absence);
-  expect(screen.getByLabelText("Задача топика")).toHaveProperty(
-    "value",
-    "Preserved draft",
-  );
+  // LoadingBoundary keeps hidden content mounted. Wait for accessible controls,
+  // not text that may render before the read's final loading-state update.
+  const retry = await screen.findByRole("button", {
+    name: "Повторить загрузку",
+  });
+  expect(screen.getByRole("alert").textContent).toContain("Local failure");
+  fireEvent.click(retry);
+  const task = await screen.findByRole("textbox", { name: "Задача топика" });
+  expect(screen.getByText(absence)).toBeTruthy();
+  expect(task).toHaveProperty("value", "Preserved draft");
   expect(screen.getByRole("alert").textContent).toContain(
     "Сохранённая задача изменилась",
   );
