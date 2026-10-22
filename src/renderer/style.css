@@ -1586,3 +1586,8 @@ code {
 .run-context > button {
   flex-shrink: 0;
 }
+
+.sidebar-project-anchor {
+  display: flex;
+  width: 100%;
+}

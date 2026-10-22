@@ -143,7 +143,7 @@ export function RepositoryActions({
       }}
     >
       {actions.map((action) => (
-        <RepositoryActionButton
+        <TooltipButton
           key={action}
           disabled={disabled || busy || !available || !!unavailable}
           label={labels[action]}
@@ -168,14 +168,14 @@ export function RepositoryActions({
           }}
         >
           <RepositoryIcon action={action} />
-        </RepositoryActionButton>
+        </TooltipButton>
       ))}
     </div>
   );
 }
 
 /** A DOM tooltip above the header, never over the native pipeline view. */
-function RepositoryActionButton({
+export function TooltipButton({
   disabled,
   label,
   tooltipLabel,
@@ -183,7 +183,13 @@ function RepositoryActionButton({
   description,
   onClick,
   children,
+  buttonClassName = "repository-action-button",
+  sidebar = false,
+  tooltipEnabled = true,
 }: {
+  buttonClassName?: string;
+  sidebar?: boolean;
+  tooltipEnabled?: boolean;
   disabled: boolean;
   label: string;
   tooltipLabel: string;
@@ -205,8 +211,11 @@ function RepositoryActionButton({
   };
   const show = () => {
     cancelLeave();
-    setOpen(true);
+    if (tooltipEnabled) setOpen(true);
   };
+  useEffect(() => {
+    if (!tooltipEnabled) setOpen(false);
+  }, [tooltipEnabled]);
   const leave = () => {
     cancelLeave();
     leaveTimer.current = setTimeout(() => {
@@ -242,6 +251,14 @@ function RepositoryActionButton({
     const view = document.defaultView;
     const place = () => {
       const rect = anchor.current!.getBoundingClientRect();
+      // Native pipeline content is a separate view; keep sidebar hints above it.
+      const top = sidebar
+        ? Math.min(
+            rect.top,
+            document.querySelector(".project-bar")?.getBoundingClientRect()
+              .bottom ?? 52,
+          )
+        : rect.top;
       const width = Math.min(640, Math.max(0, view.innerWidth - 16));
       const height = tooltip.current?.getBoundingClientRect().height ?? 0;
       const actualWidth =
@@ -258,9 +275,9 @@ function RepositoryActionButton({
             view.innerWidth - actualWidth - 8,
           ),
         ),
-        top: Math.max(8, rect.top - height - 8),
+        top: Math.max(8, top - height - 8),
         maxWidth: width,
-        maxHeight: Math.max(0, rect.top - 16),
+        maxHeight: Math.max(0, top - 16),
       });
     };
     const escape = (event: KeyboardEvent) => {
@@ -282,6 +299,7 @@ function RepositoryActionButton({
     };
   }, [
     open,
+    sidebar,
     document,
     description,
     disabled,
@@ -291,7 +309,11 @@ function RepositoryActionButton({
   return (
     <span
       ref={anchor}
-      className="repository-action-anchor"
+      className={
+        sidebar
+          ? "repository-action-anchor sidebar-project-anchor"
+          : "repository-action-anchor"
+      }
       tabIndex={disabled ? 0 : undefined}
       aria-describedby={disabled && open ? id : undefined}
       onMouseEnter={show}
@@ -321,7 +343,8 @@ function RepositoryActionButton({
     >
       <button
         type="button"
-        className="repository-action-button"
+        className={buttonClassName}
+        title={sidebar && !tooltipEnabled ? description : undefined}
         disabled={disabled}
         aria-label={label}
         aria-busy={busy}

@@ -426,3 +426,20 @@ it("collapses only sidebar while retaining the selected workspace", async () => 
       ?.classList.contains("sidebar-collapsed"),
   ).toBe(false);
 });
+
+it("shows project name and full path on hover and focus in the collapsed sidebar", async () => {
+  render(<App />);
+  const project = await screen.findByRole("button", { name: "Alpha" });
+  fireEvent.click(
+    screen.getByRole("button", { name: "Свернуть боковую панель" }),
+  );
+  fireEvent.mouseEnter(project);
+  expect(screen.getByRole("tooltip").textContent).toContain("Alpha");
+  expect(screen.getByRole("tooltip").textContent).toContain("/fixture/a");
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(screen.queryByRole("tooltip")).toBeNull();
+  fireEvent.focus(project);
+  expect(screen.getByRole("tooltip").textContent).toContain("Alpha");
+  fireEvent.blur(project);
+  expect(screen.queryByRole("tooltip")).toBeNull();
+});

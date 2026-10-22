@@ -46,6 +46,7 @@ import {
 import { TopicContextPicker } from "./TopicContextPicker";
 import {
   RepositoryActions,
+  TooltipButton,
   RepositoryOperationPopup,
 } from "./RepositoryActions";
 import { useRepositoryActionController } from "./repository-action-controller";
@@ -978,11 +979,15 @@ export function App() {
         </div>
         <nav className="project-list">
           {projects.map((p) => (
-            <button
-              title={p.path}
-              aria-label={p.name}
+            <TooltipButton
+              label={p.name}
+              tooltipLabel={p.name}
+              description={p.path}
+              sidebar
+              tooltipEnabled={sidebarCollapsed}
+              busy={false}
               key={p.id}
-              className={`project-button ${page !== "settings" && p.id === projectId ? "active" : ""}`}
+              buttonClassName={`project-button ${page !== "settings" && p.id === projectId ? "active" : ""}`}
               disabled={settingsBusy}
               onClick={() =>
                 navigate(() => {
@@ -1000,7 +1005,7 @@ export function App() {
                 {p.name}
                 <small>{p.path.split("/").slice(-2).join("/")}</small>
               </span>
-            </button>
+            </TooltipButton>
           ))}
         </nav>
         <button
