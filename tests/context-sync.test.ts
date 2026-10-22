@@ -11,7 +11,7 @@ import {
   worktreeContextRef,
   type WorktreeRecord,
 } from "../src/shared/worktrees";
-import type { Runner } from "../src/host/process";
+import { NodeRunner, type Runner } from "../src/host/process";
 vi.setConfig({ testTimeout: 30000 });
 const exec = promisify(execFile);
 // Retained synthetic fixtures only; never read actual HOME/global Git config.
@@ -235,7 +235,7 @@ describe("completed sync revision recovery", () => {
       f.home,
       {
         command: async (exe, args, cwd, env, stdin) => {
-          if (cwd === f.repo && args.includes("fetch"))
+          if (cwd === f.record.path && args.includes("push"))
             throw Error("fixture transport failure");
           return f.runner.command(exe, args, cwd, env, stdin);
         },
@@ -286,34 +286,41 @@ describe("immutable context commit import", () => {
     await expect(
       fs.stat(path.join(f.repo, ".git", "FETCH_HEAD")),
     ).rejects.toMatchObject({ code: "ENOENT" });
-    const fetch = f.calls.find((c) => c.args.includes("fetch"))!;
-    expect(fetch.args).toEqual(
+    const push = f.calls.find((c) => c.args.includes("push"))!;
+    expect(push.args).toEqual(
       expect.arrayContaining([
-        "--atomic",
-        "--no-tags",
-        "--no-write-fetch-head",
-        "--no-recurse-submodules",
-        "--no-auto-maintenance",
-        "--refmap=",
-        `${oid}:${result.destinationRef}`,
+        "--no-follow-tags",
+        "--recurse-submodules=no",
+        "origin",
+        `${oid}:refs/heads/${f.record.branch}`,
       ]),
     );
-    expect(fetch.cwd).toBe(f.repo);
-    expect(fetch.args).not.toContain("origin");
+    expect(push.cwd).toBe(f.record.path);
+    expect(await f.git(["rev-parse", f.record.branch])).toBe(oid);
   });
 });
 
 describe("durable queue and retries", () => {
-  it("defers manual and automatic requests until the actual run ends, deduplicates and survives manager restart", async () => {
+  it("manual sync does not prematurely complete a queued active run", async () => {
+    const f = await fixture(); f.setActive(true);
+    expect((await f.manager.afterRun(f.project, f.ref, "running-one")).status).toBe("waiting");
+    expect((await f.manager.request(f.project, f.ref, "manual")).status).toBe("synced");
+    await fs.writeFile(path.join(f.record.path, "late-run"), "late commit");
+    await f.git(["add", "."], f.record.path); await f.git(["commit", "-m", "late run commit"], f.record.path);
+    f.setActive(false);
+    expect((await f.manager.afterRun(f.project, f.ref, "running-one")).status).toBe("synced");
+    expect(await f.git(["rev-parse", f.record.branch])).toBe(await f.git(["rev-parse", "HEAD"], f.record.path));
+  });
+  it("defers automatic requests until the actual run ends, deduplicates and survives manager restart", async () => {
     const f = await fixture();
     f.setActive(true);
     expect(
-      (await f.manager.request(f.project, f.ref, "manual", "run-one")).status,
+      (await f.manager.request(f.project, f.ref, "automatic", "run-one")).status,
     ).toBe("waiting");
     expect((await f.manager.afterRun(f.project, f.ref, "run-one")).status).toBe(
       "waiting",
     );
-    expect(f.calls.filter((c) => c.args.includes("fetch"))).toHaveLength(0);
+    expect(f.calls.filter((c) => c.args.includes("push"))).toHaveLength(0);
     const restarted = new ContextSyncManager(f.home, f.runner, f.deps);
     expect((await restarted.status(f.project, f.ref)).status).toBe("waiting");
     f.setActive(false);
@@ -322,7 +329,7 @@ describe("durable queue and retries", () => {
       f.manager.request(f.project, f.ref),
     ]);
     expect(results.every((s) => s.status === "synced")).toBe(true);
-    expect(f.calls.filter((c) => c.args.includes("fetch"))).toHaveLength(1);
+    expect(f.calls.filter((c) => c.args.includes("push"))).toHaveLength(1);
     expect(results[0].waitingRunIds).toEqual([]);
   });
   it("imports the captured OID only and reports commits created after the snapshot as new", async () => {
@@ -331,7 +338,7 @@ describe("durable queue and retries", () => {
     let advanced = false;
     const runner: Pick<Runner, "command"> = {
       command: async (...args) => {
-        if (args[1].includes("fetch") && !advanced) {
+        if (args[1].includes("push") && !advanced) {
           advanced = true;
           await fs.writeFile(path.join(f.record.path, "later"), "later");
           await f.git(["add", "."], f.record.path);
@@ -358,7 +365,7 @@ describe("durable queue and retries", () => {
     let fail = true;
     const runner: Pick<Runner, "command"> = {
       command: async (...args) => {
-        if (args[1].includes("fetch") && fail)
+        if (args[1].includes("push") && fail)
           throw new Error("fixture import failed");
         return f.runner.command(...args);
       },
@@ -388,7 +395,7 @@ describe("durable queue and retries", () => {
     const runner: Pick<Runner, "command"> = {
       command: async (...args) => {
         const result = await f.runner.command(...args);
-        if (args[1].includes("fetch") && !changed) {
+        if (args[1].includes("push") && !changed) {
           changed = true;
           throw new Error("simulated interrupted result");
         }
@@ -405,7 +412,7 @@ describe("durable queue and retries", () => {
       recovered = await restarted.recover([f.project]);
     expect(recovered[0].status).toBe("synced");
     expect(recovered[0].importedOid).toBe(failed.sourceOid);
-    expect(f.calls.filter((c) => c.args.includes("fetch"))).toHaveLength(1);
+    expect(f.calls.filter((c) => c.args.includes("push"))).toHaveLength(2);
   });
   it("rejects an owner mismatch before primary import", async () => {
     const f = await fixture();
@@ -416,7 +423,7 @@ describe("durable queue and retries", () => {
     await expect(manager.request(f.project, f.ref)).rejects.toThrow(
       /Контекст|измен/,
     );
-    expect(f.calls.filter((c) => c.args.includes("fetch"))).toHaveLength(0);
+    expect(f.calls.filter((c) => c.args.includes("push"))).toHaveLength(0);
   });
 });
 
@@ -550,7 +557,7 @@ describe("snapshot, journal and restart safety", () => {
     ).afterRun(f.project, f.ref, "completed-run");
     expect(repeated.status).toBe("new");
     expect(repeated.importedOid).toBe(first.importedOid);
-    expect(f.calls.filter((c) => c.args.includes("fetch"))).toHaveLength(1);
+    expect(f.calls.filter((c) => c.args.includes("push"))).toHaveLength(1);
   });
   it("never overwrites a competing journal revision during the fetch", async () => {
     const f = await fixture();
@@ -559,7 +566,7 @@ describe("snapshot, journal and restart safety", () => {
     const runner: Pick<Runner, "command"> = {
       command: async (...args) => {
         const result = await f.runner.command(...args);
-        if (args[1].includes("fetch")) {
+        if (args[1].includes("push")) {
           const doc = JSON.parse(await fs.readFile(file, "utf8"));
           doc.revision = randomUUID();
           competing = JSON.stringify(doc);
@@ -644,7 +651,7 @@ describe("durable owner binding", () => {
     const f = await fixture();
     const failing: Pick<Runner, "command"> = {
       command: async (...args) => {
-        if (args[1].includes("fetch")) throw new Error("transport failure");
+        if (args[1].includes("push")) throw new Error("transport failure");
         return f.runner.command(...args);
       },
     };
@@ -660,7 +667,7 @@ describe("durable owner binding", () => {
     const result = await f.manager.retry(f.project, f.ref);
     expect(result.status).toBe("error");
     expect(result.error).toMatch(/Контекст|владел|измен/);
-    expect(f.calls.filter((c) => c.args.includes("fetch"))).toHaveLength(0);
+    expect(f.calls.filter((c) => c.args.includes("push"))).toHaveLength(0);
   });
   it("refuses apply when a persisted preview is transplanted into another context entry", async () => {
     const f = await fixture();
@@ -695,7 +702,7 @@ describe("non-blocking status and detached import", () => {
       });
       const runner: Pick<Runner, "command"> = {
         command: async (...args) => {
-          if (args[1].includes("fetch")) {
+          if (args[1].includes("push")) {
             importBlocked = true;
             reached();
             await gate;
@@ -754,7 +761,7 @@ describe("non-blocking status and detached import", () => {
     let fail = true;
     const runner: Pick<Runner, "command"> = {
       command: async (...args) => {
-        if (args[1].includes("fetch") && fail) throw new Error("offline");
+        if (args[1].includes("push") && fail) throw new Error("offline");
         return f.runner.command(...args);
       },
     };
@@ -832,7 +839,7 @@ describe("verification before marking synced", () => {
     const runner: Pick<Runner, "command"> = {
       command: async (...args) => {
         const result = await f.runner.command(...args);
-        if (args[1].includes("fetch")) {
+        if (args[1].includes("push")) {
           const spec = args[1].at(-1)!,
             ref = spec.slice(spec.indexOf(":") + 1);
           await f.git(["update-ref", ref, base]);
@@ -853,7 +860,7 @@ describe("verification before marking synced", () => {
     const runner: Pick<Runner, "command"> = {
       command: async (...args) => {
         const result = await f.runner.command(...args);
-        if (args[1].includes("fetch"))
+        if (args[1].includes("push"))
           await fs.writeFile(
             path.join(f.repo, "base"),
             "external manual change\n",
@@ -865,7 +872,7 @@ describe("verification before marking synced", () => {
       f.project,
       f.ref,
     );
-    expect(result.status).toBe("error");
+    expect(result.status).toBe("synced");
     expect(await fs.readFile(path.join(f.repo, "base"), "utf8")).toBe(
       "external manual change\n",
     );
@@ -888,7 +895,7 @@ it("deduplicates an automatic run completion that originally needed no new impor
   const result = await f.manager.afterRun(f.project, f.ref, "no-new-commits");
   expect(result.importedOid).toBe(first.importedOid);
   expect(result.status).toBe("new");
-  expect(f.calls.filter((c) => c.args.includes("fetch"))).toHaveLength(1);
+  expect(f.calls.filter((c) => c.args.includes("push"))).toHaveLength(1);
 });
 
 it("repairs an externally missing service ref with a new immutable ref rather than claiming it is synced", async () => {
@@ -921,4 +928,430 @@ it("supports explicit target branch names containing equals without applying con
       await f.git(["show", "--format=%P", "--no-patch", result.targetOid])
     ).split(" "),
   ).toHaveLength(2);
+});
+
+describe("local origin topic push", () => {
+  it("migrates an originless clone only on sync and creates its visible topic branch", async () => {
+    const f = await fixture();
+    await f.manager.status(f.project, f.ref);
+    expect(await f.git(["remote"], f.record.path)).toBe("");
+    const result = await f.manager.request(f.project, f.ref);
+    expect(result.status).toBe("synced");
+    expect(await f.git(["remote", "get-url", "origin"], f.record.path)).toBe(
+      f.repo,
+    );
+    expect(await f.git(["rev-parse", `refs/heads/${f.record.branch}`])).toBe(
+      result.sourceOid,
+    );
+    const push = f.calls.find((c) => c.args.includes("push"))!;
+    expect(push.cwd).toBe(f.record.path);
+    expect(push.args).toContain("origin");
+    expect(push.args.at(-1)).toBe(
+      `${result.sourceOid}:refs/heads/${f.record.branch}`,
+    );
+    expect(
+      push.args.some((arg) => arg.includes("force") || arg.startsWith("+")),
+    ).toBe(false);
+  });
+  it("pushes commits without inspecting dirty files in either worktree", async () => {
+    const f = await fixture();
+    for (const cwd of [f.repo, f.record.path]) {
+      await fs.writeFile(path.join(cwd, "staged"), "staged");
+      await f.git(["add", "staged"], cwd);
+      await fs.writeFile(path.join(cwd, "staged"), "unstaged");
+      await fs.writeFile(path.join(cwd, "untracked"), "untracked");
+    }
+    const indexes = await Promise.all(
+      [f.repo, f.record.path].map((cwd) =>
+        fs.readFile(path.join(cwd, ".git/index"), "hex"),
+      ),
+    );
+    const runner: Pick<Runner, "command"> = {
+      command: async (...args) => {
+        if (args[1].some((arg) => ["status", "ls-files"].includes(arg)))
+          throw Error("Dirty-file inspection forbidden for sync");
+        return f.runner.command(...args);
+      },
+    };
+    expect(
+      (
+        await new ContextSyncManager(f.home, runner, f.deps).request(
+          f.project,
+          f.ref,
+        )
+      ).status,
+    ).toBe("synced");
+    expect(
+      await Promise.all(
+        [f.repo, f.record.path].map((cwd) =>
+          fs.readFile(path.join(cwd, ".git/index"), "hex"),
+        ),
+      ),
+    ).toEqual(indexes);
+    for (const cwd of [f.repo, f.record.path]) {
+      expect(await fs.readFile(path.join(cwd, "staged"), "utf8")).toBe(
+        "unstaged",
+      );
+      expect(await fs.readFile(path.join(cwd, "untracked"), "utf8")).toBe(
+        "untracked",
+      );
+    }
+  });
+});
+
+describe("visible local branch safety", () => {
+  it("fast-forwards and then treats an identical visible branch as a no-op", async () => {
+    const f = await fixture();
+    const first = await f.manager.request(f.project, f.ref);
+    await fs.writeFile(path.join(f.record.path, "second"), "second");
+    await f.git(["add", "."], f.record.path);
+    await f.git(["commit", "-m", "second"], f.record.path);
+    const second = await f.manager.request(f.project, f.ref);
+    expect(second.status).toBe("synced");
+    expect(second.sourceOid).not.toBe(first.sourceOid);
+    expect(await f.git(["rev-parse", f.record.branch])).toBe(second.sourceOid);
+    const count = f.calls.filter((c) => c.args.includes("push")).length;
+    expect((await f.manager.request(f.project, f.ref)).status).toBe("synced");
+    expect(f.calls.filter((c) => c.args.includes("push"))).toHaveLength(count);
+  });
+  it.each(["diverged", "ahead"])(
+    "refuses %s visible branch without force or ref replacement",
+    async (kind) => {
+      const f = await fixture();
+      const source = await f.git(["rev-parse", "HEAD"], f.record.path);
+      if (kind === "ahead") await f.manager.request(f.project, f.ref);
+      const parent =
+        kind === "ahead" ? source : await f.git(["rev-parse", "HEAD"]);
+      const tree = await f.git(["rev-parse", "HEAD^{tree}"]);
+      const competing = await f.git([
+        "commit-tree",
+        tree,
+        "-p",
+        parent,
+        "-m",
+        "competing branch",
+      ]);
+      await f.git(["update-ref", `refs/heads/${f.record.branch}`, competing]);
+      const result = await f.manager.request(f.project, f.ref);
+      expect(result.status).toBe("error");
+      expect(result.error).toMatch(/rejected|non-fast-forward|fetch first/i);
+      expect(await f.git(["rev-parse", f.record.branch])).toBe(competing);
+      expect((await f.manager.retry(f.project, f.ref)).status).toBe("error");
+    },
+  );
+  it.each(["refuse", "updateInstead"])(
+    "rejects a checked-out receiver branch even with receive.denyCurrentBranch=%s without changing persistent config",
+    async (setting) => {
+      const f = await fixture();
+      await f.git(["checkout", "-b", f.record.branch]);
+      await f.git(["config", "receive.denyCurrentBranch", setting]);
+      const before = await workingState(f);
+      const config = await fs.readFile(
+        path.join(f.repo, ".git/config"),
+        "utf8",
+      );
+      const result = await f.manager.request(f.project, f.ref);
+      expect(result.status).toBe("error");
+      expect(result.error).toMatch(/checked out|current branch/i);
+      expect(await workingState(f)).toEqual(before);
+      expect(await fs.readFile(path.join(f.repo, ".git/config"), "utf8")).toBe(
+        config,
+      );
+    },
+  );
+  it("never executes sender or receiver hooks", async () => {
+    const f = await fixture();
+    const marker = path.join(f.root, "hook-ran");
+    for (const cwd of [f.repo, f.record.path]) {
+      for (const name of [
+        "pre-push",
+        "pre-receive",
+        "update",
+        "post-receive",
+        "post-update",
+        "push-to-checkout",
+        "reference-transaction",
+      ]) {
+        await fs.writeFile(
+          path.join(cwd, ".git/hooks", name),
+          `#!/bin/sh\necho unsafe > '${marker}'\nexit 1\n`,
+          { mode: 0o700 },
+        );
+      }
+    }
+    expect((await f.manager.request(f.project, f.ref)).status).toBe("synced");
+    await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+  it("does not mistake old hidden-only journals for a pushed topic, and upgrades them explicitly", async () => {
+    const f = await fixture();
+    const first = await f.manager.request(f.project, f.ref);
+    await f.git(["update-ref", "-d", `refs/heads/${f.record.branch}`]);
+    await f.git(["remote", "remove", "origin"], f.record.path);
+    const file = path.join(f.home, ".goga/desktop/sync/journal.json");
+    const doc = JSON.parse(await fs.readFile(file, "utf8"));
+    doc.entries[0].operation.primaryBefore =
+      "legacy snapshot no longer relevant";
+    await fs.writeFile(file, JSON.stringify(doc));
+    expect((await f.manager.status(f.project, f.ref)).status).toBe("new");
+    expect(await f.git(["remote"], f.record.path)).toBe("");
+    expect((await f.manager.retry(f.project, f.ref)).status).toBe("synced");
+    expect(await f.git(["rev-parse", f.record.branch])).toBe(first.sourceOid);
+  });
+  it("reports a moved visible branch as new even when its hidden snapshot is intact", async () => {
+    const f = await fixture();
+    await f.manager.request(f.project, f.ref);
+    await f.git(["update-ref", `refs/heads/${f.record.branch}`, "HEAD"]);
+    expect((await f.manager.status(f.project, f.ref)).status).toBe("new");
+    expect((await f.manager.request(f.project, f.ref)).status).toBe("synced");
+  });
+  it("recovers a push that succeeded before the result channel failed", async () => {
+    const f = await fixture();
+    const runner: Pick<Runner, "command"> = {
+      command: async (...args) => {
+        const result = await f.runner.command(...args);
+        if (args[1].includes("push")) throw Error("result channel interrupted");
+        return result;
+      },
+    };
+    const failed = await new ContextSyncManager(f.home, runner, f.deps).request(
+      f.project,
+      f.ref,
+    );
+    expect(failed.status).toBe("error");
+    expect(await f.git(["rev-parse", f.record.branch])).toBe(failed.sourceOid);
+    await fs.writeFile(path.join(f.repo, "base"), "dirty after push");
+    expect((await f.manager.retry(f.project, f.ref)).status).toBe("synced");
+    expect(await fs.readFile(path.join(f.repo, "base"), "utf8")).toBe(
+      "dirty after push",
+    );
+  });
+  it.each(["url", "pushurl", "rewrite", "receivepack", "mirror"])(
+    "rejects origin %s drift before any push without rewriting custom config",
+    async (kind) => {
+      const f = await fixture();
+      await f.git(["remote", "add", "origin", f.repo], f.record.path);
+      const key =
+        kind === "rewrite"
+          ? "url.https://example.invalid/.pushInsteadOf"
+          : `remote.origin.${kind}`;
+      const value =
+        kind === "rewrite"
+          ? f.repo
+          : kind === "mirror"
+            ? "true"
+            : "https://example.invalid/changed";
+      await f.git(["config", key, value], f.record.path);
+      const config = await fs.readFile(
+        path.join(f.record.path, ".git/config"),
+        "utf8",
+      );
+      expect(await f.manager.request(f.project, f.ref)).toMatchObject({
+        status: "error",
+        error: expect.stringMatching(/origin/i),
+      });
+      expect(f.calls.filter((c) => c.args.includes("push"))).toHaveLength(0);
+      expect(
+        await fs.readFile(path.join(f.record.path, ".git/config"), "utf8"),
+      ).toBe(config);
+    },
+  );
+});
+
+it("journals origin drift as an error instead of leaving a previous synced outcome", async () => {
+  const f = await fixture();
+  await f.manager.request(f.project, f.ref);
+  await f.git(
+    ["remote", "set-url", "origin", "https://example.invalid/drift"],
+    f.record.path,
+  );
+  const result = await f.manager.request(f.project, f.ref);
+  expect(result.status).toBe("error");
+  expect(result.error).toMatch(/origin/i);
+  expect((await f.manager.status(f.project, f.ref)).status).toBe("error");
+});
+
+it("lets native Git refuse a topic checked out in another linked worktree", async () => {
+  const f = await fixture();
+  const linked = path.join(f.root, "linked");
+  await f.git(["worktree", "add", "-b", f.record.branch, linked, "HEAD"]);
+  const head = await f.git(["rev-parse", "HEAD"], linked);
+  const index = await fs.readFile(
+    path.join(f.repo, ".git/worktrees/linked/index"),
+    "hex",
+  );
+  const result = await f.manager.request(f.project, f.ref);
+  expect(result.status).toBe("error");
+  expect(result.error).toMatch(/checked out|current branch/i);
+  expect(await f.git(["rev-parse", "HEAD"], linked)).toBe(head);
+  expect(
+    await fs.readFile(path.join(f.repo, ".git/worktrees/linked/index"), "hex"),
+  ).toBe(index);
+});
+it.each(["url", "pushurl"])(
+  "rejects multiple origin %s endpoints without contacting either",
+  async (key) => {
+    const f = await fixture();
+    await f.git(["remote", "add", "origin", f.repo], f.record.path);
+    if (key === "pushurl")
+      await f.git(["config", "remote.origin.pushurl", f.repo], f.record.path);
+    await f.git(
+      [
+        "config",
+        "--add",
+        `remote.origin.${key}`,
+        "https://example.invalid/extra",
+      ],
+      f.record.path,
+    );
+    const result = await f.manager.request(f.project, f.ref);
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/origin/i);
+    expect(f.calls.filter(({ args }) => args.includes("push"))).toHaveLength(0);
+  },
+);
+
+it("verifies the visible branch again after recording the apply snapshot", async () => {
+  const f = await fixture();
+  const base = await f.git(["rev-parse", "HEAD"]);
+  const runner: Pick<Runner, "command"> = {
+    command: async (...args) => {
+      const result = await f.runner.command(...args);
+      if (
+        args[1].includes("update-ref") &&
+        args[1].some((arg) => arg.startsWith("refs/desktop/contexts/"))
+      )
+        await f.git(["update-ref", `refs/heads/${f.record.branch}`, base]);
+      return result;
+    },
+  };
+  expect(
+    (
+      await new ContextSyncManager(f.home, runner, f.deps).request(
+        f.project,
+        f.ref,
+      )
+    ).status,
+  ).toBe("error");
+});
+
+describe("symbolic topic destination rejection", () => {
+  it.each(["main", "nested", "dangling"])(
+    "refuses a %s symbolic destination before pushing without changing the receiver",
+    async (kind) => {
+      const f = await fixture();
+      const target =
+        kind === "dangling" ? "refs/heads/not-created" : "refs/heads/main";
+      if (kind === "nested")
+        await f.git(["symbolic-ref", "refs/heads/middle", target]);
+      await f.git([
+        "symbolic-ref",
+        `refs/heads/${f.record.branch}`,
+        kind === "nested" ? "refs/heads/middle" : target,
+      ]);
+      const before = await workingState(f);
+      const result = await f.manager.request(f.project, f.ref);
+      expect(result.status).toBe("error");
+      expect(result.error).toMatch(/символическ|symbolic/i);
+      expect(f.calls.filter(({ args }) => args.includes("push"))).toHaveLength(
+        0,
+      );
+      expect(await workingState(f)).toEqual(before);
+      if (kind === "dangling")
+        expect(
+          await f.git(["for-each-ref", "--format=%(objectname)", target]),
+        ).toBe("");
+    },
+  );
+  it("never reports a matching symbolic destination synced or treats it as a no-op/retry success", async () => {
+    const f = await fixture();
+    const first = await f.manager.request(f.project, f.ref);
+    await f.git(["update-ref", "refs/heads/alias-target", first.sourceOid!]);
+    await f.git([
+      "symbolic-ref",
+      `refs/heads/${f.record.branch}`,
+      "refs/heads/alias-target",
+    ]);
+    await expect(f.manager.status(f.project, f.ref)).rejects.toThrow(
+      /символическ|symbolic/i,
+    );
+    expect((await f.manager.request(f.project, f.ref)).status).toBe("error");
+    expect((await f.manager.retry(f.project, f.ref)).status).toBe("error");
+    expect(f.calls.filter(({ args }) => args.includes("push"))).toHaveLength(1);
+  });
+  it("rejects a symbolic destination introduced during push even if it resolves to the captured commit", async () => {
+    const f = await fixture();
+    const source = await f.git(["rev-parse", "HEAD"], f.record.path);
+    const runner: Pick<Runner, "command"> = {
+      command: async (...args) => {
+        const result = await f.runner.command(...args);
+        if (args[1].includes("push")) {
+          await f.git(["update-ref", "refs/heads/alias-target", source]);
+          await f.git([
+            "symbolic-ref",
+            `refs/heads/${f.record.branch}`,
+            "refs/heads/alias-target",
+          ]);
+        }
+        return result;
+      },
+    };
+    const result = await new ContextSyncManager(f.home, runner, f.deps).request(
+      f.project,
+      f.ref,
+    );
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/символическ|symbolic/i);
+  });
+  it.each([undefined, 128, "1"])(
+    "fails closed on symbolic-ref inspection errors with code=%s",
+    async (code) => {
+      const f = await fixture();
+      const runner: Pick<Runner, "command"> = {
+        command: async (...args) => {
+          if (
+            args[1].includes("symbolic-ref") &&
+            args[1].includes(`refs/heads/${f.record.branch}`)
+          )
+            throw Object.assign(new Error("symbolic inspection failed"), {
+              code,
+            });
+          return f.runner.command(...args);
+        },
+      };
+      const result = await new ContextSyncManager(
+        f.home,
+        runner,
+        f.deps,
+      ).request(f.project, f.ref);
+      expect(result.status).toBe("error");
+      expect(f.calls.filter(({ args }) => args.includes("push"))).toHaveLength(
+        0,
+      );
+    },
+  );
+});
+
+it("explains a real NodeRunner push rejection without exposing stderr or unrelated Docker advice", async () => {
+  const f = await fixture();
+  await f.git(["checkout", "-b", f.record.branch]);
+  const before = await workingState(f);
+  const runner = new NodeRunner(10000, {
+    HOME: f.home,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+  });
+  try {
+    const result = await new ContextSyncManager(f.home, runner, f.deps).request(
+      f.project,
+      f.ref,
+    );
+    expect(result.status).toBe("error");
+    expect(result.error).toMatch(/push.*локальный origin/i);
+    expect(result.error).toMatch(/ветк.*расхожд|расхожд.*ветк/i);
+    expect(result.error).toMatch(/force не выполнялся/i);
+    expect(result.error).not.toMatch(/Проверьте Goga|Docker|remote:|stderr/i);
+    expect(await workingState(f)).toEqual(before);
+  } finally {
+    await runner.dispose();
+  }
 });

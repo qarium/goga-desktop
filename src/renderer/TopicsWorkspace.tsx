@@ -151,7 +151,7 @@ export function TopicsWorkspace({
         ? [...new Set(source.map((r) => r.branch))]
         : [...new Set(source.flatMap((r) => r.statuses))];
   const boardLoading = loading || settled !== loadKey;
-  const blocked = boardLoading || !!board?.active || !!board?.dirty;
+  const blocked = boardLoading || !!board?.active;
   const deleteBlocked = boardLoading || !!board?.active || !!error;
   const createReasonId = useId();
   // Explain the existing guard only after this project's board has settled.
@@ -169,17 +169,11 @@ export function TopicsWorkspace({
             ]
           : []),
         ...(board?.active ? ["в проекте работает запуск"] : []),
-        ...(board?.dirty ? ["в проекте есть незакоммиченные изменения"] : []),
         ...(operation.busy ? ["выполняется операция с топиками"] : []),
       ];
-  const createReasonTexts = [
-    ...(createReasons.includes("в проекте есть незакоммиченные изменения")
-      ? ["Есть незакоммиченные изменения"]
-      : []),
-    ...createReasons
-      .filter((reason) => reason !== "в проекте есть незакоммиченные изменения")
-      .map((reason) => reason[0].toUpperCase() + reason.slice(1)),
-  ];
+  const createReasonTexts = createReasons.map(
+    (reason) => reason[0].toUpperCase() + reason.slice(1),
+  );
   return (
     <section
       className="topics-workspace"

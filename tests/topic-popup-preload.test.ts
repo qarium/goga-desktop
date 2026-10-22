@@ -37,3 +37,17 @@ it("bridges popup bounds, close and removable close notification", async () => {
     callback,
   );
 });
+
+it("exposes the primary lightweight catalog read without changing full board", async () => {
+  vi.resetModules();
+  await import("../src/main/preload");
+  const api = fake.expose.mock.calls[0][1];
+  expect(typeof api.readTopicCatalog).toBe("function");
+  await api.readTopicCatalog("p", "2026");
+  expect(fake.invoke).toHaveBeenLastCalledWith(
+    "goga:read-topic-catalog",
+    "p",
+    "2026",
+  );
+  expect(typeof api.readTopicBoard).toBe("function");
+});

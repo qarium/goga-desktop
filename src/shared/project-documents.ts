@@ -1,5 +1,6 @@
 export type ProjectDocumentTarget =
   | { kind: "config" }
+  | { kind: "dockerfile"; path: string }
   | { kind: "tool"; tool: string; path: string }
   | { kind: "workflow"; name: string }
   | { kind: "pipeline"; name: string }
@@ -93,3 +94,15 @@ export function isProjectProfileName(value: unknown): value is string {
   );
 }
 export interface ProjectProfile extends ProjectWorkflow {}
+
+export interface ProjectDockerfile {
+  relativePath: string;
+  configured: boolean;
+}
+export function isProjectDockerfilePath(value: unknown): value is string {
+  return (
+    isProjectToolPath(value) &&
+    !value.split("/").some((part) => part.toLowerCase() === ".git") &&
+    !/^\.goga\/config\.ya?ml(?:\/|$)/i.test(value)
+  );
+}

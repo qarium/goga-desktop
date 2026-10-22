@@ -14,13 +14,17 @@ export function SettingsDocument({
   path,
   title,
   description,
+  saveDisabled = false,
 }: {
   store: SettingsDocuments;
   source: DocumentSource;
   path: string;
   title: string;
   description: string;
+  saveDisabled?: boolean;
 }) {
+  const dockerfile =
+    source.scope === "project" && source.target.kind === "dockerfile";
   const pipeline =
     source.scope === "project" && source.target.kind === "pipeline";
   const workflow =
@@ -49,7 +53,13 @@ export function SettingsDocument({
             <h3>{title}</h3>
             <p className="context-path">{path}</p>
           </div>
-          <small className="format">{workflow ? "YAML / Jinja" : "YAML"}</small>
+          <small className="format">
+            {dockerfile
+              ? "Dockerfile"
+              : workflow
+                ? "YAML / Jinja"
+                : "YAML"}
+          </small>
         </div>
         <p className="description">{description}</p>
         {draft.deletion && (
@@ -89,16 +99,20 @@ export function SettingsDocument({
             )}
             <YamlEditor
               key={documentKey(source)}
+              language={dockerfile ? "dockerfile" : "yaml"}
+              label={dockerfile ? "Dockerfile" : "YAML"}
               value={draft.text}
               onChange={(text) => store.edit(source, text)}
               readOnly={draft.busy}
             />
             <p className="hint">
-              {workflow
-                ? "Исходный YAML / Jinja сохраняется без рендеринга, подстановок и проверки структуры. Goga проверяет рабочий процесс после рендеринга в контексте профиля и конвейера. Перед записью проверяются внешние изменения файла; запись атомарная."
-                : pipeline
-                  ? "Исходный YAML конвейера сохраняется без рендеринга, подстановок и проверки структуры: заголовок, разделитель --- и тело остаются исходным текстом. Сохранение не гарантирует возможность запуска. Перед записью проверяются внешние изменения файла; запись атомарная."
-                  : "Исходный YAML сохраняет комментарии и неизвестные поля. Перед записью проверяются структура и внешние изменения файла; запись атомарная."}
+              {dockerfile
+                ? "Dockerfile сохраняется как исходный текст без проверки YAML и преобразований. Перед атомарной записью проверяются файл и конфигурация."
+                : workflow
+                  ? "Исходный YAML / Jinja сохраняется без рендеринга, подстановок и проверки структуры. Goga проверяет рабочий процесс после рендеринга в контексте профиля и конвейера. Перед записью проверяются внешние изменения файла; запись атомарная."
+                  : pipeline
+                    ? "Исходный YAML конвейера сохраняется без рендеринга, подстановок и проверки структуры: заголовок, разделитель --- и тело остаются исходным текстом. Сохранение не гарантирует возможность запуска. Перед записью проверяются внешние изменения файла; запись атомарная."
+                    : "Исходный YAML сохраняет комментарии и неизвестные поля. Перед записью проверяются структура и внешние изменения файла; запись атомарная."}
             </p>
             <div className="savebar">
               <span
@@ -123,7 +137,7 @@ export function SettingsDocument({
                   </button>
                   <button
                     className="primary"
-                    disabled={draft.busy}
+                    disabled={draft.busy || saveDisabled}
                     onClick={() => void store.save(source)}
                   >
                     {draft.busy ? "Сохраняем…" : "Сохранить"}

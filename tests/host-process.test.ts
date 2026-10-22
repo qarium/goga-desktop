@@ -372,3 +372,20 @@ it.each([0, 7])(
     expect(() => process.kill(-child.pid!, 0)).toThrow();
   },
 );
+
+it("preserves a genuine numeric exitCode without exposing stderr or changing its public error message", async () => {
+  const { root, runner } = await shutdownProcessFixture();
+  const error = await runner
+    .command(
+      process.execPath,
+      ["-e", "process.stderr.write('private details');process.exit(1)"],
+      root,
+    )
+    .catch((error) => error);
+  expect(error).toBeInstanceOf(Error);
+  expect(error.exitCode).toBe(1);
+  expect(error.message).toBe(
+    "Команда завершилась с кодом 1. Проверьте Goga, Docker и конфигурацию проекта.",
+  );
+  expect(error.message).not.toContain("private details");
+});

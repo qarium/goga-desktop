@@ -207,14 +207,8 @@ describe("approved unique logical topic picker", () => {
       ],
     });
     open();
-    const first = screen.getAllByRole("row")[0];
-    expect(within(first).getByText("Готова")).toBeTruthy();
-    expect(
-      within(first).queryByRole("button", { name: "Перейти в backoff" }),
-    ).toBeNull();
-    expect(
-      within(first).getByRole("button", { name: /^Синхронизировать коммиты/ }),
-    ).toBeTruthy();
+    expect(screen.getAllByRole("row")[0].textContent).toContain("Без топика");
+    expect(screen.queryByRole("row", { name: /^backoff / })).toBeNull();
     expect(within(optionsFor("other")[0]).getByText("Недоступна")).toBeTruthy();
     expect(
       within(optionsFor("other")[0]).queryByRole("button", {
@@ -241,18 +235,20 @@ describe("approved unique logical topic picker", () => {
     });
     open();
     const rows = optionsFor("backoff");
-    expect(rows).toHaveLength(3);
+    expect(rows).toHaveLength(2);
     expect(
       rows.filter((row) => row.getAttribute("aria-selected") === "true"),
-    ).toHaveLength(1);
-    expect(within(rows[0]).getByText("Текущий")).toBeTruthy();
+    ).toHaveLength(0);
+    expect(within(rows[0]).queryByText("Текущий")).toBeNull();
     expect(within(rows[0]).getByText(/2026/)).toBeTruthy();
     expect(rows.some((row) => row.textContent?.includes("2025"))).toBe(true);
     expect(
       rows.map((row) => row.getAttribute("aria-label")).join(" "),
     ).not.toContain("deleted-owner");
-    expect(rows[0].getAttribute("aria-label")).toContain("selected-owner");
-    expect(rows[1].getAttribute("aria-label")).toContain("another-owner");
+    expect(rows[0].getAttribute("aria-label")).toContain("another-owner");
+    expect(
+      rows.map((r) => r.getAttribute("aria-label")).join(" "),
+    ).not.toContain("selected-owner");
   });
 
   it("does not arbitrarily mark an ambiguous primary owner, but marks the exact explicitly selected second owner", () => {
@@ -298,31 +294,29 @@ describe("approved unique logical topic picker", () => {
     );
     open();
     rows = optionsFor("backoff");
-    expect(rows).toHaveLength(3);
-    expect(rows[0].getAttribute("aria-label")).toContain("second-owner");
-    expect(rows[0].getAttribute("aria-selected")).toBe("true");
-    expect(within(rows[0]).getByText("Текущий")).toBeTruthy();
+    expect(rows).toHaveLength(2);
     expect(
-      rows
-        .slice(1)
-        .every((row) => row.getAttribute("aria-selected") === "false"),
+      rows.every((row) => row.getAttribute("aria-selected") === "false"),
     ).toBe(true);
-    expect(screen.getAllByText("Текущий")).toHaveLength(1);
+    expect(
+      rows.map((row) => row.getAttribute("aria-label")).join(" "),
+    ).not.toContain("second-owner");
+    expect(screen.queryByText("Текущий")).toBeNull();
   });
 
   it.each(["missing", "ready"] as const)(
-    "uses refreshed inventory over selected %s history and explicitly resolves the fresh revision",
+    "uses refreshed inventory over unselected %s history and explicitly resolves the fresh revision",
     async (staleState) => {
       const stale = copy({ state: staleState }),
         fresh = copy({ revision: "300649d6-9194-4ec2-96c5-f814f2fa4586" });
       resolve.mockResolvedValue(fresh);
-      const view = mount({ selected: stale, knownContexts: [stale] });
+      const view = mount({ selected: null, knownContexts: [stale] });
       open();
       view.rerender(
         <TopicContextPicker
           project={project}
           board={board}
-          selected={stale}
+          selected={null}
           knownContexts={[fresh]}
           onSelect={view.onSelect}
           onClear={vi.fn()}
@@ -330,7 +324,7 @@ describe("approved unique logical topic picker", () => {
         />,
       );
       const row = optionsFor("backoff")[0];
-      expect(within(row).getByText("Готова")).toBeTruthy();
+      expect(within(row).getByText("Есть копия")).toBeTruthy();
       expect(view.onSelect).not.toHaveBeenCalled();
       expect(resolve).not.toHaveBeenCalled();
       fireEvent.click(row);

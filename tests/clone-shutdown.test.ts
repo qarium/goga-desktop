@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 import { CloneManager } from "../src/host/clones";
 import { NodeRunner, RunnerShutdownError } from "../src/host/process";
 import { ContextExchangeManager } from "../src/host/context-exchange";
+import { seedLegacyPublication } from "./helpers/legacy-publication";
 import { worktreeContextRef } from "../src/shared/worktrees";
 const execute = promisify(execFile);
 const cleanups: (() => Promise<unknown>)[] = [];
@@ -314,6 +315,9 @@ async function approvedPolicyFixture() {
     isActive: () => false,
     nativeEnvironment: () => f.env,
   });
+  await seedLegacyPublication(f.owner, async (args, cwd) =>
+    (await f.git(args, cwd)).trim(),
+  );
   // Fixture setup only: no publication execution or push is permitted.
   await exchange.preparePublication(f.ref, { action: "publish" });
   expect(await f.manager.resolve(f.ref)).toMatchObject({ state: "ready" });

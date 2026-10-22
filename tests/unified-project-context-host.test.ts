@@ -829,18 +829,22 @@ describe.each([0, 1])(
         second.id,
       );
       if (r.context) {
+        // Automatic completion still waits for siblings; an explicit push does not.
+        expect(
+          (await f.service.topicSyncStatus(r.context)).waitingRunIds,
+        ).toEqual(expect.arrayContaining([first.id, third.id, build.value.id]));
         expect((await f.service.syncTopicContext(r.context)).status).toBe(
-          "waiting",
+          "synced",
         );
-        await expect(
-          f.service.prepareContextApply(r.context),
-        ).rejects.toThrow();
+        const applyPreview = await f.service.prepareContextApply(r.context);
+        expect(applyPreview.canApply).toBe(false);
+        expect(applyPreview.reason).toMatch(/актив|работает|занят/i);
         await expect(
           f.service.prepareContextDeletion(r.context),
         ).rejects.toThrow();
         expect(
           (await f.service.topicSyncStatus(r.context)).waitingRunIds,
-        ).toEqual(expect.arrayContaining([first.id, third.id, build.value.id]));
+        ).toEqual([]);
       } else {
         const request = await r.pipeline();
         await expect(

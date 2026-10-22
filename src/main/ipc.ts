@@ -4,6 +4,7 @@ import {
   type TopicPopupBounds,
 } from "../shared/topic-popup";
 import { IPC_SCOPES } from "../shared/operation-scopes";
+import { repositoryActionRequestSchema } from "../shared/repository-actions";
 import { scopeRefSchema } from "../shared/context";
 import {
   topicContextIdentitySchema,
@@ -37,6 +38,7 @@ import {
   isProjectWorkflowName,
   isProjectPipelineName,
   isProjectProfileName,
+  isProjectDockerfilePath,
   isProjectToolPath,
 } from "../shared/project-documents";
 import type { Run } from "../shared/types";
@@ -47,6 +49,7 @@ import type { SettingsStore } from "../host/settings";
 import { validShellSender } from "./security";
 const id = z.string().min(1).max(256);
 const documentTarget = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("dockerfile"), path: z.string().refine(isProjectDockerfilePath) }).strict(),
   z
     .object({
       kind: z.literal("profile"),
@@ -264,6 +267,9 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   handle("select-topic-context", (ref) =>
     d.service.selectTopicContext(topicContextRefSchema.nullable().parse(ref)),
   );
+  handle("run-repository-action", (request) =>
+    d.service.runRepositoryAction(repositoryActionRequestSchema.parse(request)),
+  );
   handle("sync-topic-context", (ref) =>
     d.service.syncTopicContext(topicContextRefSchema.parse(ref)),
   );
@@ -331,6 +337,9 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   handle("repeat-build", (runId, confirmClean) =>
     d.service.repeatBuild(id.parse(runId), z.boolean().parse(confirmClean)),
   );
+  handle("read-topic-catalog", (projectId, year) =>
+    d.service.readTopicCatalog(id.parse(projectId), topicYearSchema.parse(year)),
+  );
   handle("read-topic-board", (projectId, year) =>
     d.service.readTopicBoard(
       scopeRefSchema.parse(projectId),
@@ -366,6 +375,7 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   handle("list-project-tools", (projectId) =>
     d.service.listProjectTools(scopeRefSchema.parse(projectId)),
   );
+  handle("resolve-project-dockerfile", (projectId) => d.service.resolveProjectDockerfile(scopeRefSchema.parse(projectId)));
   handle("list-project-pipelines", (projectId) =>
     d.service.listProjectPipelines(scopeRefSchema.parse(projectId)),
   );

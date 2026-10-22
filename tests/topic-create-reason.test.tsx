@@ -113,13 +113,7 @@ const assertReason = (parts: string[], stale = false) => {
   expect(button().disabled).toBe(true);
   const el = reason();
   expect(el).not.toBeNull();
-  const dirty = "в проекте есть незакоммиченные изменения";
-  const visible = [
-    ...(parts.includes(dirty) ? ["Есть незакоммиченные изменения"] : []),
-    ...parts
-      .filter((part) => part !== dirty)
-      .map((part) => part[0].toUpperCase() + part.slice(1)),
-  ];
+  const visible = parts.map((part) => part[0].toUpperCase() + part.slice(1));
   expect(el!.textContent).toBe(
     visible.join("; ") +
       (stale
@@ -146,7 +140,7 @@ const assertReason = (parts: string[], stale = false) => {
   expect(screen.queryByText("Подробнее", { exact: true })).toBeNull();
   expect(
     compact!.textContent?.match(/незакоммиченные изменения/giu)?.length ?? 0,
-  ).toBe(parts.includes(dirty) ? 1 : 0);
+  ).toBe(0);
   expect(compact!.parentElement).toBe(button().parentElement?.parentElement);
   expect(compact!.nextElementSibling).toBe(button().parentElement);
   expect(
@@ -169,7 +163,7 @@ const ui = (store = createTopicsStore(), p = project, revision = "1") => (
   />
 );
 it("places the complete reason before the refresh/create group in DOM order", async () => {
-  api.readTopicBoard.mockResolvedValue({ ...board, dirty: true });
+  api.readTopicBoard.mockResolvedValue({ ...board, active: true });
   mount();
   await settled();
   const badge = document.querySelector(".topic-create-reason")!;
@@ -178,26 +172,19 @@ it("places the complete reason before the refresh/create group in DOM order", as
   );
 });
 it("removes the redundant Подробнее disclosure from the create reason only", async () => {
-  api.readTopicBoard.mockResolvedValue({ ...board, dirty: true });
+  api.readTopicBoard.mockResolvedValue({ ...board, active: true });
   mount();
   await settled();
   expect(screen.queryByText("Подробнее", { exact: true })).toBeNull();
   expect(document.querySelector(".topic-create-reason details")).toBeNull();
 });
-it.each([
-  [true, false],
-  [false, true],
-  [true, true],
-])(
-  "explains dirty=%s active=%s visibly in the shared badge before controls",
-  async (dirty, active) => {
-    api.readTopicBoard.mockResolvedValue({ ...board, dirty, active });
+it.each([false, true])(
+  "explains active projects even when dirty=%s",
+  async (dirty) => {
+    api.readTopicBoard.mockResolvedValue({ ...board, dirty, active: true });
     mount();
     await settled();
-    assertReason([
-      ...(active ? ["в проекте работает запуск"] : []),
-      ...(dirty ? ["в проекте есть незакоммиченные изменения"] : []),
-    ]);
+    assertReason(["в проекте работает запуск"]);
     fireEvent.click(button());
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(api.prepareTopicOperation).not.toHaveBeenCalled();
@@ -220,21 +207,21 @@ it.each([false, true])(
     expect(api.prepareTopicOperation).not.toHaveBeenCalled();
   },
 );
-it("initial reading shows one loader without any dirty or missing-board warning", async () => {
+it("initial reading shows one loader without any active or missing-board warning", async () => {
   const d = deferred();
   api.readTopicBoard.mockReturnValueOnce(d.promise);
   mount();
   noReason();
   expect(button().disabled).toBe(true);
   expect(document.querySelectorAll(".loading-state")).toHaveLength(1);
-  await act(async () => d.resolve({ ...board, dirty: true }));
+  await act(async () => d.resolve({ ...board, active: true }));
   await settled();
-  assertReason(["в проекте есть незакоммиченные изменения"]);
+  assertReason(["в проекте работает запуск"]);
 });
 it.each([true, false])(
-  "refresh hides stale reason (old dirty=%s) until the current result",
-  async (dirty) => {
-    api.readTopicBoard.mockResolvedValueOnce({ ...board, dirty });
+  "refresh hides stale reason (old active=%s) until the current result",
+  async (active) => {
+    api.readTopicBoard.mockResolvedValueOnce({ ...board, active });
     mount();
     await settled();
     const oldId = button().getAttribute("aria-describedby");
@@ -246,20 +233,20 @@ it.each([true, false])(
     expect(button().disabled).toBe(true);
     expect(document.querySelectorAll(".loading-state")).toHaveLength(1);
     expect(screen.queryByRole("table")).toBeNull();
-    await act(async () => d.resolve({ ...board, dirty: !dirty }));
+    await act(async () => d.resolve({ ...board, active: !active }));
     await settled();
-    if (dirty) {
+    if (active) {
       noReason();
       expect(button().disabled).toBe(false);
-    } else assertReason(["в проекте есть незакоммиченные изменения"]);
+    } else assertReason(["в проекте работает запуск"]);
   },
 );
 it("project change immediately clears old reason and only describes the new board", async () => {
   const store = createTopicsStore();
-  api.readTopicBoard.mockResolvedValueOnce({ ...board, dirty: true });
+  api.readTopicBoard.mockResolvedValueOnce({ ...board, active: true });
   const view = render(ui(store));
   await settled();
-  assertReason(["в проекте есть незакоммиченные изменения"]);
+  assertReason(["в проекте работает запуск"]);
   const d = deferred();
   api.readTopicBoard.mockReturnValueOnce(d.promise);
   view.rerender(ui(store, { ...project, id: "b", name: "Beta" }));
@@ -344,61 +331,37 @@ it.each([false, true])(
       }),
     );
     fireEvent.click(screen.getByRole("button", { name: "Удалить выбранные…" }));
-    assertReason([
-      ...(dirty ? ["в проекте есть незакоммиченные изменения"] : []),
-      "выполняется операция с топиками",
-    ]);
+    assertReason(["выполняется операция с топиками"]);
     expect(api.executeTopicOperation).not.toHaveBeenCalled();
     await act(async () => d.reject(Error("controlled failure")));
-    if (dirty) assertReason(["в проекте есть незакоммиченные изменения"]);
-    else {
-      noReason();
-      expect(button().disabled).toBe(false);
-    }
+    noReason();
+    expect(button().disabled).toBe(false);
     expect(api.executeTopicOperation).not.toHaveBeenCalled();
   },
 );
 
-it("keeps the exact dirty reason once while all combined reasons stay visible without disclosure", async () => {
+it("keeps the active reason visible without adding a dirty-create prohibition", async () => {
   api.readTopicBoard.mockResolvedValue({ ...board, dirty: true, active: true });
   mount();
   await settled();
-  const short = screen.getByText("Есть незакоммиченные изменения", {
-    exact: true,
-  });
-  expect(short.closest("details")).toBeNull();
-  expect(short.getAttribute("title")).toBeNull();
-  assertReason([
-    "в проекте работает запуск",
-    "в проекте есть незакоммиченные изменения",
-  ]);
+  assertReason(["в проекте работает запуск"]);
   expect(button().getAttribute("aria-describedby")).toBe(reason()!.id);
-  expect(reason()!.textContent).toContain("В проекте работает запуск");
-  expect(button().disabled).toBe(true);
   expect(api.prepareTopicOperation).not.toHaveBeenCalled();
 });
-it("explains a retained dirty snapshot honestly after a failed refresh", async () => {
-  api.readTopicBoard.mockResolvedValueOnce({ ...board, dirty: true });
+it("explains a retained active snapshot honestly after a failed refresh", async () => {
+  api.readTopicBoard.mockResolvedValueOnce({ ...board, active: true });
   mount();
   await settled();
   api.readTopicBoard.mockRejectedValueOnce(Error("refresh unavailable"));
   fireEvent.click(screen.getByRole("button", { name: "Обновить список" }));
   await settled();
-  assertReason(["в проекте есть незакоммиченные изменения"], true);
-  expect(
-    screen.getByText("Есть незакоммиченные изменения", { exact: true }),
-  ).toBeTruthy();
-  const badge = document.querySelector(".topic-create-reason")!;
-  expect(badge.textContent).toContain(
-    "По последней успешной загрузке; обновить список топиков не удалось.",
-  );
-  expect(badge.querySelector("details, [hidden], .sr-only")).toBeNull();
+  assertReason(["в проекте работает запуск"], true);
   expect(screen.getByRole("alert").textContent).toContain(
     "refresh unavailable",
   );
 });
 
-it("keeps every active, dirty and in-flight reason after the next board settles", async () => {
+it("keeps active and in-flight reasons without a dirty prohibition after the next board settles", async () => {
   const store = createTopicsStore();
   api.readTopicBoard.mockResolvedValueOnce({ ...board, dirty: true });
   const view = render(ui(store));
@@ -421,13 +384,20 @@ it("keeps every active, dirty and in-flight reason after the next board settles"
   await settled();
   assertReason([
     "в проекте работает запуск",
-    "в проекте есть незакоммиченные изменения",
     "выполняется операция с топиками",
   ]);
   await act(async () => operation.reject(Error("controlled failure")));
-  assertReason([
-    "в проекте работает запуск",
-    "в проекте есть незакоммиченные изменения",
-  ]);
+  assertReason(["в проекте работает запуск"]);
   expect(api.executeTopicOperation).not.toHaveBeenCalled();
+});
+
+it("allows creation from a dirty board without a dirty prohibition", async () => {
+  api.readTopicBoard.mockResolvedValue({ ...board, dirty: true });
+  mount();
+  await settled();
+  expect(button().disabled).toBe(false);
+  noReason();
+  fireEvent.click(button());
+  expect(screen.getByRole("dialog", { name: "Создать топик" })).toBeTruthy();
+  expect(api.prepareTopicOperation).not.toHaveBeenCalled();
 });

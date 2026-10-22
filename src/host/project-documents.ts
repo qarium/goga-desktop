@@ -14,6 +14,7 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { isMap, parseAllDocuments } from "yaml";
 import {
+  isProjectDockerfilePath,
   isProjectWorkflowName,
   projectWorkflowAliasKey,
   isProjectToolName,
@@ -77,6 +78,11 @@ const flatDirectory = (kind: FlatDocumentKind) => `.goga/${kind}s`;
 function relativePath(target: SourceDocumentTarget): string {
   if (!target || typeof target !== "object")
     throw new Error("Недопустимый документ проекта");
+  if (target.kind === "dockerfile") {
+    if (!isProjectDockerfilePath(target.path))
+      throw new Error("Недопустимый путь Dockerfile");
+    return target.path;
+  }
   if (target.kind === "config") return ".goga/config.yml";
   if (isFlatDocument(target)) {
     if (
@@ -275,8 +281,9 @@ export function saveProjectDocument(
   target: ProjectDocumentTarget,
   text: string,
   version: string,
+  beforeMutation?: () => Promise<void>,
 ) {
-  return saveSourceDocument(root, target, text, version);
+  return saveSourceDocument(root, target, text, version, beforeMutation);
 }
 export function savePersonalProfile(
   root: string,
@@ -329,7 +336,7 @@ function validateText(
     validateYaml(text, "profile");
     return;
   }
-  if (isFlatDocument(target)) return;
+  if (isFlatDocument(target) || target.kind === "dockerfile") return;
   const docs = parseAllDocuments(text, { uniqueKeys: true });
   if (docs.some((doc) => doc.errors.length))
     throw new Error("Некорректный синтаксис YAML");
@@ -351,6 +358,7 @@ async function saveSourceDocument(
   target: SourceDocumentTarget,
   text: string,
   expectedVersion: string,
+  beforeMutation?: () => Promise<void>,
 ): Promise<ProjectDocument> {
   const relative = relativePath(target),
     file = path.join(root, relative);
@@ -358,7 +366,9 @@ async function saveSourceDocument(
   // the action so replacing the queued directory never silently retargets a save.
   const queuedParent = await directories(
     root,
-    isFlatDocument(target) ? "" : path.dirname(relative),
+    isFlatDocument(target) || target.kind === "dockerfile"
+      ? ""
+      : path.dirname(relative),
   );
   const parentIdentity = queuedParent.identities.at(-1)!.info;
   const queueKey = `${parentIdentity.dev}:${parentIdentity.ino}`;
@@ -378,6 +388,13 @@ async function saveSourceDocument(
       isFlatDocument(target),
     );
     if (initial.document.version !== expectedVersion) throw changed();
+    await beforeMutation?.();
+    if (target.kind === "dockerfile")
+      await createSourceDirectories(
+        root,
+        path.dirname(relative),
+        initial.directories,
+      );
     // Flat source directories may be created ONLY by an explicit, validated save.
     if (isFlatDocument(target))
       await createFlatDirectories(root, target.kind, initial.directories);
@@ -414,6 +431,7 @@ async function saveSourceDocument(
           creating: !initial.document.exists,
           stagingName: path.basename(tmp),
         });
+      await beforeMutation?.();
       const current = await read(
         root,
         relative,
@@ -742,7 +760,8 @@ export async function prepareSourceDeletion(
   target: SourceDocumentTarget,
   expectedVersion?: string,
 ): Promise<GuardedDocumentDeletion> {
-  if (target.kind === "config") throw new Error("Конфигурацию удалять нельзя");
+  if (target.kind === "config" || target.kind === "dockerfile")
+    throw new Error("Конфигурацию удалять нельзя");
   const relative = relativePath(target);
   const queued = await directories(
     root,
@@ -826,4 +845,26 @@ export async function prepareSourceDeletion(
         }),
     };
   });
+}
+
+async function createSourceDirectories(
+  root: string,
+  relative: string,
+  initial: DirectoryIdentity[],
+) {
+  await verifyDirectories(initial);
+  let prefix = "";
+  for (const part of relative.split("/").filter((part) => part !== ".")) {
+    prefix = prefix ? `${prefix}/${part}` : part;
+    const guard = await directories(root, prefix, true);
+    if (!guard.missing) continue;
+    await verifyDirectories(guard.identities);
+    try {
+      await mkdir(path.join(root, prefix));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    await verifyDirectories(guard.identities);
+    await directories(root, prefix);
+  }
 }

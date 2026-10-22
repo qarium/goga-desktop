@@ -1,3 +1,4 @@
+import type { DisplayCatalog } from "./topic-display-cache";
 import {
   useEffect,
   useId,
@@ -7,7 +8,7 @@ import {
   type KeyboardEvent,
 } from "react";
 import type { Project } from "../shared/types";
-import type { TopicBoardSnapshot, TopicTarget } from "../shared/topics";
+import type { TopicTarget } from "../shared/topics";
 import {
   topicContextRefSchema,
   type TopicContextIdentity,
@@ -20,12 +21,13 @@ import {
   type RunWithContext,
 } from "./topic-context";
 import "./TopicContextPicker.css";
+import { readRequest } from "./read-request";
 import { TopicQuickSync } from "./TopicQuickSync";
 import { TopicPickerPopup, hasNativeTopicPopup } from "./TopicPickerPopup";
 
 export interface TopicContextPickerProps {
   project: Project;
-  board: TopicBoardSnapshot | null;
+  board: DisplayCatalog | null;
   selected: WorktreeRecord | null;
   knownContexts?: WorktreeRecord[];
   runs?: RunWithContext[];
@@ -89,7 +91,7 @@ const readinessLabel: Record<string, string> = {
   "Конфликт копии": "Конфликт",
   "Копия удаляется": "Удаление",
   "Основная копия": "Исходная",
-  "Рабочая копия": "Готова",
+  "Рабочая копия": "Есть копия",
 };
 const timeoutMessage =
   "Подготовка заняла больше 300 с. Результат подготовки ещё может завершиться; повтор сначала проверит копию. Предыдущий контекст сохранён.";
@@ -244,6 +246,7 @@ export function TopicContextPicker({
     }
     const term = query.trim().toLocaleLowerCase();
     return all
+      .filter((topic) => !topic.isCurrent)
       .filter(({ identity }) =>
         `${identity.topic} ${identity.branch} ${identity.year}`
           .toLocaleLowerCase()
@@ -251,7 +254,7 @@ export function TopicContextPicker({
       )
       .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent));
   }, [snapshot, knownContexts, current, project.id, query, selectedKey]);
-  const primaryIndex = current ? topics.length : 0;
+  const primaryIndex = 0;
   const activeIndex = Math.min(focused, topics.length);
   const activeOption = activeIndex >= 0 ? optionId(activeIndex) : undefined;
   useEffect(() => {
@@ -307,12 +310,30 @@ export function TopicContextPicker({
       try {
         flight = Promise.resolve(
           create
-            ? window.goga.createTopicContext({
-                projectId: project.id,
-                year: identity.year,
-                branch: identity.branch,
-                baseRef: snapshot?.baseRef || "HEAD",
-              })
+            ? (async () => {
+                // The display catalog has no mutation/configuration authority.
+                // Load the configured base only for this explicit create intent.
+                const fresh = await readRequest(
+                  "readTopicBoard",
+                  project.id,
+                  identity.year,
+                );
+                if (!mounted.current || token !== epoch.current)
+                  throw Error("Создание отменено до изменения проекта");
+                if (
+                  fresh.projectId !== project.id ||
+                  fresh.year !== identity.year
+                )
+                  throw Error(
+                    "Настройки базы относятся к другому проекту или году",
+                  );
+                return window.goga.createTopicContext({
+                  projectId: project.id,
+                  year: identity.year,
+                  branch: identity.branch,
+                  baseRef: fresh.baseRef || "HEAD",
+                });
+              })()
             : owner
               ? typeof window.goga.resolveTopicContext === "function"
                 ? window.goga.resolveTopicContext(contextRef(owner))
@@ -448,7 +469,7 @@ export function TopicContextPicker({
       onClear();
       return;
     }
-    const topic = topics[current ? index : index - 1];
+    const topic = topics[index - 1];
     if (!topic) return;
     onTransitionIntent?.();
     if (
@@ -528,11 +549,16 @@ export function TopicContextPicker({
     );
   }
   const newName = query.trim();
-  const hasExact = topics.some(
-    ({ identity }) =>
-      identity.topic.toLocaleLowerCase() === newName.toLocaleLowerCase() ||
-      identity.branch.toLocaleLowerCase() === newName.toLocaleLowerCase(),
-  );
+  const hasExact =
+    (current &&
+      [current.topic, current.branch].some(
+        (value) => value.toLocaleLowerCase() === newName.toLocaleLowerCase(),
+      )) ||
+    topics.some(
+      ({ identity }) =>
+        identity.topic.toLocaleLowerCase() === newName.toLocaleLowerCase() ||
+        identity.branch.toLocaleLowerCase() === newName.toLocaleLowerCase(),
+    );
   const creationAvailable =
     !!onCreated && typeof window.goga.createTopicContext === "function";
   const validNewName =
@@ -545,14 +571,31 @@ export function TopicContextPicker({
       className="topic-context-picker"
       ref={root}
       onBlur={(event) => {
+        const destination = event.relatedTarget;
+        const tooltip =
+          destination instanceof Element
+            ? destination.closest('[role="tooltip"]')
+            : null;
+        // A repository action's tooltip is portalled into this document's body.
+        // Only a tooltip explicitly described by this picker belongs to it.
+        const ownedTooltip =
+          !!tooltip?.id &&
+          Array.from(
+            event.currentTarget.querySelectorAll("[aria-describedby]"),
+          ).some((control) =>
+            control
+              .getAttribute("aria-describedby")
+              ?.split(/\s+/)
+              .includes(tooltip.id),
+          );
         if (
           !hasNativeTopicPopup() &&
-          !event.currentTarget.contains(event.relatedTarget as Node)
+          !event.currentTarget.contains(destination as Node) &&
+          !ownedTooltip
         )
           close();
       }}
     >
-      <span className="topic-context-label">Топик:</span>
       <div className="topic-context-split">
         <button
           type="button"
@@ -625,9 +668,9 @@ export function TopicContextPicker({
               aria-label="Топики проекта"
               ref={list}
             >
-              {!current && primaryRow()}
+              {primaryRow()}
               {topics.map((topic, topicIndex) => {
-                const index = current ? topicIndex : topicIndex + 1;
+                const index = topicIndex + 1;
                 const isCurrent = topic.isCurrent;
                 const status = copyStatus(topic.record);
                 const activity = contextRunActivity(runs, topic.record ?? null);
@@ -697,12 +740,12 @@ export function TopicContextPicker({
                       <TopicQuickSync
                         identity={topic.identity}
                         record={topic.record}
+                        onStarted={() => close(true)}
                       />
                     </div>
                   </div>
                 );
               })}
-              {current && primaryRow()}
               {topics.length === 0 && (
                 <p className="topic-context-empty">
                   {!snapshot && !knownContexts.length

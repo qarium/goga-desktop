@@ -11,7 +11,7 @@ export type DeletableDocument =
       scope: "project";
       context?: TopicContextRef;
       projectId: string;
-      target: Exclude<ProjectDocumentTarget, { kind: "config" }>;
+      target: Exclude<ProjectDocumentTarget, { kind: "config" | "dockerfile" }>;
     }
   | { scope: "home"; kind: "profile"; name: string };
 export interface DeletionTicket {

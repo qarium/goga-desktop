@@ -48,6 +48,14 @@ beforeEach(() => {
   window.goga = api;
 });
 afterEach(cleanup);
+it("explains local origin push without promising checkout or sending uncommitted files", async () => {
+  render(<TopicSyncActions owner={owner} onChanged={() => {}} />);
+  await screen.findByText("Ещё не синхронизировано");
+  expect(screen.getByText(/Push в origin копии/).textContent).toContain("ветку a");
+  expect(screen.getByText(/Незакоммиченные файлы не отправляются/)).toBeTruthy();
+  expect(screen.getByText(/без переключения ветки и слияния/)).toBeTruthy();
+  expect(screen.queryByText(/Только коммиты в служебные ссылки/)).toBeNull();
+});
 it("shows queued synchronization without changing run outcome and retries a recorded error", async () => {
   render(<TopicSyncActions owner={owner} onChanged={() => {}} />);
   await screen.findByText("Ещё не синхронизировано");

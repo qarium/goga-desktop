@@ -16,6 +16,13 @@ export interface TopicTarget {
   branch: string;
   remote: boolean;
 }
+/** Display-only primary catalog. Never a revision or authority for mutations. */
+export interface TopicCatalogSnapshot {
+  projectId: string;
+  year: string;
+  entries: TopicTarget[];
+  currentTopic: TopicTarget | null;
+}
 export interface TopicBoardSnapshot {
   projectId: string;
   year: string;

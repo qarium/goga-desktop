@@ -26,8 +26,9 @@ import type {
   ContextSyncReason,
   ContextSyncState,
 } from "../shared/context-sync";
-import type { Runner } from "./process";
+import { CommandExitError, type Runner } from "./process";
 import { CloneStore } from "./clone-store";
+import { assertLocalOrigin } from "./local-origin";
 import { noSymlinks } from "./settings";
 export interface ContextSyncDependencies {
   resolve(ref: TopicContextRef): Promise<WorktreeRecord>;
@@ -61,7 +62,7 @@ const operationSchema = z
     owner: worktreeRecordSchema,
     sourceOid: oidSchema,
     destinationRef: z.string(),
-    primaryBefore: z.string(),
+    primaryBefore: z.string().optional(), // Read legacy hidden-import operations; never gate push on dirty files.
   })
   .strict();
 const previewSchema = z
@@ -111,7 +112,7 @@ const hash = (v: string | Buffer) =>
 const missing = (e: unknown) => (e as NodeJS.ErrnoException).code === "ENOENT";
 const changed = () =>
   new Error("Контекст или журнал синхронизации изменён. Обновите данные.");
-/** Synchronization only imports commits. Explicit confirmed apply is a separate operation. */
+/** Push commits to the original local project. Applying to its checkout remains explicit. */
 export class ContextSyncManager {
   private readonly root: string;
   private readonly file: string;
@@ -452,6 +453,9 @@ export class ContextSyncManager {
     ref: TopicContextRef,
     reason: ContextSyncReason = "manual",
     runId?: string,
+    allowOriginMigration = true,
+    /** Ephemeral host-only diagnostics; never persisted in sync state/journal. */
+    onDiagnostic?: (stdout: string, stderr: string) => void,
   ): Promise<ContextSyncState> {
     return this.locked(async () => {
       const owner = await this.owner(project, ref);
@@ -472,7 +476,11 @@ export class ContextSyncManager {
         const current = await this.head(owner.path);
         if (
           entry.state.status === "synced" &&
-          entry.state.importedOid !== current
+          (entry.state.importedOid !== current ||
+            !(await assertLocalOrigin(owner, (args, cwd) =>
+              this.git(args, cwd),
+            )) ||
+            (await this.visibleOid(owner)) !== current)
         )
           entry.state.status = "new";
         await this.write(doc.journal, doc.raw);
@@ -482,21 +490,35 @@ export class ContextSyncManager {
         entry.state.reasons.push(reason);
       if (runId && !entry.state.waitingRunIds.includes(runId))
         entry.state.waitingRunIds.push(runId);
-      if (this.deps.isActive(owner.contextId)) {
+      if (reason !== "manual" && this.deps.isActive(owner.contextId)) {
         entry.state.status = "waiting";
         entry.state.updatedAt = new Date().toISOString();
         await this.write(doc.journal, doc.raw);
         this.notify(entry.state);
         return structuredClone(entry.state);
       }
-      entry.completedRunIds = [
+      if (!this.deps.isActive(owner.contextId)) entry.completedRunIds = [
         ...new Set([
           ...(entry.completedRunIds ?? []),
           ...entry.state.waitingRunIds,
         ]),
       ];
       const sourceOid = await this.head(owner.path);
+      // Failed validation must have a durable error outcome, not leave an old synced state.
+      let localOrigin = false;
+      let destinationOid: string | undefined;
+      try {
+        localOrigin = await assertLocalOrigin(owner, (args, cwd) =>
+          this.git(args, cwd),
+        );
+        if (localOrigin) destinationOid = await this.visibleOid(owner);
+      } catch {
+        localOrigin = false;
+        /* importOperation journals the validated failure below. */
+      }
       if (
+        localOrigin &&
+        destinationOid === sourceOid &&
         entry.state.importedOid === sourceOid &&
         entry.state.destinationRef &&
         (
@@ -523,7 +545,6 @@ export class ContextSyncManager {
         owner,
         sourceOid,
         destinationRef: `refs/desktop/contexts/${owner.contextId}/${operationId}`,
-        primaryBefore: await this.primarySnapshot(owner),
       };
       entry.state = {
         ...entry.state,
@@ -536,7 +557,7 @@ export class ContextSyncManager {
       };
       const raw = await this.write(doc.journal, doc.raw);
       this.notify(entry.state);
-      return this.importOperation(project, ref, doc.journal, entry, raw);
+      return this.importOperation(project, ref, doc.journal, entry, raw, reason === "manual", allowOriginMigration, onDiagnostic);
     });
   }
 
@@ -546,6 +567,9 @@ export class ContextSyncManager {
     journal: Journal,
     entry: Entry,
     raw: string,
+    allowActive = false,
+    allowOriginMigration = true,
+    onDiagnostic?: (stdout: string, stderr: string) => void,
   ): Promise<ContextSyncState> {
     const operation = entry.operation!;
     const owner = operation.owner;
@@ -560,16 +584,17 @@ export class ContextSyncManager {
           `refs/desktop/contexts/${owner.contextId}/${operation.id}`
       )
         throw changed();
-      if (this.deps.isActive(owner.contextId)) {
+      if (!allowActive && this.deps.isActive(owner.contextId)) {
         entry.state.status = "waiting";
         await this.write(journal, raw);
         return structuredClone(entry.state);
       }
-      const before = await this.primarySnapshot(owner);
-      if (before !== operation.primaryBefore)
-        throw new Error(
-          "Состояние основной рабочей копии изменилось; импорт не продолжен.",
-        );
+      if (!(await assertLocalOrigin(owner, (args, cwd) => this.git(args, cwd), allowOriginMigration)))
+        throw new Error("У клона отсутствует локальный origin; настройки не изменялись.");
+      await this.git(
+        ["check-ref-format", `refs/heads/${owner.branch}`],
+        owner.path,
+      );
       const existing = (
         await this.git(
           ["for-each-ref", "--format=%(objectname)", operation.destinationRef],
@@ -580,33 +605,76 @@ export class ContextSyncManager {
         throw new Error(
           "Служебная ссылка занята другим OID; импорт не перезаписывает refs.",
         );
+      await this.assertDirectDestination(owner);
+      // Ordinary non-forced push, with a pinned source commit and one visible branch.
+      // Explicit receiver options disable repository hooks and checkout mutation without
+      // changing persistent receive config, even if the project configured updateInstead.
+      try {
+        await this.git(
+          [
+            "-c",
+            "protocol.allow=never",
+            "-c",
+            "protocol.file.allow=always",
+            "-c",
+            "push.gpgSign=false",
+            "-c",
+            "push.negotiate=false",
+            "push",
+            "--porcelain",
+            "--no-verify",
+            "--no-follow-tags",
+            "--recurse-submodules=no",
+            "--receive-pack=git -c core.hooksPath=/dev/null -c gc.auto=0 -c maintenance.auto=false -c receive.denyCurrentBranch=refuse receive-pack",
+            "origin",
+            `${operation.sourceOid}:refs/heads/${owner.branch}`,
+          ],
+          owner.path,
+        );
+      } catch (error) {
+        if (error instanceof CommandExitError) {
+          try {
+            onDiagnostic?.(error.stdout, error.stderr);
+          } catch {
+            /* Diagnostic observers cannot alter the durable sync outcome. */
+          }
+        }
+        if (error instanceof CommandExitError && error.exitCode !== null)
+          throw new Error(
+            `Git не выполнил push ветки ${owner.branch} в локальный origin. Проверьте, не открыта ли целевая ветка в рабочей копии и нет ли расхождения истории; force не выполнялся.`,
+          );
+        throw error;
+      }
+      await this.owner(project, ref);
+      await assertLocalOrigin(owner, (args, cwd) => this.git(args, cwd));
+      if ((await this.visibleOid(owner)) !== operation.sourceOid)
+        throw new Error(
+          "OID ветки оригинального проекта изменился во время push.",
+        );
       if (!existing)
         await this.git(
           [
-            "fetch",
-            "--atomic",
-            "--no-tags",
-            "--no-write-fetch-head",
-            "--no-recurse-submodules",
-            "--no-auto-maintenance",
-            "--refmap=",
-            owner.path,
-            `${operation.sourceOid}:${operation.destinationRef}`,
+            "update-ref",
+            operation.destinationRef,
+            operation.sourceOid,
+            "0".repeat(operation.sourceOid.length),
           ],
           owner.projectPath,
         );
-      await this.owner(project, ref);
       if (
         (
           await this.git(
             ["rev-parse", "--verify", `${operation.destinationRef}^{commit}`],
             owner.projectPath,
           )
-        ).trim() !== operation.sourceOid ||
-        (await this.primarySnapshot(owner)) !== operation.primaryBefore
+        ).trim() !== operation.sourceOid
       )
         throw new Error(
-          "OID или состояние основной рабочей копии изменились во время импорта.",
+          "OID служебного снимка изменился во время синхронизации.",
+        );
+      if ((await this.visibleOid(owner)) !== operation.sourceOid)
+        throw new Error(
+          "OID ветки оригинального проекта изменился во время синхронизации.",
         );
       entry.state = {
         ...entry.state,
@@ -633,6 +701,47 @@ export class ContextSyncManager {
     await this.write(journal, raw);
     this.notify(entry.state);
     return structuredClone(entry.state);
+  }
+  private async assertDirectDestination(owner: WorktreeRecord) {
+    try {
+      await this.git(
+        [
+          "symbolic-ref",
+          "--quiet",
+          "--no-recurse",
+          `refs/heads/${owner.branch}`,
+        ],
+        owner.projectPath,
+      );
+    } catch (error) {
+      // Exit 1 alone means "not symbolic" (including an absent direct ref).
+      // A timeout, cancellation, malformed ref or any other failure is not evidence of safety.
+      if (
+        (error instanceof CommandExitError && error.exitCode === 1) ||
+        (error instanceof Error &&
+          (error as Error & { code?: unknown }).code === 1)
+      )
+        return;
+      throw error;
+    }
+    throw new Error(
+      "Целевая ветка оригинального проекта является символической ссылкой. Push запрещён: он мог бы изменить другую ветку.",
+    );
+  }
+  private async visibleOid(owner: WorktreeRecord) {
+    await this.assertDirectDestination(owner);
+    const ref = `refs/heads/${owner.branch}`;
+    const rows = (
+      await this.git(
+        ["for-each-ref", "--format=%(refname)%00%(objectname)", ref],
+        owner.projectPath,
+      )
+    )
+      .trim()
+      .split("\n");
+    return rows
+      .map((row) => row.split("\0"))
+      .find(([name]) => name === ref)?.[1];
   }
   /** Called only after the host observes real process/group termination, not a UI outcome event. */
   afterRun(project: Project, ref: TopicContextRef, runId: string) {
@@ -667,7 +776,12 @@ export class ContextSyncManager {
             ).trim()
           : "";
         state.status =
-          state.importedOid === state.sourceOid && imported === state.sourceOid
+          (await assertLocalOrigin(owner, (args, cwd) =>
+            this.git(args, cwd),
+          )) &&
+          (await this.visibleOid(owner)) === state.sourceOid &&
+          state.importedOid === state.sourceOid &&
+          imported === state.sourceOid
             ? "synced"
             : "new";
       }
@@ -677,6 +791,7 @@ export class ContextSyncManager {
   async retry(
     project: Project,
     ref: TopicContextRef,
+    allowActive = false,
   ): Promise<ContextSyncState> {
     return this.locked(async () => {
       const owner = await this.owner(project, ref),
@@ -690,14 +805,14 @@ export class ContextSyncManager {
         entry.operation.owner.revision !== owner.revision
       )
         throw new Error("Нет сохранённой операции для повтора.");
-      entry.state.status = this.deps.isActive(owner.contextId)
+      entry.state.status = !allowActive && this.deps.isActive(owner.contextId)
         ? "waiting"
         : "syncing";
       entry.state.error = undefined;
       entry.state.updatedAt = new Date().toISOString();
       const raw = await this.write(doc.journal, doc.raw);
       this.notify(entry.state);
-      return this.importOperation(project, ref, doc.journal, entry, raw);
+      return this.importOperation(project, ref, doc.journal, entry, raw, allowActive);
     });
   }
   private async recoverLock() {

@@ -325,12 +325,16 @@ small {
 .project-bar {
   height: 80px;
   flex-shrink: 0;
-  display: flex;
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: 16px 36px;
+  align-content: center;
   align-items: center;
-  justify-content: space-between;
   padding: 0 25px;
   border-bottom: 1px solid var(--line);
-  gap: 20px;
+  column-gap: 20px;
+  row-gap: 4px;
 }
 .tabs {
   height: 44px;
@@ -916,6 +920,7 @@ code {
 }
 .section-tabs {
   display: flex;
+  flex-wrap: wrap;
   gap: 24px;
   border-bottom: 1px solid var(--line);
   margin: 23px 0 24px;
@@ -942,9 +947,14 @@ code {
 }
 .editor-heading {
   display: flex;
+  flex-wrap: wrap;
   justify-content: space-between;
   align-items: flex-start;
   gap: 16px;
+}
+.editor-heading > div {
+  min-width: 0;
+  flex: 1;
 }
 .editor-heading h3 {
   font-size: 16px;
@@ -1385,19 +1395,21 @@ code {
   overflow-y: auto;
 }
 
-/* Keep the breadcrumb and topic control on one centerline, with an explicit
-   second row for the project name. Do not change native Dashboard offsets. */
+/* Shared row for name, context and actions. Preserve native Dashboard offsets. */
 .project-heading {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-  min-width: 0;
-  flex: 1;
+  display: contents;
+}
+.project-heading > .eyebrow {
+  grid-column: 1 / -1;
+  grid-row: 1;
+  line-height: 16px;
 }
 .project-heading-context {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
+  grid-column: 1;
+  grid-row: 2;
   min-width: 0;
   min-height: 36px;
 }
@@ -1414,8 +1426,11 @@ code {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.project-heading > h1 {
+.project-heading-context > h1 {
   margin: 0;
+  margin-right: auto;
+  min-width: 48px;
+  flex: 1 1 auto;
   line-height: 26px;
   white-space: nowrap;
   overflow: hidden;
@@ -1423,6 +1438,48 @@ code {
 }
 .project-bar > .project-actions {
   flex-shrink: 0;
+  grid-column: 2;
+  grid-row: 2;
+}
+.project-heading-context .topic-context-split {
+  height: 36px;
+}
+.project-heading-context .topic-context-name {
+  max-width: 230px;
+}
+@media (max-width: 1100px) {
+  .project-bar {
+    column-gap: 10px;
+    padding-left: 16px;
+    padding-right: 16px;
+  }
+  .project-heading-context .topic-context-name {
+    max-width: 170px;
+  }
+}
+@media (max-width: 900px) {
+  .project-bar {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto auto auto;
+    gap: 10px;
+  }
+  .project-heading-context {
+    flex-wrap: wrap;
+  }
+  .project-heading-context > h1 {
+    flex-basis: 100%;
+  }
+  .project-heading-context .topic-context-picker {
+    flex: 1;
+  }
+  .project-heading-context .topic-context-name {
+    max-width: none;
+  }
+  .project-bar > .project-actions {
+    grid-column: 1;
+    grid-row: 3;
+    justify-content: flex-end;
+  }
 }
 
 /* Keep the selected workspace visible without moving the native dashboard. */
@@ -1432,5 +1489,9 @@ code {
   text-overflow: ellipsis;
   flex: 0 1 auto;
 }
-.run-context > .workspace-path:not(:last-child) { max-width: 40%; }
-.run-context > button { flex-shrink: 0; }
+.run-context > .workspace-path:not(:last-child) {
+  max-width: 40%;
+}
+.run-context > button {
+  flex-shrink: 0;
+}

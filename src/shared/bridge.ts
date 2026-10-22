@@ -1,4 +1,5 @@
 import type { TopicPopupBounds } from "./topic-popup";
+import type { RepositoryActionRequest, RepositoryActionResult } from "./repository-actions";
 import type {BuildRepeatPreparation} from "./build-repeat";
 import type { ScopeRef } from "./context";
 import type {
@@ -22,6 +23,7 @@ import type {
 } from "./build";
 import type {
   TopicBoardSnapshot,
+  TopicCatalogSnapshot,
   TopicDetails,
   TopicTarget,
   TopicOperationRequest,
@@ -38,6 +40,7 @@ import type {
   ProjectDocument,
   ProjectTool,
   ProjectWorkflow,
+  ProjectDockerfile,
   ProjectPipeline,
   ProjectProfile,
 } from "./project-documents";
@@ -60,6 +63,7 @@ export interface SettingsFile {
   version: string;
 }
 export interface DesktopAPI {
+  runRepositoryAction(request: RepositoryActionRequest): Promise<RepositoryActionResult>;
   setTopicPopupBounds?(id: string, bounds: TopicPopupBounds): Promise<void>;
   closeTopicPopup?(id: string): Promise<void>;
   onTopicPopupClosed?(callback: (id: string) => void): () => void;
@@ -131,6 +135,10 @@ export interface DesktopAPI {
   readBuildPlan(projectId: ScopeRef, path: string): Promise<BuildPlanDocument>;
   launchBuild(request: BuildRequest): Promise<Run>;
   repeatBuild(runId: string, confirmClean: boolean): Promise<Run>;
+  readTopicCatalog(
+    projectId: string,
+    year: string,
+  ): Promise<TopicCatalogSnapshot>;
   readTopicBoard(
     projectId: ScopeRef,
     year: string,
@@ -154,6 +162,7 @@ export interface DesktopAPI {
   listProjectTools(projectId: ScopeRef): Promise<ProjectTool[]>;
   listProjectWorkflows(projectId: ScopeRef): Promise<ProjectWorkflow[]>;
   listWorkflowSuggestions(projectId: ScopeRef): Promise<Pipeline[]>;
+  resolveProjectDockerfile(projectId: ScopeRef): Promise<ProjectDockerfile>;
   listProjectPipelines(projectId: ScopeRef): Promise<ProjectPipeline[]>;
   readProjectDocument(
     projectId: ScopeRef,

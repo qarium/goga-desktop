@@ -6,6 +6,7 @@ import { randomUUID, createHash } from "node:crypto";
 import type { Project } from "../shared/types";
 import type {
   TopicBoardSnapshot,
+  TopicCatalogSnapshot,
   TopicDetails,
   TopicOperationRequest,
   TopicOperationPlan,
@@ -20,6 +21,7 @@ import {
   topicEntriesSchema,
   topicTokenSchema,
 } from "../shared/topics-schema";
+import { assertReadActive } from "./read-scope";
 import { digest, atomicWrite, noSymlinks } from "./settings";
 import {
   guardedProject,
@@ -242,6 +244,43 @@ export class TopicsDomain {
     }
     return ticket.request.projectId;
   }
+  async catalog(
+    d: Pick<TopicsContext, "project" | "goga">,
+    year: string,
+  ): Promise<TopicCatalogSnapshot> {
+    topicYearSchema.parse(year);
+    assertReadActive();
+    await guardedProject(d.project.path);
+    assertReadActive();
+    const raw = await d.goga(["topics", "--year", year, "board", "--json"]);
+    assertReadActive();
+    let rows;
+    try {
+      rows = topicEntriesSchema.parse(JSON.parse(raw));
+    } catch {
+      throw Error("Goga вернула некорректный JSON каталог топиков");
+    }
+    // The aggregated board already defines logical entries; per-host history
+    // and clone inventories are deliberately not consulted for this display.
+    const entries = new Map<string, TopicTarget>();
+    const current = new Map<string, TopicTarget>();
+    for (const row of rows) {
+      if (row.remote) continue;
+      const target = { topic: row.topic, branch: row.branch, remote: false };
+      const key = JSON.stringify([target.topic, target.branch]);
+      entries.set(key, target);
+      if (row.current && normalize(row.branch) === row.topic)
+        current.set(key, target);
+    }
+    await guardedProject(d.project.path);
+    assertReadActive();
+    return {
+      projectId: d.project.id,
+      year,
+      entries: [...entries.values()],
+      currentTopic: current.size === 1 ? [...current.values()][0]! : null,
+    };
+  }
   async board(d: TopicsContext, year: string): Promise<TopicBoardSnapshot> {
     topicYearSchema.parse(year);
     for (let attempt = 0; ; attempt++) {
@@ -433,15 +472,15 @@ export class TopicsDomain {
       details: string[] = [],
       guards: string[] = [];
     let save: Prepared["save"];
-    // Only operations that change the checked-out worktree require it clean.
+    // Independent switch/current update require a clean worktree. Native create
+    // protects checkout conflicts itself and can preserve unrelated dirty work.
     // Other-topic deletion and update are checkout-free; their own target/base
     // checks and fresh confirmation guards still apply below.
     const dirtyUnsafe =
       r.action === "switch" ||
       (r.action === "update" &&
         !r.target?.remote &&
-        r.target?.branch === s.current) ||
-      (r.action === "create" && r.switch);
+        r.target?.branch === s.current);
     if (s.dirty && dirtyUnsafe)
       throw Error(
         "В рабочей копии есть незакоммиченные изменения (dirty). Сохраните их перед операцией.",

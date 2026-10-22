@@ -254,7 +254,7 @@ it("syncs exact row A with selected B and keeps dropdown, context and draft unch
   open();
   expect(
     screen.getAllByRole("button", { name: /^Синхронизировать коммиты/ }),
-  ).toHaveLength(3);
+  ).toHaveLength(2);
   await act(async () => {});
   fireEvent.click(screen.getByRole("button", { name: quickName() }));
   await screen.findByText("Синхронизировано");

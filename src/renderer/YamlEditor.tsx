@@ -14,6 +14,7 @@ import {
   EditorView,
   ViewPlugin,
   keymap,
+  lineNumbers,
   type DecorationSet,
   type ViewUpdate,
 } from "@codemirror/view";
@@ -28,9 +29,11 @@ import {
 } from "@codemirror/commands";
 import {
   HighlightStyle,
+  StreamLanguage,
   syntaxHighlighting,
   syntaxTree,
 } from "@codemirror/language";
+import { dockerFile } from "@codemirror/legacy-modes/mode/dockerfile";
 import { yaml } from "@codemirror/lang-yaml";
 import { tags } from "@lezer/highlight";
 import "./YamlEditor.css";
@@ -122,6 +125,34 @@ const highlighting = HighlightStyle.define([
   { tag: tags.comment, class: "yaml-comment" },
 ]);
 
+// The editor retains CR bytes to preserve mixed line endings. The legacy
+// tokenizer expects logical lines without terminators (its anchored regexes
+// otherwise miss CRLF comments and continuations). Adapt only its input view;
+// neither the document nor token offsets before the CR are changed.
+const dockerfileLanguage = StreamLanguage.define({
+  ...dockerFile,
+  token(stream, state) {
+    const original = stream.string;
+    if (!original.endsWith("\r")) return dockerFile.token(stream, state);
+    if (stream.pos === original.length - 1) {
+      stream.skipToEnd();
+      return null;
+    }
+    stream.string = original.slice(0, -1);
+    try {
+      return dockerFile.token(stream, state);
+    } finally {
+      stream.string = original;
+    }
+  },
+});
+const dockerfileHighlighting = HighlightStyle.define([
+  { tag: tags.keyword, class: "dockerfile-keyword" },
+  { tag: tags.string, class: "dockerfile-string" },
+  { tag: tags.comment, class: "dockerfile-comment" },
+  { tag: tags.number, class: "dockerfile-number" },
+]);
+
 // The official YAML grammar calls all plain values Literal. Decorate only
 // complete scalar nodes, never keys, quoted strings or literal-block contents.
 // This is presentation only; host YAML validation remains authoritative.
@@ -189,9 +220,19 @@ const theme = EditorView.theme(
       caretColor: "#ffffff",
     },
     ".cm-line": { padding: "0 12px" },
+    ".cm-gutters": {
+      backgroundColor: "#0d1726",
+      color: "#879ab3",
+      borderRight: "1px solid #2d405a",
+    },
+    ".cm-lineNumbers .cm-gutterElement": { padding: "0 8px", minWidth: "32px" },
     ".cm-content ::selection, .cm-content::selection": {
       backgroundColor: "#34577c",
     },
+    ".dockerfile-keyword": { color: "#8dc9ff" },
+    ".dockerfile-string": { color: "#b8d99b" },
+    ".dockerfile-comment": { color: "#879ab3", fontStyle: "italic" },
+    ".dockerfile-number": { color: "#efb88c" },
     ".yaml-key": { color: "#8dc9ff" },
     ".yaml-string": { color: "#b8d99b" },
     ".yaml-number, .yaml-number .yaml-string": { color: "#efb88c" },
@@ -205,12 +246,18 @@ export interface YamlEditorProps {
   value: string;
   onChange: (text: string) => void;
   readOnly?: boolean;
+  plainText?: boolean;
+  language?: "yaml" | "dockerfile";
+  label?: string;
 }
 
 export function YamlEditor({
   value,
   onChange,
   readOnly = false,
+  plainText = false,
+  language = "yaml",
+  label = "YAML",
 }: YamlEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
@@ -234,11 +281,14 @@ export function YamlEditor({
           // An explicit LF separator retains literal CRs, including mixed CRLF/LF
           // input. Never serialize/format YAML or silently normalize its bytes.
           EditorState.lineSeparator.of("\n"),
+          lineNumbers(),
           crlf,
           crlfSelection,
-          yaml(),
-          syntaxHighlighting(highlighting),
-          scalars,
+          ...(plainText
+            ? []
+            : language === "dockerfile"
+              ? [dockerfileLanguage, syntaxHighlighting(dockerfileHighlighting)]
+              : [yaml(), syntaxHighlighting(highlighting), scalars]),
           theme,
           history(),
           keymap.of([
@@ -260,7 +310,7 @@ export function YamlEditor({
             ...historyKeymap,
           ]),
           EditorView.contentAttributes.of({
-            "aria-label": "YAML",
+            "aria-label": label,
             spellcheck: "false",
           }),
           editable.current.of([

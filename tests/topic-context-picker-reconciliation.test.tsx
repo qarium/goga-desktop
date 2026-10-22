@@ -69,6 +69,7 @@ let api: any;
 beforeEach(() => {
   vi.useFakeTimers();
   api = {
+    readTopicBoard: vi.fn(async () => board),
     ensureTopicContext: vi.fn(),
     createTopicContext: vi.fn(),
     resolveTopicContext: vi.fn(async (ref: WorktreeRecord) =>

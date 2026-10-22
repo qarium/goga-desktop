@@ -77,7 +77,7 @@ function mountSettings() {
     />,
   );
 }
-it("uses exact six-tab order and one profile empty screen, then creates a memory-only draft with relative path", async () => {
+it("uses exact seven-tab order and one profile empty screen, then creates a memory-only draft with relative path", async () => {
   const v = mountSettings();
   await screen.findByLabelText("Исполняемый файл");
   expect(
@@ -89,6 +89,7 @@ it("uses exact six-tab order and one profile empty screen, then creates a memory
     "Конфигурация",
     "Рабочие процессы",
     "Конвейеры",
+    "Образ",
     "Инструменты",
     "Профили",
   ]);

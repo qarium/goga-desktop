@@ -2,6 +2,7 @@
 import {
   installPrototypeContextFixture,
   openPrototypeLaunch,
+  selectPrototypeOwner,
   executionButton,
 } from "./helpers/prototype-context-fixture";
 import React from "react";
@@ -136,8 +137,12 @@ beforeEach(() => {
     { id: "q", path: "/fixture/b", topic: "main", branch: "main" },
   ]);
   // Navigation between tabs is tested within one explicit owner.
-  api.listTopicContexts.mockImplementation(async (id: string) => fixture.records.filter(r => r.projectId === id));
-  api.runs.mockResolvedValue([{ ...run, topic: fixture.owner("p").topic, context: fixture.owner("p") }]);
+  api.listTopicContexts.mockImplementation(async (id: string) =>
+    fixture.records.filter((r) => r.projectId === id),
+  );
+  api.runs.mockResolvedValue([
+    { ...run, topic: fixture.owner("p").topic, context: fixture.owner("p") },
+  ]);
   window.goga = api;
 });
 afterEach(cleanup);
@@ -153,10 +158,29 @@ async function launch() {
     name: "Что нужно сделать?",
   })) as HTMLTextAreaElement;
 }
-it("keeps a clickable launch tab and the same draft across Home, Topics and a run; repeated open has no duplicate", async () => {
+async function mountReadyOwner() {
+  const records = await api.listTopicContexts("p");
+  let resolveInventory!: (value: unknown) => void;
+  api.listTopicContexts.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolveInventory = resolve;
+      }),
+  );
   render(<App />);
   await screen.findByRole("heading", { name: "Проект" });
+  await waitFor(() => expect(resolveInventory).toBeTypeOf("function"));
+  await act(async () => {
+    resolveInventory(records);
+  });
+  // This test exercises navigation within a ready owner, not historical missing
+  // clones. A heading alone does not mean the asynchronous inventory is ready:
+  // focusing earlier intentionally records a read-only missing history owner.
+  await selectPrototypeOwner();
   act(() => focusRun("b"));
+}
+it("keeps a clickable launch tab and the same draft across Home, Topics and a run; repeated open has no duplicate", async () => {
+  await mountReadyOwner();
   click("Проект");
   const input = await launch();
   fireEvent.change(input, { target: { value: "retained task" } });
@@ -190,9 +214,7 @@ it("keeps a clickable launch tab and the same draft across Home, Topics and a ru
   expect(api.discover).toHaveBeenCalledTimes(1);
 });
 it("both preparation tabs coexist, navigate by keyboard, and close independently", async () => {
-  render(<App />);
-  await screen.findByRole("heading", { name: "Проект" });
-  act(() => focusRun("b"));
+  await mountReadyOwner();
   click("Проект");
   await launch();
   await openPrototypeLaunch("build");
@@ -212,9 +234,7 @@ it("both preparation tabs coexist, navigate by keyboard, and close independently
   expect(await screen.findByRole("heading", { name: "Проект" })).toBeTruthy();
 });
 it("isolates full launch preparation values and DOM between projects", async () => {
-  render(<App />);
-  await screen.findByRole("heading", { name: "Проект" });
-  act(() => focusRun("b"));
+  await mountReadyOwner();
   click("Проект");
   const alpha = await launch();
   fireEvent.change(alpha, { target: { value: "alpha task" } });
@@ -248,9 +268,7 @@ it("isolates full launch preparation values and DOM between projects", async () 
 });
 
 it("closing an inactive launch tab respects the dirty Home settings guard", async () => {
-  render(<App />);
-  await screen.findByRole("heading", { name: "Проект" });
-  act(() => focusRun("b"));
+  await mountReadyOwner();
   click("Проект");
   await launch();
   click("Проект");
@@ -273,9 +291,7 @@ it("closing an inactive launch tab respects the dirty Home settings guard", asyn
   ).toBe("changed");
 });
 it("blocks closing while pending and closes the preparation after successful start", async () => {
-  render(<App />);
-  await screen.findByRole("heading", { name: "Проект" });
-  act(() => focusRun("b"));
+  await mountReadyOwner();
   click("Проект");
   await launch();
   let finish!: (v: any) => void;
@@ -313,9 +329,7 @@ it("blocks closing while pending and closes the preparation after successful sta
   ).toBe("true");
 });
 it("a late launch from another project never steals the current preparation or draft", async () => {
-  render(<App />);
-  await screen.findByRole("heading", { name: "Проект" });
-  act(() => focusRun("b"));
+  await mountReadyOwner();
   click("Проект");
   await launch();
   let finish!: (v: any) => void;

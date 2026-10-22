@@ -3,6 +3,7 @@ import { registerIPC } from "../src/main/ipc";
 it("guards all Topics channels and validates input before forwarding", async () => {
   const handlers = new Map<string, Function>();
   const service = {
+    readTopicCatalog: vi.fn(),
     readTopicBoard: vi.fn(),
     readTopicDetails: vi.fn(),
     prepareTopicOperation: vi.fn(),
@@ -21,6 +22,7 @@ it("guards all Topics channels and validates input before forwarding", async () 
     senderFrame: { url: "file:///app/index.html", parent: null },
   };
   for (const name of [
+    "read-topic-catalog",
     "read-topic-board",
     "read-topic-details",
     "prepare-topic-operation",
@@ -31,6 +33,14 @@ it("guards all Topics channels and validates input before forwarding", async () 
       handlers.get("goga:" + name)!({ ...event, sender: { id: 2 } }),
     ).toThrow(/IPC/);
   }
+  await handlers.get("goga:read-topic-catalog")!(event, "p", "2026");
+  expect(service.readTopicCatalog).toHaveBeenCalledExactlyOnceWith("p", "2026");
+  expect(() =>
+    handlers.get("goga:read-topic-catalog")!(event, { projectId: "p" }, "2026"),
+  ).toThrow();
+  expect(() =>
+    handlers.get("goga:read-topic-catalog")!(event, "p", "../2026"),
+  ).toThrow();
   const target = { topic: "feature", branch: "feature", remote: false };
   await handlers.get("goga:read-topic-board")!(event, "p", "2025");
   expect(service.readTopicBoard).toHaveBeenCalledWith("p", "2025");

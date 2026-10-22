@@ -5,6 +5,7 @@ import { z } from "zod";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { CloneStore } from "./clone-store";
+import { assertLocalOrigin } from "./local-origin";
 import { noSymlinks } from "./settings";
 import { childEnvironment } from "./process-environment";
 import { RunnerShutdownError, type Runner } from "./process";
@@ -427,6 +428,12 @@ export async function assertClonePublicationOrigin(
     if (await readPolicy(owner)) throw policyError();
     return;
   }
+  if (config.url === owner.projectPath) {
+    await assertLocalOrigin(owner, (args, cwd) =>
+      git(runner, args, cwd, isolatedEnvironment(home)),
+    );
+    return;
+  }
   await checkedPhysicalPolicy(home, runner, owner);
 }
 /** Incoming transport never changes primary refs/HEAD/index/files, or clone checkout. */
@@ -752,6 +759,15 @@ export class ContextExchangeManager {
     return this.clones.withRepositoryLock(owner.repositoryKey, async () => {
       await this.owner(ref, owner);
       await this.available(owner, input.action === "update");
+      const currentOrigin = await originConfig(
+        this.runner,
+        owner.path,
+        this.env,
+      );
+      if (!currentOrigin || currentOrigin.url === owner.projectPath)
+        throw new Error(
+          "Origin копии предназначен для исходного локального проекта. Используйте синхронизацию для push в локальный origin; внешняя публикация через этот origin не поддерживается.",
+        );
       let policy: UpstreamPolicy;
       try {
         const source = await originConfig(
@@ -778,26 +794,9 @@ export class ContextExchangeManager {
           ) !== JSON.stringify(actual)
         )
           throw policyError();
-        const previous = await readPolicy(owner),
-          clone = await originConfig(this.runner, owner.path, this.env);
-        if (previous)
-          policy = await checkedPolicy(
-            this.home,
-            this.runner,
-            owner,
-            nativeEnv,
-          );
-        else {
-          if (clone) throw policyError();
-          policy = {
-            schemaVersion: 1,
-            contextId: owner.contextId,
-            ownerHash: await ownerHash(owner),
-            primaryHash: hash(JSON.stringify(source)),
-            cloneHash: hash(JSON.stringify(desired)),
-            endpointsHash: hash(JSON.stringify(actual)),
-          };
-        }
+        // Only an already trusted legacy external-origin policy remains supported.
+        // New/legacy originless copies must never inherit the primary's upstream.
+        policy = await checkedPolicy(this.home, this.runner, owner, nativeEnv);
         // Validate branch shape/divergence before enabling publication or fetching base objects.
         const propagation =
           input.action === "propagate"
@@ -845,22 +844,6 @@ export class ContextExchangeManager {
           ) !== policy.endpointsHash
         )
           throw policyError();
-        if (!previous) {
-          const file = policyFile(owner);
-          await noSymlinks(file);
-          const fd = await open(file, "wx", 0o600);
-          try {
-            await fd.writeFile(JSON.stringify(policy));
-            await fd.sync();
-          } finally {
-            await fd.close();
-          }
-          for (const [name, value] of Object.entries(desired))
-            await this.git(
-              ["config", "--local", `remote.origin.${name}`, value],
-              owner.path,
-            );
-        }
         policy = await checkedPolicy(this.home, this.runner, owner, nativeEnv);
         const snapshot: PublicationSnapshot = {
           id: randomUUID(),

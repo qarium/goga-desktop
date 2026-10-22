@@ -29,6 +29,7 @@ export function ContextDocuments({
           ["config", "Конфигурация"],
           ["workflows", "Рабочие процессы"],
           ["pipelines", "Конвейеры"],
+          ["image", "Образ"],
           ["profiles", "Профили"],
           ["tools", "Инструменты"],
         ].map(([id, title]) => (

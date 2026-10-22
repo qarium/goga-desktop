@@ -45,7 +45,7 @@ export const documentKey = (source: DocumentSource) =>
                 source.target.kind === "profile"
               ? source.target.name
               : "",
-          source.target.kind === "tool"
+          source.target.kind === "tool" || source.target.kind === "dockerfile"
             ? source.target.path
             : source.target.kind === "workflow" ||
                 source.target.kind === "pipeline" ||
@@ -108,6 +108,10 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 // implicitly. Operation results are keyed to the captured source, not the selection.
 export function createSettingsDocuments() {
   const entries = new Map<string, DocumentDraft>();
+  const dockerfiles = new Map<
+    string,
+    import("../shared/project-documents").ProjectDockerfile
+  >();
   const registryDrafts = new Map<string, RegistrySettingsDraft>();
   const listeners = new Set<() => void>();
   const selections = new Map<string, WorkflowSelection>();
@@ -282,6 +286,14 @@ export function createSettingsDocuments() {
       };
     },
     get,
+    dockerfile: (scope: ScopeRef) => dockerfiles.get(documentScopeId(scope)),
+    selectDockerfile(
+      scope: ScopeRef,
+      metadata: import("../shared/project-documents").ProjectDockerfile,
+    ) {
+      dockerfiles.set(documentScopeId(scope), metadata);
+      listeners.forEach((fn) => fn());
+    },
     registryDraft: (scope: ScopeRef) =>
       registryDrafts.get(documentScopeId(scope)) ?? emptyRegistryDraft,
     updateRegistryDraft(

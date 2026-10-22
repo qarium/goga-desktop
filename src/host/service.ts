@@ -1,4 +1,14 @@
+import { parseDockerfile } from "./project-dockerfile";
 import { assertTopicTaskReady } from "./topic-readiness";
+import {
+  RepositoryActions,
+  repositoryActionFailure,
+} from "./repository-actions";
+import {
+  repositoryActionRequestSchema,
+  type RepositoryActionRequest,
+  type RepositoryActionResult,
+} from "../shared/repository-actions";
 import { assertReadActive } from "./read-scope";
 import {
   ContextExchangeManager,
@@ -54,7 +64,12 @@ import {
   type BuildRequest,
 } from "../shared/build";
 import { TopicsDomain, type TopicsContext } from "./topics";
-import type { TopicTarget, TopicOperationRequest } from "../shared/topics";
+import type {
+  TopicTarget,
+  TopicOperationRequest,
+  TopicCatalogSnapshot,
+} from "../shared/topics";
+import { topicYearSchema } from "../shared/topics-schema";
 import { captureRunOutput } from "./run-output";
 import { DEFAULT_STARTUP_TIMEOUT_MINUTES } from "../shared/startup-timeout";
 import { stripVTControlCharacters } from "node:util";
@@ -557,9 +572,48 @@ export class HostService extends EventEmitter {
       );
     return result;
   }
+  private async dockerfile(project: Project) {
+    const result = parseDockerfile(
+      this.root(project),
+      await this.cmd(project, ["config", "dockerfile"]),
+    );
+    await readProjectDocument(this.root(project), {
+      kind: "dockerfile",
+      path: result.relativePath,
+    });
+    assertReadActive();
+    await this.validateBinding(project);
+    return result;
+  }
+  async resolveProjectDockerfile(id: ScopeRef) {
+    this.check();
+    return this.snapshot(id, async () => {
+      const { relativePath, configured } = await this.dockerfile(
+        await this.project(id),
+      );
+      return { relativePath, configured };
+    });
+  }
   async readProjectDocument(id: ScopeRef, target: ProjectDocumentTarget) {
     this.check();
-    return readProjectDocument(this.root(await this.project(id)), target);
+    if (target.kind !== "dockerfile")
+      return readProjectDocument(this.root(await this.project(id)), target);
+    return this.snapshot(id, async () => {
+      const project = await this.project(id),
+        metadata = await this.dockerfile(project);
+      if (target.path !== metadata.relativePath)
+        throw new Error(
+          "Путь Dockerfile изменился. Откройте актуальный файл заново.",
+        );
+      const document = await readProjectDocument(this.root(project), target);
+      const latest = await this.dockerfile(project);
+      if (latest.fingerprint !== metadata.fingerprint)
+        throw new Error("Конфигурация Dockerfile изменилась");
+      return {
+        ...document,
+        version: `${metadata.fingerprint}:${document.version}`,
+      };
+    });
   }
   async saveProjectDocument(
     id: ScopeRef,
@@ -571,12 +625,44 @@ export class HostService extends EventEmitter {
     return this.exclusive(scopeProjectId(id), async () => {
       const project = await this.project(id);
       this.assertScopeWritable(project);
-      const document = await saveProjectDocument(
-        this.root(project),
-        target,
-        text,
-        version,
-      );
+      const document =
+        target.kind === "dockerfile"
+          ? await this.snapshot(id, async () => {
+              const metadata = await this.dockerfile(project);
+              const prefix = metadata.fingerprint + ":";
+              if (
+                target.path !== metadata.relativePath ||
+                !version.startsWith(prefix)
+              )
+                throw new Error(
+                  "Конфигурация Dockerfile изменилась. Черновик сохранён; откройте актуальный файл заново.",
+                );
+              const guard = async () => {
+                this.assertScopeWritable(project);
+                await this.validateBinding(project);
+                await this.assertSettings(project.id);
+                const latest = await this.dockerfile(project);
+                if (latest.fingerprint !== metadata.fingerprint)
+                  throw new Error("Конфигурация Dockerfile изменилась");
+                await this.validateBinding(project);
+                await this.assertSettings(project.id);
+                this.assertCatalog(this.context.getStore()!.catalogEpoch);
+              };
+              const saved = await saveProjectDocument(
+                this.root(project),
+                target,
+                text,
+                version.slice(prefix.length),
+                guard,
+              );
+              return { ...saved, version: prefix + saved.version };
+            })
+          : await saveProjectDocument(
+              this.root(project),
+              target,
+              text,
+              version,
+            );
       this.documentSaveRevisions.set(
         scopeProjectId(id),
         (this.documentSaveRevisions.get(scopeProjectId(id)) ?? 0) + 1,
@@ -1241,6 +1327,65 @@ export class HostService extends EventEmitter {
       this.sync.request(await this.project(ref.projectId), ref),
     );
   }
+  async runRepositoryAction(
+    input: RepositoryActionRequest,
+  ): Promise<RepositoryActionResult> {
+    const request = repositoryActionRequestSchema.parse(input);
+    return this.operation(() =>
+      this.exclusive(request.projectId, async () => {
+        let secrets: string[] = [];
+        try {
+          this.check();
+          return await this.snapshot(
+            request.context ?? request.projectId,
+            async () => {
+              const scoped = await this.project(request.context ?? request.projectId);
+              const call = this.invocation(scoped);
+              secrets = call.value.env.map((entry) => entry.value).filter(Boolean);
+              const actions = new RepositoryActions({
+                project: async () => {
+                  this.check();
+                  const project = (await this.listProjects()).find((p) => p.id === request.projectId);
+                  if (!project) throw Error("Неизвестный проект.");
+                  return project;
+                },
+                resolve: (ref) => this.resolveTopicContext(ref),
+                sync: (project, ref, onDiagnostic) => this.sync.request(project, ref, "manual", undefined, false, onDiagnostic),
+                verify: async () => {
+                  this.check();
+                  await this.assertSettings(request.projectId);
+                  this.assertCatalog(this.context.getStore()!.catalogEpoch);
+                },
+                git: (args, cwd) => this.runner.command(
+                  "git", args, cwd,
+                  childEnvironment(process.env, { HOME: this.home, GIT_TERMINAL_PROMPT: "0" }),
+                ),
+                goga: async (args) => {
+                  this.check();
+                  await this.assertSettings(request.projectId);
+                  await this.validateBinding(scoped);
+                  return this.runner.command(call.executable, args, this.root(scoped), call.env);
+                },
+                gogaOriginal: async (args) => {
+                  this.check();
+                  await this.assertSettings(request.projectId);
+                  await this.validateBinding(scoped);
+                  this.assertCatalog(this.context.getStore()!.catalogEpoch);
+                  // Project.path is the captured original; root(scoped) would select the clone.
+                  return this.runner.command(call.executable, args, scoped.path, call.env);
+                },
+                secrets,
+              });
+              return actions.run(request);
+            },
+            false,
+          );
+        } catch (error) {
+          return repositoryActionFailure(request, error, "", secrets);
+        }
+      }),
+    );
+  }
   async topicSyncStatus(input: TopicContextRef) {
     this.check();
     const ref = topicContextRefSchema.parse(input);
@@ -1250,7 +1395,7 @@ export class HostService extends EventEmitter {
     this.check();
     const ref = topicContextRefSchema.parse(input);
     return this.operation(async () =>
-      this.sync.retry(await this.project(ref.projectId), ref),
+      this.sync.retry(await this.project(ref.projectId), ref, true),
     );
   }
   async prepareContextApply(input: TopicContextRef) {
@@ -1457,6 +1602,56 @@ export class HostService extends EventEmitter {
           operation,
         ),
     };
+  }
+  async readTopicCatalog(
+    projectId: string,
+    year: string,
+  ): Promise<TopicCatalogSnapshot> {
+    this.check();
+    assertReadActive();
+    // This endpoint is primary-only. In particular, never inherit a clone
+    // binding from a nested read and silently label its data as primary.
+    if (typeof projectId !== "string" || this.context.getStore()?.binding)
+      throw Error("Каталог доступен только для основной папки проекта.");
+    this.parseScope(projectId);
+    topicYearSchema.parse(year);
+    const result = await this.snapshot(projectId, async () => {
+      const project = await this.project(projectId);
+      await this.validateBinding(project);
+      assertReadActive();
+      const catalog = await this.topicDomain.catalog(
+        {
+          project,
+          goga: async (args) => {
+            await this.assertSettings(projectId);
+            await this.validateBinding(project);
+            assertReadActive();
+            const call = this.invocation(project);
+            try {
+              return (
+                await this.runner.command(
+                  call.executable,
+                  args,
+                  project.path,
+                  call.env,
+                )
+              ).stdout;
+            } catch {
+              assertReadActive();
+              throw Error(
+                "Не удалось выполнить команду Goga. Проверьте конфигурацию проекта.",
+              );
+            }
+          },
+        },
+        year,
+      );
+      await this.validateBinding(project);
+      assertReadActive();
+      return catalog;
+    });
+    assertReadActive();
+    return result;
   }
   async readTopicBoard(scope: ScopeRef, year: string) {
     return this.snapshot(scope, async () => {

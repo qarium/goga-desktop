@@ -366,3 +366,56 @@ it.each([false, true])(
     }
   },
 );
+it('plain text mode keeps CRLF and history without YAML highlighting', () => {
+ const onChange=vi.fn();render(<YamlEditor plainText label="Dockerfile" value={'FROM alpine\r\nRUN true\r\n'} onChange={onChange}/>);
+ const v=editor();expect(v.contentDOM.getAttribute('aria-label')).toBe('Dockerfile');expect(v.contentDOM.querySelector('[class^="yaml-"]')).toBeNull();
+ act(()=>v.dispatch({changes:{from:v.state.doc.length,insert:'RUN echo 42\r\n'}}));
+ expect(onChange).toHaveBeenLastCalledWith('FROM alpine\r\nRUN true\r\nRUN echo 42\r\n');
+ act(()=>{undo(v);});expect(v.state.doc.toString()).toBe('FROM alpine\r\nRUN true\r\n');
+});
+
+it("highlights Dockerfile instructions, comments and strings while preserving raw bytes and undo", () => {
+  const original = '# build\r\nFROM alpine AS base\r\nRUN ["echo", "ok"]\nEXPOSE 8080\r\n';
+  const onChange = vi.fn();
+  render(<YamlEditor language="dockerfile" label="Dockerfile" value={original} onChange={onChange} />);
+  const v = editor();
+  expect(v.contentDOM.querySelector(".dockerfile-keyword")?.textContent).toBe("FROM");
+  expect(v.contentDOM.querySelector(".dockerfile-comment")?.textContent).toBe("# build");
+  expect(v.contentDOM.querySelector(".dockerfile-string")?.textContent).toContain('"echo"');
+  expect(v.contentDOM.querySelector(".dockerfile-number")?.textContent).toBe("8080");
+  expect(v.contentDOM.querySelector('[class^="yaml-"]')).toBeNull();
+  expect(v.state.doc.toString()).toBe(original);
+  expect(onChange).not.toHaveBeenCalled();
+  act(() => v.dispatch({ changes: { from: v.state.doc.length, insert: 'RUN {{ [ not YAML\r\n' } }));
+  expect(onChange).toHaveBeenLastCalledWith(original + 'RUN {{ [ not YAML\r\n');
+  act(() => { undo(v); });
+  expect(v.state.doc.toString()).toBe(original);
+  act(() => { redo(v); });
+  expect(v.state.doc.toString()).toBe(original + 'RUN {{ [ not YAML\r\n');
+});
+
+it.each(["\n", "\r\n"])("keeps Dockerfile continuation context across %j without coloring shell commands as instructions", (newline) => {
+  const source = ["RUN echo \\", '  FROM "argument"', "FROM alpine"].join(newline);
+  render(<YamlEditor language="dockerfile" value={source} onChange={() => {}} />);
+  const v = editor();
+  expect(Array.from(v.contentDOM.querySelectorAll(".dockerfile-keyword"), (node) => node.textContent)).toEqual(["RUN", "FROM"]);
+  expect(v.contentDOM.querySelector(".dockerfile-string")?.textContent).toBe('"argument"');
+  expect(v.state.doc.toString()).toBe(source);
+});
+
+it.each(["yaml", "dockerfile"] as const)("shows line numbers in %s without changing source", (language) => {
+  const value = "first\r\nsecond\nthird";
+  const onChange = vi.fn();
+  render(<YamlEditor language={language} value={value} onChange={onChange} />);
+  const v = editor();
+  const numbers = () => Array.from(v.dom.querySelectorAll('.cm-lineNumbers .cm-gutterElement'), e => e.textContent);
+  expect(numbers()).toContain("1");
+  expect(numbers()).toContain("2");
+  expect(numbers()).toContain("3");
+  expect(v.state.doc.toString()).toBe(value);
+  expect(onChange).not.toHaveBeenCalled();
+  act(() => v.dispatch({changes: {from: 0, insert: "new\n"}}));
+  expect(numbers()).toContain("4");
+  act(() => { undo(v); });
+  expect(v.state.doc.toString()).toBe(value);
+});

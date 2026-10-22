@@ -3,6 +3,7 @@ import { registerIPC } from "../src/main/ipc";
 function fixture() {
   const handlers = new Map<string, Function>();
   const service = {
+    resolveProjectDockerfile: vi.fn(async () => ({relativePath:"Dockerfile",configured:true})),
     listProjectTools: vi.fn(async () => []),
     listProjectWorkflows: vi.fn(async () => []),
     listWorkflowSuggestions: vi.fn(async () => []),
@@ -28,6 +29,7 @@ function fixture() {
 it("exposes project document channels only to the exact shell main frame", async () => {
   const { service, handlers, event } = fixture();
   for (const name of [
+    "resolve-project-dockerfile",
     "list-project-tools",
     "list-project-workflows",
     "list-workflow-suggestions",
@@ -313,4 +315,17 @@ it("validates project profile targets and catalog only through trusted shell", a
     { ...target, root: "/tmp" },
   ])
     expect(() => read(event, "p", bad)).toThrow();
+});
+
+it("validates Dockerfile IPC paths and bounded metadata reads", async () => {
+ const {service, handlers,event}=fixture();
+ await handlers.get("goga:resolve-project-dockerfile")!(event,"p");
+ expect(service.resolveProjectDockerfile).toHaveBeenCalledWith("p");
+ const read=handlers.get("goga:read-project-document")!, save=handlers.get("goga:save-project-document")!;
+ for(const path of ["../x","/etc/passwd",".git/config",".goga/config.yml","a\\b","a//b"]){
+  expect(()=>read(event,"p",{kind:"dockerfile",path})).toThrow();
+  expect(()=>save(event,"p",{kind:"dockerfile",path},"FROM alpine","v")).toThrow();
+ }
+ await save(event,"p",{kind:"dockerfile",path:"build/Dockerfile"},"RUN [raw","v");
+ expect(service.saveProjectDocument).toHaveBeenCalledWith("p",{kind:"dockerfile",path:"build/Dockerfile"},"RUN [raw","v");
 });

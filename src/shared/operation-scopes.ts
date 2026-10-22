@@ -10,6 +10,7 @@ export type OperationScope =
   | "home"
   | "desktop-project";
 export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
+  "run-repository-action": "topic-or-primary-admin",
   "prepare-build-repeat":"run",
   "reconcile-run":"run",
   "set-topic-popup-bounds": "transport",
@@ -35,6 +36,7 @@ export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
   "list-build-files": "topic-or-primary-admin",
   "read-build-plan": "topic-or-primary-admin",
   "launch-build": "topic-or-primary-admin",
+  "read-topic-catalog": "catalog",
   "read-topic-board": "topic-or-primary-admin",
   "read-topic-details": "topic-or-primary-admin",
   "prepare-topic-operation": "topic-or-primary-admin",
@@ -45,6 +47,7 @@ export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
   "choose-project": "catalog",
   "list-project-profiles": "topic-or-primary-admin",
   "list-project-tools": "topic-or-primary-admin",
+  "resolve-project-dockerfile": "topic-or-primary-admin",
   "list-project-pipelines": "topic-or-primary-admin",
   "list-project-workflows": "topic-or-primary-admin",
   "list-workflow-suggestions": "topic-or-primary-admin",

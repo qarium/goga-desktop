@@ -5,6 +5,7 @@ import { randomUUID, createHash } from "node:crypto";
 import { HostService } from "../src/host/service";
 import { NodeRunner } from "../src/host/process";
 import { CloneManager } from "../src/host/clones";
+import { seedLegacyPublication } from "./helpers/legacy-publication";
 import { worktreeContextRef } from "../src/shared/worktrees";
 import { FixtureScope, gitIntegrationBudget } from "./helpers/git-integration";
 vi.setConfig({ testTimeout: gitIntegrationBudget(30000) });
@@ -192,8 +193,13 @@ it("rejects a moved selected primary base before the native mutation", async () 
   await f.service.dispose();
 });
 it("previews the genuine upstream and executes only in the clone after confirmation", async () => {
-  const f = await fixture(),
-    plan = await f.service.prepareTopicOperation(await f.request("publish"));
+  const f = await fixture();
+  await seedLegacyPublication(f.a, async (args, cwd) =>
+    (await f.node.command("git", args, cwd)).stdout.trim(),
+  );
+  const plan = await f.service.prepareTopicOperation(
+    await f.request("publish"),
+  );
   expect(plan.details.join(" ")).toContain("origin →");
   expect(f.calls).toHaveLength(0);
   await f.service.executeTopicOperation(plan.token);
@@ -203,6 +209,9 @@ it("previews the genuine upstream and executes only in the clone after confirmat
 });
 it("keeps the original selected ref in propagate confirmation after mapping to a clone branch", async () => {
   const f = await fixture();
+  await seedLegacyPublication(f.a, async (args, cwd) =>
+    (await f.node.command("git", args, cwd)).stdout.trim(),
+  );
   const request = await f.request("propagate");
   request.baseRef = "refs/heads/main";
   const plan = await f.service.prepareTopicOperation(request);
@@ -212,4 +221,16 @@ it("keeps the original selected ref in propagate confirmation after mapping to a
   expect(plan.details.join(" ")).toContain("База клона main:");
   expect(f.calls).toHaveLength(0);
   await f.service.dispose();
+});
+
+it("keeps the new local origin intact when obsolete external publication is requested", async () => {
+  const f = await fixture();
+  const config = await readFile(path.join(f.a.gitCommonDir, "config"), "utf8");
+  await expect(
+    f.service.prepareTopicOperation(await f.request("publish")),
+  ).rejects.toThrow(/локальн|синхронизац/i);
+  expect(await readFile(path.join(f.a.gitCommonDir, "config"), "utf8")).toBe(
+    config,
+  );
+  expect(f.calls).toHaveLength(0);
 });

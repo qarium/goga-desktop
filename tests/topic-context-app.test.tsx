@@ -384,15 +384,15 @@ it("keeps catalog errors outside the native dashboard column while a pipeline is
   expect(document.querySelector(".main-area .context-board-error")).toBeNull();
 });
 
-it("separates header breadcrumb and topic picker as centered siblings above the project title", async () => {
+it("aligns project title and topic picker in one row below the breadcrumb", async () => {
   render(<App />);
   const title = await screen.findByRole("heading", { name: "Alpha" });
   const heading = title.closest(".project-heading");
   expect(heading).not.toBeNull();
   const row = heading!.querySelector(".project-heading-context")!;
   expect(row).not.toBeNull();
-  expect(row.querySelector(".eyebrow")?.textContent).toContain("Мой компьютер / ПРОЕКТ");
+  expect(heading!.querySelector(":scope > .eyebrow")?.textContent).toContain("Мой компьютер / ПРОЕКТ");
   expect(row.querySelector(".topic-context-picker")?.parentElement).toBe(row);
-  expect(title.parentElement).toBe(heading);
-  expect(title.previousElementSibling).toBe(row);
+  expect(title.parentElement).toBe(row);
+  expect(title.nextElementSibling?.classList.contains("topic-context-picker")).toBe(true);
 });

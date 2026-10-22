@@ -100,9 +100,9 @@ describe("standalone owned clone lifecycle", { timeout: 30000 }, () => {
     });
     expect(row.path).not.toBe(f.repo);
     expect((await fs.lstat(row.gitCommonDir)).isDirectory()).toBe(true);
-    expect((await f.git(["remote", "-v"], row.path)).stdout).not.toContain(
-      "origin",
-    );
+    expect(
+      (await f.git(["remote", "get-url", "origin"], row.path)).stdout.trim(),
+    ).toBe(f.repo);
     expect(
       (
         await f.git(["remote", "get-url", "desktop-source"], row.path)
@@ -800,4 +800,25 @@ describe("owned clone repair revision stability", { timeout: 30000 }, () => {
       repaired,
     );
   });
+});
+
+it("supports an ordinary non-forced git push origin branch from a newly created copy", async () => {
+  const f = await setup();
+  await f.git([
+    "remote",
+    "add",
+    "origin",
+    "https://example.invalid/external-upstream.git",
+  ]);
+  const row = await f.manager.ensure(f.project, f.identity);
+  await fs.writeFile(path.join(row.path, "ordinary-push"), "commit");
+  await f.git(["add", "."], row.path);
+  await f.git(["commit", "-m", "ordinary local push"], row.path);
+  await f.git(["push", "origin", row.branch], row.path);
+  expect((await f.git(["rev-parse", row.branch])).stdout).toBe(
+    (await f.git(["rev-parse", "HEAD"], row.path)).stdout,
+  );
+  expect((await f.git(["branch", "--show-current"])).stdout.trim()).toBe(
+    "main",
+  );
 });

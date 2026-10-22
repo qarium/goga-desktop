@@ -457,6 +457,11 @@ export class CloneManager {
         pending.path,
         pending,
       );
+      await this.git(
+        ["remote", "add", "origin", repository.projectPath],
+        pending.path,
+        pending,
+      );
       if (isNew)
         await this.git(
           ["checkout", "--no-track", "-b", identity.branch, oid, "--"],

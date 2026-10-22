@@ -8,6 +8,7 @@ function listen<T>(name: string, callback: (value: T) => void) {
   return () => ipcRenderer.removeListener(`goga:${name}`, fn);
 }
 const api: DesktopAPI = {
+  runRepositoryAction: (request) => invoke("run-repository-action", request),
   setTopicPopupBounds: (id, bounds) =>
     invoke("set-topic-popup-bounds", id, bounds),
   closeTopicPopup: (id) => invoke("close-topic-popup", id),
@@ -37,6 +38,7 @@ const api: DesktopAPI = {
   readBuildPlan: (id, path) => invoke("read-build-plan", id, path),
   launchBuild: (request) => invoke("launch-build", request),
   repeatBuild: (id, confirmClean) => invoke("repeat-build", id, confirmClean),
+  readTopicCatalog: (id, year) => invoke("read-topic-catalog", id, year),
   readTopicBoard: (id, year) => invoke("read-topic-board", id, year),
   readTopicDetails: (id, year, target) =>
     invoke("read-topic-details", id, year, target),
@@ -49,6 +51,7 @@ const api: DesktopAPI = {
   listProjects: () => invoke("list-projects"),
   listProjectProfiles: (id) => invoke("list-project-profiles", id),
   listProjectTools: (id) => invoke("list-project-tools", id),
+  resolveProjectDockerfile: (id) => invoke("resolve-project-dockerfile", id),
   listProjectPipelines: (id) => invoke("list-project-pipelines", id),
   listProjectWorkflows: (id) => invoke("list-project-workflows", id),
   listWorkflowSuggestions: (id) => invoke("list-workflow-suggestions", id),

@@ -146,9 +146,21 @@ function choose(topic: string) {
 }
 
 describe("compact context picker", () => {
+  it("places primary first, hides only selected owner and preserves sync beside Есть копия", () => {
+    mount({ knownContexts: [alpha, beta] });
+    open();
+    expect(screen.getAllByRole("row")[0].textContent).toContain("Без топика");
+    expect(screen.queryByRole("row", { name: /^beta / })).toBeNull();
+    const other = screen.getByRole("row", { name: /^alpha / });
+    expect(within(other).getByText("Есть копия")).toBeTruthy();
+    expect(
+      within(other).getByRole("button", { name: /Синхронизировать коммиты/ }),
+    ).toBeTruthy();
+    expect(screen.queryByText("Топик:")).toBeNull();
+  });
   it("separates viewing the selected card from changing context", () => {
     const { onOpenCard, onSelect } = mount();
-    expect(screen.getByText("Топик:")).toBeTruthy();
+    expect(screen.queryByText("Топик:")).toBeNull();
     fireEvent.click(
       screen.getByRole("button", { name: "Открыть карточку топика beta" }),
     );
@@ -167,7 +179,7 @@ describe("compact context picker", () => {
     ).toBe("true");
     expect(screen.queryByRole("dialog")).toBeNull();
   });
-  it("places the current match first, searches names/branches and marks current activity without guessing legacy", () => {
+  it("keeps primary first and searches remaining topics without displaying current activity", () => {
     mount({
       runs: [
         run("active", beta, { status: "starting" }),
@@ -181,12 +193,10 @@ describe("compact context picker", () => {
     });
     open();
     const options = screen.getAllByRole("row");
-    expect(options).toHaveLength(4);
-    expect(options[0].getAttribute("aria-selected")).toBe("true");
-    expect(within(options[0]).getByText("beta")).toBeTruthy();
-    expect(within(options[0]).getByText("Текущий")).toBeTruthy();
-    expect(within(options[0]).getByText("● Конвейер")).toBeTruthy();
-    expect(options[0].getAttribute("aria-label")).toContain("Активных: 1");
+    expect(options).toHaveLength(3);
+    expect(options[0].textContent).toContain("Без топика");
+    expect(screen.queryByRole("row", { name: /^beta / })).toBeNull();
+    expect(screen.queryByText("● Конвейер")).toBeNull();
     fireEvent.change(screen.getByRole("combobox", { name: "Найти топик" }), {
       target: { value: "FEATURE/ALP" },
     });
@@ -214,23 +224,20 @@ describe("compact context picker", () => {
     expect(screen.getByText(/· 2025/)).toBeTruthy();
     expect(screen.queryByText("foreign")).toBeNull();
   });
-  it.each([["selected ready clone", beta]] as const)(
-    "keeps the current marker in the name/status cell for %s",
-    (_, selected) => {
-      mount({ selected });
-      open();
-      const current = screen.getAllByRole("row")[0];
-      const [nameCell, actionCell] = within(current).getAllByRole("gridcell");
-      const marker = within(current).getByText("Текущий");
-      expect(marker.closest(".topic-context-lines")).toBe(nameCell);
-      expect(within(actionCell).queryByText("Текущий")).toBeNull();
-      expect(
-        within(nameCell).getByText(selected ? "Готова" : "Нет копии"),
-      ).toBeTruthy();
-      expect(current.getAttribute("aria-label")).toContain("Текущий");
-      expect(current.getAttribute("aria-selected")).toBe("true");
-    },
-  );
+  it("shows readiness and row sync for another ready copy, not the current copy", () => {
+    mount({ selected: beta, knownContexts: [alpha, beta] });
+    open();
+    expect(screen.queryByRole("row", { name: /^beta / })).toBeNull();
+    const other = screen.getByRole("row", { name: /^alpha / });
+    const [nameCell, actionCell] = within(other).getAllByRole("gridcell");
+    expect(within(nameCell).getByText("Есть копия")).toBeTruthy();
+    expect(
+      within(actionCell).getByRole("button", {
+        name: /Синхронизировать коммиты/,
+      }),
+    ).toBeTruthy();
+    expect(other.getAttribute("aria-selected")).toBe("false");
+  });
   it("retains the useful explicit transition for an unprepared current primary", async () => {
     const view = mount({ selected: null });
     open();
@@ -254,7 +261,7 @@ describe("compact context picker", () => {
     const topic = "очень-длинное-название-топика-для-проверки-переноса-строк";
     const current = record(topic);
     mount({
-      selected: current,
+      selected: beta,
       knownContexts: [
         current,
         record(topic, { year: "2025", contextId: "old-long-owner" }),
@@ -262,14 +269,16 @@ describe("compact context picker", () => {
       runs: [run("one", current), run("two", current)],
     });
     open();
-    const row = screen.getAllByRole("row")[0];
+    const row = screen.getByRole("row", {
+      name: new RegExp(`^${topic} .*2026`),
+    });
     const [nameCell, actionCell] = within(row).getAllByRole("gridcell");
     expect(nameCell.querySelector("strong")?.textContent).toBe(
       `${topic} · 2026`,
     );
     expect(within(nameCell).getByText(`feature/${topic}`)).toBeTruthy();
     expect(within(nameCell).getByText("● Конвейер · ещё 1")).toBeTruthy();
-    expect(within(nameCell).getByText("Текущий")).toBeTruthy();
+    expect(within(nameCell).queryByText("Текущий")).toBeNull();
     expect(row.getAttribute("aria-label")).toContain("Активных: 2");
     expect(within(actionCell).getAllByRole("button")).toHaveLength(1);
     expect(
@@ -376,13 +385,13 @@ describe("compact context picker", () => {
     await act(async () => flight.resolve(alpha));
     expect(onSelect).toHaveBeenCalledExactlyOnceWith(alpha);
   });
-  it("keeping the already selected context invalidates an earlier pending choice", async () => {
+  it("returning to primary invalidates an earlier pending choice", async () => {
     const flight = deferred<WorktreeRecord>();
     api.ensureTopicContext.mockReturnValue(flight.promise);
     const { onSelect } = mount();
     open();
     choose("alpha");
-    choose("beta");
+    fireEvent.click(screen.getByRole("row", { name: /^Без топика / }));
     await act(async () => flight.resolve(alpha));
     expect(onSelect).not.toHaveBeenCalled();
     expect(api.ensureTopicContext).toHaveBeenCalledTimes(1);
@@ -393,7 +402,6 @@ describe("compact context picker", () => {
       board: {
         ...board,
         entries: [...board.entries].reverse(),
-        records: [...board.records].reverse(),
       },
     });
     open();
@@ -528,7 +536,7 @@ describe("compact context picker", () => {
     expect(search.getAttribute("aria-activedescendant")).toBe(
       screen.getAllByRole("row")[0].id,
     );
-    await user.keyboard("{End}{ArrowUp}{Enter}");
+    await user.keyboard("{End}{Enter}");
     await waitFor(() =>
       expect(api.ensureTopicContext).toHaveBeenCalledWith({
         projectId: "p",
@@ -684,10 +692,10 @@ it("has no duplicate transition buttons and keeps topic names brighter than bran
 });
 
 it("uses short readiness badges while retaining the full explanation for assistive users", () => {
-  mount();
+  mount({ selected: null, knownContexts: [beta] });
   open();
   const ready = screen.getByRole("row", { name: /^beta / });
-  expect(within(ready).getByText("Готова").getAttribute("title")).toBe(
+  expect(within(ready).getByText("Есть копия").getAttribute("title")).toBe(
     "Рабочая копия",
   );
   const absent = screen.getByRole("row", { name: /^alpha / });
@@ -780,5 +788,100 @@ it("does not steal focus back from an outside control when the native layer clos
     outside.remove();
     opener.mockRestore();
     vi.unstubAllGlobals();
+  }
+});
+
+it("loads the configured base only on explicit creation from a lightweight catalog", async () => {
+  const pending = deferred<TopicBoardSnapshot>();
+  const read = vi.fn(() => pending.promise),
+    create = vi.fn(async () => record("new-topic"));
+  Object.assign(api, { readTopicBoard: read, createTopicContext: create });
+  mount({
+    board: {
+      projectId: "p",
+      year: "2026",
+      entries: board.entries,
+      currentTopic: board.currentTopic,
+    },
+    onCreated: vi.fn(),
+  });
+  open();
+  expect(read).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByRole("combobox"), {
+    target: { value: "new-topic" },
+  });
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Создать «new-topic» и подготовить конвейер",
+    }),
+  );
+  await waitFor(() => expect(read).toHaveBeenCalled());
+  expect(create).not.toHaveBeenCalled();
+  await act(async () => pending.resolve({ ...board, baseRef: "release/base" }));
+  await waitFor(() =>
+    expect(create).toHaveBeenCalledWith({
+      projectId: "p",
+      year: "2026",
+      branch: "new-topic",
+      baseRef: "release/base",
+    }),
+  );
+});
+
+it("keeps its fallback picker open for its own overflow tooltip, but closes for a foreign tooltip", async () => {
+  Object.assign(api, { runRepositoryAction: vi.fn() });
+  const scrollHeight = vi
+    .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+    .mockReturnValue(160);
+  const clientHeight = vi
+    .spyOn(HTMLElement.prototype, "clientHeight", "get")
+    .mockReturnValue(40);
+  const user = userEvent.setup();
+  const foreign = document.createElement("div");
+  foreign.setAttribute("role", "tooltip");
+  foreign.id = "foreign-tooltip";
+  foreign.tabIndex = 0;
+  try {
+    mount({ knownContexts: [alpha, beta] });
+    open();
+    const sync = screen.getByRole("button", {
+      name: `Синхронизировать коммиты · ${alpha.topic}/${alpha.year}/${alpha.branch}`,
+    });
+    act(() => sync.focus());
+    await user.tab();
+    expect(screen.queryByRole("grid")).not.toBeNull();
+    const tooltip = screen.getByRole("tooltip");
+    expect(document.activeElement).toBe(tooltip);
+    document.body.append(foreign);
+    act(() => foreign.focus());
+    expect(screen.queryByRole("grid")).toBeNull();
+  } finally {
+    foreign.remove();
+    scrollHeight.mockRestore();
+    clientHeight.mockRestore();
+  }
+});
+
+it("keeps the fallback picker open on its own tooltip scrollbar pointerdown, not a foreign tooltip", () => {
+  Object.assign(api, { runRepositoryAction: vi.fn() });
+  const foreign = document.createElement("div");
+  foreign.setAttribute("role", "tooltip");
+  foreign.id = "foreign-pointer-tooltip";
+  try {
+    mount({ knownContexts: [alpha, beta] });
+    open();
+    const sync = screen.getByRole("button", {
+      name: `Синхронизировать коммиты · ${alpha.topic}/${alpha.year}/${alpha.branch}`,
+    });
+    fireEvent.mouseEnter(sync);
+    const tooltip = screen.getByRole("tooltip");
+    fireEvent.pointerDown(tooltip);
+    expect(screen.queryByRole("grid")).not.toBeNull();
+    expect(screen.getByRole("tooltip")).toBe(tooltip);
+    document.body.append(foreign);
+    fireEvent.pointerDown(foreign);
+    expect(screen.queryByRole("grid")).toBeNull();
+  } finally {
+    foreign.remove();
   }
 });

@@ -1,6 +1,7 @@
 import { useId } from "react";
 import type { TopicContextIdentity, WorktreeRecord } from "../shared/worktrees";
 import { contextRef } from "./topic-context";
+import { RepositoryActions } from "./RepositoryActions";
 import {
   topicSyncLabel,
   topicSyncPending,
@@ -10,6 +11,30 @@ import {
 
 /** Sibling of transition, not a selection action. Its owner is always this row. */
 export function TopicQuickSync({
+  identity,
+  record,
+  onStarted,
+}: {
+  identity: TopicContextIdentity;
+  record?: WorktreeRecord;
+  onStarted?: () => void;
+}) {
+  if (typeof window.goga.runRepositoryAction === "function" && record)
+    return (
+      <RepositoryActions
+        project={{
+          id: record.projectId,
+          name: record.projectPath.split("/").pop() || "Проект",
+          path: record.projectPath,
+        }}
+        selected={record}
+        onlySync
+        onStarted={onStarted}
+      />
+    );
+  return <LegacyTopicQuickSync identity={identity} record={record} />;
+}
+function LegacyTopicQuickSync({
   identity,
   record,
 }: {

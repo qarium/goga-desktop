@@ -1,4 +1,11 @@
 import {
+  readCatalogCache,
+  writeCatalogCache,
+  readWorkspaceSelection,
+  writeWorkspaceSelection,
+  type DisplayCatalog,
+} from "./topic-display-cache";
+import {
   matchesWorkspace,
   runMatchesWorkspace,
   workspacePath,
@@ -37,6 +44,11 @@ import {
   type ProjectSettingsGuard,
 } from "./ProjectSettings";
 import { TopicContextPicker } from "./TopicContextPicker";
+import {
+  RepositoryActions,
+  RepositoryOperationPopup,
+} from "./RepositoryActions";
+import { useRepositoryActionController } from "./repository-action-controller";
 import { ContextRuns } from "./ContextRuns";
 import { ContextLaunchMenu } from "./ContextLaunchMenu";
 import {
@@ -48,7 +60,10 @@ import {
   type RunKind,
 } from "./topic-context";
 import type { TopicContextIdentity, WorktreeRecord } from "../shared/worktrees";
-import { topicContextRefSchema } from "../shared/worktrees";
+import {
+  topicContextRefSchema,
+  worktreeRecordSchema,
+} from "../shared/worktrees";
 import { TOPIC_CONTEXT_PREPARE_TIMEOUT_MS } from "../shared/worktree-capabilities";
 
 import { TopicsWorkspace } from "./TopicsWorkspace";
@@ -98,6 +113,11 @@ const ambiguousContextReason =
   "Несколько рабочих копий соответствуют этому топику. Выберите конкретную проверенную копию в шапке; запуск не будет назначен автоматически.";
 
 export function App() {
+  const repositoryPopupAnchor = useRef<HTMLDivElement>(null);
+  const repositoryActions = useRepositoryActionController();
+  useEffect(() => {
+    if (repositoryActions.revision) topicsChanged();
+  }, [repositoryActions.revision]);
   const draftStore = useRef(createDraftStore());
   const buildDrafts = useRef(createBuildDrafts());
   const [repeatPending, setRepeatPending] = useState<Run | null>(null);
@@ -133,6 +153,9 @@ export function App() {
   const [contextSelections, setContextSelections] = useState<
     Record<string, WorktreeRecord | null>
   >({});
+  const restoration = useRef(new Map<string, WorktreeRecord>());
+  const contextSelectionsRef = useRef(contextSelections);
+  contextSelectionsRef.current = contextSelections;
   const selectedContext = contextSelections[projectId] ?? null;
   const selectedContextRef = useRef(selectedContext);
   selectedContextRef.current = selectedContext;
@@ -186,8 +209,7 @@ export function App() {
         ...knownContexts,
         ...Object.values(contextSelections),
       ].find(
-        (record) =>
-          record != null && contextKey(record) === contextKey(ref),
+        (record) => record != null && contextKey(record) === contextKey(ref),
       );
       // History remains viewable even if its clone has disappeared. Never ensure
       // or recreate a working copy merely to show recorded output.
@@ -232,7 +254,7 @@ export function App() {
     launchSettingsBusy || documentsBusy || topicsBusy || repeatBusy;
   const topicsStore = useRef(createTopicsStore());
   const [topicsRevision, setTopicsRevision] = useState(0);
-  const [currentTopics, setCurrentTopics] = useState<TopicBoardSnapshot | null>(
+  const [currentTopics, setCurrentTopics] = useState<DisplayCatalog | null>(
     null,
   );
   const [currentTopicsError, setCurrentTopicsError] = useState("");
@@ -431,7 +453,11 @@ export function App() {
         return;
       }
       const inCurrentWorkspace = (r: Run) =>
-        runMatchesWorkspace(r, projectIdRef.current, selectedContextRef.current);
+        runMatchesWorkspace(
+          r,
+          projectIdRef.current,
+          selectedContextRef.current,
+        );
       const siblings = previous.filter(inCurrentWorkspace);
       const index = siblings.findIndex((r) => r.id === id);
       const order = [
@@ -497,7 +523,8 @@ export function App() {
   const read = useReadScope(projectId);
   const project = projects.find((p) => p.id === projectId),
     run = runs.find(
-      (r) => r.id === selected && runMatchesWorkspace(r, projectId, selectedContext),
+      (r) =>
+        r.id === selected && runMatchesWorkspace(r, projectId, selectedContext),
     );
   const displayedPath = workspacePath(project, selectedContext);
   useEffect(() => {
@@ -505,6 +532,15 @@ export function App() {
     readRequest("listProjects").then(
       (p) => {
         if (alive) {
+          const saved: Record<string, WorktreeRecord | null> = {};
+          for (const project of p) {
+            const record = readWorkspaceSelection(project);
+            if (record !== undefined) {
+              saved[project.id] = record;
+              if (record) restoration.current.set(project.id, record);
+            }
+          }
+          setContextSelections((previous) => ({ ...saved, ...previous }));
           setProjects(p);
           setProjectId(p[0]?.id ?? "");
         }
@@ -545,6 +581,55 @@ export function App() {
       failed();
     };
   }, []);
+  useEffect(() => {
+    for (const project of projects) {
+      if (Object.prototype.hasOwnProperty.call(contextSelections, project.id))
+        writeWorkspaceSelection(project, contextSelections[project.id]);
+    }
+  }, [projects, contextSelections]);
+  useEffect(() => {
+    const saved = restoration.current.get(projectId);
+    if (!saved || contextSelectionsRef.current[projectId] !== saved) return;
+    let alive = true;
+    const fail = (e: unknown) => {
+      if (!alive || contextSelectionsRef.current[projectId] !== saved) return;
+      restoration.current.delete(projectId);
+      setContextSelections((previous) =>
+        previous[projectId] === saved
+          ? { ...previous, [projectId]: { ...saved, preparation: undefined } }
+          : previous,
+      );
+      setError(
+        `Не удалось восстановить выбранный топик «${saved.topic}»: ${message(e)}. Основная папка не выбрана вместо него.`,
+      );
+    };
+    void readRequest("resolveTopicContext", contextRef(saved))
+      .then((value) => {
+        const record = worktreeRecordSchema.parse(value);
+        if (
+          contextKey(record) !== contextKey(saved) ||
+          record.revision !== saved.revision ||
+          record.projectPath !== saved.projectPath ||
+          record.state !== "ready" ||
+          record.storageKind !== "clone" ||
+          record.ownership !== "managed" ||
+          record.preparation ||
+          record.deletedAt
+        )
+          throw Error("Сохранённая копия недоступна или изменилась");
+        if (!alive || contextSelectionsRef.current[projectId] !== saved) return;
+        restoration.current.delete(projectId);
+        setContextSelections((previous) =>
+          previous[projectId] === saved
+            ? { ...previous, [projectId]: record }
+            : previous,
+        );
+      })
+      .catch(fail);
+    return () => {
+      alive = false;
+    };
+  }, [projectId]);
   useEffect(() => {
     if (page === "project" && run) setProjectId(run.projectId);
   }, [selected]);
@@ -723,12 +808,28 @@ export function App() {
   ]);
   useEffect(() => {
     let alive = true;
-    setCurrentTopics(null);
+    const year = String(new Date().getFullYear());
+    setCurrentTopics(project ? readCatalogCache(project, year) : null);
     setCurrentTopicsError("");
-    if (!project || typeof window.goga.readTopicBoard !== "function") return;
-    read("readTopicBoard", project.id, String(new Date().getFullYear())).then(
+    if (!project) return;
+    const request =
+      typeof window.goga.readTopicCatalog === "function"
+        ? read("readTopicCatalog", project.id, year)
+        : typeof window.goga.readTopicBoard === "function"
+          ? read("readTopicBoard", project.id, year)
+          : null;
+    if (!request) return;
+    request.then(
       (b) => {
-        if (alive) setCurrentTopics(b);
+        if (!alive) return;
+        if (b.projectId !== project.id || b.year !== year) {
+          setCurrentTopicsError(
+            "Список топиков относится к другому проекту или году.",
+          );
+          return;
+        }
+        writeCatalogCache(project, b);
+        setCurrentTopics(b);
       },
       (e) => {
         if (alive) setCurrentTopicsError(topicError(e));
@@ -788,10 +889,20 @@ export function App() {
           ? "Рабочая копия не готова к запуску. Выберите проверенный автономный клон."
           : ""
     : "";
-  const launchUnavailable = contextUnavailable ||
+  const launchUnavailable =
+    contextUnavailable ||
     workspaceLaunchBlockReason(runs, projectId, selectedContext, "pipeline");
   function prepareFromHeader(kind: RunKind) {
-    if (contextUnavailable || workspaceLaunchBlockReason(runsRef.current, projectId, selectedContext, kind)) return;
+    if (
+      contextUnavailable ||
+      workspaceLaunchBlockReason(
+        runsRef.current,
+        projectId,
+        selectedContext,
+        kind,
+      )
+    )
+      return;
     if (selectedContext) showContextPreparation(kind, selectedContext);
     else if (kind === "build") showBuild(projectId);
     else showLaunch(projectId);
@@ -894,12 +1005,17 @@ export function App() {
         </small>
       </aside>
       <main className="main-area">
-        <div className="project-bar">
+        <div className="project-bar" ref={repositoryPopupAnchor}>
           <div className="project-heading">
+            <span className="eyebrow">
+              Мой компьютер / {page === "settings" ? "НАСТРОЙКИ" : "ПРОЕКТ"}
+            </span>
             <div className="project-heading-context">
-              <span className="eyebrow">
-                Мой компьютер / {page === "settings" ? "НАСТРОЙКИ" : "ПРОЕКТ"}
-              </span>
+              <h1 title={page === "settings" ? "Настройки" : project?.name}>
+                {page === "settings"
+                  ? "Настройки"
+                  : (project?.name ?? "Goga Desktop")}
+              </h1>
               {page !== "settings" && project && (
                 <TopicContextPicker
                   key={project.id}
@@ -975,19 +1091,21 @@ export function App() {
                         project,
                         year,
                         target,
-                        board: currentTopics,
+                        board: null,
                         context: { kind: "topic" },
                       }),
                     )
                   }
                 />
               )}
+              {page !== "settings" && project && (
+                <RepositoryActions
+                  project={project}
+                  selected={selectedContext}
+                  disabled={settingsBusy}
+                />
+              )}
             </div>
-            <h1 title={page === "settings" ? "Настройки" : project?.name}>
-              {page === "settings"
-                ? "Настройки"
-                : (project?.name ?? "Goga Desktop")}
-            </h1>
           </div>
           {error && (
             <p className="close-error" role="alert" title={error}>
@@ -1028,6 +1146,7 @@ export function App() {
               />
             </div>
           )}
+          <RepositoryOperationPopup anchor={repositoryPopupAnchor} />
         </div>
         {!visibleRun && catalogError}
         {page === "settings" && (
@@ -1069,11 +1188,13 @@ export function App() {
               ] as const
             ).flatMap(([ids, kind]) =>
               preparationEntries(ids)
-                .filter(
-                  ({ project: ownerProject, owner }) =>
-                    matchesWorkspace(
-                      ownerProject.id, owner, projectId, selectedContext,
-                    ),
+                .filter(({ project: ownerProject, owner }) =>
+                  matchesWorkspace(
+                    ownerProject.id,
+                    owner,
+                    projectId,
+                    selectedContext,
+                  ),
                 )
                 .map(({ id, owner }) => {
                   const label =
@@ -1258,7 +1379,7 @@ export function App() {
                             branch: run.branch,
                             remote: false,
                           },
-                          board: currentTopics,
+                          board: null,
                           context: { kind: "run", run },
                         })
                       }
@@ -1322,7 +1443,10 @@ export function App() {
                         repeatBusy ||
                         !!contextUnavailable ||
                         !!workspaceLaunchBlockReason(
-                          runs, run.projectId, run.context ?? null, "build",
+                          runs,
+                          run.projectId,
+                          run.context ?? null,
+                          "build",
                         )
                       }
                       onClick={() => void repeatBuild(run)}
@@ -1461,7 +1585,10 @@ export function App() {
                     ]);
                     if (
                       workspaceLaunchBlockReason(
-                        runsRef.current, record.projectId, record, initialPreparation.kind,
+                        runsRef.current,
+                        record.projectId,
+                        record,
+                        initialPreparation.kind,
                       )
                     )
                       setPage("context-runs");
@@ -1512,7 +1639,12 @@ export function App() {
                   hidden={
                     page !== "build" ||
                     activeDraft !== id ||
-                    !matchesWorkspace(buildProject.id, owner, projectId, selectedContext)
+                    !matchesWorkspace(
+                      buildProject.id,
+                      owner,
+                      projectId,
+                      selectedContext,
+                    )
                   }
                   id={`build-draft-panel-${encodeURIComponent(id)}`}
                   role="tabpanel"
@@ -1528,9 +1660,19 @@ export function App() {
                     suspended={
                       page !== "build" ||
                       activeDraft !== id ||
-                      !matchesWorkspace(buildProject.id, owner, projectId, selectedContext)
+                      !matchesWorkspace(
+                        buildProject.id,
+                        owner,
+                        projectId,
+                        selectedContext,
+                      )
                     }
-                    blocked={workspaceLaunchBlockReason(runs, buildProject.id, owner ?? null, "build")}
+                    blocked={workspaceLaunchBlockReason(
+                      runs,
+                      buildProject.id,
+                      owner ?? null,
+                      "build",
+                    )}
                     revision={JSON.stringify([
                       settingsRevision[buildProject.id],
                       settingsDocuments.projectRevision(
@@ -1545,11 +1687,15 @@ export function App() {
                       if (!runsRef.current.some((i) => i.id === r.id))
                         applyRuns([...runsRef.current, r]);
                       if (
-                        stale || !matchesWorkspace(
-                          buildProject.id, owner,
-                          projectIdRef.current, selectedContextRef.current,
+                        stale ||
+                        !matchesWorkspace(
+                          buildProject.id,
+                          owner,
+                          projectIdRef.current,
+                          selectedContextRef.current,
                         )
-                      ) return;
+                      )
+                        return;
                       if (owner || repeatSeeds[id])
                         setOpenBuilds((values) => {
                           const next = new Set(values);
@@ -1579,7 +1725,12 @@ export function App() {
                   hidden={
                     page !== "launch" ||
                     activeDraft !== id ||
-                    !matchesWorkspace(launchProject.id, owner, projectId, selectedContext)
+                    !matchesWorkspace(
+                      launchProject.id,
+                      owner,
+                      projectId,
+                      selectedContext,
+                    )
                   }
                   id={`pipeline-draft-panel-${encodeURIComponent(id)}`}
                   role="tabpanel"
@@ -1597,7 +1748,12 @@ export function App() {
                     suspended={
                       page !== "launch" ||
                       activeDraft !== id ||
-                      !matchesWorkspace(launchProject.id, owner, projectId, selectedContext) ||
+                      !matchesWorkspace(
+                        launchProject.id,
+                        owner,
+                        projectId,
+                        selectedContext,
+                      ) ||
                       !!topicCard
                     }
                     preparedTopic={
@@ -1616,9 +1772,7 @@ export function App() {
                         year: String(new Date().getFullYear()),
                         target,
                         board:
-                          isNew || projectId !== launchProject.id
-                            ? null
-                            : currentTopics,
+                          isNew || projectId !== launchProject.id ? null : null,
                         context: {
                           kind: "preparation",
                           text,
@@ -1629,7 +1783,12 @@ export function App() {
                     }
                     key={id}
                     owner={owner ? contextRef(owner) : undefined}
-                    blocked={workspaceLaunchBlockReason(runs, launchProject.id, owner ?? null, "pipeline")}
+                    blocked={workspaceLaunchBlockReason(
+                      runs,
+                      launchProject.id,
+                      owner ?? null,
+                      "pipeline",
+                    )}
                     draftStore={draftStore.current}
                     project={launchProject}
                     onCancel={() => closeLaunch(id)}
@@ -1639,10 +1798,15 @@ export function App() {
                       // is blocked. Only the current guard may leave the editor.
                       if (r && !runsRef.current.some((i) => i.id === r.id))
                         applyRuns([...runsRef.current, r]);
-                      if (!matchesWorkspace(
-                        launchProject.id, owner,
-                        projectIdRef.current, selectedContextRef.current,
-                      )) return;
+                      if (
+                        !matchesWorkspace(
+                          launchProject.id,
+                          owner,
+                          projectIdRef.current,
+                          selectedContextRef.current,
+                        )
+                      )
+                        return;
                       if (stale && pageRef.current !== "project-settings")
                         return;
                       if (owner)

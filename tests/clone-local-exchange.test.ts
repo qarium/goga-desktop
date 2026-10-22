@@ -77,10 +77,7 @@ async function fixture(withTask = true) {
     command: async (exe, args, cwd, overrides, stdin) => {
       if (exe !== "git" || !cwd.startsWith(root + path.sep))
         throw new Error("Non-fixture/native execution forbidden");
-      if (
-        args.some((a) => /^(?:https?|ssh|git):\/\//.test(a)) ||
-        args.includes("push")
-      )
+      if (args.some((a) => /^(?:https?|ssh|git):\/\//.test(a)))
         throw new Error("External transport forbidden");
       calls.push({ args: [...args], cwd });
       return node.command(exe, args, cwd, { ...env, ...overrides }, stdin);
@@ -194,17 +191,19 @@ function noMutation(f: Fixture) {
           "switch",
           "rebase",
           "cherry-pick",
-          "push",
           "--force",
           "-f",
         ].includes(a),
       ),
     ),
   ).toEqual([]);
-  for (const call of f.calls.filter(({ args }) => args.includes("fetch"))) {
-    expect(call.cwd).toBe(f.repo);
-    expect(call.args).toContain(f.owner.path);
-    expect(call.args).toContain("--no-write-fetch-head");
+  for (const call of f.calls.filter(({ args }) => args.includes("push"))) {
+    expect(call.cwd).toBe(f.owner.path);
+    expect(call.args).toContain("origin");
+    expect(call.args.at(-1)?.split(":")).toEqual([
+      expect.stringMatching(/^[a-f0-9]{40}(?:[a-f0-9]{24})?$/),
+      `refs/heads/${f.owner.branch}`,
+    ]);
     expect(call.args.some((a) => /^\+/.test(a))).toBe(false);
   }
 }
@@ -212,6 +211,9 @@ async function synced(f: Fixture) {
   const state = await f.service.syncTopicContext(f.ref);
   expect(state.status, state.error).toBe("synced");
   expect(state.importedOid).toBe(f.cloneOid);
+  expect(await f.git(["rev-parse", `refs/heads/${f.owner.branch}`])).toBe(
+    f.cloneOid,
+  );
   return state;
 }
 async function allowedPreview(f: Fixture) {
@@ -241,8 +243,29 @@ async function unchanged(
   primary: Awaited<ReturnType<typeof snapshot>>,
   clone: Awaited<ReturnType<typeof snapshot>>,
 ) {
-  expect(await snapshot(f)).toEqual(primary);
-  expect(await snapshot(f, f.owner.path)).toEqual(clone);
+  const pushedOid = f.calls
+    .filter(({ args }) => args.includes("push"))
+    .at(-1)
+    ?.args.at(-1)
+    ?.split(":")[0];
+  const pushed = !!pushedOid;
+  const withRef = (before: typeof primary, ref: string) => ({
+    ...before,
+    refs: [
+      ...before.refs
+        .split("\n")
+        .filter((row) => row && !row.startsWith(ref + " ")),
+      `${ref} ${pushedOid}`,
+    ]
+      .sort()
+      .join("\n"),
+  });
+  expect(await snapshot(f)).toEqual(
+    pushed ? withRef(primary, `refs/heads/${f.owner.branch}`) : primary,
+  );
+  expect(await snapshot(f, f.owner.path)).toEqual(
+    pushed ? withRef(clone, `refs/remotes/origin/${f.owner.branch}`) : clone,
+  );
   noMutation(f);
 }
 
@@ -296,13 +319,13 @@ describe("clone-local exchange: sync is not apply", () => {
       await unchanged(f, before, cloneBefore);
     },
   );
-  it("queues active-owner sync and later imports without applying", async () => {
+  it("manually syncs active owner immediately without applying working files", async () => {
     const f = await fixture(),
       before = await snapshot(f),
       cloneBefore = await snapshot(f, f.owner.path);
     activeRun(f, "clone");
-    expect((await f.service.syncTopicContext(f.ref)).status).toBe("waiting");
-    expect(await destinationRefs(f)).toBe("");
+    expect((await f.service.syncTopicContext(f.ref)).status).toBe("synced");
+    expect(await destinationRefs(f)).not.toBe("");
     runs(f.service).runList = [];
     await synced(f);
     await unchanged(f, before, cloneBefore);
@@ -516,9 +539,7 @@ describe("clone-local exchange: explicit apply protections", () => {
     expect(merges[0].args).toContain(f.cloneOid);
     expect(
       f.calls.some(({ args }) =>
-        args.some((a) =>
-          ["reset", "stash", "clean", "push", "--force"].includes(a),
-        ),
+        args.some((a) => ["reset", "stash", "clean", "--force"].includes(a)),
       ),
     ).toBe(false);
   });

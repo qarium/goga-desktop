@@ -8,6 +8,17 @@ import {
 import { createPortal } from "react-dom";
 import "./TopicPickerPopup.css";
 
+let activePopup: { close: () => void; release: () => Promise<void> } | null =
+  null;
+/** Electron admits one native overlay. Wait for its host acknowledgement, not
+ * just React unmount, before replacing a selector with an operation error. */
+export async function dismissActiveTopicPopup() {
+  const active = activePopup;
+  if (!active) return;
+  active.close();
+  await active.release();
+}
+
 export function hasNativeTopicPopup() {
   return (
     typeof window.goga.setTopicPopupBounds === "function" &&
@@ -24,10 +35,12 @@ export function TopicPickerPopup({
   anchor,
   onClose,
   children,
+  label = "Выбор топика",
 }: {
   anchor: RefObject<HTMLDivElement | null>;
   onClose: () => void;
   children: ReactNode;
+  label?: string;
 }) {
   const native = hasNativeTopicPopup();
   const close = useRef(onClose);
@@ -64,9 +77,18 @@ export function TopicPickerPopup({
     const off = api.onTopicPopupClosed!((closedId) => {
       if (!disposed && closedId === id) close.current();
     });
-    const release = () => {
-      void api.closeTopicPopup!(id).catch(() => {});
+    let released: Promise<void> | null = null;
+    const release = () =>
+      (released ??= api.closeTopicPopup!(id).finally(() => {
+        if (activePopup === active) activePopup = null;
+      }));
+    const active = {
+      close: () => {
+        if (!disposed) close.current();
+      },
+      release,
     };
+    activePopup = active;
     const state = {
       id,
       alive: true,
@@ -74,7 +96,7 @@ export function TopicPickerPopup({
         if (disposed || !state.alive) return;
         state.alive = false;
         off();
-        release();
+        void release().catch(() => {});
         setContainer(null);
         setError(failureMessage);
       },
@@ -93,7 +115,7 @@ export function TopicPickerPopup({
       const doc = popup.document;
       doc.documentElement.lang = document.documentElement.lang || "ru";
       doc.documentElement.classList.add("topic-popup-document");
-      doc.title = "Выбор топика";
+      doc.title = label;
       const links = [
         ...document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'),
       ];
@@ -137,7 +159,7 @@ export function TopicPickerPopup({
       clearTimeout(timer);
       for (const remove of listeners) remove();
       off();
-      release();
+      void release().catch(() => {});
     };
   }, [native, anchor]);
 

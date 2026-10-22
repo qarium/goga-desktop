@@ -1,6 +1,7 @@
+import { DesktopStateStore } from "../src/host/desktop-state";
 import { CloneStore } from "../src/host/clone-store";
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
 import path from "node:path";
 import { HostService } from "../src/host/service";
 import { CloneManager } from "../src/host/clones";
@@ -73,7 +74,14 @@ async function fixture() {
     runner: runner as any,
   });
   vi.spyOn(service, "listProjects").mockResolvedValue([project]);
-  return { service, record, ref: worktreeContextRef(record), runner, project };
+  return {
+    service,
+    record,
+    ref: worktreeContextRef(record),
+    runner,
+    project,
+    home,
+  };
 }
 it("resolves relative plans only in the owned clone, without replacing Project.path", async () => {
   const f = await fixture();
@@ -128,4 +136,101 @@ it("recovers a partial deletion by durable token without resolving deleting owne
     "archived",
   );
   await f.service.dispose();
+});
+
+it("resolves and edits Dockerfile in exact clone only; unavailable clone never falls back", async () => {
+  const f = await fixture();
+  await new DesktopStateStore(f.home, path.join(f.home, "data")).addProject(
+    f.project,
+  );
+  const original = f.runner.command.getMockImplementation()!;
+  f.runner.command.mockImplementation(async (exe, args, cwd) =>
+    args.join(" ") === "config dockerfile"
+      ? { stdout: "# dockerfile\nDockerfile\n", stderr: "" }
+      : original(exe, args, cwd),
+  );
+  await writeFile(path.join(f.record.path, "Dockerfile"), "FROM clone");
+  await writeFile(path.join(f.project.path, "Dockerfile"), "FROM primary");
+  expect(await f.service.resolveProjectDockerfile(f.ref)).toEqual({
+    relativePath: "Dockerfile",
+    configured: true,
+  });
+  const target = { kind: "dockerfile", path: "Dockerfile" } as const;
+  const before = await f.service.readProjectDocument(f.ref, target);
+  expect(before.text).toBe("FROM clone");
+  await f.service.saveProjectDocument(
+    f.ref,
+    target,
+    "FROM edited",
+    before.version,
+  );
+  expect(
+    f.runner.command.mock.calls
+      .filter((c) => c[1].join(" ") === "config dockerfile")
+      .every((c) => c[2] === f.record.path),
+  ).toBe(true);
+  expect((await f.service.readProjectDocument("p", target)).text).toBe(
+    "FROM primary",
+  );
+  vi.mocked(CloneManager.prototype.resolve).mockRejectedValue(
+    Error("Клон отсутствует"),
+  );
+  await expect(f.service.resolveProjectDockerfile(f.ref)).rejects.toThrow(
+    /Клон/,
+  );
+  await expect(
+    f.service.saveProjectDocument(f.ref, target, "bad", before.version),
+  ).rejects.toThrow(/Клон/);
+  await f.service.dispose();
+});
+
+it("rejects an owner changed during the final Dockerfile config guard before disk replacement", async () => {
+  const f = await fixture();
+  await new DesktopStateStore(f.home, path.join(f.home, "data")).addProject(
+    f.project,
+  );
+  const original = f.runner.command.getMockImplementation()!;
+  let configCalls = 0,
+    changeOwner = false;
+  f.runner.command.mockImplementation(async (exe, args, cwd) => {
+    if (args.join(" ") !== "config dockerfile") return original(exe, args, cwd);
+    if (changeOwner && ++configCalls === 3) {
+      vi.mocked(CloneManager.prototype.resolve).mockResolvedValue({
+        ...f.record,
+        path: f.record.path + "-replaced",
+      });
+    }
+    return { stdout: "# dockerfile\nDockerfile\n", stderr: "" };
+  });
+  await writeFile(path.join(f.record.path, "Dockerfile"), "FROM clone");
+  await writeFile(path.join(f.project.path, "Dockerfile"), "FROM primary");
+  await writeFile(
+    path.join(f.record.path, ".goga/config.yml"),
+    "unchanged: true\n",
+  );
+  const target = { kind: "dockerfile", path: "Dockerfile" } as const;
+  const before = await f.service.readProjectDocument(f.ref, target);
+  changeOwner = true;
+  try {
+    await expect(
+      f.service.saveProjectDocument(
+        f.ref,
+        target,
+        "FROM draft",
+        before.version,
+      ),
+    ).rejects.toThrow(/Контекст изменился/);
+    expect(configCalls).toBe(3);
+    expect(await readFile(path.join(f.record.path, "Dockerfile"), "utf8")).toBe(
+      "FROM clone",
+    );
+    expect(
+      await readFile(path.join(f.project.path, "Dockerfile"), "utf8"),
+    ).toBe("FROM primary");
+    expect(
+      await readFile(path.join(f.record.path, ".goga/config.yml"), "utf8"),
+    ).toBe("unchanged: true\n");
+  } finally {
+    await f.service.dispose();
+  }
 });

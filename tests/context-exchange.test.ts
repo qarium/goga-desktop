@@ -4,6 +4,7 @@ import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { ContextExchangeManager } from "../src/host/context-exchange";
 import { CloneManager } from "../src/host/clones";
+import { seedLegacyPublication } from "./helpers/legacy-publication";
 import { CloneStore, managedCloneLocation } from "../src/host/clone-store";
 import {
   worktreeContextRef,
@@ -272,10 +273,11 @@ describe("immutable incoming base", () => {
 });
 
 describe("genuine upstream publication policy", () => {
-  it("explicit preparation enables only the registered primary origin and persists a private hash-only policy", async () => {
+  it("reuses a historical trusted external origin and its private hash-only policy", async () => {
     const f = await fixture();
     await f.git(["remote", "add", "origin", f.upstream]);
     const before = await state(f);
+    await seedLegacyPublication(f.record, f.git);
     const prepared = await f.manager.preparePublication(f.ref, {
       action: "publish",
     });
@@ -354,6 +356,7 @@ describe("genuine upstream publication policy", () => {
       "origin",
       "https://alice:secret@example.invalid/original.git?token=hidden",
     ]);
+    await seedLegacyPublication(f.record, f.git);
     const prepared = await f.manager.preparePublication(f.ref, {
       action: "publish",
     });
@@ -415,6 +418,7 @@ describe("genuine upstream publication policy", () => {
     await f.git(["commit", "-am", "advance"]);
     const before = await state(f),
       cloneBefore = await state(f, f.record.path);
+    await seedLegacyPublication(f.record, f.git);
     const prepared = await f.manager.preparePublication(f.ref, {
       action: "propagate",
       baseRef: "main",
@@ -458,6 +462,7 @@ describe("genuine upstream publication policy", () => {
         })
     ).stdout.trim();
     await f.git(["update-ref", "refs/heads/main", divergent], f.record.path);
+    await seedLegacyPublication(f.record, f.git);
     await expect(
       f.manager.preparePublication(f.ref, {
         action: "propagate",
@@ -479,6 +484,7 @@ describe("publication guard continuity", () => {
       "remote.origin.pushurl",
       "ssh://alice:secret@push.example.invalid/namespace/repo.git?token=hidden",
     ]);
+    await seedLegacyPublication(f.record, f.git);
     const prepared = await f.manager.preparePublication(f.ref, {
       action: "publish",
     });
@@ -491,6 +497,7 @@ describe("publication guard continuity", () => {
   it("allows policy reuse but rejects changed clone pushurl and changed owner revision before native execution", async () => {
     const f = await fixture();
     await f.git(["remote", "add", "origin", f.upstream]);
+    await seedLegacyPublication(f.record, f.git);
     const snapshot = await f.manager.preparePublication(f.ref, {
       action: "update",
     });
@@ -517,6 +524,7 @@ describe("publication guard continuity", () => {
   it("rejects copied policy from another clone and unsafe origin options", async () => {
     const f = await fixture();
     await f.git(["remote", "add", "origin", f.upstream]);
+    await seedLegacyPublication(f.record, f.git);
     await f.manager.preparePublication(f.ref, { action: "publish" });
     const file = path.join(
         f.record.gitCommonDir,
@@ -567,6 +575,7 @@ describe("publication guard continuity", () => {
     await f.git(["branch", "main"], f.record.path);
     await fs.writeFile(path.join(f.repo, "base"), "newer\n");
     await f.git(["commit", "-am", "newer"]);
+    await seedLegacyPublication(f.record, f.git);
     const snapshot = await f.manager.preparePublication(f.ref, {
       action: "propagate",
       baseRef: "main",
@@ -588,6 +597,7 @@ describe("publication guard continuity", () => {
 it("prepares with the real locking CloneManager resolver and an owner-bound native environment callback", async () => {
   const f = await fixture();
   await f.git(["remote", "add", "origin", f.upstream]);
+  await seedLegacyPublication(f.record, f.git);
   const manager = f.scope.own(
     new ContextExchangeManager(f.home, f.runner, {
       ...f.deps,
@@ -689,6 +699,7 @@ it("preserves tracked, staged and untracked dirty bytes for commits-only publish
     await fs.writeFile(path.join(f.record.path, "untracked"), "untracked\n");
     const before = await state(f, f.record.path),
       primaryBefore = await state(f);
+    await seedLegacyPublication(f.record, f.git);
     const snapshot = await f.manager.preparePublication(f.ref, {
       action,
       ...(action === "propagate" ? { baseRef: "main" } : {}),
@@ -716,6 +727,14 @@ describe("physical origin policy versus final native environment", () => {
     await f.git(["remote", "add", "origin", alias]);
     const config = path.join(f.home, "project-native.gitconfig");
     await fs.writeFile(config, `[url "${genuine}"]\n\tinsteadOf = ${alias}\n`);
+    await seedLegacyPublication(f.record, f.git, async (args, cwd) =>
+      (
+        await f.runner.command("git", args, cwd, {
+          ...f.env,
+          GIT_CONFIG_GLOBAL: config,
+        })
+      ).stdout.trim(),
+    );
     const manager = f.scope.own(
       new ContextExchangeManager(f.home, f.runner, {
         ...f.deps,
@@ -747,6 +766,14 @@ describe("physical origin policy versus final native environment", () => {
     await f.git(["remote", "add", "origin", alias]);
     const config = path.join(f.home, "project-native.gitconfig");
     await fs.writeFile(config, `[url "${genuine}"]\n\tinsteadOf = ${alias}\n`);
+    await seedLegacyPublication(f.record, f.git, async (args, cwd) =>
+      (
+        await f.runner.command("git", args, cwd, {
+          ...f.env,
+          GIT_CONFIG_GLOBAL: config,
+        })
+      ).stdout.trim(),
+    );
     const manager = f.scope.own(
       new ContextExchangeManager(f.home, f.runner, {
         ...f.deps,
@@ -787,4 +814,32 @@ describe("physical origin policy versus final native environment", () => {
       /недоступ|конфликт|измен/i,
     );
   });
+});
+
+describe("local origin publication boundary", () => {
+  it.each([false, true])(
+    "does not enable an external upstream when local origin exists=%s",
+    async (hasOrigin) => {
+      const f = await fixture();
+      await f.git(["remote", "add", "origin", f.upstream]);
+      if (hasOrigin)
+        await f.git(["remote", "add", "origin", f.repo], f.record.path);
+      const before = await fs.readFile(
+        path.join(f.record.gitCommonDir, "config"),
+        "utf8",
+      );
+      await expect(
+        f.manager.preparePublication(f.ref, { action: "publish" }),
+      ).rejects.toThrow(/локальн.*origin|origin.*локальн|синхронизац/i);
+      expect(
+        await fs.readFile(path.join(f.record.gitCommonDir, "config"), "utf8"),
+      ).toBe(before);
+      expect(
+        f.calls.some(
+          (call) => call.args.includes("push") || call.args.includes("fetch"),
+        ),
+      ).toBe(false);
+      expect((await f.clones.reconcile(f.project.id))[0].state).toBe("ready");
+    },
+  );
 });

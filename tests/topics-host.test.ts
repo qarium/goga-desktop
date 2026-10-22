@@ -219,14 +219,9 @@ it.each([
     );
   },
 );
-it("preflights dirty create+publish+switch before create and reports partial switch failure", async () => {
+it("reports partial create+publish+switch failure even with unrelated dirty files", async () => {
   const f = await fixture();
   await writeFile(path.join(f.repo, "dirty"), "x");
-  await expect(
-    f.service.prepareTopicOperation(await f.request({ switch: true })),
-  ).rejects.toThrow(/изменения|dirty/i);
-  expect(f.mutations).toEqual([]);
-  await rm(path.join(f.repo, "dirty"));
   f.failSwitch();
   const p = await f.service.prepareTopicOperation(
     await f.request({ switch: true }),
@@ -748,5 +743,50 @@ it("does not refresh an operation confirmation when its board read retries", asy
     "Каталог изменился; обновите данные.",
   );
   expect(reads).toBe(2);
+  expect(f.mutations).toEqual([]);
+});
+
+it.each([false, true])(
+  "allows dirty local create switch=%s without dropping staged, unstaged or untracked work",
+  async (switchTo) => {
+    const f = await fixture();
+    await writeFile(path.join(f.repo, "staged.txt"), "staged");
+    await f.git("add", "staged.txt");
+    await writeFile(path.join(f.repo, "staged.txt"), "unstaged");
+    await writeFile(path.join(f.repo, "untracked.txt"), "untracked");
+    const before = await f.git("status", "--porcelain=v1");
+    const plan = await f.service.prepareTopicOperation(
+      await f.request({ publish: false, switch: switchTo }),
+    );
+    expect((await f.service.executeTopicOperation(plan.token)).status).toBe(
+      "success",
+    );
+    expect(f.mutations).toHaveLength(1);
+    expect(f.mutations[0]!.args.includes("--switch")).toBe(switchTo);
+    expect(await f.git("status", "--porcelain=v1")).toEqual(before);
+    expect((await f.git("show", ":staged.txt")).stdout).toBe("staged");
+    expect(await readFile(path.join(f.repo, "staged.txt"), "utf8")).toBe(
+      "unstaged",
+    );
+    expect(await readFile(path.join(f.repo, "untracked.txt"), "utf8")).toBe(
+      "untracked",
+    );
+  },
+);
+it("still rejects dirty independent switch and current-topic update", async () => {
+  const f = await fixture();
+  await writeFile(path.join(f.repo, "untracked.txt"), "dirty");
+  for (const action of ["switch", "update"] as const) {
+    await expect(
+      f.service.prepareTopicOperation(
+        await f.request({
+          action,
+          target: { topic: "main", branch: "main", remote: false },
+          publish: false,
+          switch: false,
+        }),
+      ),
+    ).rejects.toThrow(/dirty|изменения/i);
+  }
   expect(f.mutations).toEqual([]);
 });

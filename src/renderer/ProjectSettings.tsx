@@ -423,6 +423,7 @@ export function ProjectSettings({
           ["config", "Конфигурация"],
           ["workflows", "Рабочие процессы"],
           ["pipelines", "Конвейеры"],
+          ["image", "Образ"],
           ["tools", "Инструменты"],
           ["profiles", "Профили"],
         ]}

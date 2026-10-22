@@ -80,6 +80,7 @@ const board = (projectId = "p") => ({
   remoteRecords: [],
 });
 beforeEach(() => {
+  localStorage.clear();
   api = {
     listProjects: vi.fn(async () => [
       { id: "p", name: "Fixture", path: "/fixture/project" },
@@ -151,6 +152,32 @@ beforeEach(() => {
   window.goga = api;
 });
 afterEach(cleanup);
+it("refreshes topic inventory after a repository operation without changing workspace", async () => {
+  let finish!: (value: any) => void;
+  api.runRepositoryAction = vi.fn(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  await mount();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Синхронизировать текущую ветку" }),
+  );
+  const before = api.readTopicBoard.mock.calls.length;
+  await act(async () =>
+    finish({
+      projectId: "p",
+      action: "sync",
+      status: "success",
+      log: "updated",
+    }),
+  );
+  await waitFor(() =>
+    expect(api.readTopicBoard.mock.calls.length).toBeGreaterThan(before),
+  );
+  expect(screen.getByRole("button", { name: "Без топика" })).toBeTruthy();
+});
 async function mount() {
   render(<App />);
   await screen.findByLabelText("Исполняемый файл");
@@ -400,8 +427,16 @@ it.each(["build", "pipeline"])(
       expect(screen.queryByRole("menuitem", { name: /^Сборка/ })).toBeNull();
       expect(screen.getByText("Сборка уже выполняется")).toBeTruthy();
     } else
-      expect(screen.getByRole("menuitem", { name: /^Сборка/ }).hasAttribute("disabled")).toBe(false);
-    expect(screen.getByRole("menuitem", { name: /^Конвейер/ }).hasAttribute("disabled")).toBe(false);
+      expect(
+        screen
+          .getByRole("menuitem", { name: /^Сборка/ })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+    expect(
+      screen
+        .getByRole("menuitem", { name: /^Конвейер/ })
+        .hasAttribute("disabled"),
+    ).toBe(false);
     assertNoExecution();
   },
 );
@@ -559,8 +594,16 @@ it.each(["build", "pipeline"])(
       expect(screen.queryByRole("menuitem", { name: /^Сборка/ })).toBeNull();
       expect(screen.getByText("Сборка уже выполняется")).toBeTruthy();
     } else
-      expect(screen.getByRole("menuitem", { name: /^Сборка/ }).hasAttribute("disabled")).toBe(false);
-    expect(screen.getByRole("menuitem", { name: /^Конвейер/ }).hasAttribute("disabled")).toBe(false);
+      expect(
+        screen
+          .getByRole("menuitem", { name: /^Сборка/ })
+          .hasAttribute("disabled"),
+      ).toBe(false);
+    expect(
+      screen
+        .getByRole("menuitem", { name: /^Конвейер/ })
+        .hasAttribute("disabled"),
+    ).toBe(false);
     expect(api.selectTopicContext).toHaveBeenLastCalledWith(
       expect.objectContaining({ contextId: owner.contextId }),
     );
@@ -708,7 +751,9 @@ it("Topics current-context marker follows selected clone B without rewriting nat
   await mount();
   fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
   fireEvent.click(screen.getByRole("row", { name: /^feature / }));
-  await screen.findByRole("button", { name: "Открыть карточку топика feature" });
+  await screen.findByRole("button", {
+    name: "Открыть карточку топика feature",
+  });
   fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
   await screen.findByRole("region", { name: "Запуски выбранного топика" });
   fireEvent.click(screen.getByRole("button", { name: "Топики" }));
@@ -784,7 +829,9 @@ it.each(["missing", "linked"])(
     expect(
       screen.getByRole("button", { name: "Открыть карточку топика feature" }),
     ).toBeTruthy();
-    expect(screen.getByRole("region", { name: "Контекст недоступен" })).toBeTruthy();
+    expect(
+      screen.getByRole("region", { name: "Контекст недоступен" }),
+    ).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
     expect(
       screen.getByRole("region", { name: "Запуски выбранного топика" }),
@@ -1344,4 +1391,208 @@ it("shows the exact readiness reason through the real renderer readRequest bridg
   expect(
     screen.queryByRole("textbox", { name: "Что нужно сделать?" }),
   ).toBeNull();
+});
+
+it("loads a single lightweight header catalog instead of the full board and keeps cached identities during refresh", async () => {
+  const { writeCatalogCache } =
+    await import("../src/renderer/topic-display-cache");
+  writeCatalogCache(
+    { id: "p", name: "Fixture", path: "/fixture/project" },
+    { ...board(), year: String(new Date().getFullYear()) },
+  );
+  let finish!: (v: any) => void;
+  api.readTopicCatalog = vi.fn(
+    () =>
+      new Promise((r) => {
+        finish = r;
+      }),
+  );
+  const view = render(<App />);
+  await screen.findByRole("heading", { name: "Fixture" });
+  fireEvent.click(screen.getByLabelText("Выбрать другой топик"));
+  expect(
+    await screen.findByText("feature", { selector: "strong" }),
+  ).toBeTruthy();
+  expect(api.readTopicBoard).not.toHaveBeenCalled();
+  await act(async () =>
+    finish({ ...board(), year: String(new Date().getFullYear()) }),
+  );
+  view.unmount();
+});
+it("restores the exact saved topic after remount only after host verification", async () => {
+  const { writeWorkspaceSelection } =
+    await import("../src/renderer/topic-display-cache");
+  writeWorkspaceSelection(
+    { id: "p", name: "Fixture", path: "/fixture/project" },
+    owner as any,
+  );
+  let finish!: (v: any) => void;
+  api.resolveTopicContext = vi.fn(
+    () =>
+      new Promise((r) => {
+        finish = r;
+      }),
+  );
+  render(<App />);
+  await screen.findByRole("heading", { name: "Fixture" });
+  await waitFor(() => expect(api.resolveTopicContext).toHaveBeenCalledOnce());
+  expect(api.ensureTopicContext).not.toHaveBeenCalled();
+  expect(screen.getByLabelText("Открыть карточку топика main")).toBeTruthy();
+  expect(api.selectTopicContext).not.toHaveBeenCalledWith(
+    expect.objectContaining({ contextId: owner.contextId }),
+  );
+  await act(async () => finish(owner));
+  await waitFor(() =>
+    expect(api.selectTopicContext).toHaveBeenCalledWith(
+      expect.objectContaining({ contextId: owner.contextId }),
+    ),
+  );
+});
+it("does not replace an unavailable saved copy with the primary folder", async () => {
+  const { writeWorkspaceSelection } =
+    await import("../src/renderer/topic-display-cache");
+  writeWorkspaceSelection(
+    { id: "p", name: "Fixture", path: "/fixture/project" },
+    owner as any,
+  );
+  api.resolveTopicContext.mockRejectedValue(Error("Копия недоступна"));
+  render(<App />);
+  await screen.findByRole("heading", { name: "Fixture" });
+  await waitFor(() => expect(api.resolveTopicContext).toHaveBeenCalled());
+  expect(screen.getByLabelText("Открыть карточку топика main")).toBeTruthy();
+  expect(api.ensureTopicContext).not.toHaveBeenCalled();
+});
+it("an explicit primary selection wins against a late restored owner", async () => {
+  const { writeWorkspaceSelection, readWorkspaceSelection } =
+    await import("../src/renderer/topic-display-cache");
+  const p = { id: "p", name: "Fixture", path: "/fixture/project" };
+  writeWorkspaceSelection(p, owner as any);
+  let finish!: (v: any) => void;
+  api.resolveTopicContext = vi.fn(
+    () =>
+      new Promise((r) => {
+        finish = r;
+      }),
+  );
+  render(<App />);
+  await screen.findByRole("heading", { name: "Fixture" });
+  await waitFor(() => expect(api.resolveTopicContext).toHaveBeenCalled());
+  fireEvent.click(screen.getByLabelText("Выбрать другой топик"));
+  fireEvent.click(screen.getByRole("row", { name: /Без топика/ }));
+  await act(async () => finish(owner));
+  expect(screen.queryByLabelText("Открыть карточку топика main")).toBeNull();
+  expect(readWorkspaceSelection(p)).toBeNull();
+});
+
+it("retains the cached selector after refresh failure and loads the full board only for its table", async () => {
+  const { writeCatalogCache } =
+    await import("../src/renderer/topic-display-cache");
+  const p = { id: "p", name: "Fixture", path: "/fixture/project" };
+  writeCatalogCache(p, {
+    projectId: "p",
+    year: "2026",
+    entries: [{ topic: "cached-only", branch: "cached-only", remote: false }],
+    currentTopic: null,
+  });
+  api.readTopicCatalog = vi.fn(async () => {
+    throw Error("catalog unavailable");
+  });
+  render(<App />);
+  await screen.findByRole("heading", { name: "Fixture" });
+  await screen.findByText(/catalog unavailable/);
+  expect(api.readTopicBoard).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
+  expect(screen.getByText("cached-only", { selector: "strong" })).toBeTruthy();
+  fireEvent.keyDown(screen.getByRole("combobox", { name: "Найти топик" }), {
+    key: "Escape",
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Топики" }));
+  await waitFor(() => expect(api.readTopicBoard).toHaveBeenCalled());
+});
+it("persists an explicit picker selection across a fresh App mount", async () => {
+  const { readWorkspaceSelection } =
+    await import("../src/renderer/topic-display-cache");
+  const p = { id: "p", name: "Fixture", path: "/fixture/project" };
+  const first = render(<App />);
+  await screen.findByRole("heading", { name: "Fixture" });
+  fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
+  fireEvent.click(screen.getByRole("row", { name: /^main/ }));
+  await waitFor(() =>
+    expect(readWorkspaceSelection(p)?.contextId).toBe(owner.contextId),
+  );
+  first.unmount();
+  api.resolveTopicContext.mockClear();
+  api.ensureTopicContext.mockClear();
+  render(<App />);
+  await screen.findByRole("heading", { name: "Fixture" });
+  await waitFor(() => expect(api.resolveTopicContext).toHaveBeenCalled());
+  expect(screen.getByLabelText("Открыть карточку топика main")).toBeTruthy();
+  expect(api.ensureTopicContext).not.toHaveBeenCalled();
+});
+it("restores each project independently and keeps explicit primary for the other project", async () => {
+  const { writeWorkspaceSelection } =
+    await import("../src/renderer/topic-display-cache");
+  writeWorkspaceSelection(
+    { id: "p", name: "Fixture", path: "/fixture/project" },
+    null,
+  );
+  const q = {
+    ...owner,
+    projectId: "q",
+    projectPath: "/fixture/second",
+    topic: "second-topic",
+  };
+  writeWorkspaceSelection(
+    { id: "q", name: "Second", path: "/fixture/second" },
+    q as any,
+  );
+  api.resolveTopicContext.mockResolvedValue(q);
+  render(<App />);
+  await screen.findByRole("heading", { name: "Fixture" });
+  expect(api.resolveTopicContext).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: /Second/ }));
+  await screen.findByLabelText("Открыть карточку топика second-topic");
+  await waitFor(() =>
+    expect(api.resolveTopicContext).toHaveBeenCalledWith(
+      expect.objectContaining({ projectId: "q" }),
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: /Fixture/ }));
+  await screen.findByRole("heading", { name: "Fixture" });
+  expect(screen.getByRole("button", { name: "Без топика" })).toBeTruthy();
+});
+it("rejects a different revision returned during saved-owner restoration", async () => {
+  const { writeWorkspaceSelection } =
+    await import("../src/renderer/topic-display-cache");
+  writeWorkspaceSelection(
+    { id: "p", name: "Fixture", path: "/fixture/project" },
+    owner as any,
+  );
+  api.resolveTopicContext.mockResolvedValue({
+    ...owner,
+    revision: "00000000-0000-4000-8000-000000000002",
+  });
+  render(<App />);
+  await screen.findByText(/Не удалось восстановить выбранный топик/);
+  expect(screen.getByLabelText("Открыть карточку топика main")).toBeTruthy();
+  expect(
+    api.selectTopicContext.mock.calls.every(([ref]: any) => ref === null),
+  ).toBe(true);
+  expect(api.ensureTopicContext).not.toHaveBeenCalled();
+});
+it("keeps an explicitly selected missing clone across restart instead of primary", async () => {
+  const missing = { ...owner, state: "missing" };
+  api.listTopicContexts.mockResolvedValue([missing]);
+  const first = render(<App />);
+  await screen.findByRole("heading", { name: "Fixture" });
+  await waitFor(() => expect(api.listTopicContexts).toHaveBeenCalled());
+  fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
+  fireEvent.click(screen.getByRole("row", { name: /^main/ }));
+  await screen.findByLabelText("Открыть карточку топика main");
+  first.unmount();
+  api.resolveTopicContext.mockRejectedValue(Error("missing"));
+  render(<App />);
+  await screen.findByText(/Не удалось восстановить выбранный топик/);
+  expect(screen.getByLabelText("Открыть карточку топика main")).toBeTruthy();
+  expect(api.ensureTopicContext).not.toHaveBeenCalled();
 });

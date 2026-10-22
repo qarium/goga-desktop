@@ -36,6 +36,18 @@ export class RunnerShutdownError extends Error {
     this.name = "RunnerShutdownError";
   }
 }
+/** Structured process outcome; public message stays sanitized and unchanged. */
+export class CommandExitError extends Error {
+  constructor(
+    message: string,
+    readonly exitCode: number | null,
+    /** Host-only diagnostics: sanitize before including in an operation result. */
+    readonly stdout = "",
+    readonly stderr = "",
+  ) {
+    super(message);
+  }
+}
 export class NodeRunner implements Runner {
   private children = new Set<ChildProcessWithoutNullStreams>();
   private closing = false;
@@ -183,10 +195,13 @@ export class NodeRunner implements Runner {
         if (interrupted) reject(new RunnerShutdownError("interrupted"));
         else if (code !== 0)
           reject(
-            new Error(
+            new CommandExitError(
               /No such option:\s*--profile\b/.test(err)
                 ? "Установленная версия Goga не поддерживает --profile. Обновите Goga; профиль не был проигнорирован."
                 : `Команда завершилась с кодом ${code ?? "signal"}. Проверьте Goga, Docker и конфигурацию проекта.`,
+              code,
+              out,
+              err,
             ),
           );
         else resolve({ stdout: out, stderr: err });

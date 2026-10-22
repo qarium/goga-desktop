@@ -1,3 +1,4 @@
+import { ProjectDockerfile } from "./ProjectDockerfile";
 import type { TopicContextRef } from "../shared/worktrees";
 import { contextRef } from "./topic-context";
 import { useReadScope } from "./read-request";
@@ -89,6 +90,15 @@ export function ProjectDocuments({
     };
   }, [scopeKey, tab, attempt, revision]);
   if (tab === "launch") return null;
+  if (tab === "image")
+    return (
+      <ProjectDockerfile
+        key={scopeKey}
+        project={project}
+        owner={owner}
+        store={store}
+      />
+    );
   if (tab === "workflows")
     return (
       <ProjectWorkflows
