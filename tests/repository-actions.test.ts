@@ -122,7 +122,8 @@ async function fixture() {
       before = fn;
     },
     action: (
-      action: "sync" | "publish" | "update-base" | "propagate",
+      action:
+        "sync" | "publish" | "update-base" | "propagate" | "update-remote",
       topic = true,
     ) =>
       service.runRepositoryAction({
@@ -871,4 +872,191 @@ describe("native topic propagation", () => {
       expect(f.calls.some((c) => c.exe === "FAKE-GOGA")).toBe(false);
     },
   );
+});
+
+it.each([false, true])(
+  "updates exact remote topic through original then clone (current original: %s)",
+  async (current) => {
+    const f = await fixture();
+    await f.git(["push", f.repo, "alpha:alpha"], f.owner.path);
+    await f.git(["push", "origin", "alpha"]);
+    if (current) await f.git(["checkout", "alpha"]);
+    (f.service as unknown as { runList: Run[] }).runList = [
+      {
+        id: "active",
+        projectId: f.project.id,
+        context: f.ref,
+        status: "running",
+      } as Run,
+    ];
+    await fs.writeFile(path.join(f.owner.path, "remote-change"), "new");
+    await f.git(["add", "."], f.owner.path);
+    await f.git(["commit", "-m", "remote change"], f.owner.path);
+    const next = await f.git(["rev-parse", "HEAD"], f.owner.path);
+    await f.git(["push", f.remote, "alpha:alpha"], f.owner.path);
+    await f.git(["reset", "--hard", "HEAD~1"], f.owner.path);
+    await fs.writeFile(path.join(f.owner.path, "unrelated-dirty"), "keep");
+    f.calls.length = 0;
+    const result = await f.action("update-remote");
+    expect(result.status, result.log).toBe("success");
+    expect(await f.git(["rev-parse", "alpha"])).toBe(next);
+    expect(await f.git(["rev-parse", "HEAD"], f.owner.path)).toBe(next);
+    expect(
+      await fs.readFile(path.join(f.owner.path, "unrelated-dirty"), "utf8"),
+    ).toBe("keep");
+    const fetches = f.calls.filter((c) => c.args.includes("fetch"));
+    expect(fetches.map((c) => c.cwd)).toEqual([f.repo, f.owner.path]);
+    expect(
+      fetches.every(
+        (c) =>
+          c.args.includes("origin") &&
+          c.args.some((a) => a.startsWith("refs/heads/alpha:refs/desktop/")),
+      ),
+    ).toBe(true);
+    expect(
+      f.calls.some(
+        (c) =>
+          c.exe === "FAKE-GOGA" ||
+          c.args.includes("push") ||
+          c.args.includes("reset"),
+      ),
+    ).toBe(false);
+  },
+);
+
+it.each([
+  "original-diverged",
+  "clone-diverged",
+  "overlap",
+  "missing-branch",
+  "wrong-head",
+  "bad-origin",
+  "ahead",
+])("remote refresh safely handles %s", async (mode) => {
+  const f = await fixture();
+  await f.git(["push", f.repo, "alpha:alpha"], f.owner.path);
+  await f.git(["push", "origin", "alpha"]);
+  const initial = await f.git(["rev-parse", "alpha"]);
+  if (mode === "ahead") {
+    await f.git(
+      ["update-ref", "refs/heads/alpha", await f.git(["rev-parse", "alpha^"])],
+      f.remote,
+    );
+    f.calls.length = 0;
+    const result = await f.action("update-remote");
+    expect(result.status, result.log).toBe("success");
+    expect(await f.git(["rev-parse", "HEAD"], f.owner.path)).toBe(initial);
+    return;
+  }
+  await fs.writeFile(path.join(f.owner.path, "topic"), "remote update\n");
+  await f.git(["add", "."], f.owner.path);
+  await f.git(["commit", "-m", "remote"], f.owner.path);
+  const remoteOid = await f.git(["rev-parse", "HEAD"], f.owner.path);
+  await f.git(["push", f.remote, "alpha:alpha"], f.owner.path);
+  await f.git(["reset", "--hard", initial], f.owner.path);
+  if (mode === "original-diverged" || mode === "clone-diverged") {
+    const cwd = mode === "original-diverged" ? f.repo : f.owner.path;
+    if (cwd === f.repo) await f.git(["checkout", "alpha"]);
+    await fs.writeFile(path.join(cwd, "local"), "local");
+    await f.git(["add", "."], cwd);
+    await f.git(["commit", "-m", "diverged"], cwd);
+  }
+  if (mode === "overlap")
+    await fs.writeFile(path.join(f.owner.path, "topic"), "dirty\n");
+  if (mode === "missing-branch") await f.git(["push", f.remote, ":alpha"]);
+  if (mode === "wrong-head")
+    await f.git(["checkout", "-b", "wrong"], f.owner.path);
+  if (mode === "bad-origin")
+    await f.git(["remote", "set-url", "origin", f.remote], f.owner.path);
+  const before = await f.git(["rev-parse", "HEAD"], f.owner.path);
+  f.calls.length = 0;
+  const result = await f.action("update-remote");
+  expect(result.status, result.log).toBe("error");
+  expect(await f.git(["rev-parse", "HEAD"], f.owner.path)).toBe(before);
+  expect(
+    f.calls.some(
+      (c) =>
+        c.exe === "FAKE-GOGA" ||
+        c.args.includes("push") ||
+        c.args.includes("reset"),
+    ),
+  ).toBe(false);
+  if (
+    [
+      "original-diverged",
+      "missing-branch",
+      "wrong-head",
+      "bad-origin",
+    ].includes(mode)
+  )
+    expect(
+      f.calls.filter((c) => c.cwd === f.owner.path && c.args.includes("fetch")),
+    ).toHaveLength(0);
+  else expect(await f.git(["rev-parse", "alpha"])).toBe(remoteOid);
+});
+
+it("rejects checkout after captured HEAD before noncurrent CAS", async () => {
+  const f = await fixture();
+  const old = await f.git(["rev-parse", "alpha"]);
+  await f.git(["push", f.remote, "alpha:alpha"], f.owner.path);
+  let armed = false,
+    switched = false;
+  f.intercept(async (_exe, args, cwd) => {
+    if (armed && !switched) {
+      switched = true;
+      await f.git(["checkout", "alpha"]);
+    }
+    if (cwd === f.repo && args.includes("--symbolic-full-name")) armed = true;
+  });
+  const result = await f.action("update-remote");
+  expect(switched).toBe(true);
+  expect(result.status, result.log).toBe("error");
+  expect(await f.git(["rev-parse", "alpha"])).toBe(old);
+  expect(await f.git(["status", "--porcelain"])).toBe("");
+  expect(
+    f.calls.some(
+      (c) =>
+        c.args.includes("update-ref") && c.args.includes("refs/heads/alpha"),
+    ),
+  ).toBe(false);
+});
+
+it.each([false, true])(
+  "protects dirty checked-out original during remote refresh (overlap: %s)",
+  async (overlap) => {
+    const f = await fixture();
+    await f.git(["push", f.repo, "alpha:alpha"], f.owner.path);
+    await f.git(["checkout", "alpha"]);
+    const old = await f.git(["rev-parse", "alpha"]);
+    await fs.writeFile(path.join(f.owner.path, "topic"), "remote\n");
+    await f.git(["commit", "-am", "remote"], f.owner.path);
+    await f.git(["push", f.remote, "alpha:alpha"], f.owner.path);
+    const next = await f.git(["rev-parse", "HEAD"], f.owner.path);
+    await f.git(["reset", "--hard", old], f.owner.path);
+    const dirtyFile = overlap ? "topic" : "base";
+    await fs.writeFile(path.join(f.repo, dirtyFile), "dirty\n");
+    f.calls.length = 0;
+    const result = await f.action("update-remote");
+    expect(result.status, result.log).toBe(overlap ? "error" : "success");
+    expect(await f.git(["rev-parse", "alpha"])).toBe(overlap ? old : next);
+    expect(await fs.readFile(path.join(f.repo, dirtyFile), "utf8")).toBe(
+      "dirty\n",
+    );
+    if (overlap)
+      expect(
+        f.calls.some((c) => c.cwd === f.owner.path && c.args.includes("fetch")),
+      ).toBe(false);
+  },
+);
+
+it("keeps clone commits ahead of the updated original without rollback", async () => {
+  const f = await fixture();
+  const original = await f.git(["rev-parse", "alpha"]);
+  await f.git(["push", "origin", "alpha"]);
+  const clone = await f.git(["rev-parse", "HEAD"], f.owner.path);
+  expect(clone).not.toBe(original);
+  const result = await f.action("update-remote");
+  expect(result.status, result.log).toBe("success");
+  expect(await f.git(["rev-parse", "alpha"])).toBe(original);
+  expect(await f.git(["rev-parse", "HEAD"], f.owner.path)).toBe(clone);
 });

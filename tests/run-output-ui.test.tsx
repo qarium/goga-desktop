@@ -173,7 +173,7 @@ it("keeps each run's output and log preference isolated and hides the native vie
     "actual stdout\nactual stderr",
   );
   fireEvent.click(statusButton());
-  fireEvent.click(screen.getByRole("button", { name: "⚙ Настройки" }));
+  fireEvent.click(screen.getByRole("button", { name: "Настройки" }));
   expect(api.selectRun).toHaveBeenLastCalledWith(null);
 });
 

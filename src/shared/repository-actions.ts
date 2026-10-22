@@ -5,6 +5,7 @@ export const repositoryActionSchema = z.enum([
   "sync",
   "publish",
   "update-base",
+  "update-remote",
   "propagate",
 ]);
 export const repositoryActionRequestSchema = z
@@ -20,10 +21,13 @@ export const repositoryActionRequestSchema = z
       message: "Контекст относится к другому проекту.",
     },
   )
-  .refine((value) => value.action !== "propagate" || !!value.context, {
-    message:
-      "Применение топика к базе доступно только в выбранном контексте топика.",
-  });
+  .refine(
+    (value) =>
+      !["propagate", "update-remote"].includes(value.action) || !!value.context,
+    {
+      message: "Действие доступно только в выбранном контексте топика.",
+    },
+  );
 export type RepositoryAction = z.infer<typeof repositoryActionSchema>;
 export type RepositoryActionRequest = z.infer<
   typeof repositoryActionRequestSchema

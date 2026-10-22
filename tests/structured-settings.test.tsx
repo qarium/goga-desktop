@@ -177,7 +177,7 @@ it("lists actual tools with all folders collapsed and retains full-path drafts a
   act(() =>
     editor()!.dispatch({ changes: { from: 0, insert: "# across Back\n" } }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "⚙ Настройки" }));
+  fireEvent.click(screen.getByRole("button", { name: "Настройки" }));
   fireEvent.click(screen.getByRole("button", { name: "← Назад" }));
   fireEvent.click(screen.getByRole("button", { name: "Проект" }));
   fireEvent.click(screen.getByRole("button", { name: "Инструменты" }));
@@ -211,7 +211,7 @@ it("shows empty tools and missing config with explicit save only", async () => {
 });
 it("retains an unopened new profile after Back and rejects names longer than host limit", async () => {
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "⚙ Настройки" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Настройки" }));
   fireEvent.click(screen.getByRole("button", { name: "Профили" }));
   await screen.findByRole("button", { name: "personal" });
   fireEvent.click(screen.getByRole("button", { name: /Новый профиль/ }));
@@ -225,7 +225,7 @@ it("retains an unopened new profile after Back and rejects names longer than hos
   });
   fireEvent.click(screen.getByRole("button", { name: "Создать черновик" }));
   fireEvent.click(screen.getByRole("button", { name: "← Назад" }));
-  fireEvent.click(screen.getByRole("button", { name: "⚙ Настройки" }));
+  fireEvent.click(screen.getByRole("button", { name: "Настройки" }));
   fireEvent.click(screen.getByRole("button", { name: "Профили" }));
   expect(
     await screen.findByRole("button", { name: "new.profile" }),
@@ -271,13 +271,13 @@ it("allows leaving during a pending read without showing its result in a differe
       }),
   );
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "⚙ Настройки" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Настройки" }));
   fireEvent.click(screen.getByRole("button", { name: "Открыть редактор" }));
   fireEvent.click(screen.getByRole("button", { name: "← Назад" }));
   expect(screen.queryByRole("heading", { name: "Общие настройки" })).toBeNull();
   await act(async () => finish({ text: "late: value\r\n", version: "late1" }));
   expect(editor()).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "⚙ Настройки" }));
+  fireEvent.click(screen.getByRole("button", { name: "Настройки" }));
   expect(editor()!.state.doc.toString()).toBe("late: value\r\n");
 });
 it("keeps late tool reads under their original full-path identity", async () => {
@@ -344,7 +344,7 @@ it("retains failed save A and its version while selecting B, blocking App naviga
   fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
   expect(screen.getByRole("heading", { name: "Проект" })).toBeTruthy();
   expect(
-    (screen.getByRole("button", { name: "⚙ Настройки" }) as HTMLButtonElement)
+    (screen.getByRole("button", { name: "Настройки" }) as HTMLButtonElement)
       .disabled,
   ).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "Папка env/ci" }));
@@ -359,7 +359,7 @@ it("retains failed save A and its version while selecting B, blocking App naviga
   expect(b.state.doc.toString()).toBe(textB);
   expect(screen.queryByRole("alert")).toBeNull();
   expect(
-    (screen.getByRole("button", { name: "⚙ Настройки" }) as HTMLButtonElement)
+    (screen.getByRole("button", { name: "Настройки" }) as HTMLButtonElement)
       .disabled,
   ).toBe(false);
   fireEvent.click(
@@ -418,7 +418,7 @@ it("uses the returned version after successful A save while B remains selected",
 });
 it("retains home drafts after Back and does not turn successful saves into catalog refresh failures", async () => {
   render(<App />);
-  fireEvent.click(await screen.findByRole("button", { name: "⚙ Настройки" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Настройки" }));
   await waitFor(() => expect(api.listSettings).toHaveBeenCalledOnce());
   const view = await reveal();
   act(() =>
@@ -426,7 +426,7 @@ it("retains home drafts after Back and does not turn successful saves into catal
   );
   const text = view.state.doc.toString();
   fireEvent.click(screen.getByRole("button", { name: "← Назад" }));
-  fireEvent.click(screen.getByRole("button", { name: "⚙ Настройки" }));
+  fireEvent.click(screen.getByRole("button", { name: "Настройки" }));
   expect(editor()!.state.doc.toString()).toBe(text);
   await waitFor(() => expect(api.listSettings).toHaveBeenCalledTimes(2));
   api.listSettings.mockRejectedValue(Error("catalog denied"));

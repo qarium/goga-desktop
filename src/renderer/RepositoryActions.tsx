@@ -25,6 +25,7 @@ export function RepositoryIcon({
 }: {
   action: RepositoryActionRequest["action"];
 }) {
+  if (action === "update-remote") return <span aria-hidden="true">↻</span>;
   return (
     <svg
       viewBox="0 0 24 24"
@@ -88,7 +89,7 @@ export function RepositoryActions({
   const actions: RepositoryActionRequest["action"][] = onlySync
     ? ["sync"]
     : selected
-      ? ["sync", "publish", "update-base", "propagate"]
+      ? ["sync", "publish", "update-base", "propagate", "update-remote"]
       : ["sync", "publish"];
   const labels = {
     sync:
@@ -98,16 +99,20 @@ export function RepositoryActions({
           ? "Синхронизировать топик"
           : "Синхронизировать текущую ветку",
     publish: selected ? "Опубликовать топик" : "Опубликовать текущую ветку",
+    "update-remote": "Обновить топик из remote",
     "update-base": "Обновить из base",
     propagate: "Перенести топик в base и опубликовать",
   };
   const tooltipLabels = {
     sync: "Синхронизировать",
     publish: "Опубликовать",
+    "update-remote": "Обновить топик из remote",
     "update-base": "Обновить из base",
     propagate: "Перенести топик в base и опубликовать",
   };
   const descriptions = {
+    "update-remote":
+      "Коммиты: origin → ветка топика в исходном проекте → копия; только fast-forward, без публикации",
     sync: selected
       ? "Коммиты: копия → исходный проект"
       : "Обновить текущую ветку из upstream (fast-forward)",

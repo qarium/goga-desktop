@@ -211,7 +211,9 @@ async function chooseFeature() {
   fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
   fireEvent.click(screen.getByRole("row", { name: /^feature / }));
   await waitFor(() => expect(screen.queryByRole("grid")).toBeNull());
-  await screen.findByRole("button", { name: "Открыть карточку топика feature" });
+  await screen.findByRole("button", {
+    name: "Открыть карточку топика feature",
+  });
   fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
   await screen.findByRole("region", { name: "Запуски выбранного топика" });
 }
@@ -384,15 +386,43 @@ it("keeps catalog errors outside the native dashboard column while a pipeline is
   expect(document.querySelector(".main-area .context-board-error")).toBeNull();
 });
 
-it("aligns project title and topic picker in one row below the breadcrumb", async () => {
+it("keeps identity separate from context controls on the same header", async () => {
   render(<App />);
   const title = await screen.findByRole("heading", { name: "Alpha" });
   const heading = title.closest(".project-heading");
   expect(heading).not.toBeNull();
-  const row = heading!.querySelector(".project-heading-context")!;
+  const row = heading!.nextElementSibling!;
   expect(row).not.toBeNull();
-  expect(heading!.querySelector(":scope > .eyebrow")?.textContent).toContain("Мой компьютер / ПРОЕКТ");
+  expect(heading!.querySelector(":scope > .eyebrow")?.textContent).toContain(
+    "Мой компьютер / ПРОЕКТ",
+  );
   expect(row.querySelector(".topic-context-picker")?.parentElement).toBe(row);
-  expect(title.parentElement).toBe(row);
-  expect(title.nextElementSibling?.classList.contains("topic-context-picker")).toBe(true);
+  expect(title.parentElement).toBe(heading);
+  expect(row.classList.contains("project-heading-context")).toBe(true);
+});
+
+it("collapses only sidebar while retaining the selected workspace", async () => {
+  render(<App />);
+  const toggle = await screen.findByRole("button", {
+    name: "Свернуть боковую панель",
+  });
+  expect(toggle.closest(".sidebar-footer")).not.toBeNull();
+  const main = document.querySelector(".main-area");
+  fireEvent.click(toggle);
+  expect(
+    document
+      .querySelector(".app-shell")
+      ?.classList.contains("sidebar-collapsed"),
+  ).toBe(true);
+  expect(document.querySelector(".main-area")).toBe(main);
+  const expand = screen.getByRole("button", {
+    name: "Развернуть боковую панель",
+  });
+  expect(expand.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(expand);
+  expect(
+    document
+      .querySelector(".app-shell")
+      ?.classList.contains("sidebar-collapsed"),
+  ).toBe(false);
 });

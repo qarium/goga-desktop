@@ -150,7 +150,7 @@ function mount(selected: WorktreeRecord | null = owner) {
     </>,
   );
 }
-it("shows four topic actions in order and only sync/publish for primary", () => {
+it("shows five topic actions in order and only sync/publish for primary", () => {
   const view = mount();
   expect(
     screen.getAllByRole("button").map((b) => b.getAttribute("aria-label")),
@@ -159,6 +159,7 @@ it("shows four topic actions in order and only sync/publish for primary", () => 
     "Опубликовать топик",
     "Обновить из base",
     "Перенести топик в base и опубликовать",
+    "Обновить топик из remote",
   ]);
   expect(
     [
@@ -754,4 +755,20 @@ it("resumes logical forward tab order after an overflow tooltip portal", async (
     scrollHeight.mockRestore();
     clientHeight.mockRestore();
   }
+});
+
+it("refreshes captured topic from remote without publication", async () => {
+  mount();
+  const button = screen.getByLabelText("Обновить топик из remote");
+  expect(button.textContent).toBe("↻");
+  await act(async () => fireEvent.click(button));
+  expect(api.runRepositoryAction).toHaveBeenCalledWith(
+    expect.objectContaining({
+      action: "update-remote",
+      context: expect.objectContaining({
+        contextId: owner.contextId,
+        revision: owner.revision,
+      }),
+    }),
+  );
 });

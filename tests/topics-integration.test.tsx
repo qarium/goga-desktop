@@ -341,7 +341,7 @@ it("retains a manually selected owner and its independent draft across project n
     },
   );
   fireEvent.click(screen.getByRole("button", { name: /Other project/ }));
-  fireEvent.click(screen.getByRole("button", { name: /▱Project/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Project" }));
   await openPrototypeLaunch();
   await waitFor(() =>
     expect(

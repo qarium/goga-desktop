@@ -135,15 +135,17 @@ export class RepositoryActions {
         throw changed();
     }
   }
-  private async currentBranch() {
-    const ref = (await this.git(["symbolic-ref", "--quiet", "HEAD"])).trim();
+  private async currentBranch(cwd = this.project.path) {
+    const ref = (
+      await this.git(["symbolic-ref", "--quiet", "HEAD"], cwd)
+    ).trim();
     if (!ref.startsWith("refs/heads/"))
       throw Error(
         "В основной папке не выбрана локальная ветка (detached HEAD).",
       );
     return ref.slice(11);
   }
-  private async directBranch(value: string) {
+  private async directBranch(value: string, cwd = this.project.path) {
     const branch = value.startsWith("refs/heads/") ? value.slice(11) : value;
     if (
       !branch ||
@@ -155,14 +157,17 @@ export class RepositoryActions {
         "База должна быть однозначной локальной веткой, не тегом или произвольной ссылкой.",
       );
     const ref = `refs/heads/${branch}`;
-    await this.git(["check-ref-format", ref]);
+    await this.git(["check-ref-format", ref], cwd);
     const rows = (
-      await this.git([
-        "for-each-ref",
-        "--format=%(refname)%00%(objectname)%00%(symref)",
-        ref,
-        `refs/tags/${branch}`,
-      ])
+      await this.git(
+        [
+          "for-each-ref",
+          "--format=%(refname)%00%(objectname)%00%(symref)",
+          ref,
+          `refs/tags/${branch}`,
+        ],
+        cwd,
+      )
     )
       .trim()
       .split("\n")
@@ -178,17 +183,14 @@ export class RepositoryActions {
       );
     return { branch, ref, oid: oid(match[1]) };
   }
-  private async remote(name: string, push: boolean) {
+  private async remote(name: string, push: boolean, cwd = this.project.path) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(name) || name === ".")
       throw Error("Upstream remote отсутствует или неоднозначен.");
     const prefix = `remote.${name}.`;
-    const raw = await this.git([
-      "config",
-      "--local",
-      "--includes",
-      "--null",
-      "--list",
-    ]);
+    const raw = await this.git(
+      ["config", "--local", "--includes", "--null", "--list"],
+      cwd,
+    );
     const rows = raw
       .split("\0")
       .filter(Boolean)
@@ -213,13 +215,10 @@ export class RepositoryActions {
         throw Error(`Remote ${name} неоднозначен.`);
     }
     const endpoint = (
-      await this.git([
-        "remote",
-        "get-url",
-        ...(push ? ["--push"] : []),
-        "--all",
-        name,
-      ])
+      await this.git(
+        ["remote", "get-url", ...(push ? ["--push"] : []), "--all", name],
+        cwd,
+      )
     ).trim();
     if (
       !endpoint ||
@@ -264,12 +263,39 @@ export class RepositoryActions {
     if ((await this.remote("origin", true)) !== endpoint) throw changed();
     this.lines.push("Публикация завершена.");
   }
-  private async refreshBase(value: string) {
-    const base = await this.directBranch(value);
+  private async refreshBase(
+    value: string,
+    source?: {
+      remote: string;
+      ref: string;
+      cwd?: string;
+      expected?: string;
+      guard?: () => Promise<void>;
+    },
+  ) {
+    const branchLabel = source ? "ветки топика" : "базовой ветки";
+    const cwd = source?.cwd ?? this.project.path;
+    const git = (args: string[], _cwd = cwd, output = false) =>
+      this.git(args, _cwd, output);
+    const base = await this.directBranch(value, cwd);
+    const common = (
+      await git(["rev-parse", "--path-format=absolute", "--git-common-dir"])
+    ).trim();
+    const verifyOwner = async () => {
+      await this.verify();
+      await source?.guard?.();
+      if (source && this.owner) {
+        if (
+          (await this.currentBranch(this.owner.path)) !== this.owner.branch ||
+          !(await assertLocalOrigin(this.owner, (args, root) =>
+            this.git(args, root),
+          ))
+        )
+          throw changed();
+      }
+    };
     const assertIdle = async () => {
-      const gitDir = (
-        await this.git(["rev-parse", "--absolute-git-dir"])
-      ).trim();
+      const gitDir = (await git(["rev-parse", "--absolute-git-dir"])).trim();
       for (const file of [
         "index.lock",
         "HEAD.lock",
@@ -293,7 +319,7 @@ export class RepositoryActions {
         );
       }
       for (const file of ["packed-refs.lock", `${base.ref}.lock`]) {
-        const full = path.join(this.common, file);
+        const full = path.join(common, file);
         await noSymlinks(full);
         try {
           await lstat(full);
@@ -306,11 +332,11 @@ export class RepositoryActions {
     };
     await assertIdle();
     this.lines.push(
-      `Обновление базовой ветки ${base.branch} из upstream (fast-forward-only)…`,
+      `Обновление ${branchLabel} ${base.branch} из ${source?.remote ?? "upstream"} (fast-forward-only)…`,
     );
     const upstream = async () =>
       (
-        await this.git([
+        await git([
           "for-each-ref",
           "--format=%(refname)%00%(upstream:remotename)%00%(upstream:remoteref)",
           base.ref,
@@ -320,25 +346,31 @@ export class RepositoryActions {
         .split("\n")
         .map((row) => row.split("\0"))
         .find((row) => row[0] === base.ref);
-    const tracking = await upstream();
+    const tracking = source
+      ? [base.ref, source.remote, source.ref]
+      : await upstream();
     if (!tracking?.[1] || !tracking[2]?.startsWith("refs/heads/"))
       throw Error(`У ветки ${base.branch} отсутствует однозначный upstream.`);
-    await this.git(["check-ref-format", tracking[2]]);
-    const endpoint = await this.remote(tracking[1], false);
+    await git(["check-ref-format", tracking[2]]);
+    const endpoint = await this.remote(tracking[1], false, cwd);
     const verify = async () => {
-      await this.verify();
+      await verifyOwner();
       await assertIdle();
       if (
-        JSON.stringify(await upstream()) !== JSON.stringify(tracking) ||
-        (await this.remote(tracking[1], false)) !== endpoint ||
-        (await this.directBranch(base.branch)).oid !== base.oid
+        (!source &&
+          JSON.stringify(await upstream()) !== JSON.stringify(tracking)) ||
+        (await this.remote(tracking[1], false, cwd)) !== endpoint ||
+        (await this.directBranch(base.branch, cwd)).oid !== base.oid
       )
         throw changed();
     };
     await verify();
     const fetched = `refs/desktop/repository-actions/${randomUUID()}`;
-    await this.git(
+    await git(
       [
+        ...(cwd !== this.project.path
+          ? ["-c", "protocol.allow=never", "-c", "protocol.file.allow=always"]
+          : []),
         "fetch",
         "--no-tags",
         "--no-write-fetch-head",
@@ -346,20 +378,19 @@ export class RepositoryActions {
         tracking[1],
         `${tracking[2]}:${fetched}`,
       ],
-      this.project.path,
+      cwd,
       true,
     );
-    let next = oid(
-      await this.git(["rev-parse", "--verify", `${fetched}^{commit}`]),
-    );
+    let next = oid(await git(["rev-parse", "--verify", `${fetched}^{commit}`]));
+    if (source?.expected && next !== source.expected) throw changed();
     try {
-      await this.git(["merge-base", "--is-ancestor", base.oid, next]);
+      await git(["merge-base", "--is-ancestor", base.oid, next]);
     } catch (error) {
       if (!(error instanceof CommandExitError) || error.exitCode !== 1)
         throw error;
       // A local branch ahead of upstream is already up to date; never reset it backwards.
       try {
-        await this.git(["merge-base", "--is-ancestor", next, base.oid]);
+        await git(["merge-base", "--is-ancestor", next, base.oid]);
       } catch (reverseError) {
         if (
           !(reverseError instanceof CommandExitError) ||
@@ -367,31 +398,34 @@ export class RepositoryActions {
         )
           throw reverseError;
         throw Error(
-          `Истории базовой ветки ${base.branch} и upstream разошлись. Выполните слияние или другую проверенную операцию вручную; fast-forward-only не изменял ветку.`,
+          `Истории ${branchLabel} ${base.branch} и ${source?.remote ?? "upstream"} разошлись. Выполните слияние или другую проверенную операцию вручную; fast-forward-only не изменял ветку.`,
         );
       }
       next = base.oid;
     }
     await verify();
-    const worktrees = (
-      await this.git(["worktree", "list", "--porcelain", "-z"])
-    ).split("\0\0");
-    const elsewhere = worktrees.some(
-      (block) =>
-        block.split("\0").includes(`branch ${base.ref}`) &&
-        !block.split("\0").includes(`worktree ${this.project.path}`),
-    );
-    if (elsewhere)
-      throw Error(
-        "Базовая ветка открыта в другой рабочей копии; обновите её там вручную.",
+    const assertNotElsewhere = async () => {
+      const worktrees = (
+        await git(["worktree", "list", "--porcelain", "-z"])
+      ).split("\0\0");
+      const elsewhere = worktrees.some(
+        (block) =>
+          block.split("\0").includes(`branch ${base.ref}`) &&
+          !block.split("\0").includes(`worktree ${cwd}`),
       );
+      if (elsewhere)
+        throw Error(
+          "Базовая ветка открыта в другой рабочей копии; обновите её там вручную.",
+        );
+    };
+    await assertNotElsewhere();
     const head = (
-      await this.git(["rev-parse", "--symbolic-full-name", "HEAD"])
+      await git(["rev-parse", "--symbolic-full-name", "HEAD"])
     ).trim();
     await verify();
     if (head === base.ref) {
-      if ((await this.currentBranch()) !== base.branch) throw changed();
-      await this.git(
+      if ((await this.currentBranch(cwd)) !== base.branch) throw changed();
+      await git(
         [
           "-c",
           "merge.autoStash=false",
@@ -405,19 +439,34 @@ export class RepositoryActions {
           "--no-edit",
           next,
         ],
-        this.project.path,
+        cwd,
         true,
       );
     } else {
-      await this.git(
+      // Verification yields to other Git clients. Never CAS a branch that became
+      // checked out meanwhile: moving only its ref would leave stale files/index.
+      await assertNotElsewhere();
+      if (
+        (await git(["rev-parse", "--symbolic-full-name", "HEAD"])).trim() !==
+        head
+      )
+        throw changed();
+      await git(
         ["update-ref", "--no-deref", base.ref, next, base.oid],
-        this.project.path,
+        cwd,
         true,
       );
     }
-    await this.verify();
-    if ((await this.directBranch(base.branch)).oid !== next) throw changed();
-    this.lines.push(`Базовая ветка ${base.branch} обновлена.`);
+    await verifyOwner();
+    if ((await this.remote(tracking[1], false, cwd)) !== endpoint)
+      throw changed();
+    if ((await this.directBranch(base.branch, cwd)).oid !== next)
+      throw changed();
+    this.lines.push(
+      source
+        ? `Ветка топика ${base.branch} обновлена.`
+        : `Базовая ветка ${base.branch} обновлена.`,
+    );
     return { ...base, oid: next };
   }
   private async updateCloneTracking(branch: string, next: string) {
@@ -481,7 +530,49 @@ export class RepositoryActions {
         throw Error(
           "У клона отсутствует локальный origin; настройки не изменялись.",
         );
-      if (request.action === "update-base") {
+      if (request.action === "update-remote") {
+        if (!this.owner)
+          throw Error("Обновление из remote доступно только в топике.");
+        const branch = this.owner.branch;
+        if ((await this.currentBranch(this.owner.path)) !== branch)
+          throw changed();
+        this.lines.push(
+          `Получение ветки ${branch} из origin оригинального проекта…`,
+        );
+        const endpoint = await this.remote("origin", false);
+        const original = await this.refreshBase(branch, {
+          remote: "origin",
+          ref: `refs/heads/${branch}`,
+          guard: async () => {
+            if ((await this.remote("origin", false)) !== endpoint)
+              throw changed();
+          },
+        });
+        await this.verify();
+        if (
+          !(await assertLocalOrigin(this.owner, (args, cwd) =>
+            this.git(args, cwd),
+          ))
+        )
+          throw changed();
+        this.lines.push(
+          "Получение обновлённой ветки в клон через локальный origin…",
+        );
+        await this.refreshBase(branch, {
+          remote: "origin",
+          ref: original.ref,
+          cwd: this.owner.path,
+          expected: original.oid,
+          guard: async () => {
+            if (
+              (await this.remote("origin", false)) !== endpoint ||
+              (await this.directBranch(branch)).oid !== original.oid
+            )
+              throw changed();
+          },
+        });
+        this.lines.push("Топик обновлён из remote без публикации.");
+      } else if (request.action === "update-base") {
         if (!this.owner)
           throw Error("Обновление из базовой ветки доступно только в топике.");
         this.lines.push(

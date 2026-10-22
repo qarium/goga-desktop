@@ -236,7 +236,9 @@ async function chooseFeature() {
   fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
   fireEvent.click(screen.getByRole("row", { name: /^feature / }));
   await waitFor(() => expect(screen.queryByRole("grid")).toBeNull());
-  await screen.findByRole("button", { name: "Открыть карточку топика feature" });
+  await screen.findByRole("button", {
+    name: "Открыть карточку топика feature",
+  });
   fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
   await screen.findByRole("region", { name: "Запуски выбранного топика" });
 }
@@ -364,7 +366,9 @@ it("keeps two context drafts independent and restores selector ownership without
   });
   fireEvent.change(taskB, { target: { value: "Task B retained" } });
   const calls = api.discover.mock.calls.length;
-  expect(screen.queryByRole("tab", { name: "Новый конвейер · feature" })).toBeNull();
+  expect(
+    screen.queryByRole("tab", { name: "Новый конвейер · feature" }),
+  ).toBeNull();
   await chooseFeature();
   fireEvent.click(
     screen.getByRole("tab", { name: "Новый конвейер · feature" }),
@@ -379,7 +383,9 @@ it("keeps two context drafts independent and restores selector ownership without
       }) as HTMLTextAreaElement
     ).value,
   ).toBe("Task A retained");
-  expect(screen.queryByRole("tab", { name: "Новый конвейер · main" })).toBeNull();
+  expect(
+    screen.queryByRole("tab", { name: "Новый конвейер · main" }),
+  ).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
   fireEvent.click(screen.getByRole("row", { name: /^main / }));
   await waitFor(() => expect(screen.queryByRole("grid")).toBeNull());
@@ -459,4 +465,32 @@ it("App does not fall back to primary topic details after clone inventory failur
   expect(api.readTopicDetails).not.toHaveBeenCalled();
   expect(api.readTopicBoard.mock.calls.length).toBe(boardReads);
   expect(api.ensureTopicContext).not.toHaveBeenCalled();
+});
+
+it("retains selected topic, preparation tab and dirty draft across sidebar collapse", async () => {
+  await mountContexts();
+  await chooseFeature();
+  fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+  fireEvent.click(screen.getByRole("menuitem", { name: /Конвейер/ }));
+  const task = await screen.findByRole("textbox", {
+    name: "Что нужно сделать?",
+  });
+  fireEvent.change(task, { target: { value: "Unsaved owned draft" } });
+  const tab = screen.getByRole("tab", { name: "Новый конвейер · feature" });
+  const beforeDiscover = api.discover.mock.calls.length;
+  for (const name of ["Свернуть боковую панель", "Развернуть боковую панель"]) {
+    fireEvent.click(screen.getByRole("button", { name }));
+    expect(
+      screen.getByRole("button", { name: "Открыть карточку топика feature" }),
+    ).toBeTruthy();
+    expect(screen.getByRole("tab", { name: "Новый конвейер · feature" })).toBe(
+      tab,
+    );
+    expect(screen.getByRole("textbox", { name: "Что нужно сделать?" })).toBe(
+      task,
+    );
+    expect((task as HTMLTextAreaElement).value).toBe("Unsaved owned draft");
+    expect(api.discover.mock.calls.length).toBe(beforeDiscover);
+    expect(api.launch).not.toHaveBeenCalled();
+  }
 });

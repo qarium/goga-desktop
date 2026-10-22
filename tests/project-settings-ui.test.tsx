@@ -370,7 +370,7 @@ it("ignores a late read from another project and keeps general settings separate
   expect(
     (screen.getByLabelText("Исполняемый файл") as HTMLInputElement).value,
   ).toBe("beta-goga");
-  fireEvent.click(screen.getByRole("button", { name: "⚙ Настройки" }));
+  fireEvent.click(screen.getByRole("button", { name: "Настройки" }));
   expect(
     await screen.findByRole("heading", { name: "Общие настройки" }),
   ).toBeTruthy();
@@ -425,7 +425,7 @@ it("blocks stale launch and composition edits until refreshed project settings a
 });
 it.each([
   "Топики",
-  "⚙ Настройки",
+  "Настройки",
   "Добавить проект",
   "Запустить конвейер через меню",
   /Project Beta/,

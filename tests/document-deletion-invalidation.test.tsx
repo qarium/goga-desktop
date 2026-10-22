@@ -532,7 +532,7 @@ it("App preserves explicit profile through global settings deletion with the lau
     target: { value: "personal" },
   });
   await ready();
-  click("⚙ Настройки");
+  click("Настройки");
   await waitFor(() => expect(api.listSettings).toHaveBeenCalled());
   click("Профили");
   api.listSettings.mockResolvedValue({ profiles: ["other"] });

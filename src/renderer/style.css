@@ -1395,66 +1395,160 @@ code {
   overflow-y: auto;
 }
 
-/* Shared row for name, context and actions. Preserve native Dashboard offsets. */
+/* Identity is a separate left block. Context and run controls share the desktop row. */
+.project-bar {
+  grid-template-columns: 180px minmax(0, 1fr) auto;
+  grid-template-rows: 1fr;
+  column-gap: 24px;
+}
 .project-heading {
-  display: contents;
+  min-width: 0;
 }
 .project-heading > .eyebrow {
-  grid-column: 1 / -1;
-  grid-row: 1;
+  display: block;
   line-height: 16px;
-}
-.project-heading-context {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  grid-column: 1;
-  grid-row: 2;
-  min-width: 0;
-  min-height: 36px;
-}
-.project-heading-context > .eyebrow {
-  flex-shrink: 0;
-  white-space: nowrap;
-  line-height: 16px;
-}
-.project-heading-context > .topic-context-picker {
-  margin-left: 0;
-}
-.project-heading-context .topic-context-name {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.project-heading-context > h1 {
-  margin: 0;
-  margin-right: auto;
-  min-width: 48px;
-  flex: 1 1 auto;
+.project-heading > h1 {
+  margin: 4px 0 0;
   line-height: 26px;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.project-bar > .project-actions {
-  flex-shrink: 0;
-  grid-column: 2;
-  grid-row: 2;
+.project-heading-context {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  min-height: 36px;
+}
+.project-heading-context > .topic-context-picker {
+  margin-left: 0;
+  min-width: 0;
+}
+.project-heading-context .topic-context-name {
+  max-width: 230px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .project-heading-context .topic-context-split {
   height: 36px;
 }
-.project-heading-context .topic-context-name {
-  max-width: 230px;
+.project-bar > .project-actions {
+  grid-column: 3;
+  grid-row: 1;
+  flex-shrink: 0;
 }
-@media (max-width: 1100px) {
+.sidebar-footer {
+  align-items: center;
+}
+.sidebar-toggle {
+  margin-left: auto;
+  flex-shrink: 0;
+}
+.app-shell.sidebar-collapsed {
+  grid-template-columns: 60px minmax(0, 1fr);
+}
+.sidebar-collapsed .sidebar {
+  padding-left: 8px;
+  padding-right: 8px;
+}
+.sidebar-collapsed .sidebar > .eyebrow,
+.sidebar-collapsed .sidebar > select,
+.sidebar-collapsed .local-label,
+.sidebar-collapsed .sidebar-heading > .eyebrow,
+.sidebar-collapsed .project-button > span:last-child,
+.sidebar-collapsed .settings-button > span,
+.sidebar-collapsed .sidebar-footer > span {
+  display: none;
+}
+.sidebar-collapsed .sidebar-heading {
+  justify-content: center;
+}
+.sidebar-collapsed .project-button,
+.sidebar-collapsed .settings-button {
+  justify-content: center;
+  padding-left: 0;
+  padding-right: 0;
+}
+.sidebar-collapsed .sidebar-footer {
+  padding: 14px 0 0;
+  justify-content: center;
+}
+.sidebar-collapsed .sidebar-toggle {
+  margin-left: 0;
+}
+@media (max-width: 1200px) {
   .project-bar {
-    column-gap: 10px;
+    grid-template-columns: 180px minmax(0, 1fr) auto;
     padding-left: 16px;
     padding-right: 16px;
   }
   .project-heading-context .topic-context-name {
-    max-width: 170px;
+    max-width: 130px;
+  }
+}
+/* Compact desktop still keeps identity, topic actions and launch controls in one row. */
+@media (min-width: 901px) and (max-width: 1050px) {
+  .project-bar {
+    grid-template-columns: 104px minmax(0, 1fr) auto;
+  }
+  .project-heading > .eyebrow {
+    white-space: normal;
+    letter-spacing: 0.5px;
+    font-size: 9px;
+    line-height: 13px;
+  }
+  .project-heading > h1 {
+    font-size: 18px;
+    line-height: 22px;
+  }
+  .project-heading-context {
+    gap: 6px;
+  }
+  .project-heading-context > .topic-context-picker {
+    flex-shrink: 0;
+  }
+  .project-heading-context .topic-context-name {
+    min-width: 96px;
+    max-width: 96px;
+    padding-left: 6px;
+    padding-right: 6px;
+    font-size: 11px;
+  }
+  .project-heading-context .topic-context-trigger {
+    min-width: 28px;
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+  .project-heading-context .topic-context-chevron {
+    right: 10px;
+  }
+  .project-heading-context .repository-actions {
+    gap: 4px;
+  }
+  .project-heading-context .repository-action-button {
+    width: 30px;
+    padding: 5px;
+  }
+  .project-bar > .project-actions {
+    gap: 6px;
+  }
+  .project-bar > .project-actions > button,
+  .project-bar > .project-actions .context-launch-trigger {
+    padding-left: 8px;
+    padding-right: 8px;
+    font-size: 11px;
+  }
+  .project-bar > .project-actions .context-launch-trigger {
+    padding-right: 28px;
+  }
+  .project-bar > .project-actions .context-select-chevron {
+    right: 10px;
   }
 }
 @media (max-width: 900px) {
@@ -1465,9 +1559,6 @@ code {
   }
   .project-heading-context {
     flex-wrap: wrap;
-  }
-  .project-heading-context > h1 {
-    flex-basis: 100%;
   }
   .project-heading-context .topic-context-picker {
     flex: 1;

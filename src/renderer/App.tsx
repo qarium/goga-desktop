@@ -113,6 +113,22 @@ const ambiguousContextReason =
   "Несколько рабочих копий соответствуют этому топику. Выберите конкретную проверенную копию в шапке; запуск не будет назначен автоматически.";
 
 export function App() {
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try {
+      return localStorage.getItem("goga.desktop.sidebarCollapsed") === "true";
+    } catch {
+      return false;
+    }
+  });
+  const toggleSidebar = () =>
+    setSidebarCollapsed((value) => {
+      try {
+        localStorage.setItem("goga.desktop.sidebarCollapsed", String(!value));
+      } catch {
+        /* UI remains usable without storage. */
+      }
+      return !value;
+    });
   const repositoryPopupAnchor = useRef<HTMLDivElement>(null);
   const repositoryActions = useRepositoryActionController();
   useEffect(() => {
@@ -934,13 +950,13 @@ export function App() {
     </div>
   );
   return (
-    <div className="app-shell">
+    <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
       <header className="titlebar">
         <div className="wordmark">
           <b>Go</b>ga <small>DESKTOP</small>
         </div>
       </header>
-      <aside className="sidebar">
+      <aside className="sidebar" aria-label="Боковая панель">
         <label className="eyebrow" htmlFor="workspace">
           РАБОЧАЯ ОБЛАСТЬ
         </label>
@@ -964,6 +980,7 @@ export function App() {
           {projects.map((p) => (
             <button
               title={p.path}
+              aria-label={p.name}
               key={p.id}
               className={`project-button ${page !== "settings" && p.id === projectId ? "active" : ""}`}
               disabled={settingsBusy}
@@ -987,6 +1004,7 @@ export function App() {
           ))}
         </nav>
         <button
+          aria-label="Настройки"
           className={`settings-button ${page === "settings" ? "active" : ""}`}
           disabled={settingsBusy}
           onClick={() =>
@@ -1002,6 +1020,23 @@ export function App() {
         <small className="sidebar-footer">
           <span>© Goga 2026</span>
           <span className="app-version">v{version}</span>
+          <button
+            className="icon-button sidebar-toggle"
+            aria-label={
+              sidebarCollapsed
+                ? "Развернуть боковую панель"
+                : "Свернуть боковую панель"
+            }
+            aria-expanded={!sidebarCollapsed}
+            onClick={toggleSidebar}
+            title={
+              sidebarCollapsed
+                ? "Развернуть боковую панель"
+                : "Свернуть боковую панель"
+            }
+          >
+            <span aria-hidden="true">{sidebarCollapsed ? "»" : "«"}</span>
+          </button>
         </small>
       </aside>
       <main className="main-area">
@@ -1010,102 +1045,102 @@ export function App() {
             <span className="eyebrow">
               Мой компьютер / {page === "settings" ? "НАСТРОЙКИ" : "ПРОЕКТ"}
             </span>
-            <div className="project-heading-context">
-              <h1 title={page === "settings" ? "Настройки" : project?.name}>
-                {page === "settings"
-                  ? "Настройки"
-                  : (project?.name ?? "Goga Desktop")}
-              </h1>
-              {page !== "settings" && project && (
-                <TopicContextPicker
-                  key={project.id}
-                  project={project}
-                  board={currentTopics}
-                  selected={selectedContext}
-                  knownContexts={knownContexts}
-                  runs={runs as RunWithContext[]}
-                  disabled={settingsBusy}
-                  onTransitionIntent={() => {
-                    if (pageRef.current !== "context-preparation") return;
-                    // A new explicit topic transition owns continuation even
-                    // while its verification is pending. Retain A's flight
-                    // for reconciliation, but never publish its late result.
-                    initialPreparationNonce.current++;
-                    setInitialPreparation(null);
-                    setPage("context-runs");
-                  }}
-                  onCreated={(record) =>
-                    navigateContext(() => {
-                      setContextSelections((values) => ({
-                        ...values,
-                        [projectId]: record,
-                      }));
-                      setKnownContexts((values) => [
-                        ...values.filter(
-                          (value) => value.contextId !== record.contextId,
-                        ),
-                        record,
-                      ]);
-                      topicsChanged();
-                      showContextPreparation("pipeline", record, true);
-                    })
-                  }
-                  onSelect={(record) =>
-                    navigateContext(() => {
-                      setContextSelections((values) => ({
-                        ...values,
-                        [projectId]: record,
-                      }));
-                      setKnownContexts((values) => [
-                        ...values.filter(
-                          (value) => value.contextId !== record.contextId,
-                        ),
-                        record,
-                      ]);
-                      selectedRef.current = null;
-                      selectedContextRef.current = record;
-                      setSelected(null);
-                      setPage(
-                        pageRef.current === "project-settings"
-                          ? "project-settings"
-                          : "context-runs",
-                      );
-                      setError("");
-                    })
-                  }
-                  onClear={() =>
-                    navigateContext(() => {
-                      setContextSelections((values) => ({
-                        ...values,
-                        [projectId]: null,
-                      }));
-                      selectedRef.current = null;
-                      selectedContextRef.current = null;
-                      setSelected(null);
-                      setPage("project-settings");
-                    })
-                  }
-                  onOpenCard={(target, year) =>
-                    navigate(() =>
-                      setTopicCard({
-                        project,
-                        year,
-                        target,
-                        board: null,
-                        context: { kind: "topic" },
-                      }),
-                    )
-                  }
-                />
-              )}
-              {page !== "settings" && project && (
-                <RepositoryActions
-                  project={project}
-                  selected={selectedContext}
-                  disabled={settingsBusy}
-                />
-              )}
-            </div>
+            <h1 title={page === "settings" ? "Настройки" : project?.name}>
+              {page === "settings"
+                ? "Настройки"
+                : (project?.name ?? "Goga Desktop")}
+            </h1>
+          </div>
+          <div className="project-heading-context">
+            {page !== "settings" && project && (
+              <TopicContextPicker
+                key={project.id}
+                project={project}
+                board={currentTopics}
+                selected={selectedContext}
+                knownContexts={knownContexts}
+                runs={runs as RunWithContext[]}
+                disabled={settingsBusy}
+                onTransitionIntent={() => {
+                  if (pageRef.current !== "context-preparation") return;
+                  // A new explicit topic transition owns continuation even
+                  // while its verification is pending. Retain A's flight
+                  // for reconciliation, but never publish its late result.
+                  initialPreparationNonce.current++;
+                  setInitialPreparation(null);
+                  setPage("context-runs");
+                }}
+                onCreated={(record) =>
+                  navigateContext(() => {
+                    setContextSelections((values) => ({
+                      ...values,
+                      [projectId]: record,
+                    }));
+                    setKnownContexts((values) => [
+                      ...values.filter(
+                        (value) => value.contextId !== record.contextId,
+                      ),
+                      record,
+                    ]);
+                    topicsChanged();
+                    showContextPreparation("pipeline", record, true);
+                  })
+                }
+                onSelect={(record) =>
+                  navigateContext(() => {
+                    setContextSelections((values) => ({
+                      ...values,
+                      [projectId]: record,
+                    }));
+                    setKnownContexts((values) => [
+                      ...values.filter(
+                        (value) => value.contextId !== record.contextId,
+                      ),
+                      record,
+                    ]);
+                    selectedRef.current = null;
+                    selectedContextRef.current = record;
+                    setSelected(null);
+                    setPage(
+                      pageRef.current === "project-settings"
+                        ? "project-settings"
+                        : "context-runs",
+                    );
+                    setError("");
+                  })
+                }
+                onClear={() =>
+                  navigateContext(() => {
+                    setContextSelections((values) => ({
+                      ...values,
+                      [projectId]: null,
+                    }));
+                    selectedRef.current = null;
+                    selectedContextRef.current = null;
+                    setSelected(null);
+                    setPage("project-settings");
+                  })
+                }
+                onOpenCard={(target, year) =>
+                  navigate(() =>
+                    setTopicCard({
+                      project,
+                      year,
+                      target,
+                      board: null,
+                      context: { kind: "topic" },
+                    }),
+                  )
+                }
+              />
+            )}
+            {page !== "settings" && project && (
+              <RepositoryActions
+                project={project}
+                selected={selectedContext}
+                disabled={settingsBusy}
+              />
+            )}
           </div>
           {error && (
             <p className="close-error" role="alert" title={error}>

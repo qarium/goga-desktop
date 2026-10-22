@@ -57,7 +57,7 @@ it("keeps a compact project header with Runs and Launch actions and settings in 
   expect(
     within(container.querySelector(".sidebar") as HTMLElement).getByRole(
       "button",
-      { name: "⚙ Настройки" },
+      { name: "Настройки" },
     ),
   ).toBeTruthy();
 });
