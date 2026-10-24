@@ -323,3 +323,90 @@ it("switches a granted console with input while selection metadata is still savi
     expect.objectContaining({ kind: "activate", ref }),
   );
 });
+
+it("follows a centered terminal when its workspace shifts without resizing the terminal", async () => {
+  const observed = new Set<Element>();
+  let notify!: ResizeObserverCallback;
+  const disconnect = vi.fn(() => observed.clear());
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: ResizeObserverCallback) {
+        notify = callback;
+      }
+      observe(element: Element) {
+        observed.add(element);
+      }
+      disconnect = disconnect;
+    },
+  );
+  const rect = vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockReturnValue({ x: 300, y: 200, width: 600, height: 400 } as DOMRect);
+  const request = vi.fn(async () => true);
+  const api = { request } as any;
+  try {
+    const view = render(
+      <div className="scroll-area" data-testid="workspace">
+        <section className="project-content">
+          <TerminalSurface
+            api={api}
+            scope="p"
+            revision="v"
+            tabId="t"
+            session={ref}
+            onError={() => {}}
+          />
+        </section>
+      </div>,
+    );
+    await act(async () => {});
+    request.mockClear();
+    const workspace = view.getByTestId("workspace");
+    // The max-width content stays 600px wide; only its ancestor resizes.
+    rect.mockReturnValue({
+      x: 180,
+      y: 200,
+      width: 600,
+      height: 400,
+    } as DOMRect);
+    await act(async () => {
+      if (observed.has(workspace)) notify([], {} as ResizeObserver);
+    });
+    expect(request).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        kind: "activate",
+        ref,
+        bounds: { x: 180, y: 200, width: 600, height: 400 },
+      }),
+    );
+    request.mockClear();
+    await act(async () => {
+      notify([], {} as ResizeObserver);
+    });
+    expect(request).not.toHaveBeenCalled();
+    rect.mockReturnValue({
+      x: 300,
+      y: 200,
+      width: 600,
+      height: 400,
+    } as DOMRect);
+    await act(async () => {
+      notify([], {} as ResizeObserver);
+    });
+    expect(request).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        kind: "activate",
+        ref,
+        bounds: { x: 300, y: 200, width: 600, height: 400 },
+      }),
+    );
+    view.unmount();
+    expect(disconnect).toHaveBeenCalledTimes(1);
+    request.mockClear();
+    await act(async () => notify([], {} as ResizeObserver));
+    expect(request).not.toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});

@@ -1,7 +1,7 @@
 import { flushSync } from "react-dom";
 import { LoadingState } from "./LoadingBoundary";
 import { useViewActive } from "./RetainedViews";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ScopeRef } from "../shared/context";
 import {
   TERMINAL_SELECTION_STALE,
@@ -39,6 +39,7 @@ interface Props {
   blocked?: string;
   obscured?: boolean;
 }
+type PendingConfirmation = TerminalConfirmation & { closingTabId?: string };
 const errorText = (error: unknown) =>
   error instanceof Error ? error.message : "Операция терминала не выполнена.";
 export function TerminalWorkspace(props: Props) {
@@ -56,6 +57,9 @@ function Workspace({ api, scope, obscured }: Props) {
   const activeRef = useRef(viewActive);
   activeRef.current = viewActive;
   const needsRead = useRef(false);
+  // Ensure a visible tab only on entry, never on close/metadata notifications.
+  const ensureOnEntry = useRef(true);
+  const wasActive = useRef(viewActive);
   const metadataRead = useRef<Promise<void> | undefined>(undefined);
   const metadataFailed = useRef(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -67,13 +71,16 @@ function Workspace({ api, scope, obscured }: Props) {
   const [openedSession, setSession] = useState<TerminalSessionInfo | undefined>(
     saved?.session,
   );
+  const [enteringEmpty, setEnteringEmpty] = useState(!saved?.state.tabs.length);
   const [validated, setValidated] = useState(false);
   const [error, setError] = useState("");
   const [presentationFailed, setPresentationFailed] = useState(false);
   const [busy, setBusy] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [closingTabId, setClosingTabId] = useState<string>();
+  const closingTarget = useRef<string | undefined>(undefined);
   const [opening, setOpening] = useState(false);
-  const [confirmation, setConfirmation] = useState<TerminalConfirmation>();
+  const [confirmation, setConfirmation] = useState<PendingConfirmation>();
   const live = useRef(true),
     reload = useRef<() => Promise<void>>(async () => {});
   const flight = useRef(false),
@@ -83,6 +90,8 @@ function Workspace({ api, scope, obscured }: Props) {
   const queuedSelection = useRef<string | null>(null);
   const selectionTask = useRef<Promise<boolean> | null>(null);
   const selectedId = optimisticId ?? state?.selectedId;
+  const closingSelected =
+    closingTabId !== undefined && closingTabId === selectedId;
   const selected = state?.tabs.find((tab) => tab.id === selectedId);
   const session =
     state?.sessions.find((s) => s.tabId === selectedId) ??
@@ -125,7 +134,9 @@ function Workspace({ api, scope, obscured }: Props) {
           try {
             let next = await api.request({ kind: "read", scope });
             if (!effectCurrent || !live.current) return;
-            if (!next.initialized) {
+            const ensure = activeRef.current && ensureOnEntry.current;
+            if (ensure) ensureOnEntry.current = false;
+            if (ensure && next.tabs.length === 0) {
               await api.request({
                 kind: "initialize",
                 scope,
@@ -146,6 +157,7 @@ function Workspace({ api, scope, obscured }: Props) {
             setSession(current?.state === "starting" ? undefined : current);
           } catch (e) {
             if (!effectCurrent) return;
+            if (activeRef.current) ensureOnEntry.current = false;
             metadataFailed.current = true;
             needsRead.current = true;
             if (effectCurrent && live.current) setError(errorText(e));
@@ -157,7 +169,10 @@ function Workspace({ api, scope, obscured }: Props) {
         if (!effectCurrent) return;
         reading = undefined;
         metadataRead.current = undefined;
-        if (live.current) setRefreshing(false);
+        if (live.current) {
+          setRefreshing(false);
+          setEnteringEmpty(false);
+        }
       });
       metadataRead.current = reading;
       return reading;
@@ -185,14 +200,24 @@ function Workspace({ api, scope, obscured }: Props) {
           .catch(() => {});
     };
   }, [api, scope]);
-  useEffect(() => {
-    if (viewActive && needsRead.current) void reload.current();
+  useLayoutEffect(() => {
+    const entered = viewActive && !wasActive.current;
+    wasActive.current = viewActive;
+    if (!entered) return;
+    ensureOnEntry.current = true;
+    const empty = !snapshot.current?.tabs.length;
+    if (empty) setEnteringEmpty(true);
+    // Warm, nonempty contexts keep their live screen with no extra request.
+    if (empty || needsRead.current) void reload.current();
+    else ensureOnEntry.current = false;
   }, [viewActive]);
   useEffect(() => {
     // Existing sessions already own a live screen. Selecting one is presentation,
     // never a request to reopen it. New sessions wait for durable selection.
     if (
       restarting ||
+      (closingTarget.current !== undefined &&
+        closingTarget.current === selected?.id) ||
       !validated ||
       optimisticId !== null ||
       (session && session.state !== "starting")
@@ -325,12 +350,19 @@ function Workspace({ api, scope, obscured }: Props) {
       if (live.current) await reload.current();
     });
   }
-  async function complete(preview: TerminalConfirmation) {
+  async function complete(preview: PendingConfirmation) {
     const restartingSession = preview.kind === "refresh";
+    const closingTab = preview.kind === "tab";
+    let reconciled = false;
     // Remove the old native presentation before its generation is retired.
     // Closing the dialog must not briefly remount that screen during confirm.
     flushSync(() => {
       if (restartingSession) setRestarting(true);
+      if (closingTab) {
+        // Closing is an admission guard, never a reason to retry a failed open.
+        closingTarget.current = preview.closingTabId;
+        setClosingTabId(preview.closingTabId);
+      }
       setConfirmation(undefined);
     });
     ticket.current = undefined;
@@ -343,11 +375,15 @@ function Workspace({ api, scope, obscured }: Props) {
       if (!live.current) return;
       if (result.session) setSession(result.session);
       await reload.current();
+      reconciled = true;
       if (result.status !== "success")
         throw Error(
           result.message ?? "Не все процессы завершены. Вкладка сохранена.",
         );
     } catch (error) {
+      // A rejected IPC may have already stopped/removed the session. Reconcile
+      // before presenting it again, but keep the original close error visible.
+      if (live.current && closingTab && !reconciled) await reload.current();
       // A rejected restart may already have retired the old generation.
       // Keep its screen hidden rather than producing a second presentation error.
       if (live.current && restartingSession) setPresentationFailed(true);
@@ -357,12 +393,18 @@ function Workspace({ api, scope, obscured }: Props) {
         if (metadataFailed.current) setPresentationFailed(true);
         setRestarting(false);
       }
+      if (live.current && closingTab) {
+        if (metadataFailed.current && preview.closingTabId === selectedId)
+          setPresentationFailed(true);
+        closingTarget.current = undefined;
+        setClosingTabId(undefined);
+      }
     }
   }
   async function prepare(tabId?: string) {
     await action(async () => {
       if (!state) return;
-      const preview = tabId
+      const result = tabId
         ? await api.request({
             kind: "prepare-close",
             scope,
@@ -377,6 +419,7 @@ function Workspace({ api, scope, obscured }: Props) {
               generation: session!.generation,
             },
           });
+      const preview: PendingConfirmation = { ...result, closingTabId: tabId };
       if (!live.current) {
         await api.request({ kind: "cancel", token: preview.token });
         return;
@@ -391,7 +434,12 @@ function Workspace({ api, scope, obscured }: Props) {
   }
   const usable = session && selected && session.tabId === selected.id;
   const hidden =
-    restarting || !!confirmation || presentationFailed || (!validated && !!error) || obscured;
+    restarting ||
+    closingSelected ||
+    !!confirmation ||
+    presentationFailed ||
+    (!validated && !!error) ||
+    obscured;
   return (
     <section
       className="terminal-workspace project-content"
@@ -425,7 +473,7 @@ function Workspace({ api, scope, obscured }: Props) {
         </div>
       )}
 
-      {state && !state.tabs.length && (
+      {state && !state.tabs.length && !enteringEmpty && (
         <div className="terminal-empty">
           <h3>Нет открытых терминалов</h3>
           <p>
@@ -434,11 +482,24 @@ function Workspace({ api, scope, obscured }: Props) {
           </p>
         </div>
       )}
-      {(restarting || (!error && ((!state && refreshing) || opening))) && (
-        <div className="terminal-session-loading">
-          <LoadingState label={restarting ? "Перезапускаем терминал" : "Открываем терминал"} />
-        </div>
-      )}
+      {!error &&
+        (restarting ||
+          closingSelected ||
+          (!state && refreshing) ||
+          enteringEmpty ||
+          opening) && (
+          <div className="terminal-session-loading">
+            <LoadingState
+              label={
+                restarting
+                  ? "Перезапускаем терминал"
+                  : closingSelected
+                    ? "Закрываем терминал"
+                    : "Открываем терминал"
+              }
+            />
+          </div>
+        )}
       {usable &&
         !hidden &&
         session.screen !== "lost" &&

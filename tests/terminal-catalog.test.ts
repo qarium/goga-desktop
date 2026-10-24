@@ -205,7 +205,7 @@ it("checks document authority after awaits and before persisting", async () => {
   ).rejects.toThrow("old document");
   expect((await f.store.load()).projects).toEqual({});
 });
-it("keeps an explicitly emptied project empty after restart, removal is host-only and owner-checked", async () => {
+it("keeps reads empty after removal but ensures one common terminal on the next explicit entry", async () => {
   const f = await fixture();
   const empty = await f.catalog.read("p");
   const state = await f.catalog.change({
@@ -225,7 +225,9 @@ it("keeps an explicitly emptied project empty after restart, removal is host-onl
     scope: "p",
     revision: current.revision,
   });
-  expect(again.tabs).toEqual([]);
+  expect(current.tabs).toEqual([]);
+  expect(again.tabs).toHaveLength(1);
+  expect(again.tabs[0].scope).toEqual({ kind: "common" });
   expect(again.initialized).toBe(true);
 });
 it("locks a closing tab against metadata edits; removal preserves unrelated concurrent metadata", async () => {
@@ -380,4 +382,52 @@ it("selection reports a retryable revision conflict but keeps owner, frozen-tab 
       name: "overwrite",
     }),
   ).rejects.toThrow();
+});
+
+it("ensures only one common tab across competing empty-context entries", async () => {
+  const f = await fixture();
+  const initial = await f.catalog.read(a);
+  const topicOnly = await f.catalog.change({
+    kind: "create",
+    scope: a,
+    area: "context",
+    revision: initial.revision,
+  });
+  const [primary, other] = await Promise.all([
+    f.catalog.change({
+      kind: "initialize",
+      scope: "p",
+      revision: topicOnly.revision,
+    }),
+    f.catalog.change({
+      kind: "initialize",
+      scope: b,
+      revision: topicOnly.revision,
+    }),
+  ]);
+  expect(primary.tabs).toHaveLength(1);
+  expect(primary.tabs[0].scope).toEqual({ kind: "common" });
+  expect(other.tabs).toEqual(primary.tabs);
+  const original = await f.catalog.read(a);
+  expect(original.selectedId).toBe(topicOnly.selectedId);
+  expect(original.tabs[0]).toEqual(topicOnly.tabs[0]);
+  expect(original.tabs).toHaveLength(2);
+});
+it("still rejects a stale initialization that would write into an empty context", async () => {
+  const f = await fixture();
+  const initial = await f.catalog.read(a);
+  await f.catalog.change({
+    kind: "create",
+    scope: a,
+    area: "context",
+    revision: initial.revision,
+  });
+  await expect(
+    f.catalog.change({
+      kind: "initialize",
+      scope: "p",
+      revision: initial.revision,
+    }),
+  ).rejects.toThrow();
+  expect((await f.catalog.read("p")).tabs).toEqual([]);
 });

@@ -87,7 +87,7 @@ export function initializeTerminalProject(
   id: string,
 ): TerminalProjectTabs {
   const valid = terminalProjectTabsSchema.parse(state);
-  return valid.initialized
+  return visibleTerminalTabs(valid.tabs, context).length > 0
     ? valid
     : createTerminalTab(valid, context, "common", id);
 }

@@ -145,3 +145,71 @@ it("preserves the native preflight/spawn stage through session errors without sp
     expect(spawn).toHaveBeenCalledTimes(preflight ? 0 : 1);
   }
 });
+
+it("waits for native readiness before any shell, then revalidates the root", async () => {
+  const f = setup();
+  let ready!: () => void;
+  const prepareNative = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        ready = resolve;
+      }),
+  );
+  (f.d as any).prepareNative = prepareNative;
+  const verifyRoot = vi.fn(async () => {});
+  f.d.acquire = async () => ({
+    launch: { ...launch, verifyRoot },
+    release: f.release,
+  });
+  const sessions = new TerminalSessions(f.d);
+  const first = sessions.open(tab, "p"),
+    duplicate = sessions.open(tab, "p");
+  await vi.waitFor(() => expect(prepareNative).toHaveBeenCalledTimes(1));
+  expect(f.d.spawn).not.toHaveBeenCalled();
+  expect(sessions.list()[0].state).toBe("starting");
+  ready();
+  const [a, b] = await Promise.all([first, duplicate]);
+  expect(a).toEqual(b);
+  expect(a.state).toBe("running");
+  expect(verifyRoot).toHaveBeenCalledTimes(2);
+  expect(f.d.spawn).toHaveBeenCalledTimes(1);
+});
+it.each(["failure", "cancel", "root-changed"])(
+  "readiness %s clears starting state without spawning or leaking the lease",
+  async (mode) => {
+    const f = setup();
+    let ready!: () => void, fail!: (e: Error) => void;
+    const prepareNative = vi.fn(
+      () =>
+        new Promise<void>((resolve, reject) => {
+          ready = resolve;
+          fail = reject;
+        }),
+    );
+    (f.d as any).prepareNative = prepareNative;
+    let valid = true;
+    f.d.acquire = async () => ({
+      launch: {
+        ...launch,
+        verifyRoot: async () => {
+          if (!valid) throw Error("changed");
+        },
+      },
+      release: f.release,
+    });
+    const sessions = new TerminalSessions(f.d);
+    const opening = sessions.open(tab, "p").catch((e) => e);
+    await vi.waitFor(() => expect(prepareNative).toHaveBeenCalledTimes(1));
+    if (mode === "cancel") sessions.cancelOpen(tab, "p");
+    if (mode === "root-changed") valid = false;
+    if (mode === "failure") fail(Error("synthetic-secret"));
+    else ready();
+    const error = await opening;
+    expect(error.retained).toBe(false);
+    expect(error.message).not.toContain("synthetic-secret");
+    if (mode === "failure") expect(error.message).toContain("native-preflight");
+    expect(f.d.spawn).not.toHaveBeenCalled();
+    expect(f.release).toHaveBeenCalledTimes(1);
+    expect(sessions.list()).toHaveLength(0);
+  },
+);

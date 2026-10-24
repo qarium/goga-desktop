@@ -85,7 +85,14 @@ export function TerminalSurface(props: {
       typeof ResizeObserver === "undefined"
         ? undefined
         : new ResizeObserver(measure);
-    if (root.current) observer?.observe(root.current);
+    // A centered max-width surface can move without changing its own size
+    // (e.g. sidebar collapse). Ancestor resizes must update the native bounds too.
+    for (
+      let node: HTMLElement | null = root.current;
+      node;
+      node = node.parentElement
+    )
+      observer?.observe(node);
     window.addEventListener("resize", measure);
     window.addEventListener("scroll", measure, true);
     measure();

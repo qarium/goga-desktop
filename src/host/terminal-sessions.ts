@@ -63,6 +63,8 @@ export type TerminalSessionRef = Pick<
 >;
 export interface TerminalSessionDependencies {
   acquire(scope: ScopeRef): Promise<TerminalLease>;
+  /** Shared cold native readiness. No shell exists while this promise is pending. */
+  prepareNative?(): Promise<void>;
   spawn(launch: TerminalLaunch): TerminalPty;
   /** Must bind to the OS identity captured at spawn, not rediscover a PID on close. */
   processes(pty: TerminalPty): TerminalProcessControl;
@@ -435,12 +437,17 @@ export class TerminalSessions {
         phase = "root";
         await entry.lease.launch.verifyRoot();
         if (entry.cancelled) throw Error();
+        if (this.dependencies.prepareNative) {
+          phase = "native-preflight";
+          await this.dependencies.prepareNative();
+          if (entry.cancelled) throw Error();
+        }
         phase = "screen";
         entry.screen = await this.dependencies.prepareScreen(
           this.ref(entry),
           () => this.loseScreen(entry),
         );
-        // The renderer can take seconds to initialize. Re-check the pinned root
+        // Native readiness and renderer startup may take seconds. Re-check the pinned root
         // after waiting, then perform the readiness check and spawn without yielding.
         phase = "revalidate";
         await entry.lease.launch.verifyRoot();

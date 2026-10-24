@@ -36,6 +36,7 @@ export function createTerminalRuntime(options: TerminalRuntimeOptions) {
   const surface = new TerminalTransport(options.createView);
   const sessions = new TerminalSessions({
     acquire: (scope) => options.host.acquireTerminalContext(scope),
+    prepareNative: native.prepare,
     spawn: native.spawn,
     processes: native.processes,
     prepareScreen: surface.prepare,

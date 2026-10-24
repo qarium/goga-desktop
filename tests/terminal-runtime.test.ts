@@ -246,3 +246,25 @@ it("rejects a changed owner before native startup and keeps persisted metadata",
   expect(f.driver.spawn).not.toHaveBeenCalled();
   expect((await f.runtime.catalog.read("p")).tabs).toEqual(state.tabs);
 });
+it("uses asynchronous inspector preparation when restoring a persisted terminal tab", async () => {
+  const f = await setup();
+  const state = await initialized(f);
+  let ready!: () => void;
+  const prepare = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        ready = resolve;
+      }),
+  );
+  (f.inspector as any).prepare = prepare;
+  const opening = f.runtime.sessions.open(state.tabs[0], "p");
+  await vi.waitFor(() => expect(prepare).toHaveBeenCalledTimes(1));
+  expect(f.driver.spawn).not.toHaveBeenCalled();
+  ready();
+  expect((await opening).state).toBe("running");
+  expect(f.driver.spawn).toHaveBeenCalledTimes(1);
+  const close = f.runtime.sessions.prepareClose({ kind: "exit" });
+  expect(
+    (await f.runtime.sessions.confirmClose(close.token, true)).status,
+  ).toBe("success");
+});

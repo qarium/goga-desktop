@@ -135,16 +135,24 @@ export class TerminalCatalog {
       const context = await this.context(request.scope),
         registry = await this.store.load();
       guard();
+      let state = this.project(registry, context);
+      // Entry initialization is an idempotent ensure, not unconditional create.
+      // A competing entry may already have added the common tab. Returning that
+      // authorized snapshot writes nothing; stale requests that would write
+      // still go through the revision check below.
+      if (
+        request.kind === "initialize" &&
+        visibleTerminalTabs(state.tabs, context).length > 0
+      )
+        return this.snapshot(registry, context);
       if (registry.revision !== request.revision) {
         if (request.kind === "select") throw Error(TERMINAL_SELECTION_STALE);
         throw denied();
       }
-      let state = this.project(registry, context);
       if ("tabId" in request)
         this.target(registry, context, request.tabId, request.revision);
       switch (request.kind) {
         case "initialize":
-          if (state.initialized) return this.snapshot(registry, context);
           state = initializeTerminalProject(state, context, randomUUID());
           break;
         case "create":

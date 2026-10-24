@@ -72,7 +72,7 @@ describe("common and context terminal tabs", () => {
       visibleTerminalTabs(tabs, { kind: "primary", projectId: "q" }),
     ).toEqual([]);
   });
-  it("initializes once with a common tab even if first visit is a topic", () => {
+  it("ensures one common tab on explicit entry when the context has no visible tabs", () => {
     const empty: TerminalProjectTabs = {
       initialized: false,
       tabs: [],
@@ -89,9 +89,9 @@ describe("common and context terminal tabs", () => {
       tabs: [],
       selectedByContext: {},
     });
-    expect(initializeTerminalProject(closed, primary, "third").tabs).toEqual(
-      [],
-    );
+    expect(
+      initializeTerminalProject(closed, primary, "third").tabs,
+    ).toMatchObject([{ id: "third", scope: { kind: "common" } }]);
   });
   it("creates topic and primary bindings without changing existing scope", () => {
     const start = state();
@@ -173,4 +173,25 @@ it("reorders visible slots atomically without moving hidden tabs or mutating inp
   expect(() => reorderTerminalTab(tabs, a, "c", "b")).toThrow();
   expect(() => reorderTerminalTab(tabs, a, "p", "c")).toThrow();
   expect(ids(tabs)).toEqual(["c", "p", "a", "b", "c2"]);
+});
+
+it("ensures a common tab for an empty context without touching other contexts", () => {
+  const topicOnly = createTerminalTab(
+    { initialized: true, tabs: [], selectedByContext: {} },
+    a,
+    "context",
+    "topic-only",
+  );
+  const result = initializeTerminalProject(topicOnly, primary, "fallback");
+  expect(result.tabs[0]).toEqual(topicOnly.tabs[0]);
+  expect(result.selectedByContext[terminalContextKey(a)]).toBe("topic-only");
+  expect(visibleTerminalTabs(result.tabs, primary).map((t) => t.id)).toEqual([
+    "fallback",
+  ]);
+  expect(result.tabs[1].scope).toEqual({ kind: "common" });
+  expect(result.tabs[1].name).toBe("console (1)");
+  expect(initializeTerminalProject(topicOnly, a, "unneeded")).toEqual(
+    topicOnly,
+  );
+  expect(initializeTerminalProject(result, b, "duplicate")).toEqual(result);
 });

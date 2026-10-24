@@ -9,6 +9,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { RetainedViews } from "../src/renderer/RetainedViews";
 import { TerminalWorkspace } from "../src/renderer/TerminalWorkspace";
 const surfaceProbe = vi.hoisted(() => ({ fail: (_message: string) => {} }));
 vi.mock("../src/renderer/TerminalSurface", () => ({
@@ -178,7 +179,7 @@ it("confirmation hides the surface; cancel sends no stop or refresh", async () =
     expect.objectContaining({ kind: "confirm" }),
   );
 });
-it("closing the last tab stays empty, including after remount", async () => {
+it("closing the last tab stays empty until the next entry", async () => {
   const f = fixture();
   const view = render(<TerminalWorkspace api={f.api} scope="p" />);
   await screen.findByRole("tab");
@@ -188,12 +189,15 @@ it("closing the last tab stays empty, including after remount", async () => {
   await screen.findByRole("dialog");
   fireEvent.click(screen.getByRole("button", { name: "Завершить и закрыть" }));
   await screen.findByRole("heading", { name: "Нет открытых терминалов" });
-  view.unmount();
-  render(<TerminalWorkspace api={f.api} scope="p" />);
-  await screen.findByRole("heading", { name: "Нет открытых терминалов" });
   expect(f.request).not.toHaveBeenCalledWith(
     expect.objectContaining({ kind: "initialize" }),
   );
+  view.unmount();
+  render(<TerminalWorkspace api={f.api} scope="p" />);
+  await screen.findByRole("tab", { name: /console — Общий/ });
+  expect(
+    f.request.mock.calls.filter(([r]) => r.kind === "initialize"),
+  ).toHaveLength(1);
 });
 it("initializes the first console only on first entry", async () => {
   const f = fixture(false);
@@ -741,60 +745,209 @@ it("a failure belongs to its session generation and cannot hide a replacement", 
   expect(screen.queryByText("Screen unavailable")).toBeNull();
 });
 
-it.each([false, true])("refresh hides the retired screen behind a loader and settles (failure=%s)", async (fail) => {
-  const f = fixture();
-  const original = f.request.getMockImplementation()!;
-  let finish!: () => void;
-  let replacement: any;
-  f.request.mockImplementation(async (r: any) => {
-    if (r.kind === "confirm") {
-      await new Promise<void>(resolve => { finish = resolve; });
-      if (fail) throw Error("Restart failed");
-      replacement = { sessionId: "new", generation: "new-g", tabId: "t", state: "running", context: { kind: "primary", projectId: "p" } };
-      return { status: "success", session: replacement, completed: [], remaining: [] };
-    }
-    const result = await original(r);
-    return r.kind === "read" && replacement ? { ...result, sessions: [replacement] } : result;
-  });
-  render(<TerminalWorkspace api={f.api} scope="p" />);
-  await screen.findByTestId("terminal-screen");
-  fireEvent.click(screen.getByRole("button", { name: "Обновить сессию" }));
-  await screen.findByRole("dialog");
-  fireEvent.click(screen.getByRole("button", { name: "Завершить и обновить" }));
-  await screen.findByRole("status", { name: "Перезапускаем терминал" });
-  expect(screen.queryByTestId("terminal-screen")).toBeNull();
-  expect(screen.queryByRole("alert")).toBeNull();
-  await act(async () => finish());
-  await waitFor(() => expect(screen.queryByRole("status", { name: "Перезапускаем терминал" })).toBeNull());
-  if (fail) {
-    expect(await screen.findByText("Restart failed")).toBeTruthy();
+it.each([false, true])(
+  "refresh hides the retired screen behind a loader and settles (failure=%s)",
+  async (fail) => {
+    const f = fixture();
+    const original = f.request.getMockImplementation()!;
+    let finish!: () => void;
+    let replacement: any;
+    f.request.mockImplementation(async (r: any) => {
+      if (r.kind === "confirm") {
+        await new Promise<void>((resolve) => {
+          finish = resolve;
+        });
+        if (fail) throw Error("Restart failed");
+        replacement = {
+          sessionId: "new",
+          generation: "new-g",
+          tabId: "t",
+          state: "running",
+          context: { kind: "primary", projectId: "p" },
+        };
+        return {
+          status: "success",
+          session: replacement,
+          completed: [],
+          remaining: [],
+        };
+      }
+      const result = await original(r);
+      return r.kind === "read" && replacement
+        ? { ...result, sessions: [replacement] }
+        : result;
+    });
+    render(<TerminalWorkspace api={f.api} scope="p" />);
+    await screen.findByTestId("terminal-screen");
+    fireEvent.click(screen.getByRole("button", { name: "Обновить сессию" }));
+    await screen.findByRole("dialog");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Завершить и обновить" }),
+    );
+    await screen.findByRole("status", { name: "Перезапускаем терминал" });
     expect(screen.queryByTestId("terminal-screen")).toBeNull();
-  }
-  else expect(await screen.findByTestId("terminal-screen")).toBeTruthy();
-});
+    expect(screen.queryByRole("alert")).toBeNull();
+    await act(async () => finish());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("status", { name: "Перезапускаем терминал" }),
+      ).toBeNull(),
+    );
+    if (fail) {
+      expect(await screen.findByText("Restart failed")).toBeTruthy();
+      expect(screen.queryByTestId("terminal-screen")).toBeNull();
+    } else expect(await screen.findByTestId("terminal-screen")).toBeTruthy();
+  },
+);
 
-it.each([false, true])("initial terminal loading covers metadata and spawn, settles on failure=%s", async (fail) => {
+it.each([false, true])(
+  "initial terminal loading covers metadata and spawn, settles on failure=%s",
+  async (fail) => {
+    const f = fixture();
+    const original = f.request.getMockImplementation()!;
+    let releaseRead!: () => void;
+    let releaseOpen!: () => void;
+    f.request.mockImplementation(async (r: any) => {
+      if (r.kind === "read")
+        await new Promise<void>((resolve) => {
+          releaseRead = resolve;
+        });
+      if (r.kind === "open") {
+        await new Promise<void>((resolve) => {
+          releaseOpen = resolve;
+        });
+        if (fail) throw Error("Shell failed");
+      }
+      return original(r);
+    });
+    render(<TerminalWorkspace api={f.api} scope="p" />);
+    expect(
+      await screen.findByRole("status", { name: "Открываем терминал" }),
+    ).toBeTruthy();
+    expect(screen.queryByText("Загружаем вкладки…")).toBeNull();
+    await act(async () => releaseRead());
+    await waitFor(() => expect(releaseOpen).toBeTypeOf("function"));
+    expect(
+      screen.getByRole("status", { name: "Открываем терминал" }),
+    ).toBeTruthy();
+    expect(screen.queryByTestId("terminal-screen")).toBeNull();
+    await act(async () => releaseOpen());
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("status", { name: "Открываем терминал" }),
+      ).toBeNull(),
+    );
+    if (fail) expect(await screen.findByText("Shell failed")).toBeTruthy();
+    else expect(await screen.findByTestId("terminal-screen")).toBeTruthy();
+  },
+);
+
+it("ensures a common tab when returning to a retained empty context, not on background changes", async () => {
   const f = fixture();
+  const pane = (active: boolean) => (
+    <RetainedViews activeKey={active ? "terminal" : null}>
+      <TerminalWorkspace api={f.api} scope="p" />
+    </RetainedViews>
+  );
+  const view = render(pane(true));
+  await screen.findByTestId("terminal-screen");
+  f.empty();
+  await act(async () => f.notify());
+  await screen.findByRole("heading", { name: "Нет открытых терминалов" });
+  expect(
+    f.request.mock.calls.filter(([r]) => r.kind === "initialize"),
+  ).toHaveLength(0);
+  view.rerender(pane(false));
+  await act(async () => f.notify());
+  view.rerender(pane(true));
+  await screen.findByRole("tab", { name: /console — Общий/ });
+  expect(
+    f.request.mock.calls.filter(([r]) => r.kind === "initialize"),
+  ).toHaveLength(1);
+  const reads = f.request.mock.calls.filter(([r]) => r.kind === "read").length;
+  view.rerender(pane(false));
+  view.rerender(pane(true));
+  expect(f.request.mock.calls.filter(([r]) => r.kind === "read")).toHaveLength(
+    reads,
+  );
+});
+it("settles failed empty-context initialization without retrying or opening a shell", async () => {
+  const f = fixture();
+  f.empty();
   const original = f.request.getMockImplementation()!;
-  let releaseRead!: () => void;
-  let releaseOpen!: () => void;
+  let reject!: (error: Error) => void;
+  f.request.mockImplementation((r: any) =>
+    r.kind === "initialize"
+      ? new Promise((_, fail) => {
+          reject = fail;
+        })
+      : original(r),
+  );
+  render(<TerminalWorkspace api={f.api} scope="p" />);
+  await waitFor(() => expect(reject).toBeDefined());
+  expect(
+    screen.getByRole("status", { name: "Открываем терминал" }),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole("heading", { name: "Нет открытых терминалов" }),
+  ).toBeNull();
+  await act(async () => reject(new Error("Не удалось сохранить вкладку")));
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "Не удалось сохранить вкладку",
+  );
+  expect(
+    screen.queryByRole("status", { name: "Открываем терминал" }),
+  ).toBeNull();
+  await act(async () => f.notify());
+  expect(
+    f.request.mock.calls.filter(([r]) => r.kind === "initialize"),
+  ).toHaveLength(1);
+  expect(f.request.mock.calls.filter(([r]) => r.kind === "open")).toHaveLength(
+    0,
+  );
+});
+it("ensures an empty context once when effects are replayed", async () => {
+  const f = fixture();
+  f.empty();
+  render(
+    <React.StrictMode>
+      <TerminalWorkspace api={f.api} scope="p" />
+    </React.StrictMode>,
+  );
+  await screen.findByRole("tab", { name: /console — Общий/ });
+  expect(
+    f.request.mock.calls.filter(([r]) => r.kind === "initialize"),
+  ).toHaveLength(1);
+});
+it("does not initialize a context hidden while its first read is pending", async () => {
+  const f = fixture();
+  f.empty();
+  const original = f.request.getMockImplementation()!;
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
   f.request.mockImplementation(async (r: any) => {
-    if (r.kind === "read") await new Promise<void>(resolve => { releaseRead = resolve; });
-    if (r.kind === "open") {
-      await new Promise<void>(resolve => { releaseOpen = resolve; });
-      if (fail) throw Error("Shell failed");
-    }
+    if (r.kind === "read") await gate;
     return original(r);
   });
-  render(<TerminalWorkspace api={f.api} scope="p" />);
-  expect(await screen.findByRole("status", { name: "Открываем терминал" })).toBeTruthy();
-  expect(screen.queryByText("Загружаем вкладки…")).toBeNull();
-  await act(async () => releaseRead());
-  await waitFor(() => expect(releaseOpen).toBeTypeOf("function"));
-  expect(screen.getByRole("status", { name: "Открываем терминал" })).toBeTruthy();
-  expect(screen.queryByTestId("terminal-screen")).toBeNull();
-  await act(async () => releaseOpen());
-  await waitFor(() => expect(screen.queryByRole("status", { name: "Открываем терминал" })).toBeNull());
-  if (fail) expect(await screen.findByText("Shell failed")).toBeTruthy();
-  else expect(await screen.findByTestId("terminal-screen")).toBeTruthy();
+  const pane = (active: boolean) => (
+    <RetainedViews activeKey={active ? "terminal" : null}>
+      <TerminalWorkspace api={f.api} scope="p" />
+    </RetainedViews>
+  );
+  const view = render(pane(true));
+  view.rerender(pane(false));
+  await act(async () => release());
+  expect(
+    f.request.mock.calls.filter(([r]) => r.kind === "initialize"),
+  ).toHaveLength(0);
+  expect(f.request.mock.calls.filter(([r]) => r.kind === "open")).toHaveLength(
+    0,
+  );
+  view.rerender(pane(true));
+  await screen.findByRole("tab", { name: /console — Общий/ });
+  expect(
+    f.request.mock.calls.filter(([r]) => r.kind === "initialize"),
+  ).toHaveLength(1);
 });

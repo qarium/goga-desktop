@@ -11,6 +11,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { mkdtemp, rm } from "node:fs/promises";
 import { TerminalCatalog } from "../src/host/terminal-catalog";
 import { TerminalStore } from "../src/host/terminal-store";
+import { RetainedViews } from "../src/renderer/RetainedViews";
 import { TerminalWorkspace } from "../src/renderer/TerminalWorkspace";
 import type { ScopeRef } from "../src/shared/context";
 import type { TerminalContext } from "../src/shared/terminal";
@@ -130,4 +131,57 @@ it("persists UI reorder/name/selection with real catalog and store across a fres
     "true",
   );
   expect((await restored.read("q")).tabs.map((t) => t.name)).toEqual(["Q"]);
+});
+
+it("switches from a topic-only console to a new common console in primary without replacing the topic session", async () => {
+  const home = await mkdtemp("/private/tmp/goga-terminal-empty-context-");
+  homes.push(home);
+  const catalog = new TerminalCatalog(new TerminalStore(home), owner);
+  const initial = await catalog.read(a);
+  const topic = await catalog.change({
+    kind: "create",
+    scope: a,
+    revision: initial.revision,
+    area: "context",
+  });
+  const api = apiFor(catalog);
+  const pane = (scope: ScopeRef) => (
+    <RetainedViews activeKey={typeof scope === "string" ? scope : scope.topic}>
+      <TerminalWorkspace api={api} scope={scope} />
+    </RetainedViews>
+  );
+  const view = render(pane(a));
+  await screen.findByRole("tab", { name: /console — Терминал топика/ });
+  await screen.findByText("test surface");
+  expect(
+    api.request.mock.calls.filter(([r]: any) => r.kind === "initialize"),
+  ).toHaveLength(0);
+  view.rerender(pane("p"));
+  await screen.findByRole("tab", { name: /console \(1\) — Общий терминал/ });
+  await screen.findByText("test surface");
+  const primary = await catalog.read("p");
+  expect(primary.tabs).toHaveLength(1);
+  expect(primary.tabs[0].scope).toEqual({ kind: "common" });
+  expect((await catalog.read(a)).selectedId).toBe(topic.selectedId);
+  view.rerender(pane(a));
+  expect(
+    screen
+      .getByRole("tab", { name: /console — Терминал топика/ })
+      .getAttribute("aria-selected"),
+  ).toBe("true");
+  expect(screen.getByText("test surface")).toBeTruthy();
+  expect(
+    api.request.mock.calls.filter(
+      ([r]: any) =>
+        r.kind === "open" &&
+        typeof r.scope !== "string" &&
+        r.scope.topic === "a",
+    ),
+  ).toHaveLength(1);
+  view.rerender(pane(b));
+  await screen.findByRole("tab", { name: /console \(1\) — Общий терминал/ });
+  expect((await catalog.read(b)).tabs[0].id).toBe(primary.tabs[0].id);
+  expect(
+    api.request.mock.calls.filter(([r]: any) => r.kind === "initialize"),
+  ).toHaveLength(1);
 });

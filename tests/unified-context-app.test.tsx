@@ -27,6 +27,55 @@ vi.mock("../src/renderer/ProjectSettings", () => ({
   },
   ProjectSettingsConfirmation: () => null,
 }));
+vi.mock("../src/renderer/TerminalSurface", () => ({
+  TerminalSurface: () => (
+    <div data-testid="terminal-screen">Terminal screen</div>
+  ),
+}));
+function terminalFixture() {
+  const projects = new Set<string>();
+  const snapshot = (scope: any) => {
+    const projectId = typeof scope === "string" ? scope : scope.projectId;
+    const context =
+      typeof scope === "string"
+        ? { kind: "primary", projectId }
+        : { kind: "topic", ...scope };
+    const tab = {
+      id: `common-${projectId}`,
+      projectId,
+      name: "console",
+      scope: { kind: "common" },
+    };
+    return {
+      revision: "v",
+      context,
+      initialized: projects.has(projectId),
+      tabs: projects.has(projectId) ? [tab] : [],
+      selectedId: projects.has(projectId) ? tab.id : null,
+      sessions: projects.has(projectId)
+        ? [
+            {
+              tabId: tab.id,
+              sessionId: `${tab.id}-${typeof scope === "string" ? "primary" : scope.contextId}`,
+              generation: "g",
+              state: "running",
+              context,
+            },
+          ]
+        : [],
+    };
+  };
+  return {
+    onChanged: () => () => {},
+    request: vi.fn(async (r: any) => {
+      if (r.kind === "initialize")
+        projects.add(typeof r.scope === "string" ? r.scope : r.scope.projectId);
+      if (r.kind === "read" || r.kind === "initialize")
+        return snapshot(r.scope);
+      throw Error(`Unexpected terminal request: ${r.kind}`);
+    }),
+  };
+}
 const completions = new Map<string, (run: any, stale: boolean) => void>();
 vi.mock("../src/renderer/LaunchForm", () => ({
   LaunchForm: ({ owner, onLaunched, blocked }: any) => {
@@ -584,24 +633,7 @@ it.each(["primary", "clone"])(
   },
 );
 it("keeps Terminal between Project and Topics, follows selector context without affecting run tabs", async () => {
-  api.terminal = {
-    onChanged: () => () => {},
-    request: vi.fn(async (request: any) => {
-      if (request.kind === "read")
-        return {
-          revision: "v",
-          context:
-            typeof request.scope === "string"
-              ? { kind: "primary", projectId: request.scope }
-              : { kind: "topic", ...request.scope },
-          initialized: true,
-          tabs: [],
-          selectedId: null,
-          sessions: [],
-        };
-      return null;
-    }),
-  };
+  api.terminal = terminalFixture();
   await mount();
   const nav = screen.getByRole("tablist", { name: "Разделы проекта" });
   expect(
@@ -611,7 +643,7 @@ it("keeps Terminal between Project and Topics, follows selector context without 
       .map((b) => b.textContent),
   ).toEqual(["Проект", "Терминал", "Топики"]);
   fireEvent.click(screen.getByRole("button", { name: "Терминал" }));
-  await screen.findByRole("heading", { name: "Нет открытых терминалов" });
+  await screen.findByTestId("terminal-screen");
   await choose("alpha");
   await waitFor(() =>
     expect(api.terminal.request).toHaveBeenCalledWith(
@@ -626,9 +658,18 @@ it("keeps Terminal between Project and Topics, follows selector context without 
       .getByRole("button", { name: "Терминал" })
       .getAttribute("aria-pressed"),
   ).toBe("true");
+  await screen.findByTestId("terminal-screen");
+  expect(
+    screen.getByRole("tab", { name: /console — Общий терминал/ }),
+  ).toBeTruthy();
+  expect(
+    api.terminal.request.mock.calls.filter(
+      ([r]: any) => r.kind === "initialize",
+    ),
+  ).toHaveLength(1);
   const reads = api.terminal.request.mock.calls.length;
   await choose("Без топика");
-  await screen.findByRole("heading", { name: "Нет открытых терминалов" });
+  await screen.findByTestId("terminal-screen");
   expect(api.terminal.request.mock.calls).toHaveLength(reads);
   expect(
     screen
@@ -642,22 +683,18 @@ it("returns to each project section instead of resetting to Project", async () =
     { id: "p", name: "Fixture", path: "/fixture/project" },
     { id: "q", name: "Other", path: "/fixture/other" },
   ]);
-  api.terminal = {
-    onChanged: () => () => {},
-    request: vi.fn(async (r: any) => ({
-      revision: "v",
-      initialized: true,
-      context: { kind: "primary", projectId: r.scope },
-      tabs: [],
-      selectedId: null,
-      sessions: [],
-    })),
-  };
+  api.terminal = terminalFixture();
   await mount();
   fireEvent.click(screen.getByRole("button", { name: "Терминал" }));
-  const savedScreen = await screen.findByRole("heading", {
-    name: "Нет открытых терминалов",
-  });
+  const savedScreen = await screen.findByTestId("terminal-screen");
+  expect(
+    screen.getByRole("tab", { name: /console — Общий терминал/ }),
+  ).toBeTruthy();
+  expect(
+    api.terminal.request.mock.calls.filter(
+      ([r]: any) => r.kind === "initialize",
+    ),
+  ).toHaveLength(1);
   api.terminal.request.mockClear();
   fireEvent.click(screen.getByRole("button", { name: "Other" }));
   await screen.findByTestId("settings");
@@ -669,9 +706,7 @@ it("returns to each project section instead of resetting to Project", async () =
         .getAttribute("aria-pressed"),
     ).toBe("true"),
   );
-  expect(
-    await screen.findByRole("heading", { name: "Нет открытых терминалов" }),
-  ).toBe(savedScreen);
+  expect(await screen.findByTestId("terminal-screen")).toBe(savedScreen);
   expect(
     api.terminal.request.mock.calls.filter(([r]: any) => r.kind === "read"),
   ).toEqual([]);

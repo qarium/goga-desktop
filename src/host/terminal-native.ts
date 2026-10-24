@@ -43,6 +43,7 @@ export interface NativeTerminalDriver {
   ): NativeTerminal;
 }
 export interface TerminalInspector {
+  prepare?(budgetMs?: number): Promise<void>;
   check?(): void;
   birth(pid: number, timeoutMs?: number): unknown;
   root(pid: number, timeoutMs?: number): unknown;
@@ -94,6 +95,15 @@ export class TerminalNativeAdapter {
     private inspector: TerminalInspector,
     private system: TerminalNativeSystem = {},
   ) {}
+  prepare = async (): Promise<void> => {
+    try {
+      if ((this.system.platform ?? process.platform) !== "darwin")
+        throw Error();
+      await this.inspector.prepare?.();
+    } catch {
+      throw new TerminalStartupError("native-preflight", false);
+    }
+  };
   spawn = (launch: TerminalLaunch): TerminalPty => {
     if ((this.system.platform ?? process.platform) !== "darwin")
       throw new TerminalStartupError("native-preflight", false);

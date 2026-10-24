@@ -1,5 +1,6 @@
 import {
   execFileSync,
+  execFile,
   type ExecFileSyncOptionsWithStringEncoding,
 } from "node:child_process";
 import { copyFileSync, mkdtempSync, renameSync, rmSync } from "node:fs";
@@ -10,7 +11,7 @@ import {
   createIsolatedTerminalInspector,
 } from "../src/host/terminal-inspector";
 
-it("a real native reader retains its executable across a development rebuild", () => {
+it("a real native reader retains its executable across a development rebuild", async () => {
   const dir = mkdtempSync("/private/tmp/goga-inspector-rebuild-test-");
   const helper = join(dir, "terminal-inspect");
   const invocations: {
@@ -64,7 +65,43 @@ it("a real native reader retains its executable across a development rebuild", (
       throw error;
     }
   };
-  const isolated = createIsolatedTerminalInspector(helper, { execute });
+  const executeAsync = (
+    file: string,
+    args: string[],
+    options: ExecFileSyncOptionsWithStringEncoding & { signal: AbortSignal },
+  ) => {
+    const started = performance.now();
+    return new Promise<string>((resolve, reject) => {
+      execFile(
+        file,
+        args,
+        { ...options, encoding: "utf8" },
+        (error, stdout, stderr) => {
+          let validJson = false;
+          try {
+            JSON.parse(stdout);
+            validJson = true;
+          } catch {
+            /* adapter validates */
+          }
+          invocations.push({
+            operation: args[0],
+            elapsedMs: Math.round(performance.now() - started),
+            outcome: error ? String(error.code ?? "exit") : "ok",
+            stdoutBytes: Buffer.byteLength(stdout),
+            stderrBytes: Buffer.byteLength(stderr),
+            validJson,
+          });
+          if (error) reject(error);
+          else resolve(stdout);
+        },
+      );
+    });
+  };
+  const isolated = createIsolatedTerminalInspector(helper, {
+    execute,
+    executeAsync,
+  });
   try {
     execFileSync(
       "/usr/bin/clang",
@@ -91,7 +128,11 @@ it("a real native reader retains its executable across a development rebuild", (
         stdio: "pipe",
       },
     );
-    const old = createTerminalInspector(helper, { execute });
+    const old = createTerminalInspector(helper, { execute, executeAsync });
+    // Follow production startup: asynchronous cold readiness precedes the
+    // unchanged synchronous identity/read/replacement checks.
+    await old.prepare!();
+    await isolated.prepare!();
     old.check!();
     isolated.check!();
     const before = isolated.birth(process.pid);
