@@ -1257,34 +1257,44 @@ export function LaunchForm({
                 {typeof blocked === "string" ? blocked : "Запуск в этой рабочей копии временно недоступен."}
               </p>
             )}
-            <div
+            <details
+              key={taskKey ?? ownerKey}
               className="task-editor"
               aria-busy={editor.draft?.status === "loading"}
             >
-              <label>
+              <summary>
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.75"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="m9 6 6 6-6 6" />
+                </svg>
                 Что нужно сделать?
-                <textarea
-                  rows={5}
-                  value={task}
-                  disabled={!editor.ready}
-                  maxLength={100000}
-                  onChange={(e) => {
-                    editor.edit(e.target.value);
-                    setConfirmEmpty(false);
-                  }}
-                  placeholder={
-                    mode === "new" ? "Опишите задачу для нового топика" : ""
-                  }
-                />
-              </label>
+              </summary>
+              <textarea
+                aria-label="Что нужно сделать?"
+                rows={5}
+                value={task}
+                disabled={!editor.ready}
+                maxLength={100000}
+                onChange={(e) => {
+                  editor.edit(e.target.value);
+                  setConfirmEmpty(false);
+                }}
+                placeholder={
+                  mode === "new" ? "Опишите задачу для нового топика" : ""
+                }
+              />
               {editor.draft?.status === "loading" && (
                 <p className="hint" role="status">
                   Читаем задачу выбранного топика…
-                </p>
-              )}
-              {editor.draft?.error && editor.draft.status !== "error" && (
-                <p className="error" role="alert">
-                  Не удалось прочитать задачу: {editor.draft.error}
                 </p>
               )}
               {mode === "existing" && editor.ready && (
@@ -1300,11 +1310,6 @@ export function LaunchForm({
                         : "Загружено полное содержимое задачи."}{" "}
                   {topic?.branch !== data.currentBranch &&
                     "Для другой ветки показана сохранённая в Git версия, без её незакоммиченных изменений."}
-                </p>
-              )}
-              {owner && editor.ready && !task.trim() && (
-                <p className="hint" role="status">
-                  Для запуска в этой копии нужна непустая задача.
                 </p>
               )}
               <p className="hint">
@@ -1336,17 +1341,27 @@ export function LaunchForm({
                   Перечитать задачу
                 </button>
               )}
-              {emptyReplacement && (
-                <label className="check-row">
-                  <input
-                    type="checkbox"
-                    checked={confirmEmpty}
-                    onChange={(e) => setConfirmEmpty(e.target.checked)}
-                  />
-                  Подтверждаю сохранение пустой задачи
-                </label>
-              )}
-            </div>
+            </details>
+            {editor.draft?.error && editor.draft.status !== "error" && (
+              <p className="error" role="alert">
+                Не удалось прочитать задачу: {editor.draft.error}
+              </p>
+            )}
+            {owner && editor.ready && !task.trim() && (
+              <p className="hint" role="status">
+                Для запуска в этой копии нужна непустая задача.
+              </p>
+            )}
+            {emptyReplacement && (
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={confirmEmpty}
+                  onChange={(e) => setConfirmEmpty(e.target.checked)}
+                />
+                Подтверждаю сохранение пустой задачи
+              </label>
+            )}
             <div className="form-divider" />
             <div className="form-grid">
               <label>

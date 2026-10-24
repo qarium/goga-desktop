@@ -769,8 +769,47 @@ code {
 .task-editor {
   min-width: 0;
 }
+/* Native disclosure keeps the task mounted and preserves its draft/selection. */
+.task-editor > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 0;
+  color: var(--text);
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+.task-editor > summary::-webkit-details-marker {
+  display: none;
+}
+.task-editor > summary:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 3px;
+  border-radius: 4px;
+}
+.task-editor > summary svg {
+  flex: none;
+}
+.task-editor[open] > summary {
+  margin-bottom: 8px;
+}
+.task-editor[open] > summary svg {
+  transform: rotate(90deg);
+}
+.task-editor > textarea {
+  display: block;
+  width: 100%;
+}
+.task-editor > textarea + .hint {
+  margin-top: 12px;
+}
+.task-editor > .hint + .hint {
+  margin-top: 8px;
+}
 .task-editor > .quiet {
   font-size: 11px;
+  margin-top: 12px;
   margin-bottom: 8px;
 }
 .task-reload-dialog {
