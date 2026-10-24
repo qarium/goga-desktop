@@ -96,6 +96,9 @@ beforeEach(() => {
       remoteEntries: [],
       remoteRecords: [],
     })),
+    readTopicOverview: vi.fn(),
+    prepareTopicOperation: vi.fn(),
+    executeTopicOperation: vi.fn(),
     buildContext: vi.fn(async () => structuredClone(context)),
     readBuildPlan: vi.fn(async (_p, path) => ({
       path,
@@ -126,6 +129,7 @@ beforeEach(() => {
     cancelRead: vi.fn(async () => {}),
     launchBuild: vi.fn(async () => ({ ...run, id: "new", status: "running" })),
   };
+  api.readTopicTable = vi.fn((id: string) => api.readTopicBoard(id));
   window.goga = api;
 });
 afterEach(() => {
@@ -434,12 +438,16 @@ it("App does not read primary topic details when the asynchronous clone inventor
   });
   const boardReads = api.readTopicBoard.mock.calls.length;
   fireEvent.click(card);
-  const transfer = await screen.findByRole("region", {
-    name: "Перенос изменений",
-  });
-  expect(within(transfer).getByRole("status").textContent).toBe(
-    "Проверяем наличие рабочей копии…",
-  );
+  const overview = await screen.findByRole("dialog", { name: "main" });
+  expect(
+    within(overview).getByRole("status", { name: "Загружаем задачу…" }),
+  ).toBeTruthy();
+  expect(
+    within(overview).getByRole("button", { name: "Удалить топик…" }),
+  ).toHaveProperty("disabled", true);
+  expect(api.readTopicOverview).not.toHaveBeenCalled();
+  expect(api.prepareTopicOperation).not.toHaveBeenCalled();
+  expect(api.executeTopicOperation).not.toHaveBeenCalled();
   expect(api.readTopicDetails).not.toHaveBeenCalled();
   expect(api.readTopicBoard.mock.calls.length).toBe(boardReads);
   expect(api.ensureTopicContext).not.toHaveBeenCalled();
@@ -455,13 +463,16 @@ it("App does not fall back to primary topic details after clone inventory failur
   });
   const boardReads = api.readTopicBoard.mock.calls.length;
   fireEvent.click(card);
-  const transfer = await screen.findByRole("region", {
-    name: "Перенос изменений",
-  });
-  expect(within(transfer).getByRole("alert").textContent).toBe(
-    "Не удалось проверить рабочую копию. Её отсутствие не подтверждено.",
+  const overview = await screen.findByRole("dialog", { name: "main" });
+  expect(within(overview).getByRole("alert").textContent).toBe(
+    "Inventory error",
   );
-  expect(within(transfer).getByText("Inventory error")).toBeTruthy();
+  expect(
+    within(overview).getByRole("button", { name: "Удалить топик…" }),
+  ).toHaveProperty("disabled", true);
+  expect(api.readTopicOverview).not.toHaveBeenCalled();
+  expect(api.prepareTopicOperation).not.toHaveBeenCalled();
+  expect(api.executeTopicOperation).not.toHaveBeenCalled();
   expect(api.readTopicDetails).not.toHaveBeenCalled();
   expect(api.readTopicBoard.mock.calls.length).toBe(boardReads);
   expect(api.ensureTopicContext).not.toHaveBeenCalled();

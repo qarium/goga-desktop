@@ -351,7 +351,10 @@ it("same-id installed pipeline rediscovery replaces old project preview", async 
   ui.rerender(launch("2"));
   await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
   expect(screen.queryByRole("option", { name: "run" })).toBeNull();
-  expect(screen.getByRole("status").textContent).toContain("Загружаем");
+  expect(screen.getByRole("status").getAttribute("aria-label")).toContain(
+    "Загружаем",
+  );
+  expect(screen.getByRole("status").textContent).toBe("");
   expect(retainedButton(/Запустить/).hasAttribute("disabled")).toBe(true);
   await act(async () =>
     pending.resolve({

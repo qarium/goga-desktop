@@ -1060,3 +1060,298 @@ it("keeps clone commits ahead of the updated original without rollback", async (
   expect(await f.git(["rev-parse", "alpha"])).toBe(original);
   expect(await f.git(["rev-parse", "HEAD"], f.owner.path)).toBe(clone);
 });
+
+describe("explicit card propagation", () => {
+  const request = (
+    f: Awaited<ReturnType<typeof fixture>>,
+    context = true,
+    branch = "alpha",
+    baseRef = "main",
+  ) => ({
+    projectId: f.project.id,
+    action: "propagate" as const,
+    ...(context ? { context: f.ref } : {}),
+    propagation: {
+      year: "2026",
+      topic: branch
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-|-$/g, ""),
+      branch,
+      baseRef,
+    },
+  });
+  const mutations = (f: Awaited<ReturnType<typeof fixture>>) =>
+    f.calls.filter(
+      (c) =>
+        c.exe === "FAKE-GOGA" ||
+        c.args.includes("push") ||
+        c.args.includes("checkout"),
+    );
+  it("syncs captured clone then invokes exact selected base in original, preserving dirty files and config", async () => {
+    const f = await fixture();
+    await f.git(["branch", "release"]);
+    await fs.writeFile(path.join(f.owner.path, "topic"), "dirty\n");
+    (f.service as unknown as { runList: Run[] }).runList = [
+      {
+        id: "active",
+        projectId: f.project.id,
+        context: f.ref,
+        status: "running",
+      } as Run,
+    ];
+    const config = await fs.readFile(path.join(f.repo, ".git/config"), "utf8");
+    const result = await f.service.runRepositoryAction(
+      request(f, true, "alpha", "release"),
+    );
+    expect(result.status, result.log).toBe("success");
+    expect(
+      mutations(f).map((c) => ({
+        cwd: c.cwd,
+        command: c.exe === "FAKE-GOGA" ? c.args : "push",
+      })),
+    ).toEqual([
+      { cwd: f.owner.path, command: "push" },
+      {
+        cwd: f.repo,
+        command: [
+          "topics",
+          "--year",
+          "2026",
+          "propagate",
+          "alpha",
+          "--base-ref",
+          "release",
+          "-y",
+        ],
+      },
+    ]);
+    expect(await f.git(["rev-parse", "alpha"])).toBe(
+      await f.git(["rev-parse", "HEAD"], f.owner.path),
+    );
+    expect(await fs.readFile(path.join(f.repo, ".git/config"), "utf8")).toBe(
+      config,
+    );
+    expect(await fs.readFile(path.join(f.owner.path, "topic"), "utf8")).toBe(
+      "dirty\n",
+    );
+    expect(
+      f.calls.some(
+        (c) => c.args.includes("--force") || c.args.includes("clone"),
+      ),
+    ).toBe(false);
+  });
+  it("uses an exact normalized own local branch with no clone directly, without creating or switching", async () => {
+    const f = await fixture();
+    await f.git(["branch", "feature/Beta"]);
+    const before = await f.service.listTopicContexts(f.project.id);
+    f.calls.length = 0;
+    const result = await f.service.runRepositoryAction(
+      request(f, false, "feature/Beta"),
+    );
+    expect(result.status, result.log).toBe("success");
+    expect(mutations(f)).toEqual([
+      {
+        exe: "FAKE-GOGA",
+        cwd: f.repo,
+        args: [
+          "topics",
+          "--year",
+          "2026",
+          "propagate",
+          "feature/Beta",
+          "--base-ref",
+          "main",
+          "-y",
+        ],
+      },
+    ]);
+    expect(await f.service.listTopicContexts(f.project.id)).toEqual(before);
+    expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe("main");
+  });
+  it.each(["year", "topic", "branch"])(
+    "rejects a mismatching context %s",
+    async (key) => {
+      const f = await fixture();
+      const value = request(f);
+      Object.assign(value.propagation, {
+        [key]: key === "year" ? "2025" : "other",
+      });
+      await expect(f.service.runRepositoryAction(value)).rejects.toThrow();
+      expect(mutations(f)).toEqual([]);
+    },
+  );
+  it.each(["ready", "missing", "ambiguous"])(
+    "never falls back to primary for a registered %s owner",
+    async (mode) => {
+      const f = await fixture();
+      if (mode === "missing")
+        await fs.rename(f.owner.path, `${f.owner.path}-removed`);
+      if (mode === "ambiguous") {
+        const file = path.join(f.home, ".goga/desktop/clones/registry.json");
+        const registry = JSON.parse(await fs.readFile(file, "utf8"));
+        registry.records.push({
+          ...registry.records[0],
+          contextId: `ctx-${"b".repeat(64)}`,
+          path: `${f.owner.path}-other`,
+        });
+        await fs.writeFile(file, JSON.stringify(registry));
+      }
+      const result = await f.service.runRepositoryAction(request(f, false));
+      expect(result.status, result.log).toBe("error");
+      expect(mutations(f)).toEqual([]);
+    },
+  );
+  it.each([
+    "alpha",
+    "missing",
+    "main^",
+    "--help",
+    "/tmp/main",
+    "refs/tags/main",
+    "origin/main",
+  ])("rejects invalid selected destination %s", async (base) => {
+    const f = await fixture();
+    const parsed = await f.service
+      .runRepositoryAction(request(f, true, "alpha", base))
+      .catch(() => ({ status: "error" }));
+    expect(parsed.status).toBe("error");
+    expect(mutations(f)).toEqual([]);
+  });
+  it.each([
+    "missing-origin",
+    "tag-base",
+    "symbolic-base",
+    "wrong-topic",
+    "missing-source",
+  ])("rejects invalid explicit identity or Git inputs: %s", async (mode) => {
+    const f = await fixture();
+    await f.git(["branch", "beta"]);
+    const value = request(f, false, "beta");
+    if (mode === "missing-origin") await f.git(["remote", "remove", "origin"]);
+    if (mode === "tag-base") await f.git(["tag", "main"]);
+    if (mode === "symbolic-base") {
+      await f.git(["symbolic-ref", "refs/heads/alias", "refs/heads/main"]);
+      value.propagation.baseRef = "alias";
+    }
+    if (mode === "wrong-topic") value.propagation.topic = "wrong";
+    if (mode === "missing-source") await f.git(["branch", "-D", "beta"]);
+    const result = await f.service.runRepositoryAction(value);
+    expect(result.status, result.log).toBe("error");
+    expect(mutations(f)).toEqual([]);
+  });
+  it.each(["source", "base", "owner"])(
+    "rechecks %s after validation before no-clone command",
+    async (mode) => {
+      const f = await fixture();
+      await f.git(["branch", "beta"]);
+      let checks = 0;
+      f.intercept(async (_exe, args, cwd) => {
+        if (cwd === f.repo && args.includes("get-url") && ++checks === 1) {
+          if (mode === "source" || mode === "base")
+            await f
+              .git([
+                "update-ref",
+                `refs/heads/${mode === "source" ? "beta" : "main"}`,
+                await f.git(["rev-parse", "HEAD"], f.owner.path),
+              ])
+              .catch(async () => {
+                await f.git(["fetch", f.owner.path, "alpha"]);
+                await f.git([
+                  "update-ref",
+                  `refs/heads/${mode === "source" ? "beta" : "main"}`,
+                  await f.git(["rev-parse", "HEAD"], f.owner.path),
+                ]);
+              });
+          else {
+            const file = path.join(
+              f.home,
+              ".goga/desktop/clones/registry.json",
+            );
+            const registry = JSON.parse(await fs.readFile(file, "utf8"));
+            registry.records.push({
+              ...registry.records[0],
+              contextId: `ctx-${"c".repeat(64)}`,
+              topic: "beta",
+              branch: "beta",
+              path: `${f.owner.path}-beta`,
+            });
+            await fs.writeFile(file, JSON.stringify(registry));
+          }
+        }
+      });
+      const result = await f.service.runRepositoryAction(
+        request(f, false, "beta"),
+      );
+      expect(checks).toBeGreaterThan(0);
+      expect(result.status, result.log).toBe("error");
+      expect(mutations(f)).toEqual([]);
+    },
+  );
+  it.each(["source", "base", "owner", "origin"])(
+    "stops after clone sync if %s changes before native publication",
+    async (mode) => {
+      const f = await fixture();
+      let synced = false,
+        changed = false;
+      f.intercept(async (_exe, args, cwd) => {
+        if (cwd === f.owner.path && args.includes("push")) synced = true;
+        else if (
+          synced &&
+          !changed &&
+          cwd === f.repo &&
+          args.includes("for-each-ref") &&
+          args.includes("refs/heads/main")
+        ) {
+          changed = true;
+          if (mode === "source")
+            await f.git([
+              "update-ref",
+              "refs/heads/alpha",
+              await f.git(["rev-parse", "main"]),
+            ]);
+          if (mode === "base")
+            await f.git([
+              "update-ref",
+              "refs/heads/main",
+              await f.git(["rev-parse", "alpha"]),
+            ]);
+          if (mode === "owner") await f.git(["checkout", "main"], f.owner.path);
+          if (mode === "origin") await f.git(["remote", "remove", "origin"]);
+        }
+      });
+      const result = await f.service.runRepositoryAction(request(f));
+      expect(changed).toBe(true);
+      expect(result.status, result.log).toBe("error");
+      expect(result.log).toContain("Синхронизация топика завершена");
+      expect(f.calls.filter((c) => c.exe === "FAKE-GOGA")).toEqual([]);
+      expect(f.calls.filter((c) => c.args.includes("push"))).toHaveLength(1);
+    },
+  );
+  it.each(["sync", "native"])(
+    "stops on %s failure with sanitized diagnostics and no fallback",
+    async (phase) => {
+      const f = await fixture();
+      f.intercept(async (exe, args) => {
+        if (
+          (phase === "sync" && args.includes("push")) ||
+          (phase === "native" && exe === "FAKE-GOGA")
+        )
+          throw new CommandExitError(
+            "fixture failure",
+            1,
+            "partial",
+            "https://user:credential@example.invalid/?token=secret",
+          );
+      });
+      const result = await f.service.runRepositoryAction(request(f));
+      expect(result.status).toBe("error");
+      expect(result.log).toContain("partial");
+      expect(result.log).not.toMatch(/credential|token=secret/);
+      expect(f.calls.filter((c) => c.exe === "FAKE-GOGA")).toHaveLength(
+        phase === "sync" ? 0 : 1,
+      );
+      expect(f.calls.filter((c) => c.args.includes("push"))).toHaveLength(1);
+    },
+  );
+});

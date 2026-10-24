@@ -10,7 +10,9 @@ import {
   type WorktreeRecord,
 } from "../src/shared/worktrees";
 afterEach(() => vi.restoreAllMocks());
-async function fixture() {
+async function fixture(
+  options: { trashItem?: (root: string) => Promise<void> } = {},
+) {
   const root = await mkdtemp(
     "/private/tmp/goga-context-ab-research-20261019-impl-routing-",
   );
@@ -51,6 +53,7 @@ async function fixture() {
     sourceCommonDir: path.join(primary, ".git"),
   };
   vi.spyOn(CloneManager.prototype, "resolve").mockResolvedValue(record);
+  vi.spyOn(CloneManager.prototype, "list").mockResolvedValue([record]);
   vi.spyOn(CloneStore.prototype, "assertOwned").mockResolvedValue(undefined);
   const runner = {
     command: vi.fn(async (_exe: string, args: string[], cwd: string) => ({
@@ -72,6 +75,7 @@ async function fixture() {
     home,
     dataDir: path.join(home, "data"),
     runner: runner as any,
+    trashItem: options.trashItem,
   });
   vi.spyOn(service, "listProjects").mockResolvedValue([project]);
   return {
@@ -233,4 +237,292 @@ it("rejects an owner changed during the final Dockerfile config guard before dis
   } finally {
     await f.service.dispose();
   }
+});
+it("prepares terminal roots and all Desktop environment rows without invoking Goga", async () => {
+  const f = await fixture();
+  const store = new DesktopStateStore(f.home, path.join(f.home, "data"));
+  await store.addProject(f.project);
+  const doc = await store.read("p");
+  await store.save(
+    "p",
+    {
+      ...doc.value,
+      env: [
+        {
+          key: "LOCAL_SECRET",
+          value: "synthetic-value",
+          secret: true,
+          runtime: false,
+        },
+        {
+          key: "RUNTIME_VALUE",
+          value: "runtime",
+          secret: false,
+          runtime: true,
+        },
+      ],
+    },
+    doc.version,
+  );
+  for (const [scope, root] of [
+    ["p", f.project.path],
+    [f.ref, f.record.path],
+  ] as const) {
+    const launch = await f.service.prepareTerminalLaunch(scope, {
+      accountShell: () => "/bin/zsh",
+      inherited: { HOME: f.home, PATH: "/usr/bin:/bin" },
+    });
+    expect(launch.cwd).toBe(root);
+    expect(launch.env).toMatchObject({
+      LOCAL_SECRET: "synthetic-value",
+      RUNTIME_VALUE: "runtime",
+    });
+    await launch.verifyRoot();
+    launch.dispose?.();
+  }
+  expect(f.runner.command.mock.calls.every((c) => c[0] === "git")).toBe(true);
+  expect(f.runner.start).not.toHaveBeenCalled();
+  await f.service.dispose();
+});
+it("terminal preparation never falls back from a missing or foreign clone", async () => {
+  const f = await fixture();
+  await new DesktopStateStore(f.home, path.join(f.home, "data")).addProject(
+    f.project,
+  );
+  vi.mocked(CloneManager.prototype.resolve).mockRejectedValueOnce(
+    Error("lost"),
+  );
+  await expect(f.service.prepareTerminalLaunch(f.ref)).rejects.toThrow();
+  vi.mocked(CloneManager.prototype.resolve).mockResolvedValue({
+    ...f.record,
+    topic: "other",
+  });
+  await expect(f.service.prepareTerminalLaunch(f.ref)).rejects.toThrow();
+  expect(f.runner.start).not.toHaveBeenCalled();
+  await f.service.dispose();
+});
+it("holds a clone lease and blocks deletion preparation", async () => {
+  const f = await fixture();
+  await new DesktopStateStore(f.home, path.join(f.home, "data")).addProject(
+    f.project,
+  );
+  const prepare = vi
+    .spyOn(CloneManager.prototype, "prepareDeletion")
+    .mockRejectedValue(Error("fixture-delete"));
+  const lease = await f.service.acquireTerminalContext(f.ref, {
+    accountShell: () => "/bin/zsh",
+    inherited: { HOME: f.home },
+  });
+  await expect(f.service.prepareContextDeletion(f.ref)).rejects.toThrow(
+    /активный/,
+  );
+  expect(prepare).not.toHaveBeenCalled();
+  const dispose = vi.spyOn(lease.launch, "dispose");
+  lease.release();
+  lease.release();
+  expect(dispose).toHaveBeenCalledTimes(1);
+  await expect(f.service.prepareContextDeletion(f.ref)).rejects.toThrow(
+    "fixture-delete",
+  );
+  expect(prepare).toHaveBeenCalledTimes(1);
+  await f.service.dispose();
+});
+it("releases failed terminal preparation instead of permanently blocking deletion", async () => {
+  const f = await fixture();
+  await new DesktopStateStore(f.home, path.join(f.home, "data")).addProject(
+    f.project,
+  );
+  await expect(
+    f.service.acquireTerminalContext(f.ref, {
+      accountShell: () => "/bin/unsupported",
+    }),
+  ).rejects.toThrow(/оболочк/i);
+  const prepare = vi
+    .spyOn(CloneManager.prototype, "prepareDeletion")
+    .mockRejectedValue(Error("fixture-delete"));
+  await expect(f.service.prepareContextDeletion(f.ref)).rejects.toThrow(
+    "fixture-delete",
+  );
+  expect(prepare).toHaveBeenCalledTimes(1);
+  await f.service.dispose();
+});
+it("revalidates an existing terminal by stable owner after a harmless revision change", async () => {
+  const f = await fixture();
+  await new DesktopStateStore(f.home, path.join(f.home, "data")).addProject(
+    f.project,
+  );
+  const launch = await f.service.prepareTerminalLaunch(f.ref);
+  const fresh = {
+    ...f.record,
+    revision: "00000000-0000-4000-8000-000000000009",
+  };
+  vi.mocked(CloneManager.prototype.list).mockResolvedValue([fresh]);
+  vi.mocked(CloneManager.prototype.resolve).mockImplementation(async (ref) => {
+    if (ref.revision !== fresh.revision) throw Error("stale");
+    return fresh;
+  });
+  await launch.verifyRoot();
+  vi.mocked(CloneManager.prototype.list).mockResolvedValue([
+    { ...fresh, topic: "foreign" },
+  ]);
+  await expect(launch.verifyRoot()).rejects.toThrow(/контекст/);
+  launch.dispose?.();
+  await f.service.dispose();
+});
+it("rejects a previously prepared deletion after a terminal acquired the clone", async () => {
+  const trashItem = vi.fn(async () => {});
+  const f = await fixture({ trashItem });
+  await new DesktopStateStore(f.home, path.join(f.home, "data")).addProject(
+    f.project,
+  );
+  const token = "00000000-0000-4000-8000-000000000009";
+  vi.spyOn(CloneManager.prototype, "deletionRecovery").mockResolvedValue([
+    { token, owner: f.ref },
+  ] as any);
+  const execute = vi
+    .spyOn(CloneManager.prototype, "executeDeletion")
+    .mockRejectedValue(Error("fixture-execute"));
+  const lease = await f.service.acquireTerminalContext(f.ref);
+  await expect(
+    f.service.deleteContext({ projectId: "p", token }),
+  ).rejects.toThrow(/активный/);
+  expect(execute).not.toHaveBeenCalled();
+  expect(trashItem).not.toHaveBeenCalled();
+  lease.release();
+  await expect(
+    f.service.deleteContext({ projectId: "p", token }),
+  ).rejects.toThrow("fixture-execute");
+  await f.service.dispose();
+});
+it("serializes pending acquisition with deletion preparation", async () => {
+  const f = await fixture();
+  await new DesktopStateStore(f.home, path.join(f.home, "data")).addProject(
+    f.project,
+  );
+  let unblock!: () => void, entered!: () => void;
+  const gate = new Promise<void>((r) => {
+      unblock = r;
+    }),
+    started = new Promise<void>((r) => {
+      entered = r;
+    });
+  vi.mocked(CloneManager.prototype.resolve).mockImplementationOnce(async () => {
+    entered();
+    await gate;
+    return f.record;
+  });
+  const prepare = vi.spyOn(CloneManager.prototype, "prepareDeletion");
+  const opening = f.service.acquireTerminalContext(f.ref);
+  await started;
+  const deletion = f.service.prepareContextDeletion(f.ref);
+  const rejected = expect(deletion).rejects.toThrow(/активный/);
+  expect(prepare).not.toHaveBeenCalled();
+  unblock();
+  const lease = await opening;
+  await rejected;
+  expect(prepare).not.toHaveBeenCalled();
+  lease.release();
+  await f.service.dispose();
+});
+it("a completed deletion wins over a queued acquisition; no stale root is granted", async () => {
+  const f = await fixture({ trashItem: async () => {} });
+  await new DesktopStateStore(f.home, path.join(f.home, "data")).addProject(
+    f.project,
+  );
+  const token = "00000000-0000-4000-8000-000000000009";
+  vi.spyOn(CloneManager.prototype, "deletionRecovery").mockResolvedValue([
+    { token, owner: f.ref },
+  ] as any);
+  let unblock!: () => void, entered!: () => void;
+  const gate = new Promise<void>((r) => {
+      unblock = r;
+    }),
+    started = new Promise<void>((r) => {
+      entered = r;
+    });
+  vi.spyOn(CloneManager.prototype, "executeDeletion").mockImplementation(
+    async () => {
+      entered();
+      await gate;
+      vi.mocked(CloneManager.prototype.resolve).mockRejectedValue(
+        Error("deleted"),
+      );
+      return {
+        status: "success",
+        stage: "completed",
+        message: "fixture",
+      } as any;
+    },
+  );
+  const deleting = f.service.deleteContext({ projectId: "p", token });
+  await started;
+  const opening = f.service.acquireTerminalContext(f.ref);
+  const rejected = expect(opening).rejects.toThrow(/контекст/);
+  unblock();
+  await deleting;
+  await rejected;
+  await f.service.dispose();
+});
+it("keeps deletion blocked until every terminal lease in that clone is released", async () => {
+  const f = await fixture();
+  await new DesktopStateStore(f.home, path.join(f.home, "data")).addProject(
+    f.project,
+  );
+  const one = await f.service.acquireTerminalContext(f.ref),
+    two = await f.service.acquireTerminalContext(f.ref);
+  one.release();
+  one.release();
+  await expect(f.service.prepareContextDeletion(f.ref)).rejects.toThrow(
+    /активный/,
+  );
+  two.release();
+  const prepare = vi
+    .spyOn(CloneManager.prototype, "prepareDeletion")
+    .mockRejectedValue(Error("fixture-delete"));
+  await expect(f.service.prepareContextDeletion(f.ref)).rejects.toThrow(
+    "fixture-delete",
+  );
+  expect(prepare).toHaveBeenCalledOnce();
+  await f.service.dispose();
+});
+
+it("resolves terminal catalog ownership without shell preparation, env exposure or context inheritance", async () => {
+  const f = await fixture();
+  await new DesktopStateStore(f.home, path.join(f.home, "data")).addProject(
+    f.project,
+  );
+  const prepare = vi.spyOn(f.service, "prepareTerminalLaunch");
+  const { revision: _, ...identity } = f.ref;
+  expect(await f.service.resolveTerminalOwner(f.ref)).toEqual({
+    kind: "topic",
+    ...identity,
+  });
+  expect(await f.service.resolveTerminalOwner("p")).toEqual({
+    kind: "primary",
+    projectId: "p",
+  });
+  expect(prepare).not.toHaveBeenCalled();
+  expect(f.runner.start).not.toHaveBeenCalled();
+  vi.mocked(CloneManager.prototype.resolve).mockRejectedValueOnce(
+    Error("missing clone"),
+  );
+  await expect(f.service.resolveTerminalOwner(f.ref)).rejects.toThrow();
+  await f.service.dispose();
+});
+
+it("validates terminal presentation identity once, without repeating clone Git discovery", async () => {
+  const f = await fixture();
+  await new DesktopStateStore(f.home, path.join(f.home, "data")).addProject(
+    f.project,
+  );
+  vi.mocked(CloneManager.prototype.resolve).mockClear();
+  f.runner.command.mockClear();
+  await f.service.resolveTerminalOwner(f.ref);
+  expect(CloneManager.prototype.resolve).toHaveBeenCalledTimes(1);
+  expect(
+    f.runner.command.mock.calls.filter(([, args]) =>
+      args.includes("--show-toplevel"),
+    ),
+  ).toHaveLength(1);
+  await f.service.dispose();
 });

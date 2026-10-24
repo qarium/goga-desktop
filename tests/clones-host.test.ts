@@ -822,3 +822,62 @@ it("supports an ordinary non-forced git push origin branch from a newly created 
     "main",
   );
 });
+
+it("batches repository path queries for source and clone on each resolution", async () => {
+  const f = await setup();
+  try {
+    const row = await f.manager.ensure(f.project, f.identity);
+    f.calls.length = 0;
+    await f.manager.resolve(worktreeContextRef(row));
+    const paths = f.calls.filter((call) =>
+      call.args.includes("--show-toplevel"),
+    );
+    expect(paths.map((call) => call.cwd)).toEqual([f.repo, row.path]);
+    for (const call of paths) {
+      expect(call.args).toContain("--git-common-dir");
+      expect(call.args).toContain("--absolute-git-dir");
+      expect(call.args).toContain("--path-format=absolute");
+    }
+    expect(
+      f.calls.filter((call) => call.args.includes("--absolute-git-dir")),
+    ).toHaveLength(2);
+  } finally {
+    await fs.rm(f.root, { recursive: true, force: true });
+  }
+}, 15000);
+
+it.each(["missing", "extra", "relative", "foreign"])(
+  "rejects %s data in a grouped clone path response",
+  async (kind) => {
+    const f = await setup();
+    try {
+      const row = await f.manager.ensure(f.project, f.identity);
+      const original = f.runner.command.bind(f.runner);
+      f.runner.command = async (...args) => {
+        const result = await original(...args);
+        if (
+          args[2] === row.path &&
+          args[1].includes("--show-toplevel") &&
+          args[1].includes("--absolute-git-dir")
+        ) {
+          const values = [row.path, row.gitCommonDir, row.gitCommonDir];
+          if (kind === "missing") values.pop();
+          if (kind === "extra") values.push(row.gitCommonDir);
+          if (kind === "relative") values[1] = ".git";
+          if (kind === "foreign") values[1] = path.join(f.repo, ".git");
+          return { ...result, stdout: values.join("\n") + "\n" };
+        }
+        return result;
+      };
+      await expect(
+        f.manager.resolve(worktreeContextRef(row)),
+      ).rejects.toThrow();
+      expect(
+        f.calls.filter((call) => call.args.includes("clone")),
+      ).toHaveLength(1);
+    } finally {
+      await fs.rm(f.root, { recursive: true, force: true });
+    }
+  },
+  15000,
+);

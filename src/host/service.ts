@@ -1,3 +1,14 @@
+import { HistoryPruner, type PruneAccess } from "./history-prune";
+import type { HistoryPrunePreview, HistoryPruneResult } from "../shared/history";
+import * as history from "./history";
+import { historyYearSchema, historyEntrySchema, historyPathSchema } from "../shared/history";
+import type { PreparedShutdown } from "./shutdown";
+import type { TerminalContext } from "../shared/terminal";
+import {
+  prepareTerminalEnvironment,
+  type TerminalSystem,
+  type TerminalLaunch,
+} from "./terminal-environment";
 import { parseDockerfile } from "./project-dockerfile";
 import { assertTopicTaskReady } from "./topic-readiness";
 import {
@@ -64,12 +75,15 @@ import {
   type BuildRequest,
 } from "../shared/build";
 import { TopicsDomain, type TopicsContext } from "./topics";
+import { readTopicTableDisplay, readTopicTaskOverview } from "./topic-display";
 import type {
   TopicTarget,
   TopicOperationRequest,
   TopicCatalogSnapshot,
+  TopicBoardSnapshot,
+  TopicDetails,
 } from "../shared/topics";
-import { topicYearSchema } from "../shared/topics-schema";
+import { topicYearSchema, topicTargetSchema } from "../shared/topics-schema";
 import { captureRunOutput } from "./run-output";
 import { DEFAULT_STARTUP_TIMEOUT_MINUTES } from "../shared/startup-timeout";
 import { stripVTControlCharacters } from "node:util";
@@ -176,8 +190,10 @@ export class HostService extends EventEmitter {
   private buildRequests = new Map<string, BuildRequest>();
   private topicDomain = new TopicsDomain();
   private deletionTickets = new DocumentDeletionTickets();
+  private historyPruner = new HistoryPruner();
   private personalSettings: SettingsStore;
   private trashItem?: TrashItem;
+  private terminalLeases = new Map<string, number>();
   private operationTail: Promise<unknown> = Promise.resolve();
   private catalogEpoch = 0;
   private deleting = false;
@@ -188,6 +204,7 @@ export class HostService extends EventEmitter {
   private state: DesktopStateStore;
   private context = new AsyncLocalStorage<{
     projectId: string;
+    scopedProject: Project;
     document: ProjectSettingsDocument;
     catalogEpoch: number;
     binding?: WorktreeRecord;
@@ -215,6 +232,7 @@ export class HostService extends EventEmitter {
   private worktrees: WorktreeManager;
   private contextPreparations = new Map<string, Promise<WorktreeRecord>>();
   private disposed = false;
+  private shutdownAdmission = false;
   constructor(options: {
     home?: string;
     dataDir: string;
@@ -399,6 +417,7 @@ export class HostService extends EventEmitter {
     return this.context.run(
       {
         projectId: id,
+        scopedProject,
         document,
         catalogEpoch: epoch,
         ...(binding ? { binding } : {}),
@@ -490,6 +509,110 @@ export class HostService extends EventEmitter {
     return [...sources]
       .sort(([a], [b]) => a.localeCompare(b))
       .map(([name, source]) => ({ name, source }));
+  }
+  /** Catalog identity only: no shell resolution, launch environment or automatic clone creation. */
+  async resolveTerminalOwner(scope: ScopeRef): Promise<TerminalContext> {
+    this.check();
+    const parsed = this.parseScope(scope);
+    return this.context.exit(() =>
+      this.snapshot(parsed, async () => {
+        // snapshot() already resolved the exact clone and checked ownership,
+        // revision and effective Git paths. Repeating project()/validateBinding()
+        // here performed that same discovery three times per read/show.
+        const binding = this.context.getStore()?.binding;
+        if (!binding)
+          return {
+            kind: "primary" as const,
+            projectId: scopeProjectId(parsed),
+          };
+        const { revision: _, ...identity } = worktreeContextRef(binding);
+        return { kind: "topic" as const, ...identity };
+      }),
+    );
+  }
+  async acquireTerminalContext(
+    scope: ScopeRef,
+    system: TerminalSystem = {},
+  ): Promise<{ launch: TerminalLaunch; release: () => void }> {
+    const parsed = this.parseScope(scope);
+    return this.operation(async () => {
+      this.check();
+      const key =
+        typeof parsed === "string" ? `primary:${parsed}` : parsed.contextId;
+      this.terminalLeases.set(key, (this.terminalLeases.get(key) ?? 0) + 1);
+      let released = false;
+      let launch: TerminalLaunch | undefined;
+      const release = () => {
+        if (released) return;
+        released = true;
+        launch?.dispose?.();
+        const count = (this.terminalLeases.get(key) ?? 1) - 1;
+        if (count) this.terminalLeases.set(key, count);
+        else this.terminalLeases.delete(key);
+      };
+      try {
+        launch = await this.prepareTerminalLaunch(parsed, system);
+        this.check();
+        return { launch, release };
+      } catch (error) {
+        release();
+        throw error;
+      }
+    });
+  }
+  /** Host-only launch preparation; env and root verification never cross renderer IPC. */
+  async prepareTerminalLaunch(
+    scope: ScopeRef,
+    system: TerminalSystem = {},
+  ): Promise<TerminalLaunch> {
+    this.check();
+    const parsed = this.parseScope(scope);
+    const toContext = (ref: ScopeRef): TerminalContext => {
+      if (typeof ref === "string") return { kind: "primary", projectId: ref };
+      const { revision: _revision, ...identity } = ref;
+      return { kind: "topic", ...identity };
+    };
+    let admitted = false;
+    // Each resolution starts outside inherited pipeline snapshots; primary never inherits a topic.
+    return prepareTerminalEnvironment(
+      toContext(parsed),
+      () =>
+        this.context.exit(async () => {
+          this.check();
+          let current = parsed;
+          if (admitted && typeof parsed !== "string") {
+            const records = (await this.clones.list(parsed.projectId)).filter(
+              (record) =>
+                record.contextId === parsed.contextId &&
+                record.projectId === parsed.projectId &&
+                record.year === parsed.year &&
+                record.topic === parsed.topic &&
+                record.branch === parsed.branch &&
+                !record.deletedAt,
+            );
+            if (records.length !== 1)
+              throw Error("Владелец терминала недоступен.");
+            current = worktreeContextRef(records[0]!);
+          }
+          const result = await this.snapshot(current, async () => {
+            const project = await this.project(current);
+            await this.validateBinding(project);
+            const binding = this.binding(project);
+            return {
+              context: binding
+                ? toContext(worktreeContextRef(binding))
+                : toContext(project.id),
+              root: this.root(project),
+              env: this.context
+                .getStore()!
+                .document.value.env.map((row) => ({ ...row })),
+            };
+          });
+          admitted = true;
+          return result;
+        }),
+      { inherited: { ...process.env, HOME: this.home }, ...system },
+    );
   }
   async readProjectSettings(id: ScopeRef): Promise<ProjectSettingsView> {
     assertReadActive();
@@ -1024,6 +1147,7 @@ export class HostService extends EventEmitter {
   }
   private async readTopicTaskWithSettings(
     request: TopicTaskRequest,
+    verifyLaunchReadiness = false,
   ): Promise<TopicTaskDocument> {
     if (
       !request ||
@@ -1043,7 +1167,14 @@ export class HostService extends EventEmitter {
         request.context.branch !== request.branch)
     )
       throw Error("Задача относится к другому контексту.");
-    const p = await this.project(request.projectId);
+    // snapshot() already resolved this exact owner and its effective Git root.
+    // Reuse that Project only for this read; every command and the final owner
+    // resolution still check live paths. The launch path deliberately revalidates.
+    const snapshot = this.context.getStore();
+    const p =
+      !verifyLaunchReadiness && snapshot?.projectId === request.projectId
+        ? snapshot.scopedProject
+        : await this.project(request.projectId);
     await guardedProject(this.root(p));
     const inheritedOwner = this.binding(p);
     const taskOwner =
@@ -1054,9 +1185,12 @@ export class HostService extends EventEmitter {
       (taskOwner.topic !== request.topic || taskOwner.branch !== request.branch)
     )
       throw Error("Задача относится к другому контексту.");
-    const readiness = taskOwner
-      ? await this.readyTopicContext(topicContextRefSchema.parse(taskOwner))
-      : undefined;
+    // Opening the editor needs a scoped task snapshot, not repeated full
+    // readiness scans. The private launch path opts into those before writing.
+    const readiness =
+      taskOwner && verifyLaunchReadiness
+        ? await this.readyTopicContext(topicContextRefSchema.parse(taskOwner))
+        : undefined;
     const matches = (await this.topics(p, taskOwner?.year)).filter(
       (t) => t.branch === request.branch && t.topic === request.topic,
     );
@@ -1072,6 +1206,8 @@ export class HostService extends EventEmitter {
     );
     const git = (args: string[]) => this.cmd(p, args, true);
     const current = (await git(["branch", "--show-current"])).trim();
+    if (taskOwner && current !== taskOwner.branch)
+      throw Error("Ветка рабочей копии изменилась. Выберите контекст заново.");
     const commit = (
       await git([
         "rev-parse",
@@ -1339,32 +1475,58 @@ export class HostService extends EventEmitter {
           return await this.snapshot(
             request.context ?? request.projectId,
             async () => {
-              const scoped = await this.project(request.context ?? request.projectId);
+              const scoped = await this.project(
+                request.context ?? request.projectId,
+              );
               const call = this.invocation(scoped);
-              secrets = call.value.env.map((entry) => entry.value).filter(Boolean);
+              secrets = call.value.env
+                .map((entry) => entry.value)
+                .filter(Boolean);
               const actions = new RepositoryActions({
                 project: async () => {
                   this.check();
-                  const project = (await this.listProjects()).find((p) => p.id === request.projectId);
+                  const project = (await this.listProjects()).find(
+                    (p) => p.id === request.projectId,
+                  );
                   if (!project) throw Error("Неизвестный проект.");
                   return project;
                 },
                 resolve: (ref) => this.resolveTopicContext(ref),
-                sync: (project, ref, onDiagnostic) => this.sync.request(project, ref, "manual", undefined, false, onDiagnostic),
+                inventory: () => this.clones.list(request.projectId),
+                sync: (project, ref, onDiagnostic) =>
+                  this.sync.request(
+                    project,
+                    ref,
+                    "manual",
+                    undefined,
+                    false,
+                    onDiagnostic,
+                  ),
                 verify: async () => {
                   this.check();
                   await this.assertSettings(request.projectId);
                   this.assertCatalog(this.context.getStore()!.catalogEpoch);
                 },
-                git: (args, cwd) => this.runner.command(
-                  "git", args, cwd,
-                  childEnvironment(process.env, { HOME: this.home, GIT_TERMINAL_PROMPT: "0" }),
-                ),
+                git: (args, cwd) =>
+                  this.runner.command(
+                    "git",
+                    args,
+                    cwd,
+                    childEnvironment(process.env, {
+                      HOME: this.home,
+                      GIT_TERMINAL_PROMPT: "0",
+                    }),
+                  ),
                 goga: async (args) => {
                   this.check();
                   await this.assertSettings(request.projectId);
                   await this.validateBinding(scoped);
-                  return this.runner.command(call.executable, args, this.root(scoped), call.env);
+                  return this.runner.command(
+                    call.executable,
+                    args,
+                    this.root(scoped),
+                    call.env,
+                  );
                 },
                 gogaOriginal: async (args) => {
                   this.check();
@@ -1372,7 +1534,12 @@ export class HostService extends EventEmitter {
                   await this.validateBinding(scoped);
                   this.assertCatalog(this.context.getStore()!.catalogEpoch);
                   // Project.path is the captured original; root(scoped) would select the clone.
-                  return this.runner.command(call.executable, args, scoped.path, call.env);
+                  return this.runner.command(
+                    call.executable,
+                    args,
+                    scoped.path,
+                    call.env,
+                  );
                 },
                 secrets,
               });
@@ -1419,7 +1586,9 @@ export class HostService extends EventEmitter {
   }
   private deletionGuards(ref: TopicContextRef) {
     return {
-      active: this.contextActive(ref.contextId),
+      active:
+        this.contextActive(ref.contextId) ||
+        this.terminalLeases.has(ref.contextId),
       current: this.selectedContext?.contextId === ref.contextId,
     };
   }
@@ -1454,28 +1623,30 @@ export class HostService extends EventEmitter {
       : null;
   }
   async prepareContextDeletion(input: TopicContextRef) {
-    this.check();
-    const ref = topicContextRefSchema.parse(input);
-    const guards = this.deletionGuards(ref);
-    if (guards.active || guards.current)
-      throw Error("Выбранный или активный контекст нельзя удалить.");
-    const recovered = await this.contextDeletionRecovery(ref);
-    if (recovered) return recovered;
-    await this.resolveTopicContext(ref);
-    const plan = await this.clones.prepareDeletion(
-      ref,
-      this.deletionGuards(ref),
-    );
-    return {
-      token: plan.token,
-      contextId: ref.contextId,
-      stage: plan.stage,
-      details: [
-        "Все коммиты, ветки, теги и reflog будут сохранены в служебных refs основной папки.",
-        "Owned clone будет перемещён в системную Корзину. Основная папка и внешние рабочие копии не удаляются.",
-        "Незакоммиченные и ценные ignored-файлы блокируют удаление.",
-      ],
-    };
+    return this.operation(async () => {
+      this.check();
+      const ref = topicContextRefSchema.parse(input);
+      const guards = this.deletionGuards(ref);
+      if (guards.active || guards.current)
+        throw Error("Выбранный или активный контекст нельзя удалить.");
+      const recovered = await this.contextDeletionRecovery(ref);
+      if (recovered) return recovered;
+      await this.resolveTopicContext(ref);
+      const plan = await this.clones.prepareDeletion(
+        ref,
+        this.deletionGuards(ref),
+      );
+      return {
+        token: plan.token,
+        contextId: ref.contextId,
+        stage: plan.stage,
+        details: [
+          "Все коммиты, ветки, теги и reflog будут сохранены в служебных refs основной папки.",
+          "Owned clone будет перемещён в системную Корзину. Основная папка и внешние рабочие копии не удаляются.",
+          "Незакоммиченные и ценные ignored-файлы блокируют удаление.",
+        ],
+      };
+    });
   }
   async deleteContext(input: { projectId: string; token: string }) {
     this.check();
@@ -1485,6 +1656,9 @@ export class HostService extends EventEmitter {
         (p) => p.token === input.token,
       );
       if (!plan) throw Error("Подтверждение удаления отсутствует.");
+      const guards = this.deletionGuards(plan.owner);
+      if (guards.active || guards.current)
+        throw Error("Выбранный или активный контекст нельзя удалить.");
       const result = await this.clones.executeDeletion(
         input.token,
         this.deletionGuards(plan.owner),
@@ -1501,7 +1675,10 @@ export class HostService extends EventEmitter {
             this.snapshot(
               input.projectId,
               async () => {
-                const d = await this.topicsContext(input.projectId);
+                const d = await this.topicsContext(input.projectId, {
+                  owner: plan.owner,
+                  revision: plan.deletionRevision,
+                });
                 if (d.active()) throw Error("Основная папка занята.");
                 const refs = await d.git([
                   "for-each-ref",
@@ -1546,7 +1723,10 @@ export class HostService extends EventEmitter {
       };
     });
   }
-  private async topicsContext(id: ScopeRef): Promise<TopicsContext> {
+  private async topicsContext(
+    id: ScopeRef,
+    confirmedDeletion?: { owner: TopicContextRef; revision: string },
+  ): Promise<TopicsContext> {
     const project = await this.project(id);
     const key = await this.key(project);
     return {
@@ -1594,6 +1774,60 @@ export class HostService extends EventEmitter {
                 !r.context &&
                 ["starting", "running"].includes(r.status),
             )),
+      assertPrimaryOwnerAvailable: async (request) => {
+        if (request.context || !["delete", "update"].includes(request.action))
+          return;
+        const topics = new Set(
+          request.topics ?? (request.target ? [request.target.topic] : []),
+        );
+        const owners = (await this.clones.list(project.id)).filter(
+          (row) =>
+            row.projectId === project.id &&
+            row.year === request.year &&
+            row.storageKind === "clone" &&
+            row.ownership === "managed" &&
+            !row.deletedAt,
+        );
+        // This exemption is issued only inside executeDeletion's confirmed
+        // removeTopic callback. Never expose it as an IPC/request field or exempt
+        // another owner merely because it is also in the deleting state.
+        const confirmed = (row: WorktreeRecord) =>
+          !!confirmedDeletion &&
+          request.action === "delete" &&
+          request.projectId === confirmedDeletion.owner.projectId &&
+          request.year === confirmedDeletion.owner.year &&
+          topics.size === 1 &&
+          topics.has(confirmedDeletion.owner.topic) &&
+          row.contextId === confirmedDeletion.owner.contextId &&
+          row.projectId === confirmedDeletion.owner.projectId &&
+          row.year === confirmedDeletion.owner.year &&
+          row.topic === confirmedDeletion.owner.topic &&
+          row.branch === confirmedDeletion.owner.branch &&
+          row.projectPath === project.path &&
+          row.state === "deleting" &&
+          row.revision === confirmedDeletion.revision;
+        if (confirmedDeletion && !owners.some(confirmed))
+          throw Error(
+            "Подтверждённый владелец удаления изменился. Обновите подтверждение.",
+          );
+        // Goga delete is slug-wide even when the request carries target.branch.
+        // Every matching owner must use the dedicated context deletion flow.
+        if (
+          owners.some(
+            (row) =>
+              row.projectPath !== project.path ||
+              (request.action === "delete"
+                ? topics.has(row.topic) && !confirmed(row)
+                : !!request.target &&
+                  !request.target.remote &&
+                  row.topic === request.target.topic &&
+                  row.branch === request.target.branch),
+          )
+        )
+          throw Error(
+            "У топика есть рабочая копия. Операция из основной папки запрещена; выберите её точный контекст.",
+          );
+      },
       assertBranchesAvailable: (branches, operation) =>
         assertTopicBranchesAvailable(
           (args) => this.cmd(project, args, true),
@@ -1649,6 +1883,405 @@ export class HostService extends EventEmitter {
       await this.validateBinding(project);
       assertReadActive();
       return catalog;
+    });
+    assertReadActive();
+    return result;
+  }
+  /** Read-only inventory: no clone discovery, refresh, Goga, or mutation authority. */
+  private async topicDisplayInventory(project: Project, year: string) {
+    const rows = (await this.clones.list(project.id)).filter(
+      (row) =>
+        row.year === year &&
+        row.storageKind === "clone" &&
+        row.ownership === "managed" &&
+        !row.deletedAt,
+    );
+    if (
+      rows.some(
+        (row) =>
+          row.projectId !== project.id || row.projectPath !== project.path,
+      )
+    )
+      throw Error(
+        "Реестр относится к прежней папке проекта. Требуется проверка.",
+      );
+    assertReadActive();
+    return rows;
+  }
+  async readTopicTable(
+    projectId: string,
+    year: string,
+  ): Promise<TopicBoardSnapshot> {
+    this.check();
+    assertReadActive();
+    if (typeof projectId !== "string" || this.context.getStore()?.binding)
+      throw Error("Таблица доступна только для основной папки проекта.");
+    this.parseScope(projectId);
+    topicYearSchema.parse(year);
+    const result = await this.snapshot(projectId, async () => {
+      const context = await this.topicsContext(projectId);
+      const before = await this.topicDisplayInventory(context.project, year);
+      const table = await readTopicTableDisplay(context, year);
+      const entries = new Map(
+        table.entries.map((row) => [
+          JSON.stringify([row.topic, row.branch]),
+          row,
+        ]),
+      );
+      const groups = new Map<string, WorktreeRecord[]>();
+      for (const owner of before) {
+        const key = JSON.stringify([owner.topic, owner.branch]);
+        groups.set(key, [...(groups.get(key) ?? []), owner]);
+      }
+      const ownerGroups = [...groups.values()];
+      const failed = new Set<string>();
+      const summaries: TopicBoardSnapshot["entries"] = [];
+      let next = 0;
+      const worker = async () => {
+        for (;;) {
+          const index = next++;
+          const group = ownerGroups[index];
+          const owner = group?.[0];
+          if (!owner || !group) return;
+          assertReadActive();
+          const primary = entries.get(
+            JSON.stringify([owner.topic, owner.branch]),
+          );
+          let row: TopicBoardSnapshot["entries"][number] = {
+            topic: owner.topic,
+            branch: owner.branch,
+            remote: false,
+            current: primary?.current ?? false,
+            statuses: [],
+            todo: null,
+            divergence: null,
+            hosts: primary?.hosts ?? [owner.branch],
+          };
+          if (group.length > 1) {
+            for (const candidate of group) failed.add(candidate.contextId);
+            row.statusError =
+              "Неоднозначный владелец статуса топика. Обновите список контекстов.";
+            summaries[index] = row;
+            continue;
+          }
+          try {
+            if (owner.state !== "ready") throw Error("Owner unavailable");
+            const ref = worktreeContextRef(owner);
+            const local = await this.snapshot(ref, async () => {
+              const owned = await this.topicsContext(ref);
+              const localTable = await readTopicTableDisplay(owned, year);
+              await this.validateBinding(owned.project);
+              assertReadActive();
+              return localTable;
+            });
+            const own = local.entries.find(
+              (entry) =>
+                entry.topic === owner.topic &&
+                entry.branch === owner.branch &&
+                !entry.remote,
+            );
+            if (own)
+              row = {
+                ...own,
+                current: row.current,
+                // Placement describes the original repository; clone reads only
+                // refresh the exact owner's status/divergence.
+                hosts: primary?.hosts ?? own.hosts,
+              };
+          } catch {
+            // Cancellation is not an owner status error and must invalidate the read.
+            assertReadActive();
+            failed.add(owner.contextId);
+            row.statusError =
+              "Не удалось прочитать актуальный статус топика. Обновите таблицу.";
+          }
+          summaries[index] = row;
+        }
+      };
+      await Promise.all(
+        Array.from({ length: Math.min(3, ownerGroups.length) }, worker),
+      );
+      for (const row of summaries)
+        entries.set(JSON.stringify([row.topic, row.branch]), row);
+      table.entries = [...entries.values()];
+      table.records = table.entries.map(({ hosts: _hosts, ...row }) => row);
+      const after = await this.topicDisplayInventory(context.project, year);
+      // Exact owner validation may mark a vanished clone unavailable. Such a row
+      // remains explicitly unknown; identity/membership changes still invalidate
+      // the whole read, as do revision changes of successfully loaded owners.
+      const comparable = (rows: WorktreeRecord[]) =>
+        rows.map((row) => {
+          if (!failed.has(row.contextId)) return row;
+          const {
+            revision: _revision,
+            state: _state,
+            reason: _reason,
+            ...identity
+          } = row;
+          return identity;
+        });
+      if (
+        JSON.stringify(comparable(before)) !== JSON.stringify(comparable(after))
+      )
+        throw Error("Каталог контекстов изменился; обновите список.");
+      assertReadActive();
+      return table;
+    });
+    assertReadActive();
+    return result;
+  }
+  private assertHistoryPrimary(scope: ScopeRef): string {
+    const parsed = this.parseScope(scope);
+    if (
+      typeof parsed !== "string" ||
+      this.context.getStore()?.binding ||
+      this.selectedContext?.projectId === parsed
+    )
+      throw Error("Очистка истории доступна только в режиме «Без топика».");
+    this.check();
+    return parsed;
+  }
+  private async historyPruneAccess(projectId: string): Promise<PruneAccess> {
+    this.assertHistoryPrimary(projectId);
+    const project = await this.project(projectId);
+    const call = this.invocation(project);
+    const snapshot = this.context.getStore()!;
+    return {
+      root: project.path,
+      version: JSON.stringify([
+        snapshot.document.version,
+        snapshot.catalogEpoch,
+      ]),
+      secrets: call.value.env.map((e) => e.value).filter(Boolean),
+      verify: async () => {
+        this.assertHistoryPrimary(projectId);
+        await this.assertSettings(projectId);
+        this.assertCatalog(snapshot.catalogEpoch);
+        if ((await this.project(projectId)).path !== project.path)
+          throw Error("Папка проекта изменилась. Повторите предпросмотр.");
+      },
+      command: (args) =>
+        this.runner.command(call.executable, args, project.path, call.env),
+    };
+  }
+  async prepareHistoryPrune(
+    scope: ScopeRef,
+    year: string,
+  ): Promise<HistoryPrunePreview> {
+    try {
+      const id = this.assertHistoryPrimary(scope);
+      historyYearSchema.parse(year);
+      return await this.exclusive(id, () =>
+        this.snapshot(
+          id,
+          async () =>
+            this.historyPruner.run(
+              id,
+              year,
+              await this.historyPruneAccess(id),
+            ) as Promise<HistoryPrunePreview>,
+        ),
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Не удалось подготовить очистку.";
+      return {
+        status: "error",
+        projectId: typeof scope === "string" ? scope : "",
+        year,
+        entries: [],
+        error: message,
+        log: message,
+      };
+    }
+  }
+  async pruneHistory(
+    scope: ScopeRef,
+    token: string,
+  ): Promise<HistoryPruneResult> {
+    // Consume before any await, including the serialization queue.
+    const pending =
+      typeof token === "string" ? this.historyPruner.take(token) : undefined;
+    let changed = false;
+    try {
+      const id = this.assertHistoryPrimary(scope);
+      if (!pending || pending.projectId !== id)
+        throw Error(
+          "Подтверждение очистки истекло или уже использовано. Откройте предпросмотр заново.",
+        );
+      return await this.operation(() =>
+        this.exclusive(id, () =>
+          this.snapshot(
+            id,
+            async () => {
+              const result = (await this.historyPruner.run(
+                id,
+                pending.year,
+                await this.historyPruneAccess(id),
+                pending,
+              )) as HistoryPruneResult;
+              changed = result.changed;
+              return result;
+            },
+            false,
+          ),
+        ),
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : "Не удалось выполнить очистку.";
+      return { status: "error", changed, error: message, log: message };
+    }
+  }
+  private async historyRead<T>(
+    scope: ScopeRef,
+    action: (project: Project) => Promise<T>,
+  ) {
+    this.check();
+    const parsed = this.parseScope(scope);
+    if (typeof parsed === "string" && this.context.getStore()?.binding)
+      throw Error("Для рабочей копии требуется точный контекст топика.");
+    return history.withHistoryRead(async () => {
+      const result = await this.snapshot(parsed, async () => {
+        const project = await this.project(parsed);
+        const result = await action(project);
+        await this.validateBinding(project);
+        assertReadActive();
+        return result;
+      });
+      assertReadActive();
+      return result;
+    });
+  }
+  async listHistoryYears(scope: ScopeRef) {
+    return this.historyRead(scope, (project) =>
+      history.listHistoryYears(this.root(project)),
+    );
+  }
+  async listHistoryEntries(scope: ScopeRef, year: string) {
+    historyYearSchema.parse(year);
+    return this.historyRead(scope, (project) =>
+      history.listHistoryEntries(this.root(project), year),
+    );
+  }
+  private async historyEntryRead<T>(
+    scope: ScopeRef,
+    year: string,
+    entry: string,
+    target: TopicTarget | undefined,
+    action: (root: string, source?: history.HistoryTopicSource) => Promise<T>,
+  ) {
+    historyYearSchema.parse(year);
+    historyEntrySchema.parse(entry);
+    if (target !== undefined) topicTargetSchema.parse(target);
+    const parsed = this.parseScope(scope);
+    if (
+      target &&
+      (target.topic !== entry ||
+        (typeof parsed !== "string" &&
+          (parsed.year !== year ||
+            parsed.topic !== entry ||
+            parsed.branch !== target.branch ||
+            target.remote)))
+    )
+      throw Error("История относится к другому контексту топика.");
+    return this.historyRead(parsed, async (project) => {
+      const owner = this.binding(project);
+      const assertNoOwner = async () => {
+        if (
+          target &&
+          !owner &&
+          !target.remote &&
+          (await this.topicDisplayInventory(project, year)).some(
+            (row) => row.topic === target.topic && row.branch === target.branch,
+          )
+        )
+          throw Error(
+            "У топика есть рабочая копия. Выберите её точный контекст; подмена основной папкой запрещена.",
+          );
+      };
+      await assertNoOwner();
+      const result = await action(
+        this.root(project),
+        target
+          ? {
+              projectId: project.id,
+              target,
+              ...(owner ? { owner: worktreeContextRef(owner) } : {}),
+              gitEnv: childEnvironment(process.env, { HOME: this.home }),
+            }
+          : undefined,
+      );
+      await assertNoOwner();
+      return result;
+    });
+  }
+  async listHistoryArtifacts(
+    scope: ScopeRef,
+    year: string,
+    entry: string,
+    target?: TopicTarget,
+  ) {
+    return this.historyEntryRead(scope, year, entry, target, (root, source) =>
+      history.listHistoryArtifacts(root, year, entry, source),
+    );
+  }
+  async readHistoryArtifact(
+    scope: ScopeRef,
+    year: string,
+    entry: string,
+    path: string,
+    target?: TopicTarget,
+  ) {
+    historyPathSchema.parse(path);
+    return this.historyEntryRead(scope, year, entry, target, (root, source) =>
+      history.readHistoryArtifact(root, year, entry, path, source),
+    );
+  }
+  async readTopicOverview(
+    scope: ScopeRef,
+    year: string,
+    target: TopicTarget,
+  ): Promise<TopicDetails> {
+    this.check();
+    assertReadActive();
+    const parsed = this.parseScope(scope);
+    topicYearSchema.parse(year);
+    topicTargetSchema.parse(target);
+    if (
+      typeof parsed !== "string" &&
+      (parsed.year !== year ||
+        parsed.topic !== target.topic ||
+        parsed.branch !== target.branch ||
+        target.remote)
+    )
+      throw Error("Топик относится к другому контексту.");
+    if (typeof parsed === "string" && this.context.getStore()?.binding)
+      throw Error("Для рабочей копии требуется точный контекст топика.");
+    const result = await this.snapshot(parsed, async () => {
+      const context = await this.topicsContext(parsed);
+      const assertNoOwner = async () => {
+        if (
+          !context.owner &&
+          !target.remote &&
+          (await this.topicDisplayInventory(context.project, year)).some(
+            (row) => row.topic === target.topic && row.branch === target.branch,
+          )
+        )
+          throw Error(
+            "У топика есть рабочая копия. Выберите её точный контекст; подмена основной папкой запрещена.",
+          );
+      };
+      await assertNoOwner();
+      const details = await readTopicTaskOverview(context, year, target);
+      await assertNoOwner();
+      await this.validateBinding(context.project);
+      assertReadActive();
+      return details;
     });
     assertReadActive();
     return result;
@@ -2012,6 +2645,7 @@ export class HostService extends EventEmitter {
     });
   }
   async launchBuild(input: BuildRequest): Promise<Run> {
+    this.assertLaunchAllowed();
     // Safe errors: zod diagnostics can include user-controlled secrets.
     const parsed = buildRequestSchema.safeParse(input);
     if (!parsed.success) throw new Error("Некорректный запрос сборки");
@@ -2050,6 +2684,7 @@ export class HostService extends EventEmitter {
     key: string,
     request: BuildRequest,
   ): Promise<Run> {
+    this.assertLaunchAllowed();
     this.check();
     this.assertRunAdmission(p, key, "build");
     if (request.options.clean && !request.confirmClean)
@@ -2479,11 +3114,12 @@ export class HostService extends EventEmitter {
     const explicit =
       r.profile ||
       (r.profileMode === "auto" ? "" : this.invocation(p).value.profile);
-    if (explicit && !workflow)
-      throw new Error(
-        "Этот конвейер не применяет профиль без рабочего процесса. Выберите рабочий процесс или Автоматически для этого запуска.",
-      );
-    if (explicit && !(await this.profiles(p)).some((x) => x.name === explicit))
+    // Goga only resolves profiles when a workflow is active.
+    if (
+      workflow &&
+      explicit &&
+      !(await this.profiles(p)).some((x) => x.name === explicit)
+    )
       throw new Error(
         "Выбранный профиль отсутствует. Обновите список профилей.",
       );
@@ -2592,6 +3228,7 @@ export class HostService extends EventEmitter {
     args: string[],
     env: NodeJS.ProcessEnv,
   ) {
+    this.assertLaunchAllowed();
     if (!this.recovery) return this.runner.start(exe, args, this.root(p), env);
     const launched = await this.recovery.launch({
       runId: run.id,
@@ -2676,6 +3313,7 @@ export class HostService extends EventEmitter {
     return realpath(path.resolve(this.root(p), dir));
   }
   async launch(request: LaunchRequest): Promise<Run> {
+    this.assertLaunchAllowed();
     if (request?.update !== undefined && typeof request.update !== "boolean")
       throw new Error("Некорректный параметр обновления (update)");
     return this.operation(() =>
@@ -2689,6 +3327,7 @@ export class HostService extends EventEmitter {
     );
   }
   private async launchWithSettings(request: LaunchRequest): Promise<Run> {
+    this.assertLaunchAllowed();
     assertEnvironmentTransport(this.context.getStore()!.document.value.env);
     if (typeof request?.clean !== "boolean")
       throw new Error("Некорректный параметр очистки состояния (clean)");
@@ -2954,11 +3593,10 @@ export class HostService extends EventEmitter {
       } else {
         branch = selection.branch;
         topic = selection.topic;
-        taskSnapshot = await this.readTopicTask({
-          projectId: p.id,
-          branch,
-          topic,
-        });
+        taskSnapshot = await this.readTopicTaskWithSettings(
+          { projectId: p.id, branch, topic },
+          true,
+        );
         launchTaskPath = taskSnapshot.path;
         if (taskSnapshot.version !== request.taskVersion)
           throw new Error(
@@ -3404,6 +4042,98 @@ export class HostService extends EventEmitter {
       this.emitRuns();
     } catch {
       /* Keep durable intent for restart replay; never rewrite the run outcome. */
+    }
+  }
+  private assertLaunchAllowed(): void {
+    this.check();
+    if (this.shutdownAdmission)
+      throw Error("Приложение готовится к выходу. Новый запуск недоступен.");
+  }
+  /** Freeze only new runs; stopping/recovery and project reads must remain usable.
+   * Drain the pre-existing operation chain before taking the confirmation snapshot:
+   * a recovery launch may already be between journal persistence and actual spawn.
+   */
+  async prepareShutdown(): Promise<PreparedShutdown> {
+    this.check();
+    if (this.shutdownAdmission)
+      throw Error("Подготовка к выходу уже выполняется.");
+    this.shutdownAdmission = true;
+    let released = false;
+    const active = () =>
+      this.runList.filter(
+        (run) =>
+          ["starting", "running"].includes(run.status) ||
+          this.children.has(run.id),
+      );
+    try {
+      await this.operationTail;
+      const planned = new Map(
+        active().map((run) => [run.id, this.runOwnerHash(run)]),
+      );
+      const validate = () => {
+        if (released) throw Error("Подготовка к выходу уже завершена.");
+        for (const run of active()) {
+          if (
+            planned.get(run.id) !== this.runOwnerHash(run) ||
+            run.recovery === "unverified"
+          )
+            throw Error("Состояние запуска не подтверждено. Выход отменён.");
+        }
+        if (
+          [...this.children.keys()].some(
+            (id) => !this.runList.some((run) => run.id === id),
+          )
+        )
+          throw Error("Состояние запуска не подтверждено. Выход отменён.");
+      };
+      validate();
+      return {
+        items: active().map((run) => ({
+          id: `run:${run.id}`,
+          label: `${run.pipeline} — ${run.topic || "Без топика"}`,
+        })),
+        requiresConfirmation: planned.size > 0,
+        validate,
+        stop: async () => {
+          validate();
+          for (const run of active()) await this.stop(run.id);
+        },
+        remaining: () =>
+          [
+            ...new Set([
+              ...active().map((run) => run.id),
+              ...this.children.keys(),
+            ]),
+          ].map((id) => `run:${id}`),
+        release: () => {
+          if (released) return;
+          released = true;
+          this.shutdownAdmission = false;
+        },
+      };
+    } catch (error) {
+      this.shutdownAdmission = false;
+      throw error;
+    }
+  }
+  /** Unified exit has already stopped all runs. Persist before irreversible cleanup.
+   * Runner.dispose failures retain ownership and reopen its admissions for a retry.
+   */
+  async finalizeShutdown(): Promise<void> {
+    if (
+      !this.shutdownAdmission ||
+      this.children.size ||
+      this.runList.some((run) => ["starting", "running"].includes(run.status))
+    )
+      throw Error("Сначала требуется завершить запуски приложения.");
+    await this.operationTail;
+    await this.runSaveTail;
+    this.disposed = true;
+    try {
+      await this.runner.dispose?.();
+    } catch (error) {
+      this.disposed = false;
+      throw error;
     }
   }
   async dispose(): Promise<void> {

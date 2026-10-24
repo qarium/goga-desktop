@@ -21,13 +21,13 @@ export async function dismissActiveTopicPopup() {
 
 export function hasNativeTopicPopup() {
   return (
-    typeof window.goga.setTopicPopupBounds === "function" &&
-    typeof window.goga.closeTopicPopup === "function" &&
-    typeof window.goga.onTopicPopupClosed === "function"
+    typeof window.goga?.setTopicPopupBounds === "function" &&
+    typeof window.goga?.closeTopicPopup === "function" &&
+    typeof window.goga?.onTopicPopupClosed === "function"
   );
 }
 const failureMessage =
-  "Не удалось открыть меню топиков поверх панели. Закройте меню и попробуйте снова.";
+  "Не удалось открыть меню поверх панели. Закройте меню и попробуйте снова.";
 
 /** Only presentation moves into the same-origin native layer. React state and
  * every privileged call remain in the original, authenticated shell renderer. */
@@ -36,11 +36,13 @@ export function TopicPickerPopup({
   onClose,
   children,
   label = "Выбор топика",
+  width: preferredWidth = 436,
 }: {
-  anchor: RefObject<HTMLDivElement | null>;
+  anchor: RefObject<HTMLElement | null>;
   onClose: () => void;
   children: ReactNode;
   label?: string;
+  width?: number;
 }) {
   const native = hasNativeTopicPopup();
   const close = useRef(onClose);
@@ -53,7 +55,7 @@ export function TopicPickerPopup({
   );
   const position = () => {
     const rect = anchor.current?.getBoundingClientRect();
-    const width = Math.max(1, Math.min(436, window.innerWidth - 16));
+    const width = Math.max(1, Math.min(preferredWidth, window.innerWidth - 16));
     const x = Math.max(
       0,
       Math.min(
@@ -166,9 +168,13 @@ export function TopicPickerPopup({
   useLayoutEffect(() => {
     const state = layer.current;
     if (!container || !styled || !state?.alive) return;
-    let last = "";
+    let last = "",
+      ready = false,
+      disposed = false,
+      frame = 0;
+    const readyDeadline = setTimeout(state.fail, 5000);
     const measure = () => {
-      if (!state.alive) return;
+      if (!state.alive || !ready || disposed) return;
       const bounds = position();
       bounds.height = Math.min(
         bounds.height,
@@ -181,9 +187,33 @@ export function TopicPickerPopup({
     };
     const observer = new ResizeObserver(measure);
     observer.observe(container);
-    measure();
-    container.querySelector<HTMLInputElement>('[role="combobox"]')?.focus();
-    return () => observer.disconnect();
+    // Style load alone precedes layout/font settlement. Keep the native layer
+    // hidden until the complete portal has its final first-frame geometry.
+    container.getBoundingClientRect();
+    Promise.resolve(container.ownerDocument.fonts?.ready)
+      .then(() => {
+        if (disposed || !state.alive) return;
+        frame = window.requestAnimationFrame(() => {
+          frame = window.requestAnimationFrame(() => {
+            if (disposed || !state.alive) return;
+            clearTimeout(readyDeadline);
+            ready = true;
+            measure();
+            container
+              .querySelector<HTMLElement>(
+                '[role="combobox"], [role="menuitem"]:not(:disabled)',
+              )
+              ?.focus();
+          });
+        });
+      })
+      .catch(state.fail);
+    return () => {
+      disposed = true;
+      clearTimeout(readyDeadline);
+      window.cancelAnimationFrame(frame);
+      observer.disconnect();
+    };
   }, [container, styled]);
 
   if (!native) return children;

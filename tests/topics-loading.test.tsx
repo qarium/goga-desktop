@@ -64,6 +64,8 @@ beforeEach(() => {
     prepareTopicOperation: vi.fn(),
     executeTopicOperation: vi.fn(),
   };
+  api.readTopicTable = api.readTopicBoard;
+  api.readTopicOverview = api.readTopicDetails;
   window.goga = api;
 });
 afterEach(cleanup);
@@ -96,7 +98,7 @@ it.each(["board", "task"])(
     mount();
     expect(
       screen
-        .getByText("Загружаем топик…")
+        .getByRole("status", { name: "Загружаем топик…" })
         .closest("[role=status]")
         ?.getAttribute("aria-busy"),
     ).toBe("true");
@@ -118,7 +120,7 @@ it.each(["board", "task"])(
     });
     expect(
       screen
-        .getByText("Загружаем топик…")
+        .getByRole("status", { name: "Загружаем топик…" })
         .closest("[role=status]")
         ?.getAttribute("aria-busy"),
     ).toBe("true");
@@ -127,7 +129,9 @@ it.each(["board", "task"])(
       if (first === "board") taskRead.resolve(details);
       else boardRead.resolve(board);
     });
-    expect(screen.queryByText("Загружаем топик…")).toBeNull();
+    expect(
+      screen.queryByRole("status", { name: "Загружаем топик…" }),
+    ).toBeNull();
     expect(
       (
         screen.getByRole("textbox", {
@@ -153,7 +157,7 @@ it("shows an error instead of partial content; retry keeps the existing unsaved 
     boardRead.resolve(board);
   });
   expect(screen.getByRole("alert").textContent).toContain("Test read failed");
-  expect(screen.queryByText("Загружаем топик…")).toBeNull();
+  expect(screen.queryByRole("status", { name: "Загружаем топик…" })).toBeNull();
   expect(screen.queryByRole("textbox", { name: "Задача топика" })).toBeNull();
   expect(screen.queryByRole("button", { name: "Опубликовать…" })).toBeNull();
   expect(store.tasks.get(key)?.text).toBe("Keep unsaved work");
@@ -162,7 +166,7 @@ it("shows an error instead of partial content; retry keeps the existing unsaved 
   fireEvent.click(screen.getByRole("button", { name: "Повторить загрузку" }));
   expect(
     screen
-      .getByText("Загружаем топик…")
+      .getByRole("status", { name: "Загружаем топик…" })
       .closest("[role=status]")
       ?.getAttribute("aria-busy"),
   ).toBe("true");
@@ -209,14 +213,14 @@ it("does not load historical snapshots or new-topic preparation", () => {
     } as any,
   });
   expect(screen.getByText("Historical snapshot")).toBeTruthy();
-  expect(screen.queryByText("Загружаем топик…")).toBeNull();
+  expect(screen.queryByRole("status", { name: "Загружаем топик…" })).toBeNull();
   expect(
     screen.queryByRole("region", { name: "Перенос изменений" }),
   ).toBeNull();
   first.unmount();
   mount({ kind: "preparation", newTopic: true, text: "New preparation" });
   expect(screen.getByText("New preparation")).toBeTruthy();
-  expect(screen.queryByText("Загружаем топик…")).toBeNull();
+  expect(screen.queryByRole("status", { name: "Загружаем топик…" })).toBeNull();
   expect(api.readTopicBoard).not.toHaveBeenCalled();
   expect(api.readTopicDetails).not.toHaveBeenCalled();
 });

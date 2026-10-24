@@ -172,26 +172,33 @@ export class CloneManager {
     if (owner) await this.store.assertOwned(owner);
     return result.stdout;
   }
+  /** One Git process observes all repository paths; malformed output fails closed. */
+  private async gitPaths(cwd: string, owner?: WorktreeRecord) {
+    const raw = await this.git(
+      [
+        "rev-parse",
+        "--path-format=absolute",
+        "--show-toplevel",
+        "--git-common-dir",
+        "--absolute-git-dir",
+      ],
+      cwd,
+      owner,
+    );
+    const values = raw.replace(/\n$/, "").split("\n");
+    if (values.length !== 3 || values.some((value) => !path.isAbsolute(value)))
+      throw Error("Не удалось проверить пути Git-репозитория.");
+    return { top: values[0]!, common: values[1]!, git: values[2]! };
+  }
   private async repository(project: Project): Promise<Repository> {
     if (!project || !path.isAbsolute(project.path)) throw unavailable();
     const canonical = await realpath(project.path);
     await noSymlinks(canonical);
-    const top = (
-      await this.git(["rev-parse", "--show-toplevel"], canonical)
-    ).trim();
-    if ((await realpath(top)) !== canonical)
+    const paths = await this.gitPaths(canonical);
+    if ((await realpath(paths.top)) !== canonical)
       throw Error("Выберите корневую папку Git-проекта.");
-    const common = await realpath(
-      (
-        await this.git(
-          ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-          canonical,
-        )
-      ).trim(),
-    );
-    const git = await realpath(
-      (await this.git(["rev-parse", "--absolute-git-dir"], canonical)).trim(),
-    );
+    const common = await realpath(paths.common);
+    const git = await realpath(paths.git);
     await noSymlinks(common);
     if (common !== git)
       throw Error(
@@ -287,19 +294,7 @@ export class CloneManager {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
-      const top = (
-        await this.git(["rev-parse", "--show-toplevel"], record.path, record)
-      ).trim();
-      const common = (
-        await this.git(
-          ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-          record.path,
-          record,
-        )
-      ).trim();
-      const git = (
-        await this.git(["rev-parse", "--absolute-git-dir"], record.path, record)
-      ).trim();
+      const { top, common, git } = await this.gitPaths(record.path, record);
       if (
         (await realpath(top)) !== record.path ||
         (await realpath(common)) !== record.gitCommonDir ||

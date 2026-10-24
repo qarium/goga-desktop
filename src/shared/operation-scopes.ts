@@ -10,9 +10,15 @@ export type OperationScope =
   | "home"
   | "desktop-project";
 export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
+  "prepare-history-prune": "desktop-project",
+  "prune-history": "owner-ticket",
+  "list-history-years": "topic-or-primary-admin",
+  "list-history-entries": "topic-or-primary-admin",
+  "list-history-artifacts": "topic-or-primary-admin",
+  "read-history-artifact": "topic-or-primary-admin",
   "run-repository-action": "topic-or-primary-admin",
-  "prepare-build-repeat":"run",
-  "reconcile-run":"run",
+  "prepare-build-repeat": "run",
+  "reconcile-run": "run",
   "set-topic-popup-bounds": "transport",
   "close-topic-popup": "transport",
   "cancel-read": "transport",
@@ -37,6 +43,8 @@ export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
   "read-build-plan": "topic-or-primary-admin",
   "launch-build": "topic-or-primary-admin",
   "read-topic-catalog": "catalog",
+  "read-topic-table": "catalog",
+  "read-topic-overview": "topic-or-primary-admin",
   "read-topic-board": "topic-or-primary-admin",
   "read-topic-details": "topic-or-primary-admin",
   "prepare-topic-operation": "topic-or-primary-admin",
@@ -69,3 +77,23 @@ export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
   "read-settings": "home",
   "save-settings": "home",
 };
+
+/** Dedicated terminal control channel; each discriminated operation has its own boundary. */
+export const TERMINAL_CONTROL_SCOPES = {
+  read: "topic-or-primary-admin",
+  initialize: "topic-or-primary-admin",
+  create: "topic-or-primary-admin",
+  rename: "topic-or-primary-admin",
+  select: "topic-or-primary-admin",
+  move: "topic-or-primary-admin",
+  reorder: "topic-or-primary-admin",
+  open: "topic-or-primary-admin",
+  show: "owner-ticket",
+  preview: "owner-ticket",
+  activate: "owner-ticket",
+  hide: "transport",
+  "prepare-close": "topic-or-primary-admin",
+  "prepare-refresh": "topic-or-primary-admin",
+  confirm: "owner-ticket",
+  cancel: "owner-ticket",
+} as const satisfies Record<string, OperationScope>;

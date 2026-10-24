@@ -206,16 +206,21 @@ const scalars = ViewPlugin.fromClass(
 
 const theme = EditorView.theme(
   {
-    "&": { color: "#d7e2f2", backgroundColor: "#0d1726", fontSize: "12px" },
+    "&": {
+      color: "#d7e2f2",
+      backgroundColor: "#0d1726",
+      fontSize: "12px",
+      height: "var(--settings-editor-height, auto)",
+    },
     "&.cm-focused": { outline: "2px solid #6da9ff", outlineOffset: "-2px" },
     ".cm-scroller": {
       fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
       lineHeight: "1.75",
       overflow: "auto",
-      maxHeight: "460px",
+      maxHeight: "var(--settings-editor-height, 460px)",
     },
     ".cm-content": {
-      minHeight: "330px",
+      minHeight: "var(--settings-editor-min-height, 330px)",
       padding: "12px 0",
       caretColor: "#ffffff",
     },

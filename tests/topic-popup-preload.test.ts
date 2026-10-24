@@ -51,3 +51,32 @@ it("exposes the primary lightweight catalog read without changing full board", a
   );
   expect(typeof api.readTopicBoard).toBe("function");
 });
+it("exposes a lazy terminal bridge only in the main API, without spawning or connecting on load", async () => {
+  vi.resetModules();
+  fake.invoke.mockClear();
+  await import("../src/main/preload");
+  const api = fake.expose.mock.calls[0][1];
+  expect(api.terminal).toBeDefined();
+  expect(fake.invoke).not.toHaveBeenCalled();
+  fake.invoke
+    .mockResolvedValueOnce("00000000-0000-4000-8000-000000000001" as any)
+    .mockResolvedValueOnce(null as any);
+  await api.terminal.request({ kind: "hide" });
+  expect(fake.invoke).toHaveBeenLastCalledWith("goga:terminal-request", {
+    documentId: "00000000-0000-4000-8000-000000000001",
+    request: { kind: "hide" },
+  });
+});
+
+it("exposes separate display table and task-only overview reads", async () => {
+  vi.resetModules();
+  await import("../src/main/preload");
+  const api = fake.expose.mock.calls[0][1];
+  expect(typeof api.readTopicTable).toBe("function");
+  expect(typeof api.readTopicOverview).toBe("function");
+  await api.readTopicTable("p", "2026");
+  expect(fake.invoke).toHaveBeenLastCalledWith("goga:read-topic-table", "p", "2026");
+  const target = { topic: "topic", branch: "topic", remote: false };
+  await api.readTopicOverview("p", "2026", target);
+  expect(fake.invoke).toHaveBeenLastCalledWith("goga:read-topic-overview", "p", "2026", target);
+});

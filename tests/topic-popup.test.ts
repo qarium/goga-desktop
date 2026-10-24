@@ -180,7 +180,10 @@ describe("native topic popup", () => {
     wc.emit("blur");
     expect(wc.close).toHaveBeenCalledOnce();
     expect(f.children).toEqual([f.dashboard]);
-    expect(f.shell.send).toHaveBeenCalledExactlyOnceWith("goga:topic-popup-closed", ID);
+    expect(f.shell.send).toHaveBeenCalledExactlyOnceWith(
+      "goga:topic-popup-closed",
+      ID,
+    );
   });
   it.each(["render-process-gone", "destroyed"])(
     "cleans popup on %s",
@@ -234,4 +237,17 @@ describe("native topic popup", () => {
     expect(f.shell.listenerCount("did-start-navigation")).toBe(0);
     expect(f.request()).toEqual({ action: "deny" });
   });
+});
+
+it("reports a pending or shown popup as a focus owner until it is closed", () => {
+  const f = fixture();
+  expect(f.host.isOpen).toBe(false);
+  f.open();
+  expect(f.host.isOpen).toBe(true);
+  f.host.setBounds(ID, { x: 10, y: 20, width: 400, height: 300 });
+  expect(f.host.isOpen).toBe(true);
+  f.host.close(ID);
+  expect(f.host.isOpen).toBe(false);
+  f.host.dispose();
+  expect(f.host.isOpen).toBe(false);
 });

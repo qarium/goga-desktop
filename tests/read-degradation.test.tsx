@@ -107,6 +107,7 @@ beforeEach(() => {
     })),
     checkoutBranch: vi.fn(async () => "main"),
     readTopicBoard: vi.fn(async () => board),
+    readTopicTable: vi.fn(async () => board),
   };
   window.goga = api;
 });
@@ -210,7 +211,7 @@ it("Topics timeout preserves filters, allows retry, and rejects old late errors"
   const input = screen.getByRole("searchbox") as HTMLInputElement;
   fireEvent.change(input, { target: { value: "draft filter" } });
   const old = deferred();
-  api.readTopicBoard.mockReturnValueOnce(old.promise);
+  api.readTopicTable.mockReturnValueOnce(old.promise);
   fireEvent.click(screen.getByRole("button", { name: "Обновить список" }));
   await advance(300001);
   noLoader();
@@ -223,6 +224,9 @@ it("Topics timeout preserves filters, allows retry, and rejects old late errors"
   expect(input.value).toBe("draft filter");
   await act(async () => old.reject(Error("late error")));
   expect(screen.queryByText("late error")).toBeNull();
+  expect(api.readTopicTable).toHaveBeenCalledTimes(3);
+  expect(api.readTopicBoard).not.toHaveBeenCalled();
+  noLoader();
 });
 it.each(["workflow", "pipeline", "profile"] as const)(
   "%s catalog no-response is error, not empty success; retry recovers",

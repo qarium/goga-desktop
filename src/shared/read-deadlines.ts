@@ -1,5 +1,10 @@
 /** File IO is distinct from CLI snapshots (the host already allows 120s/command). */
 export const READ_BUDGETS = {
+  prepareHistoryPrune: 300000,
+  listHistoryYears: 30000,
+  listHistoryEntries: 30000,
+  listHistoryArtifacts: 30000,
+  readHistoryArtifact: 30000,
   contextDeletionRecovery: 30000,
   topicSyncStatus: 30000,
   prepareContextDeletion: 300000,
@@ -13,6 +18,8 @@ export const READ_BUDGETS = {
   preview: 300000,
   checkoutBranch: 300000,
   readTopicCatalog: 300000,
+  readTopicTable: 300000,
+  readTopicOverview: 300000,
   readTopicBoard: 300000,
   readTopicDetails: 300000,
   readTopicTask: 300000,

@@ -1,6 +1,8 @@
+import { useViewActive } from "./RetainedViews";
+import { ProjectHistory } from "./ProjectHistory";
 import { ProjectDockerfile } from "./ProjectDockerfile";
 import type { TopicContextRef } from "../shared/worktrees";
-import { contextRef } from "./topic-context";
+import { contextKey, contextRef } from "./topic-context";
 import { useReadScope } from "./read-request";
 import { LoadingBoundary } from "./LoadingBoundary";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -26,6 +28,7 @@ export function ProjectDocuments({
   store: SettingsDocuments;
   savedSettingsVersion?: string;
 }) {
+  const viewActive = useViewActive();
   const scope = owner ? contextRef(owner) : project.id;
   const scopeKey = documentScopeId(scope);
   const [tools, setTools] = useState<ProjectTool[]>([]),
@@ -65,7 +68,7 @@ export function ProjectDocuments({
   const [settled, setSettled] = useState("");
   const read = useReadScope(JSON.stringify([scopeKey, tab, attempt, revision]));
   useEffect(() => {
-    if (tab !== "tools") return;
+    if (!viewActive || tab !== "tools") return;
     let current = true;
     setLoading(true);
     setError("");
@@ -88,8 +91,16 @@ export function ProjectDocuments({
     return () => {
       current = false;
     };
-  }, [scopeKey, tab, attempt, revision]);
+  }, [scopeKey, tab, attempt, revision, viewActive]);
   if (tab === "launch") return null;
+  if (tab === "history")
+    return (
+      <ProjectHistory
+        key={owner ? contextKey(owner) : project.id}
+        project={project}
+        owner={owner}
+      />
+    );
   if (tab === "image")
     return (
       <ProjectDockerfile

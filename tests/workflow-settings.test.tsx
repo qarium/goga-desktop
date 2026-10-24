@@ -67,7 +67,7 @@ async function openSettings(primary = false) {
     await openPrototypeDocuments();
   else {
     click("Проект");
-    await screen.findByRole("textbox", { name: "Исполняемый файл" });
+    await screen.findByRole("heading", { name: "Проект" });
   }
   click("Рабочие процессы");
   await waitFor(() => expect(api.listProjectWorkflows).toHaveBeenCalled());

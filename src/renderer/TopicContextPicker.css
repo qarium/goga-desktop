@@ -36,6 +36,11 @@
   border-radius: 0 7px 7px 0;
   color: var(--teal);
 }
+/* Keep restored keyboard focus inside the split control, not across its seam. */
+.topic-context-name:focus-visible,
+.topic-context-trigger:focus-visible {
+  outline-offset: -3px;
+}
 .topic-context-chevron {
   position: absolute;
   top: 50%;

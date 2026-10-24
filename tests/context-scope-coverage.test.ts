@@ -26,3 +26,17 @@ it("does not interpret malformed context ownership as a primary project identifi
     expect(scopeRefSchema.safeParse(input).success).toBe(false);
   expect(scopeRefSchema.parse("p")).toBe("p");
 });
+
+it("classifies every dedicated terminal control operation without allowing arbitrary shell commands", async () => {
+  const { terminalControlRequestSchema } =
+    await import("../src/shared/terminal-control");
+  const { TERMINAL_CONTROL_SCOPES } =
+    await import("../src/shared/operation-scopes");
+  expect(
+    terminalControlRequestSchema.options
+      .map((option) => option.shape.kind.value)
+      .sort(),
+  ).toEqual(Object.keys(TERMINAL_CONTROL_SCOPES).sort());
+  expect(TERMINAL_CONTROL_SCOPES.confirm).toBe("owner-ticket");
+  expect(Object.keys(TERMINAL_CONTROL_SCOPES)).not.toContain("input");
+});

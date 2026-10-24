@@ -1,3 +1,4 @@
+import { useViewActive } from "./RetainedViews";
 import { useEffect, useId, useRef } from "react";
 import type { DocumentDeletion } from "./settings-documents";
 export function DocumentDeleteConfirmation({
@@ -13,16 +14,18 @@ export function DocumentDeleteConfirmation({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  const active = useViewActive();
   const dialog = useRef<HTMLDialogElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
   const title = useId();
   const description = useId();
   useEffect(() => {
+    if (!active) return;
     const element = dialog.current!;
     element.showModal();
     cancel.current?.focus();
     return () => element.close();
-  }, []);
+  }, [active]);
   return (
     <dialog
       ref={dialog}

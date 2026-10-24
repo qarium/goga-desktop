@@ -182,8 +182,16 @@ it("lists actual tools with all folders collapsed and retains full-path drafts a
   fireEvent.click(screen.getByRole("button", { name: "Проект" }));
   fireEvent.click(screen.getByRole("button", { name: "Инструменты" }));
   await screen.findByRole("combobox", { name: "Инструмент" });
-  fireEvent.click(screen.getByRole("button", { name: "Папка env" }));
-  fireEvent.click(screen.getByRole("button", { name: "Папка env/local" }));
+  expect(
+    screen
+      .getByRole("button", { name: "Папка env" })
+      .getAttribute("aria-expanded"),
+  ).toBe("true");
+  expect(
+    screen
+      .getByRole("button", { name: "Папка env/local" })
+      .getAttribute("aria-expanded"),
+  ).toBe("true");
   fireEvent.click(
     screen.getByRole("button", { name: "Файл env/local/config.yml" }),
   );

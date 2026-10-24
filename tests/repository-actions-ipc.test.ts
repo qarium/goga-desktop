@@ -86,3 +86,41 @@ it.each(["propagate", "update-remote"])(
     expect(runRepositoryAction).toHaveBeenCalledTimes(1);
   },
 );
+
+it("accepts exact explicit card propagation through the existing shell scope only", async () => {
+  const handlers = new Map<string, Function>();
+  const runRepositoryAction = vi.fn(async (v) => v);
+  registerIPC(
+    { handle: (n: string, f: Function) => handlers.set(n, f) } as any,
+    {
+      service: { runRepositoryAction },
+      window: { webContents: { id: 1 } },
+      shellURL: "file:///app/index.html",
+    } as any,
+  );
+  const handler = handlers.get("goga:run-repository-action")!;
+  const event = {
+    sender: { id: 1 },
+    senderFrame: { url: "file:///app/index.html", parent: null },
+  };
+  const propagation = {
+    year: "2026",
+    topic: "alpha",
+    branch: "alpha",
+    baseRef: "main",
+  };
+  const request = { projectId: "p", action: "propagate", propagation };
+  expect(await handler(event, request)).toEqual(request);
+  for (const extra of [
+    { action: "publish" },
+    { action: "update-remote" },
+    { propagation: { ...propagation, path: "/unsafe" } },
+    { propagation: { ...propagation, baseRef: "--force" } },
+    { propagation: { ...propagation, branch: "--help" } },
+    { propagation: { ...propagation, year: "bad" } },
+    { propagation: { ...propagation, args: ["reset"] } },
+  ])
+    expect(() => handler(event, { ...request, ...extra })).toThrow();
+  expect(() => handler({ ...event, sender: { id: 2 } }, request)).toThrow();
+  expect(runRepositoryAction).toHaveBeenCalledTimes(1);
+});

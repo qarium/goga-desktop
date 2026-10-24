@@ -79,6 +79,8 @@ beforeEach(() => {
       message: "Готово",
     })),
   };
+  api.readTopicTable = api.readTopicBoard;
+  api.readTopicOverview = api.readTopicDetails;
   window.goga = api;
 });
 afterEach(cleanup);
@@ -98,12 +100,7 @@ it("shows approved defaults/order and live name search without apply", async () 
     screen
       .getAllByRole("switch")
       .map((e) => [e.textContent, e.getAttribute("aria-checked")]),
-  ).toEqual([
-    ["Описания задач", "true"],
-    ["Состояния по веткам", "false"],
-    ["Только удалённые ветки", "false"],
-    ["Только с активными запусками", "false"],
-  ]);
+  ).toEqual([["Только с активными запусками", "false"]]);
   fireEvent.change(screen.getByPlaceholderText("Часть имени топика"), {
     target: { value: "FEATURE-B" },
   });
@@ -130,15 +127,16 @@ it("option search alone does not filter board; cancel does not select", async ()
     screen.getByRole("button", { name: "Открыть топик feature-a" }),
   ).toBeTruthy();
 });
-it("per-host rows and where expansion preserve branch-specific state", async () => {
+it("keeps placements and task previews out of the compact table", async () => {
   mount();
   await screen.findByRole("button", { name: "Открыть топик feature-a" });
-  fireEvent.click(screen.getByRole("switch", { name: "Состояния по веткам" }));
   expect(
     screen.getAllByRole("button", { name: "Открыть топик feature-a" }),
-  ).toHaveLength(2);
-  expect(screen.getAllByText("done").length).toBeGreaterThan(0);
+  ).toHaveLength(1);
+  expect(screen.queryByText("Где находится")).toBeNull();
+  expect(screen.queryByText("done")).toBeNull();
 });
+
 it.each([
   [true, false],
   [false, false],
@@ -150,6 +148,7 @@ it.each([
     mount();
     await screen.findByRole("button", { name: "Создать топик" });
     fireEvent.click(screen.getByRole("button", { name: "Создать топик" }));
+    await screen.findByLabelText("Имя ветки / топика");
     const dialog = screen.getByRole("dialog", { name: "Создать топик" });
     expect(
       within(dialog)
@@ -317,23 +316,20 @@ it("requires explicit execution, consumes once and preserves a draft after failu
     ).value,
   ).toBe("Saved only with consent");
 });
-it("bulk delete previews the concrete selected topic list and cancel does nothing", async () => {
+it("row deletion previews the exact topic and cancel never executes", async () => {
   mount();
-  await screen.findByRole("button", { name: "Открыть топик feature-b" });
   fireEvent.click(
-    screen.getByRole("checkbox", {
-      name: "Выбрать топик feature-b в feature/b",
-    }),
+    await screen.findByRole("button", { name: "Удалить топик feature-b" }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Удалить выбранные…" }));
   await screen.findByRole("button", { name: "Удалить без корзины" });
   expect(api.prepareTopicOperation.mock.calls[0][0]).toMatchObject({
     action: "delete",
-    topics: ["feature-b"],
+    target: { topic: "feature-b", branch: "feature/b", remote: false },
   });
   fireEvent.click(screen.getByRole("button", { name: "Отмена" }));
   expect(api.executeTopicOperation).not.toHaveBeenCalled();
 });
+
 it("partial create outcome remains visible after board refresh and retains its draft", async () => {
   const store = createTopicsStore();
   api.executeTopicOperation.mockResolvedValue({
@@ -350,7 +346,7 @@ it("partial create outcome remains visible after board refresh and retains its d
     />,
   );
   fireEvent.click(await screen.findByRole("button", { name: "Создать топик" }));
-  fireEvent.change(screen.getByLabelText("Имя ветки / топика"), {
+  fireEvent.change(await screen.findByLabelText("Имя ветки / топика"), {
     target: { value: "feature/partial" },
   });
   fireEvent.change(screen.getByLabelText("Задача"), {
@@ -361,7 +357,7 @@ it("partial create outcome remains visible after board refresh and retains its d
   expect(
     await screen.findByText("Опубликовано, но переключение не удалось"),
   ).toBeTruthy();
-  await waitFor(() => expect(api.readTopicBoard).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(api.readTopicBoard).toHaveBeenCalledTimes(3));
   expect((screen.getByLabelText("Задача") as HTMLTextAreaElement).value).toBe(
     "Keep this draft",
   );
@@ -595,31 +591,33 @@ it.each(["draft", "active"])(
       ).toBe(true);
   },
 );
-it("bulk deletion of other topics ignores unrelated dirt but still rejects current selection", async () => {
+it("row deletion ignores unrelated dirt but protects selected context", async () => {
   api.readTopicBoard.mockResolvedValue({ ...board, dirty: true });
-  mount();
-  await screen.findByRole("button", { name: "Открыть топик feature-b" });
-  fireEvent.click(
-    screen.getByRole("checkbox", {
-      name: "Выбрать топик feature-b в feature/b",
-    }),
+  render(
+    <TopicsWorkspace
+      project={project}
+      store={createTopicsStore()}
+      onOpenTopic={vi.fn()}
+      onChanged={vi.fn()}
+      selectedContext={{
+        projectId: "p",
+        year: "2026",
+        topic: a.topic,
+        branch: a.branch,
+      }}
+    />,
   );
   expect(
     (
-      screen.getByRole("button", {
-        name: "Удалить выбранные…",
-      }) as HTMLButtonElement
+      (await screen.findByRole("button", {
+        name: "Удалить топик feature-b",
+      })) as HTMLButtonElement
     ).disabled,
   ).toBe(false);
-  fireEvent.click(
-    screen.getByRole("checkbox", {
-      name: "Выбрать топик feature-a в feature/a",
-    }),
-  );
   expect(
     (
       screen.getByRole("button", {
-        name: "Удалить выбранные…",
+        name: "Удалить топик feature-a",
       }) as HTMLButtonElement
     ).disabled,
   ).toBe(true);

@@ -634,13 +634,13 @@ const exactTaskOwner = {
   contextId: `ctx-${"1".padStart(64, "0")}`,
   revision: "00000000-0000-4000-8000-000000000001",
 };
-it("normalizes initial defensive task failure after exact-owner readiness succeeds through readRequest", async () => {
+it("normalizes initial task failure on direct exact-owner form opening through readRequest", async () => {
   useTaskReadIPCEnvelope();
   api.readTopicTask.mockRejectedValueOnce(Error(taskReadReason));
   render(<App />);
   await openPrototypeLaunch();
   expect((await screen.findByRole("alert")).textContent).toBe(taskReadReason);
-  expect(api.checkTopicContextReadiness).toHaveBeenCalledWith(exactTaskOwner);
+  expect(api.checkTopicContextReadiness).not.toHaveBeenCalled();
   expect(api.readRequest).toHaveBeenCalledWith(
     expect.any(String),
     "readTopicTask",

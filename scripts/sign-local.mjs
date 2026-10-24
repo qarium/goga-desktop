@@ -1,3 +1,8 @@
+import {
+  assertPackageTarget,
+  terminalPackageFiles,
+  verifyNativeFiles,
+} from "./terminal-native-build.mjs";
 import path from "node:path";
 import { signAsync } from "@electron/osx-sign";
 
@@ -19,7 +24,11 @@ export default async function signLocal(context) {
     context.appOutDir,
     `${context.packager.appInfo.productFilename}.app`,
   );
+  assertPackageTarget(context);
+  const binaries = terminalPackageFiles(app);
+  await verifyNativeFiles(binaries, process.arch);
   await signAsync({
+    binaries,
     app,
     platform: "darwin",
     identity: "-",

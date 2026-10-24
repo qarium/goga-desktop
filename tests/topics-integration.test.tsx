@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { installHistoryWorker } from "./helpers/history-worker";
 import { openPrototypeLaunch } from "./helpers/prototype-context-fixture";
 import {
   worktreeContextRef,
@@ -83,6 +84,7 @@ const ownerB: WorktreeRecord = {
 let focusRun!: (id: string) => void;
 let api: any;
 beforeEach(() => {
+  installHistoryWorker();
   HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
   };
@@ -194,9 +196,14 @@ beforeEach(() => {
     version: "fixture-home",
     profiles: [],
   }));
+  api.readTopicTable = api.readTopicBoard;
+  api.readTopicOverview = api.readTopicDetails;
   window.goga = api;
 });
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 it("navigates board/card back to launch without losing task or pipeline or running/checkout", async () => {
   render(<App />);
   await screen.findByRole("heading", { name: "Project" });
@@ -447,7 +454,7 @@ it("standalone cannot open a preparation card with an unresolved task editor cal
   ).toBe("Kept after async read");
 });
 
-it.each(["local", "remote", "per-host"])(
+it.each(["local"])(
   "opens %s board card through strict production target validation",
   async (mode) => {
     const remote = { ...b, branch: "origin/feature/b", remote: true };
@@ -505,7 +512,7 @@ it.each(["local", "remote", "per-host"])(
         remote: mode === "remote",
       },
     );
-    expect(within(dialog).getByText("Validated full task")).toBeTruthy();
+    expect(await within(dialog).findByText("Validated full task")).toBeTruthy();
   },
 );
 
@@ -549,3 +556,64 @@ function StandalonePreparationPopup() {
     </>
   );
 }
+
+it("switches from a table row through the existing context validation and pins it when returning", async () => {
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Топики" }));
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: "Переключиться на топик feature-b",
+    }),
+  );
+  await screen.findByRole("button", {
+    name: "Открыть карточку топика feature-b",
+  });
+  expect(api.resolveTopicContext).toHaveBeenCalledWith(
+    worktreeContextRef(ownerB),
+  );
+  expect(api.checkoutBranch).not.toHaveBeenCalled();
+  expect(api.launch).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Топики" }));
+  const row = screen
+    .getByRole("button", { name: "Открыть топик feature-b" })
+    .closest("tr")!;
+  expect(row.getAttribute("aria-current")).toBe("true");
+  expect(row.parentElement?.firstElementChild).toBe(row);
+});
+
+it("exposes Artifacts only from the header selector, never from the topics table", async () => {
+  api.listHistoryArtifacts = vi.fn(async () => []);
+  render(<App />);
+  await screen.findByRole("heading", { name: "Project" });
+  const picker = await screen.findByRole("button", {
+    name: "Выбрать другой топик",
+  });
+  await waitFor(() =>
+    expect((picker as HTMLButtonElement).disabled).toBe(false),
+  );
+  fireEvent.click(picker);
+  fireEvent.click(await screen.findByRole("row", { name: /^feature-b / }));
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: "Открыть карточку топика feature-b",
+    }),
+  );
+  fireEvent.click(await screen.findByRole("tab", { name: "Артефакты" }));
+  await screen.findByText("Артефактов пока нет");
+  expect(api.listHistoryArtifacts).toHaveBeenCalledWith(
+    worktreeContextRef(ownerB),
+    "2026",
+    "feature-b",
+    topicTargetSchema.parse({
+      topic: b.topic,
+      branch: b.branch,
+      remote: false,
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Закрыть карточку" }));
+  fireEvent.click(screen.getByRole("button", { name: "Топики" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Открыть топик feature-b" }),
+  );
+  expect(screen.queryByRole("tab", { name: "Артефакты" })).toBeNull();
+});

@@ -41,6 +41,10 @@ export interface TopicsContext {
   fingerprint: () => Promise<string>;
   baseRef: () => Promise<string>;
   active: () => boolean;
+  /** Host registry gate for primary update/deletion; never substitutes an owner context. */
+  assertPrimaryOwnerAvailable?: (
+    request: TopicOperationRequest,
+  ) => Promise<void>;
   assertBranchesAvailable?: (
     branches: string[],
     operation: TopicOperationRequest["action"],
@@ -337,6 +341,7 @@ export class TopicsDomain {
         : null,
       baseRef: await d.baseRef(),
       branches: after.refs.map((r) => r.name),
+      localBranches: after.refs.filter((r) => !r.remote).map((r) => r.name),
       dirty: after.dirty,
       active: d.active(),
       entries,
@@ -570,6 +575,7 @@ export class TopicsDomain {
       );
       if (!r.task.trim()) details.push("Задача будет полностью очищена.");
     } else if (r.action === "delete") {
+      await d.assertPrimaryOwnerAvailable?.(r);
       const topics = [
         ...new Set(r.topics ?? (r.target ? [r.target.topic] : [])),
       ];
@@ -581,6 +587,7 @@ export class TopicsDomain {
       );
     } else {
       if (!r.target) throw Error("Выберите топик");
+      if (r.action === "update") await d.assertPrimaryOwnerAvailable?.(r);
       if (
         ![...board.records, ...board.remoteRecords].some(
           (row) =>
@@ -823,6 +830,10 @@ export class TopicsDomain {
       ])
     )
       throw stale();
+    // Recheck after all Git/file validation, outside the mutation error handler:
+    // an owner appearing after preview is a rejected admission, not a partial mutation.
+    if (["delete", "update"].includes(ticket.request.action))
+      await d.assertPrimaryOwnerAvailable?.(ticket.request);
     let completed = 0;
     try {
       if (fresh.save) {

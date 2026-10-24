@@ -1,3 +1,4 @@
+import { createTerminalControlAPI } from "./terminal-control-preload";
 import { contextBridge, ipcRenderer } from "electron";
 import type { DesktopAPI } from "../shared/bridge";
 const invoke = (name: string, ...args: unknown[]) =>
@@ -8,6 +9,16 @@ function listen<T>(name: string, callback: (value: T) => void) {
   return () => ipcRenderer.removeListener(`goga:${name}`, fn);
 }
 const api: DesktopAPI = {
+  terminal: createTerminalControlAPI(
+    (channel, value) =>
+      ipcRenderer.invoke(channel, ...(value === undefined ? [] : [value])),
+    (channel, callback) => {
+      const listener = (_event: Electron.IpcRendererEvent, value: unknown) =>
+        callback(value);
+      ipcRenderer.on(channel, listener);
+      return () => ipcRenderer.removeListener(channel, listener);
+    },
+  ),
   runRepositoryAction: (request) => invoke("run-repository-action", request),
   setTopicPopupBounds: (id, bounds) =>
     invoke("set-topic-popup-bounds", id, bounds),
@@ -38,7 +49,19 @@ const api: DesktopAPI = {
   readBuildPlan: (id, path) => invoke("read-build-plan", id, path),
   launchBuild: (request) => invoke("launch-build", request),
   repeatBuild: (id, confirmClean) => invoke("repeat-build", id, confirmClean),
+  prepareHistoryPrune: (projectId, year) => invoke("prepare-history-prune", projectId, year),
+  pruneHistory: (projectId, token) => invoke("prune-history", projectId, token),
+  listHistoryYears: (scope) => invoke("list-history-years", scope),
+  listHistoryEntries: (scope, year) =>
+    invoke("list-history-entries", scope, year),
+  listHistoryArtifacts: (scope, year, entry, target) =>
+    invoke("list-history-artifacts", scope, year, entry, target),
+  readHistoryArtifact: (scope, year, entry, path, target) =>
+    invoke("read-history-artifact", scope, year, entry, path, target),
   readTopicCatalog: (id, year) => invoke("read-topic-catalog", id, year),
+  readTopicTable: (id, year) => invoke("read-topic-table", id, year),
+  readTopicOverview: (id, year, target) =>
+    invoke("read-topic-overview", id, year, target),
   readTopicBoard: (id, year) => invoke("read-topic-board", id, year),
   readTopicDetails: (id, year, target) =>
     invoke("read-topic-details", id, year, target),

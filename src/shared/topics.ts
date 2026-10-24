@@ -3,6 +3,8 @@ export interface TopicBoardRecord {
   topic: string;
   branch: string;
   statuses: string[];
+  /** Safe display-only diagnostic; absent on native Goga board records. */
+  statusError?: string;
   current: boolean;
   remote: boolean;
   todo: string | null;
@@ -31,6 +33,8 @@ export interface TopicBoardSnapshot {
   currentTopic: TopicTarget | null;
   baseRef: string;
   branches: string[];
+  /** Local destination choices; never grants host mutation authority. */
+  localBranches?: string[];
   dirty: boolean;
   active: boolean;
   entries: TopicBoardEntry[];

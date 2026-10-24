@@ -33,6 +33,8 @@ export interface TopicContextPickerProps {
   runs?: RunWithContext[];
   disabled?: boolean;
   onSelect: (record: WorktreeRecord) => void;
+  requestedSelection?: { identity: TopicContextIdentity; nonce: number } | null;
+  onSelectionRequestHandled?: () => void;
   onTransitionIntent?: () => void;
   onCreated?: (record: WorktreeRecord) => void;
   onClear: () => void;
@@ -109,6 +111,8 @@ export function TopicContextPicker({
   onCreated,
   onClear,
   onOpenCard,
+  requestedSelection,
+  onSelectionRequestHandled,
 }: TopicContextPickerProps) {
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
@@ -172,6 +176,24 @@ export function TopicContextPicker({
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
   }, [expanded]);
+
+  useEffect(() => {
+    if (
+      !requestedSelection ||
+      requestedSelection.identity.projectId !== project.id
+    )
+      return;
+    const identity = requestedSelection.identity;
+    const owners = knownContexts.filter(
+      (record) =>
+        !record.deletedAt && identityKey(record) === identityKey(identity),
+    );
+    if (owners.length > 1) {
+      setQuery(identity.topic);
+      setOpen(true);
+    } else prepare(identity, false, owners[0]);
+    onSelectionRequestHandled?.();
+  }, [requestedSelection]);
 
   const topics = useMemo(() => {
     const logical = new Map<string, TopicContextIdentity>();

@@ -1,5 +1,19 @@
 import { z } from "zod";
 import { topicContextRefSchema } from "./worktrees";
+import {
+  topicBranchSchema,
+  topicSlugSchema,
+  topicYearSchema,
+} from "./topics-schema";
+
+export const topicPropagationSchema = z
+  .object({
+    year: topicYearSchema,
+    topic: topicSlugSchema,
+    branch: topicBranchSchema,
+    baseRef: topicBranchSchema,
+  })
+  .strict();
 
 export const repositoryActionSchema = z.enum([
   "sync",
@@ -13,6 +27,7 @@ export const repositoryActionRequestSchema = z
     projectId: z.string().min(1).max(256),
     context: topicContextRefSchema.optional(),
     action: repositoryActionSchema,
+    propagation: topicPropagationSchema.optional(),
   })
   .strict()
   .refine(
@@ -23,9 +38,27 @@ export const repositoryActionRequestSchema = z
   )
   .refine(
     (value) =>
-      !["propagate", "update-remote"].includes(value.action) || !!value.context,
+      !["propagate", "update-remote"].includes(value.action) ||
+      !!value.context ||
+      (value.action === "propagate" && !!value.propagation),
     {
       message: "Действие доступно только в выбранном контексте топика.",
+    },
+  )
+  .refine((value) => !value.propagation || value.action === "propagate", {
+    message: "Выбор ветки публикации доступен только для propagate.",
+  })
+  .refine(
+    (value) =>
+      !value.propagation ||
+      !value.context ||
+      ["year", "topic", "branch"].every(
+        (key) =>
+          value.propagation![key as "year" | "topic" | "branch"] ===
+          value.context![key as "year" | "topic" | "branch"],
+      ),
+    {
+      message: "Контекст не совпадает с выбранным топиком.",
     },
   );
 export type RepositoryAction = z.infer<typeof repositoryActionSchema>;

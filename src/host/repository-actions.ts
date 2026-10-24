@@ -19,6 +19,7 @@ import { CommandExitError } from "./process";
 interface Dependencies {
   project(): Promise<Project>;
   resolve(ref: TopicContextRef): Promise<WorktreeRecord>;
+  inventory(): Promise<WorktreeRecord[]>;
   sync(
     project: Project,
     ref: TopicContextRef,
@@ -88,6 +89,7 @@ export class RepositoryActions {
   private owner?: WorktreeRecord;
   private project!: Project;
   private common = "";
+  private propagation?: RepositoryActionRequest["propagation"];
   constructor(private deps: Dependencies) {}
   private async git(args: string[], cwd = this.project.path, output = false) {
     await this.deps.verify();
@@ -129,6 +131,26 @@ export class RepositoryActions {
       ).trim() !== this.common
     )
       throw changed();
+    if (this.propagation) {
+      const target = this.propagation;
+      const owners = (await this.deps.inventory()).filter(
+        (record) =>
+          record.projectId === this.project.id &&
+          record.year === target.year &&
+          record.topic === target.topic &&
+          record.branch === target.branch &&
+          !record.deletedAt,
+      );
+      if (
+        this.owner
+          ? owners.length !== 1 ||
+            JSON.stringify(owners[0]) !== JSON.stringify(this.owner)
+          : owners.length !== 0
+      )
+        throw Error(
+          "Владелец топика изменился или неоднозначен. Обновите карточку и выберите рабочую копию заново.",
+        );
+    }
     if (this.owner) {
       const current = await this.deps.resolve(worktreeContextRef(this.owner));
       if (JSON.stringify(current) !== JSON.stringify(this.owner))
@@ -503,8 +525,101 @@ export class RepositoryActions {
     );
     this.lines.push(`База origin/${branch} в клоне обновлена.`);
   }
+  /** Explicit card publication never borrows the selected header owner or configured base. */
+  private async propagateSelected(request: RepositoryActionRequest) {
+    const target = request.propagation!;
+    const normalized = target.branch
+      .toLowerCase()
+      .replace(/[^\x00-\x7f]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-|-$/g, "");
+    if (
+      target.topic !== normalized ||
+      target.branch.startsWith("refs/") ||
+      target.baseRef.startsWith("refs/")
+    )
+      throw Error(
+        "Публиковать можно только собственную локальную ветку выбранного топика в локальную ветку назначения.",
+      );
+    if (target.branch === target.baseRef)
+      throw Error("Ветка назначения должна отличаться от ветки топика.");
+    const source = await this.directBranch(
+      target.branch,
+      this.owner?.path ?? this.project.path,
+    );
+    const base = await this.directBranch(target.baseRef);
+    const endpoint = await this.remote("origin", true);
+    const guard = async (imported?: string) => {
+      await this.verify();
+      if (
+        (await this.directBranch(base.branch)).oid !== base.oid ||
+        (await this.remote("origin", true)) !== endpoint ||
+        (
+          await this.directBranch(
+            source.branch,
+            this.owner?.path ?? this.project.path,
+          )
+        ).oid !== source.oid
+      )
+        throw changed();
+      if (
+        this.owner &&
+        ((await this.currentBranch(this.owner.path)) !== source.branch ||
+          !(await assertLocalOrigin(this.owner, (args, cwd) =>
+            this.git(args, cwd),
+          )))
+      )
+        throw changed();
+      if (
+        imported &&
+        (imported !== source.oid ||
+          (await this.directBranch(source.branch)).oid !== imported)
+      )
+        throw changed();
+      await this.verify();
+    };
+    await guard();
+    let imported: string | undefined;
+    if (this.owner) {
+      this.lines.push("Синхронизация топика в локальный origin…");
+      const result = await this.deps.sync(
+        this.project,
+        request.context!,
+        (stdout, stderr) => {
+          this.lines.push(stdout, stderr);
+        },
+      );
+      if (result.status !== "synced" || !result.importedOid)
+        throw Error(
+          result.error ??
+            "Синхронизация не завершена; публикация не выполнялась.",
+        );
+      imported = result.importedOid;
+      this.lines.push("Синхронизация топика завершена.");
+    }
+    await guard(imported);
+    this.lines.push(
+      `Публикация топика ${target.branch} в ветку ${base.branch}: goga topics propagate (оригинальный проект)…`,
+    );
+    const result = await this.deps.gogaOriginal([
+      "topics",
+      "--year",
+      target.year,
+      "propagate",
+      source.branch,
+      "--base-ref",
+      base.branch,
+      "-y",
+    ]);
+    this.lines.push(
+      result.stdout,
+      result.stderr,
+      "Публикация топика завершена.",
+    );
+  }
   async run(request: RepositoryActionRequest): Promise<RepositoryActionResult> {
     try {
+      this.propagation = request.propagation;
       this.project = await this.deps.project();
       await noSymlinks(this.project.path);
       this.common = (
@@ -517,7 +632,7 @@ export class RepositoryActions {
       if (request.context)
         this.owner = await this.deps.resolve(request.context);
       await this.verify();
-      if (request.action === "propagate" && !this.owner)
+      if (request.action === "propagate" && !this.owner && !request.propagation)
         throw Error(
           "Применение топика к базе доступно только в выбранном контексте топика.",
         );
@@ -530,7 +645,9 @@ export class RepositoryActions {
         throw Error(
           "У клона отсутствует локальный origin; настройки не изменялись.",
         );
-      if (request.action === "update-remote") {
+      if (request.action === "propagate" && request.propagation) {
+        await this.propagateSelected(request);
+      } else if (request.action === "update-remote") {
         if (!this.owner)
           throw Error("Обновление из remote доступно только в топике.");
         const branch = this.owner.branch;

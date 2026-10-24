@@ -101,6 +101,7 @@ beforeEach(() => {
     })),
     checkoutBranch: vi.fn(async () => "main"),
     readTopicBoard: vi.fn(async () => board),
+    readTopicTable: vi.fn(async () => board),
   };
   window.goga = api;
 });
@@ -216,9 +217,9 @@ it("Launch task error and preview error end loading and permit retry", async () 
   await screen.findByDisplayValue("task");
   expect(document.querySelector(".loading-state")).toBeNull();
 });
-it("Topics hides filters/table/warnings as one boundary and keeps filters after refresh", async () => {
+it("Topics hides pending table content but preserves filters and the mounted table during refresh", async () => {
   const d = deferred();
-  api.readTopicBoard.mockReturnValueOnce(d.promise);
+  api.readTopicTable.mockReturnValueOnce(d.promise);
   render(
     <TopicsWorkspace
       project={project}
@@ -228,16 +229,29 @@ it("Topics hides filters/table/warnings as one boundary and keeps filters after 
     />,
   );
   loading();
-  expect(screen.queryByRole("searchbox")).toBeNull();
+  const input = screen.getByRole("searchbox");
+  expect(screen.queryByRole("table")).toBeNull();
   await flush(d, board);
-  const input = await screen.findByRole("searchbox");
+  const table = await screen.findByRole("table");
+  expect(screen.getByRole("searchbox")).toBe(input);
+  expect(api.readTopicBoard).not.toHaveBeenCalled();
   fireEvent.change(input, { target: { value: "retained" } });
   const next = deferred();
-  api.readTopicBoard.mockReturnValueOnce(next.promise);
+  api.readTopicTable.mockReturnValueOnce(next.promise);
   fireEvent.click(screen.getByRole("button", { name: "Обновить список" }));
-  loading();
-  expect(screen.queryByRole("searchbox")).toBeNull();
+  expect(
+    screen.getByRole("status").querySelector(".loading-spinner"),
+  ).toBeTruthy();
+  expect(screen.getByRole("status").textContent).toBe("");
+  expect(screen.getByRole("searchbox")).toBe(input);
+  expect(
+    (screen.getByRole("button", { name: "Создать топик" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+  expect(screen.queryByRole("table")).toBeNull();
+  expect(table.isConnected).toBe(true);
   await flush(next, board);
+  expect(screen.getByRole("table")).toBe(table);
   expect(screen.getByRole("searchbox")).toBe(input);
   expect((input as HTMLInputElement).value).toBe("retained");
 });
@@ -353,24 +367,51 @@ it("Build never reveals a late context/plan after a revision changes", async () 
     ).value,
   ).toBe("fresh.md");
 });
-it("Topics ignores an old project's late reply, including warnings", async () => {
+it("Topics cancels the old project read and ignores its late rows and warnings", async () => {
   const old = deferred(),
     fresh = deferred();
-  api.readTopicBoard
+  api.readTopicTable
     .mockReturnValueOnce(old.promise)
     .mockReturnValueOnce(fresh.promise);
   const store = createTopicsStore();
   const props = { store, onOpenTopic: () => {}, onChanged: () => {} };
+  api.cancelRead = vi.fn(async () => {});
   const view = render(<TopicsWorkspace key="p" project={project} {...props} />);
+  await waitFor(() =>
+    expect(api.readTopicTable).toHaveBeenCalledWith("p", "2026"),
+  );
   view.rerender(
     <TopicsWorkspace key="q" project={{ ...project, id: "q" }} {...props} />,
   );
-  await flush(old, { ...board, dirty: true, currentBranch: "stale" });
+  await waitFor(() =>
+    expect(api.readTopicTable).toHaveBeenCalledWith("q", "2026"),
+  );
+  expect(api.cancelRead).toHaveBeenCalledTimes(1);
+  await flush(old, {
+    ...board,
+    dirty: true,
+    currentBranch: "stale",
+    entries: [
+      {
+        topic: "stale",
+        branch: "stale",
+        remote: false,
+        statuses: ["stale-status"],
+        hosts: ["stale"],
+        todo: null,
+        divergence: null,
+      },
+    ],
+  });
   loading();
-  expect(screen.queryByRole("searchbox")).toBeNull();
+  expect(screen.queryByRole("table")).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: "Открыть топик stale" }),
+  ).toBeNull();
   await flush(fresh, { ...board, projectId: "q" });
-  await screen.findByRole("searchbox");
+  await screen.findByRole("table");
   expect(screen.queryByText(/stale/)).toBeNull();
+  expect(api.readTopicBoard).not.toHaveBeenCalled();
   expect(document.querySelector(".loading-state")).toBeNull();
 });
 it("Launch refresh preserves the mounted task and draft through dependent preview", async () => {

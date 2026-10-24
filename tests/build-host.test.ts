@@ -734,3 +734,68 @@ it("keeps an unverified recovered primary run reserved against another writer", 
     /уже работает|не подтверждено/,
   );
 });
+
+it("shutdown preparation freezes build/pipeline admission without stopping; cancellation restores admission", async () => {
+  const f = await setup();
+  const request = await f.request();
+  const lease = await f.service.prepareShutdown();
+  expect(lease.items).toEqual([]);
+  await expect(f.service.launchBuild(request)).rejects.toThrow(/выход|заверш/i);
+  await expect(f.service.launch({} as any)).rejects.toThrow(/выход|заверш/i);
+  expect(f.children).toHaveLength(0);
+  expect(f.kill).not.toHaveBeenCalled();
+  lease.release();
+  lease.release();
+  await f.service.launchBuild(request);
+  expect(f.children).toHaveLength(1);
+});
+it("shutdown uses the existing run stop policy and keeps a failed build controllable", async () => {
+  const f = await setup();
+  const run = await f.service.launchBuild(await f.request());
+  const lease = await f.service.prepareShutdown();
+  expect(lease.items.map((item) => item.id)).toEqual([`run:${run.id}`]);
+  expect(lease.requiresConfirmation).toBe(true);
+  lease.validate();
+  expect(f.kill).not.toHaveBeenCalled();
+  f.kill.mockRejectedValueOnce(Error("synthetic stop failure"));
+  await expect(lease.stop()).rejects.toThrow();
+  expect(lease.remaining()).toEqual([`run:${run.id}`]);
+  lease.release();
+  const retry = await f.service.prepareShutdown();
+  retry.validate();
+  await retry.stop();
+  expect(retry.remaining()).toEqual([]);
+  retry.release();
+});
+it("shutdown waits for an already queued launch to settle, with no spawn after its gate", async () => {
+  const f = await setup();
+  const request = await f.request();
+  // Launch enqueues preparation before its first filesystem await.
+  const launching = f.service.launchBuild(request).catch((error) => error);
+  const lease = await f.service.prepareShutdown();
+  expect(await launching).toBeInstanceOf(Error);
+  expect(f.children).toHaveLength(0);
+  expect(lease.items).toEqual([]);
+  expect(f.kill).not.toHaveBeenCalled();
+  lease.release();
+});
+
+it("final cleanup failure leaves the host usable and can be retried, without restarting old work", async () => {
+  const f = await setup();
+  const runner = (f.service as any).runner;
+  runner.dispose = vi
+    .fn()
+    .mockRejectedValueOnce(Error("cleanup failure"))
+    .mockResolvedValue(undefined);
+  await expect(f.service.finalizeShutdown()).rejects.toThrow();
+  const lease = await f.service.prepareShutdown();
+  await expect(f.service.finalizeShutdown()).rejects.toThrow("cleanup failure");
+  lease.release();
+  expect((await f.service.readProjectSettings(f.p.id)).version).toBeTruthy();
+  expect(f.children).toHaveLength(0);
+  const retry = await f.service.prepareShutdown();
+  await f.service.finalizeShutdown();
+  retry.release();
+  expect(runner.dispose).toHaveBeenCalledTimes(2);
+  await expect(f.service.launchBuild({} as any)).rejects.toThrow(/заверш/);
+});

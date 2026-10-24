@@ -161,6 +161,8 @@ beforeEach(() => {
   };
   // Exercise the real renderer read coordinator and IPC envelope, not mocked components.
   api.readRequest = vi.fn(async (_id, method, args) => api[method](...args));
+  api.readTopicTable = api.readTopicBoard;
+  api.readTopicOverview = api.readTopicDetails;
   window.goga = api;
 });
 afterEach(cleanup);
@@ -245,7 +247,7 @@ it("moves loading -> reason -> retry loading -> clone-owned task without prepari
     .mockReturnValueOnce(retry.promise);
   const card = props();
   render(<TopicCard {...card} />);
-  expect(screen.getByText("Загружаем топик…")).toBeTruthy();
+  expect(screen.getByRole("status", { name: "Загружаем топик…" })).toBeTruthy();
   expect(screen.queryByRole("textbox", { name: "Задача топика" })).toBeNull();
   await act(async () => first.reject(Error(wrapped())));
   expect((await screen.findByRole("alert")).textContent).toBe(
@@ -253,7 +255,7 @@ it("moves loading -> reason -> retry loading -> clone-owned task without prepari
   );
   expect(card.store.tasks.size).toBe(0);
   fireEvent.click(screen.getByRole("button", { name: "Повторить загрузку" }));
-  expect(screen.getByText("Загружаем топик…")).toBeTruthy();
+  expect(screen.getByRole("status", { name: "Загружаем топик…" })).toBeTruthy();
   expect(screen.queryByRole("alert")).toBeNull();
   await act(async () => retry.resolve(details()));
   expect(
@@ -463,7 +465,9 @@ it.each(["current-header", "selector", "board"])(
         screen.getByRole("button", { name: "Выбрать другой топик" }),
       );
       fireEvent.click(screen.getByRole("row", { name: /^feature-test / }));
-      await screen.findByRole("button", { name: "Открыть карточку топика feature-test" });
+      await screen.findByRole("button", {
+        name: "Открыть карточку топика feature-test",
+      });
       fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
       await screen.findByRole("region", { name: "Запуски выбранного топика" });
       // Explicit selector transition validates its owner once; opening the card does not.
@@ -486,16 +490,23 @@ it.each(["current-header", "selector", "board"])(
         }),
       );
     const dialog = await screen.findByRole("dialog", { name: "feature-test" });
-    expect((await within(dialog).findByRole("alert")).textContent).toBe(
-      "Не удалось загрузить топик" + reason,
-    );
+    expect((await within(dialog).findByRole("alert")).textContent).toBe(reason);
     expect(
       within(dialog).queryByRole("textbox", { name: "Задача топика" }),
     ).toBeNull();
-    expectOwnedReads();
+    expect(api.readTopicOverview).toHaveBeenCalledWith(
+      contextRef(owner),
+      year,
+      target,
+    );
+    expect(api.readTopicBoard).not.toHaveBeenCalledWith(
+      contextRef(owner),
+      year,
+    );
+    expectNoPreparation();
     expect(api.readRequest).toHaveBeenCalledWith(
       expect.any(String),
-      "readTopicDetails",
+      "readTopicOverview",
       [contextRef(owner), year, target],
     );
     expect(api.syncContext).not.toHaveBeenCalled();

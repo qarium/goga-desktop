@@ -113,6 +113,10 @@ beforeEach(() => {
     listSettings: vi.fn(async () => ({ profiles: [] })),
     listTopicContexts: vi.fn(async () => [owner, otherOwner]),
     readTopicBoard: vi.fn(async () => board),
+    readTopicTable: vi.fn(async () => board),
+    readTopicOverview: vi.fn(async () => {
+      throw Error(wrapped());
+    }),
     readTopicDetails: vi.fn(async () => {
       throw Error(wrapped());
     }),
@@ -286,7 +290,9 @@ it.each(["current-header", "selector", "board"])(
   "opens missing local data via %s without repair or mutation",
   async (entry) => {
     localMissing();
-    // Primary board has the selection; owned board honestly has no local catalog row.
+    api.readTopicOverview.mockResolvedValue(missingDetails());
+    // The display table has the identity; the exact owner has no local task.
+    // Legacy TopicCard editor coverage above remains separate from this read-only UI.
     api.readTopicBoard.mockImplementation(async (scope: any) =>
       typeof scope === "string" ? board : missingBoard,
     );
@@ -299,11 +305,14 @@ it.each(["current-header", "selector", "board"])(
       fireEvent.click(
         await screen.findByRole("row", { name: /^feature-test / }),
       );
-      await screen.findByRole("button", { name: "Открыть карточку топика feature-test" });
+      await screen.findByRole("button", {
+        name: "Открыть карточку топика feature-test",
+      });
       fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
       await screen.findByRole("region", { name: "Запуски выбранного топика" });
       api.resolveTopicContext.mockClear();
     }
+    const boardReads = api.readTopicBoard.mock.calls.length;
     if (entry === "board") {
       fireEvent.click(screen.getByRole("button", { name: "Топики" }));
       fireEvent.click(
@@ -317,9 +326,19 @@ it.each(["current-header", "selector", "board"])(
           name: "Открыть карточку топика feature-test",
         }),
       );
-    await screen.findByText(absence);
-    expect(screen.getByLabelText("Задача топика")).toHaveProperty("value", "");
-    expectOwnedReads();
+    await screen.findByText("Задача не задана");
+    expect(screen.queryByRole("textbox", { name: "Задача топика" })).toBeNull();
+    expect(api.readTopicOverview).toHaveBeenCalledExactlyOnceWith(
+      contextRef(owner),
+      year,
+      target,
+    );
+    expect(api.readTopicDetails).not.toHaveBeenCalled();
+    expect(api.readTopicBoard.mock.calls.length).toBe(boardReads);
+    expectNoPreparation();
+    expect(api.syncContext).not.toHaveBeenCalled();
+    expect(api.applyContext).not.toHaveBeenCalled();
+    expect(api.deleteContext).not.toHaveBeenCalled();
     expect(api.prepareTopicOperation).not.toHaveBeenCalled();
     expect(api.executeTopicOperation).not.toHaveBeenCalled();
   },
@@ -549,7 +568,9 @@ it.each(["resolve", "reject"] as const)(
       .mockResolvedValue(details("New owner task", otherOwner));
     const card = props(),
       view = render(<TopicCard {...card} />);
-    expect(screen.getByText("Загружаем топик…")).toBeTruthy();
+    expect(
+      screen.getByRole("status", { name: "Загружаем топик…" }),
+    ).toBeTruthy();
     view.rerender(
       <TopicCard
         {...card}

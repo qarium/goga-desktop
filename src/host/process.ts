@@ -51,6 +51,7 @@ export class CommandExitError extends Error {
 export class NodeRunner implements Runner {
   private children = new Set<ChildProcessWithoutNullStreams>();
   private closing = false;
+  private disposal?: Promise<void>;
   private pendingCommands = new Map<
     ChildProcessWithoutNullStreams,
     () => void
@@ -117,12 +118,37 @@ export class NodeRunner implements Runner {
     }
     this.children.delete(child);
   }
-  async dispose() {
+  dispose(): Promise<void> {
+    if (this.disposal) return this.disposal;
     this.closing = true;
     const children = [...this.children];
     for (const child of children) this.pendingCommands.get(child)?.();
-    await Promise.all(children.map((c) => this.kill(c)));
+    const attempt = Promise.resolve().then(async () => {
+      // A failed child must not reopen admissions while other stop attempts still run.
+      const results = await Promise.allSettled(
+        children.map((child) => this.kill(child)),
+      );
+      const failure = results.find(
+        (result): result is PromiseRejectedResult =>
+          result.status === "rejected",
+      );
+      if (failure) {
+        this.closing = false;
+        throw failure.reason;
+      }
+    });
+    this.disposal = attempt;
+    void attempt.then(
+      () => {
+        if (this.disposal === attempt) this.disposal = undefined;
+      },
+      () => {
+        if (this.disposal === attempt) this.disposal = undefined;
+      },
+    );
+    return attempt;
   }
+
   command(
     exe: string,
     args: string[],

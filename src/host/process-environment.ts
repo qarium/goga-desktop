@@ -1,3 +1,4 @@
+import { isOfflineGitRead } from "./read-scope";
 /** Per-child policy only. Never changes process.env or a user's Git configuration. */
 export const gitRedirectKeys = [
   "GIT_DIR",
@@ -23,6 +24,13 @@ export function childEnvironment(
   for (const key of Object.keys(result))
     if (configInjection(key)) delete result[key];
   for (const key of gitRedirectKeys) delete result[key];
+  if (isOfflineGitRead()) {
+    // Apply after every inherited/default/explicit override. Resolver commands
+    // use NodeRunner too; deny all transports for older Git without lazy-fetch
+    // suppression. Do not alter process.env or any repository configuration.
+    result.GIT_NO_LAZY_FETCH = "1";
+    result.GIT_ALLOW_PROTOCOL = "";
+  }
   return result;
 }
 export function assertContextEnvironment(

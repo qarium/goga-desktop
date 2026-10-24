@@ -6,11 +6,11 @@ export function LoadingState({ label }: { label: string }) {
     <div
       className="loading-state"
       role="status"
+      aria-label={label}
       aria-live="polite"
       aria-busy="true"
     >
       <span className="loading-spinner" aria-hidden="true" />
-      <p>{label}</p>
     </div>
   );
 }
@@ -19,6 +19,7 @@ export function LoadingState({ label }: { label: string }) {
  * Keep children mounted so an update never destroys an editor or its draft. */
 export function LoadingBoundary({
   pending,
+  background = false,
   label,
   error,
   onRetry,
@@ -26,18 +27,20 @@ export function LoadingBoundary({
   children,
 }: {
   pending: boolean;
+  background?: boolean;
   label: string;
   error?: string;
   onRetry?: () => void;
   retryLabel?: string;
   children: ReactNode;
 }) {
+  const loading = pending && !error;
   const content = useRef<HTMLDivElement>(null);
   const focus = useRef<HTMLElement | null>(null);
   useLayoutEffect(() => {
-    if (pending && content.current?.contains(document.activeElement))
+    if (loading && content.current?.contains(document.activeElement))
       focus.current = document.activeElement as HTMLElement;
-    if (!pending && !error && focus.current) {
+    if (!loading && !error && focus.current) {
       const target = focus.current;
       focus.current = null;
       // Do not steal focus from navigation/close controls or a different section.
@@ -48,13 +51,18 @@ export function LoadingBoundary({
       )
         target.focus({ preventScroll: true });
     }
-  }, [pending, error]);
+  }, [loading, error]);
   return (
-    <div className="loading-boundary" aria-busy={pending}>
-      {pending ? (
+    <div
+      className={
+        background ? "loading-boundary loading-background" : "loading-boundary"
+      }
+      aria-busy={loading}
+    >
+      {loading ? (
         <LoadingState label={label} />
       ) : error ? (
-        <div className="loading-error">
+        <div className={background ? "loading-refresh-error" : "loading-error"}>
           <p className="error" role="alert">
             {error}
           </p>
@@ -68,8 +76,8 @@ export function LoadingBoundary({
       <div
         className="loading-content"
         ref={content}
-        hidden={pending || !!error}
-        inert={pending || !!error}
+        hidden={!background && (loading || !!error)}
+        inert={!background && (loading || !!error)}
       >
         {children}
       </div>

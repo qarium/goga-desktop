@@ -121,3 +121,24 @@
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
+
+.repository-operation-dialog {
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  width: min(520px, calc(100vw - 32px));
+  max-height: calc(100dvh - 32px);
+  overflow: auto;
+}
+.repository-operation-dialog::backdrop {
+  background: #0006;
+}
+.repository-operation-dialog .repository-operation-popup {
+  position: static;
+  width: 100%;
+  max-width: none;
+  border: 0;
+  box-shadow: none;
+}

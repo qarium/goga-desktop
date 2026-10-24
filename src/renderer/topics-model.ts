@@ -107,13 +107,21 @@ export function topicRowActivity(
   row: TopicBoardRecord,
   runs: RunWithContext[] = [],
   knownContexts: WorktreeRecord[] = [],
+  exactOwner = false,
 ): TopicRowActivity {
   const result: TopicRowActivity = {
     activeCount: 0,
     activeRuns: [],
     unverifiedRunIds: [],
   };
-  const owner = ownTopicTarget(board, row.topic);
+  const owner = exactOwner
+    ? board.entries.find(
+        (entry) =>
+          !entry.remote &&
+          entry.topic === row.topic &&
+          entry.branch === row.branch,
+      )
+    : ownTopicTarget(board, row.topic);
   if (!owner || owner.remote) return result;
   const contexts = new Map(
     knownContexts

@@ -1,0 +1,118 @@
+/* Open non-modal dialogs are in-flow; expanding promotes the same DOM to top-layer. */
+.history-document > .history-reader {
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  inset: auto;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  max-width: none;
+  max-height: none;
+  color: inherit;
+  background: transparent;
+  overflow: hidden;
+}
+.history-reader-body {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+}
+.history-reader .history-document-head {
+  padding-right: 190px;
+}
+.history-reader .history-scroll-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.history-document > .history-reader-expanded {
+  position: fixed;
+  box-sizing: border-box;
+  padding: 18px 28px 0;
+  background: #090e1a;
+  color: #e1e7f2;
+  visibility: visible;
+}
+.history-reader::backdrop {
+  background: transparent;
+}
+.topic-dialog.history-reader-parent {
+  visibility: hidden;
+}
+.topic-dialog.history-reader-parent::backdrop {
+  background: transparent;
+}
+.history-reader-context {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  flex: 0 0 auto;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.history-reader-context span:first-child {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.history-reader-context span:last-child {
+  flex-shrink: 0;
+}
+.history-reader.history-reader-expanded .history-document-head {
+  min-height: 42px;
+  border-bottom: 1px solid var(--line);
+  margin-bottom: 0;
+  padding-bottom: 10px;
+}
+.history-reader.history-reader-expanded .history-scroll-toolbar {
+  top: 0;
+  right: 0;
+}
+.history-reader.history-reader-expanded .history-preview {
+  width: 100%;
+  max-width: 920px;
+  margin: 0 auto;
+  padding: 32px 24px 64px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+.history-reader.history-reader-expanded .history-markdown {
+  font-size: 16px;
+  line-height: 1.85;
+}
+.history-reader.history-reader-expanded .history-markdown h1 {
+  font-size: 28px;
+}
+.history-reader.history-reader-expanded .history-markdown h2 {
+  font-size: 22px;
+  margin: 28px 0 12px;
+}
+.history-reader.history-reader-expanded .history-markdown h3 {
+  font-size: 18px;
+  margin: 24px 0 10px;
+}
+.history-reader.history-reader-expanded .history-markdown code,
+.history-reader.history-reader-expanded .history-plain {
+  font-size: 14px;
+}
+@media (max-width: 800px) {
+  .history-document > .history-reader-expanded {
+    padding: 14px 16px 0;
+  }
+  .history-reader-context span:last-child {
+    display: none;
+  }
+  .history-reader.history-reader-expanded .history-preview {
+    padding: 24px 8px 48px;
+  }
+}

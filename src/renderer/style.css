@@ -1344,23 +1344,6 @@ code {
   overflow-wrap: anywhere;
 }
 
-/* Project Home and Topics share the same content origin. */
-.project-home-panel {
-  max-width: 1240px;
-  margin: 0 auto;
-  padding: 26px 32px 40px;
-}
-@media (max-width: 1000px) {
-  .project-home-panel {
-    padding: 20px 20px 32px;
-  }
-}
-@media (max-width: 760px) {
-  .project-home-panel {
-    padding: 18px 12px;
-  }
-}
-
 /* Keep open preparations mounted while visiting personal settings. */
 .project-page {
   display: contents;
@@ -1629,4 +1612,33 @@ code {
 .sidebar-project-anchor {
   display: flex;
   width: 100%;
+}
+
+/* Shared settings editor: measured editor height reserves these controls. The
+ * sticky fallback keeps actions reachable if an unusually short window needs
+ * outer scrolling as well. CodeMirror itself owns the document scroll. */
+.document-editor-footer {
+  display: flow-root;
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  background: var(--bg);
+  padding: 8px 0;
+}
+.document-editor-footer > .hint {
+  margin: 0;
+  max-height: 72px;
+  overflow-y: auto;
+}
+.document-editor-footer > .error,
+.document-editor-footer > .success {
+  max-height: 96px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+}
+.document-editor-footer .savebar {
+  margin-top: 10px;
+}
+.document-editor-footer .document-save-actions {
+  padding-top: 10px;
 }

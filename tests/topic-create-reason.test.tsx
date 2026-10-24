@@ -77,6 +77,8 @@ beforeEach(() => {
       message: "Готово",
     })),
   };
+  api.readTopicTable = api.readTopicBoard;
+  api.readTopicOverview = api.readTopicDetails;
   window.goga = api;
 });
 afterEach(cleanup);
@@ -231,8 +233,11 @@ it.each([true, false])(
     noReason();
     if (oldId) expect(document.getElementById(oldId)).toBeNull();
     expect(button().disabled).toBe(true);
-    expect(document.querySelectorAll(".loading-state")).toHaveLength(1);
-    expect(screen.queryByRole("table")).toBeNull();
+    expect(
+      screen.getByRole("status").querySelector(".loading-spinner"),
+    ).toBeTruthy();
+    expect(screen.getByRole("status").textContent).toBe("");
+    expect(screen.getByRole("table", { hidden: true })).toBeTruthy();
     await act(async () => d.resolve({ ...board, active: !active }));
     await settled();
     if (active) {
@@ -305,7 +310,7 @@ it("invalid year explains that existing condition without inventing dirty", asyn
   noReason();
   expect(button().disabled).toBe(false);
 });
-it("failed refresh retaining a clean board introduces no new creation prohibition", async () => {
+it("failed refresh blocks creation until a successful fresh catalog", async () => {
   mount();
   await settled();
   api.readTopicBoard.mockRejectedValueOnce(Error("refresh unavailable"));
@@ -314,8 +319,7 @@ it("failed refresh retaining a clean board introduces no new creation prohibitio
   expect(screen.getByRole("alert").textContent).toContain(
     "refresh unavailable",
   );
-  noReason();
-  expect(button().disabled).toBe(false);
+  assertReason(["не удалось загрузить список топиков"]);
 });
 it.each([false, true])(
   "busy operation is explained with existing dirty=%s and removed on settlement",
@@ -326,11 +330,9 @@ it.each([false, true])(
     const d = deferred();
     api.prepareTopicOperation.mockReturnValueOnce(d.promise);
     fireEvent.click(
-      screen.getByRole("checkbox", {
-        name: "Выбрать топик feature-b в feature/b",
-      }),
+      screen.getByRole("button", { name: "Удалить топик feature-b" }),
     );
-    fireEvent.click(screen.getByRole("button", { name: "Удалить выбранные…" }));
+    await waitFor(() => expect(api.prepareTopicOperation).toHaveBeenCalled());
     assertReason(["выполняется операция с топиками"]);
     expect(api.executeTopicOperation).not.toHaveBeenCalled();
     await act(async () => d.reject(Error("controlled failure")));
@@ -355,7 +357,7 @@ it("explains a retained active snapshot honestly after a failed refresh", async 
   api.readTopicBoard.mockRejectedValueOnce(Error("refresh unavailable"));
   fireEvent.click(screen.getByRole("button", { name: "Обновить список" }));
   await settled();
-  assertReason(["в проекте работает запуск"], true);
+  assertReason(["не удалось загрузить список топиков"]);
   expect(screen.getByRole("alert").textContent).toContain(
     "refresh unavailable",
   );
@@ -369,11 +371,9 @@ it("keeps active and in-flight reasons without a dirty prohibition after the nex
   const operation = deferred();
   api.prepareTopicOperation.mockReturnValueOnce(operation.promise);
   fireEvent.click(
-    screen.getByRole("checkbox", {
-      name: "Выбрать топик feature-b в feature/b",
-    }),
+    screen.getByRole("button", { name: "Удалить топик feature-b" }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Удалить выбранные…" }));
+  await waitFor(() => expect(api.prepareTopicOperation).toHaveBeenCalled());
   api.readTopicBoard.mockResolvedValueOnce({
     ...board,
     active: true,

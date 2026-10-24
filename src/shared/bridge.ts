@@ -1,6 +1,11 @@
+import type { HistoryArtifact, HistoryDocument, HistoryPrunePreview, HistoryPruneResult } from "./history";
+import type { TerminalAPI } from "./terminal-control";
 import type { TopicPopupBounds } from "./topic-popup";
-import type { RepositoryActionRequest, RepositoryActionResult } from "./repository-actions";
-import type {BuildRepeatPreparation} from "./build-repeat";
+import type {
+  RepositoryActionRequest,
+  RepositoryActionResult,
+} from "./repository-actions";
+import type { BuildRepeatPreparation } from "./build-repeat";
 import type { ScopeRef } from "./context";
 import type {
   ContextSyncState,
@@ -63,12 +68,16 @@ export interface SettingsFile {
   version: string;
 }
 export interface DesktopAPI {
-  runRepositoryAction(request: RepositoryActionRequest): Promise<RepositoryActionResult>;
+  /** Optional for compatibility with older hosts and isolated fixtures. */
+  terminal?: TerminalAPI;
+  runRepositoryAction(
+    request: RepositoryActionRequest,
+  ): Promise<RepositoryActionResult>;
   setTopicPopupBounds?(id: string, bounds: TopicPopupBounds): Promise<void>;
   closeTopicPopup?(id: string): Promise<void>;
   onTopicPopupClosed?(callback: (id: string) => void): () => void;
-  prepareBuildRepeat?(runId:string):Promise<BuildRepeatPreparation>;
-  reconcileRun?(runId:string):Promise<Run>;
+  prepareBuildRepeat?(runId: string): Promise<BuildRepeatPreparation>;
+  reconcileRun?(runId: string): Promise<Run>;
   createTopicContext(input: {
     projectId: string;
     year: string;
@@ -86,26 +95,19 @@ export interface DesktopAPI {
     token: string;
     confirmed: true;
   }): Promise<ContextApplyResult>;
-  contextDeletionRecovery(
-    ref: TopicContextRef,
-  ): Promise<{
+  contextDeletionRecovery(ref: TopicContextRef): Promise<{
     token: string;
     contextId: string;
     stage: string;
     details: string[];
   } | null>;
-  prepareContextDeletion(
-    ref: TopicContextRef,
-  ): Promise<{
+  prepareContextDeletion(ref: TopicContextRef): Promise<{
     token: string;
     contextId: string;
     stage: string;
     details: string[];
   }>;
-  deleteContext(input: {
-    projectId: string;
-    token: string;
-  }): Promise<{
+  deleteContext(input: { projectId: string; token: string }): Promise<{
     projectId: string;
     status: "success" | "partial" | "failed";
     message: string;
@@ -135,10 +137,35 @@ export interface DesktopAPI {
   readBuildPlan(projectId: ScopeRef, path: string): Promise<BuildPlanDocument>;
   launchBuild(request: BuildRequest): Promise<Run>;
   repeatBuild(runId: string, confirmClean: boolean): Promise<Run>;
+  prepareHistoryPrune(projectId: string, year: string): Promise<HistoryPrunePreview>;
+  pruneHistory(projectId: string, token: string): Promise<HistoryPruneResult>;
+  listHistoryYears(scope: ScopeRef): Promise<string[]>;
+  listHistoryEntries(scope: ScopeRef, year: string): Promise<string[]>;
+  listHistoryArtifacts(
+    scope: ScopeRef,
+    year: string,
+    entry: string,
+    target?: TopicTarget,
+  ): Promise<HistoryArtifact[]>;
+  readHistoryArtifact(
+    scope: ScopeRef,
+    year: string,
+    entry: string,
+    path: string,
+    target?: TopicTarget,
+  ): Promise<HistoryDocument>;
   readTopicCatalog(
     projectId: string,
     year: string,
   ): Promise<TopicCatalogSnapshot>;
+  /** Display-only snapshot; its revision cannot authorize operations. */
+  readTopicTable(projectId: string, year: string): Promise<TopicBoardSnapshot>;
+  /** Checked task-only read. No mutation authority or full board is loaded. */
+  readTopicOverview(
+    scope: ScopeRef,
+    year: string,
+    target: TopicTarget,
+  ): Promise<TopicDetails>;
   readTopicBoard(
     projectId: ScopeRef,
     year: string,

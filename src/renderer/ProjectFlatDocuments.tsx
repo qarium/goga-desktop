@@ -1,3 +1,4 @@
+import { useViewActive } from "./RetainedViews";
 import type { TopicContextRef } from "../shared/worktrees";
 import { contextRef } from "./topic-context";
 import { useReadScope } from "./read-request";
@@ -22,6 +23,7 @@ export function ProjectFlatDocuments({
   store: SettingsDocuments;
   savedSettingsVersion?: string;
 }) {
+  const viewActive = useViewActive();
   const scope = owner ? contextRef(owner) : project.id;
   const scopeKey = documentScopeId(scope);
   const pipeline = kind === "pipeline";
@@ -57,6 +59,7 @@ export function ProjectFlatDocuments({
     JSON.stringify([scopeKey, kind, revision, attempt]),
   );
   useEffect(() => {
+    if (!viewActive) return;
     let current = true;
     setLoading(true);
     setError("");
@@ -82,7 +85,7 @@ export function ProjectFlatDocuments({
     return () => {
       current = false;
     };
-  }, [scopeKey, kind, revision, attempt]);
+  }, [scopeKey, kind, revision, attempt, viewActive]);
   const files: ProjectWorkflow[] = [
     ...catalog,
     ...state.drafts

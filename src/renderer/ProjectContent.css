@@ -1,0 +1,22 @@
+/* Shared content grid. Native terminal sizing stays in TerminalWorkspace.css. */
+.project-content.project-content {
+  box-sizing: border-box;
+  width: 100%;
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 26px 32px 40px;
+}
+@media (max-width: 1000px) {
+  .project-content.project-content {
+    padding: 20px 20px 32px;
+  }
+}
+@media (max-width: 760px) {
+  .project-content.project-content {
+    padding: 18px 12px;
+  }
+}
+
+.project-content > .section-heading h2 {
+  margin-top: 0;
+}

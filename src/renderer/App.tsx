@@ -1,3 +1,6 @@
+import { TopicOverview } from "./TopicOverview";
+import { RetainedViews } from "./RetainedViews";
+import { TerminalWorkspace } from "./TerminalWorkspace";
 import {
   readCatalogCache,
   writeCatalogCache,
@@ -35,6 +38,7 @@ import {
   createBuildDrafts,
 } from "./BuildForm";
 import { LaunchForm } from "./LaunchForm";
+import { LoadingState } from "./LoadingBoundary";
 import { RunOutput, TerminalIcon, dashboardReady } from "./RunOutput";
 import { Settings } from "./Settings";
 import { createSettingsDocuments, documentScopeId } from "./settings-documents";
@@ -160,6 +164,7 @@ export function App() {
       | "settings"
       | "project-settings"
       | "topics"
+      | "terminal"
       | "build"
       | "context-runs"
       | "context-preparation"
@@ -216,6 +221,23 @@ export function App() {
     Record<string, WorktreeRecord>
   >({});
   const [activeDraft, setActiveDraft] = useState("");
+  const projectNavigation = useRef(
+    new Map<
+      string,
+      { page: typeof page; selected: string | null; activeDraft: string }
+    >(),
+  );
+  useEffect(() => {
+    if (projectId && page !== "settings")
+      projectNavigation.current.set(projectId, {
+        // Preparation is a captured mutation intent, not a browsable section.
+        // Its in-flight result remains in initialFlights; navigation must never
+        // automatically repeat/consume that intent.
+        page: page === "context-preparation" ? "context-runs" : page,
+        selected,
+        activeDraft,
+      });
+  }, [projectId, page, selected, activeDraft]);
   const [contextOpenRuns, setContextOpenRuns] = useState(
     () => new Set<string>(),
   );
@@ -275,6 +297,10 @@ export function App() {
     null,
   );
   const [currentTopicsError, setCurrentTopicsError] = useState("");
+  const [tableTopicSelection, setTableTopicSelection] = useState<{
+    identity: TopicContextIdentity;
+    nonce: number;
+  } | null>(null);
   const [topicCard, setTopicCard] = useState<{
     project: Project;
     year: string;
@@ -282,7 +308,36 @@ export function App() {
     board: TopicBoardSnapshot | null;
     context: TopicCardContext;
     host?: TopicBoardRecord;
+    showArtifacts?: boolean;
   } | null>(null);
+  const matchingCardOwners = topicCard
+    ? [
+        ...new Map(
+          [...(selectedContext ? [selectedContext] : []), ...knownContexts]
+            .filter(
+              (record) =>
+                !record.deletedAt &&
+                record.projectId === topicCard.project.id &&
+                record.year === topicCard.year &&
+                record.topic === topicCard.target.topic &&
+                record.branch === topicCard.target.branch,
+            )
+            .map((record) => [record.contextId, record]),
+        ).values(),
+      ]
+    : [];
+  const cardOwner =
+    matchingCardOwners.find(
+      (record) => record.contextId === selectedContext?.contextId,
+    ) ?? (matchingCardOwners.length === 1 ? matchingCardOwners[0] : undefined);
+  const cardOwnerError =
+    !cardOwner && matchingCardOwners.length > 1
+      ? "У топика несколько рабочих контекстов. Выберите нужный в селекторе топиков."
+      : contextsError;
+  const TopicCardComponent =
+    topicCard?.context.kind === "topic" || topicCard?.context.kind === "current"
+      ? TopicOverview
+      : TopicCard;
   const [preparedTopic, setPreparedTopic] = useState<
     | { projectId: string; target: TopicTarget; text?: string; nonce: number }
     | undefined
@@ -336,11 +391,7 @@ export function App() {
     setActiveDraft(id);
     setPage("build");
   }
-  function showContextPreparation(
-    kind: RunKind,
-    owner: WorktreeRecord,
-    readinessChecked = false,
-  ) {
+  function showContextPreparation(kind: RunKind, owner: WorktreeRecord) {
     if (
       owner.state !== "ready" ||
       owner.storageKind !== "clone" ||
@@ -351,25 +402,9 @@ export function App() {
       workspaceLaunchBlockReason(runsRef.current, owner.projectId, owner, kind)
     )
       return;
-    if (
-      kind === "pipeline" &&
-      !readinessChecked &&
-      !openLaunches.has(draftKey(owner, "pipeline"))
-    ) {
-      setInitialPreparation({
-        identity: {
-          projectId: owner.projectId,
-          year: owner.year,
-          topic: owner.topic,
-          branch: owner.branch,
-        },
-        owner,
-        kind,
-        nonce: ++initialPreparationNonce.current,
-      });
-      setSelected(null);
-      setPage("context-preparation");
-    } else if (kind === "build") showBuild(owner.projectId, owner);
+    // A selected ready owner already has an exact identity. Opening a form is
+    // read-only; its scoped host reads and the final launch enforce authority.
+    if (kind === "build") showBuild(owner.projectId, owner);
     else showLaunch(owner.projectId, owner);
   }
   function returnToDraft(id: string, kind: RunKind) {
@@ -939,6 +974,23 @@ export function App() {
   }
   // Native Dashboard bounds are fixed. Keep errors outside its column while
   // it is visible; once the run ends the message can use normal main flow.
+  // Logical ownership is stable across metadata revisions; host checks still use
+  // fresh props. Removing a project explicitly disposes its retained UI only.
+  const sectionKey = (kind: string, owner = selectedContext) =>
+    project
+      ? JSON.stringify([
+          project.id,
+          project.path,
+          kind,
+          owner ? contextKey(owner) : "primary",
+        ])
+      : null;
+  const retainProjectView = (key: string) => {
+    const [id, path] = JSON.parse(key);
+    return projects.some(
+      (project) => project.id === id && project.path === path,
+    );
+  };
   const catalogError = page !== "settings" && currentTopicsError && (
     <div className="context-board-error">
       <p role="alert">{currentTopicsError}</p>
@@ -991,11 +1043,11 @@ export function App() {
               disabled={settingsBusy}
               onClick={() =>
                 navigate(() => {
+                  const saved = projectNavigation.current.get(p.id);
                   setProjectId(p.id);
-                  setPage("project-settings");
-                  setSelected(
-                    runs.find((r) => r.projectId === p.id)?.id ?? null,
-                  );
+                  setPage(saved?.page ?? "project-settings");
+                  setSelected(saved?.selected ?? null);
+                  setActiveDraft(saved?.activeDraft ?? "");
                   setError("");
                 })
               }
@@ -1061,6 +1113,8 @@ export function App() {
               <TopicContextPicker
                 key={project.id}
                 project={project}
+                requestedSelection={tableTopicSelection}
+                onSelectionRequestHandled={() => setTableTopicSelection(null)}
                 board={currentTopics}
                 selected={selectedContext}
                 knownContexts={knownContexts}
@@ -1088,7 +1142,7 @@ export function App() {
                       record,
                     ]);
                     topicsChanged();
-                    showContextPreparation("pipeline", record, true);
+                    showContextPreparation("pipeline", record);
                   })
                 }
                 onSelect={(record) =>
@@ -1107,9 +1161,11 @@ export function App() {
                     selectedContextRef.current = record;
                     setSelected(null);
                     setPage(
-                      pageRef.current === "project-settings"
-                        ? "project-settings"
-                        : "context-runs",
+                      pageRef.current === "terminal"
+                        ? "terminal"
+                        : pageRef.current === "project-settings"
+                          ? "project-settings"
+                          : "context-runs",
                     );
                     setError("");
                   })
@@ -1123,7 +1179,11 @@ export function App() {
                     selectedRef.current = null;
                     selectedContextRef.current = null;
                     setSelected(null);
-                    setPage("project-settings");
+                    setPage(
+                      pageRef.current === "terminal"
+                        ? "terminal"
+                        : "project-settings",
+                    );
                   })
                 }
                 onOpenCard={(target, year) =>
@@ -1134,6 +1194,7 @@ export function App() {
                       target,
                       board: null,
                       context: { kind: "topic" },
+                      showArtifacts: true,
                     }),
                   )
                 }
@@ -1189,14 +1250,14 @@ export function App() {
           <RepositoryOperationPopup anchor={repositoryPopupAnchor} />
         </div>
         {!visibleRun && catalogError}
-        {page === "settings" && (
+        <RetainedViews activeKey={page === "settings" ? "settings" : null}>
           <div className="scroll-area">
             <Settings
               documents={settingsDocuments}
               onBack={() => navigate(() => setPage("project-settings"))}
             />
           </div>
-        )}
+        </RetainedViews>
         <div className="project-page" hidden={page === "settings"}>
           <div className="tabs" role="tablist" aria-label="Разделы проекта">
             {project && (
@@ -1208,6 +1269,17 @@ export function App() {
                 onClick={() => navigate(() => setPage("project-settings"))}
               >
                 Проект
+              </button>
+            )}
+            {project && window.goga.terminal && (
+              <button
+                type="button"
+                className="topics-nav"
+                aria-pressed={page === "terminal"}
+                disabled={settingsBusy}
+                onClick={() => navigate(() => setPage("terminal"))}
+              >
+                Терминал
               </button>
             )}
             {project && (
@@ -1524,7 +1596,14 @@ export function App() {
                 {run.recoveryMessage}
               </p>
             )}
-            {page === "context-runs" && (
+            <RetainedViews
+              activeKey={
+                page === "context-runs"
+                  ? sectionKey("runs", displayOwner)
+                  : null
+              }
+              retain={retainProjectView}
+            >
               <section className="context-stage">
                 {displayOwner && displayOwner.storageKind !== "clone" && (
                   <ContextMigration
@@ -1588,7 +1667,7 @@ export function App() {
                   </>
                 )}
               </section>
-            )}
+            </RetainedViews>
             {page === "context-preparation" &&
               project &&
               initialPreparation &&
@@ -1636,21 +1715,27 @@ export function App() {
                       showContextPreparation(
                         initialPreparation.kind,
                         record,
-                        true,
                       );
                   }}
                 />
               )}
-            {page === "project-settings" &&
-              project &&
-              (contextUnavailable ? (
-                <section
-                  className="context-stage"
-                  aria-label="Контекст недоступен"
-                >
-                  <p role="status">{contextUnavailable}</p>
-                </section>
-              ) : (
+            {page === "project-settings" && contextUnavailable && (
+              <section
+                className="context-stage"
+                aria-label="Контекст недоступен"
+              >
+                <p role="status">{contextUnavailable}</p>
+              </section>
+            )}
+            <RetainedViews
+              activeKey={
+                page === "project-settings" && !contextUnavailable
+                  ? sectionKey("settings")
+                  : null
+              }
+              retain={retainProjectView}
+            >
+              {project && (
                 <ProjectSettings
                   embedded
                   documents={settingsDocuments}
@@ -1671,7 +1756,8 @@ export function App() {
                     }))
                   }
                 />
-              ))}
+              )}
+            </RetainedViews>
             {preparationEntries(openBuilds).map(
               ({ id, owner, project: buildProject }) => (
                 <div
@@ -1868,36 +1954,84 @@ export function App() {
                 </div>
               ),
             )}
+            <RetainedViews
+              activeKey={
+                page === "terminal" && window.goga.terminal
+                  ? sectionKey("terminal", displayOwner)
+                  : null
+              }
+              retain={retainProjectView}
+            >
+              {project && window.goga.terminal && (
+                <TerminalWorkspace
+                  api={window.goga.terminal}
+                  scope={displayOwner ? contextRef(displayOwner) : project.id}
+                  blocked={contextUnavailable || undefined}
+                  obscured={Boolean(
+                    topicCard ||
+                    pendingNavigation ||
+                    repeatPending ||
+                    repositoryActions.failures.length,
+                  )}
+                />
+              )}
+            </RetainedViews>
+            <RetainedViews
+              activeKey={
+                page === "topics" && project
+                  ? JSON.stringify([project.id, project.path, "topics"])
+                  : null
+              }
+              retain={retainProjectView}
+            >
+              {project && (
+                <TopicsWorkspace
+                  key={project.id}
+                  project={project}
+                  store={topicsStore.current}
+                  revision={topicScope}
+                  onChanged={topicsChanged}
+                  onBusy={setTopicsBusy}
+                  runs={runs as RunWithContext[]}
+                  knownContexts={knownContexts}
+                  selectedContext={displayOwner}
+                  disabled={settingsBusy}
+                  ownerReadState={
+                    contextsLoading
+                      ? "loading"
+                      : contextsError
+                        ? "error"
+                        : "confirmed"
+                  }
+                  ownerReadError={contextsError}
+                  onSelectTopic={(identity) =>
+                    navigateContext(() =>
+                      setTableTopicSelection({ identity, nonce: Date.now() }),
+                    )
+                  }
+                  onOpenRun={(id) => {
+                    const target = runs.find((value) => value.id === id);
+                    if (target) navigate(() => openContextRun(target));
+                  }}
+                  onOpenTopic={(target, year, board, host) =>
+                    setTopicCard({
+                      project,
+                      target,
+                      year,
+                      board,
+                      host,
+                      context: { kind: "topic" },
+                    })
+                  }
+                />
+              )}
+            </RetainedViews>
             {page === "launch" ||
+            page === "terminal" ||
+            page === "topics" ||
             (project &&
               (page === "project-settings" ||
-                page === "build")) ? null : page === "topics" && project ? (
-              <TopicsWorkspace
-                key={project.id}
-                project={project}
-                store={topicsStore.current}
-                revision={topicScope}
-                onChanged={topicsChanged}
-                onBusy={setTopicsBusy}
-                runs={runs as RunWithContext[]}
-                knownContexts={knownContexts}
-                selectedContext={displayOwner}
-                onOpenRun={(id) => {
-                  const target = runs.find((value) => value.id === id);
-                  if (target) navigate(() => openContextRun(target));
-                }}
-                onOpenTopic={(target, year, board, host) =>
-                  setTopicCard({
-                    project,
-                    target,
-                    year,
-                    board,
-                    host,
-                    context: { kind: "topic" },
-                  })
-                }
-              />
-            ) : !project ? (
+                page === "build")) ? null : !project ? (
               <div className="empty-state">
                 <div className="empty-symbol">⌘</div>
                 <h2>Добавьте локальный проект</h2>
@@ -1932,52 +2066,57 @@ export function App() {
                   Создать запуск
                 </button>
               </div>
-            ) : !canShowDashboard || showLogs[run.id] ? (
-              <RunOutput
-                key={run.id}
-                run={run}
-                viewError={viewErrors[run.id]}
-              />
-            ) : (
+            ) : !canShowDashboard || showLogs[run.id] ? null : (
               <div
                 className="afm-placeholder"
                 aria-label="Встроенная панель конвейера"
               />
             )}
+            <RetainedViews
+              activeKey={
+                page === "project" &&
+                run &&
+                (!canShowDashboard || showLogs[run.id])
+                  ? JSON.stringify([
+                      run.projectId,
+                      projects.find((p) => p.id === run.projectId)?.path,
+                      run.id,
+                    ])
+                  : null
+              }
+              retain={(key) =>
+                retainProjectView(key) &&
+                runs.some((run) => run.id === JSON.parse(key)[2])
+              }
+            >
+              {run && <RunOutput run={run} viewError={viewErrors[run.id]} />}
+            </RetainedViews>
           </div>
         </div>
       </main>
       {topicCard && (
-        <TopicCard
+        <TopicCardComponent
           key={JSON.stringify([
             topicCard.project.id,
             topicCard.year,
             topicCard.target,
             topicCard.context.kind,
+            topicCard.showArtifacts,
           ])}
           {...topicCard}
           minimal={contextsEnabled}
           contextRequired={contextsEnabled}
           ownerReadState={
-            contextsLoading ? "loading" : contextsError ? "error" : "confirmed"
+            contextsLoading ? "loading" : cardOwnerError ? "error" : "confirmed"
           }
-          ownerReadError={contextsError}
+          ownerReadError={cardOwnerError}
           onContextPrepared={(record) =>
             setKnownContexts((values) => [
               ...values.filter((item) => item.contextId !== record.contextId),
               record,
             ])
           }
-          owner={[
-            ...(selectedContext ? [selectedContext] : []),
-            ...knownContexts,
-          ].find(
-            (record) =>
-              record.projectId === topicCard.project.id &&
-              record.year === topicCard.year &&
-              record.topic === topicCard.target.topic &&
-              record.branch === topicCard.target.branch,
-          )}
+          owner={cardOwner}
           selectedContextId={selectedContext?.contextId}
           runs={runs as RunWithContext[]}
           store={topicsStore.current}
@@ -2249,21 +2388,22 @@ function InitialContextPreparation({
       if (mounted.current) setBusy(false);
     }
   }
+  // Errors take precedence even if another preparation read is still pending.
+  // Reads and the physical preparation already have bounded deadlines above.
+  if (!error && !restriction && (busy || loading || !attempted.current))
+    return (
+      <section className="context-stage" aria-label="Подготовка запуска">
+        <LoadingState label="Подготовка запуска" />
+      </section>
+    );
   return (
     <section className="context-stage" aria-label="Подготовка рабочей копии">
       <h2>{kind === "build" ? "Подготовка сборки" : "Подготовка конвейера"}</h2>
       <p className="context-run-hint">
         Топик: {identity.topic} · {identity.year} · {identity.branch}
       </p>
-      {(busy || loading) && (
-        <p className="context-run-hint" role="status">
-          {loading
-            ? "Проверяем доступные копии…"
-            : "Подготавливаем рабочую копию…"}
-        </p>
-      )}
       {restriction && (
-        <p className="context-run-hint" role="status">
+        <p className="context-run-hint" role="alert">
           {restriction}
         </p>
       )}

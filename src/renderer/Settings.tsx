@@ -1,3 +1,4 @@
+import { RetainedViews, useViewActive } from "./RetainedViews";
 import { useReadScope } from "./read-request";
 import { LoadingBoundary } from "./LoadingBoundary";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
@@ -26,6 +27,7 @@ export function Settings({
     [creating, setCreating] = useState(false),
     [newName, setNewName] = useState(""),
     [error, setError] = useState("");
+  const viewActive = useViewActive();
   const read = useReadScope("settings");
   useEffect(() => {
     const since = seenRemovals.current;
@@ -52,6 +54,7 @@ export function Settings({
   const loadKey = JSON.stringify([revision, attempt]);
   const [settled, setSettled] = useState("");
   useEffect(() => {
+    if (!viewActive) return;
     let alive = true;
     const catalogRemovalRevision = store.removalRevision();
     setError("");
@@ -83,7 +86,7 @@ export function Settings({
     return () => {
       alive = false;
     };
-  }, [store, revision, attempt]);
+  }, [store, revision, attempt, viewActive]);
   function create() {
     const name = newName.trim();
     if (
@@ -125,87 +128,90 @@ export function Settings({
         current={tab}
         onChange={setTab}
       />
-      {tab === "config" ? (
-        <SettingsDocument
-          store={store}
-          source={{ scope: "home", kind: "config" }}
-          path="~/.goga/config.yml"
-          title="Конфигурация Goga"
-          description="Домашняя конфигурация. Личные профили находятся в отдельном разделе «Профили»."
-        />
-      ) : (
-        <LoadingBoundary
-          pending={settled !== loadKey}
-          label="Загружаем личные профили…"
-        >
-          <div className="subsection-intro">
-            <p>Личные профили для повторного использования в проектах.</p>
-            <button className="quiet" onClick={() => setCreating((v) => !v)}>
-              ＋ Новый профиль
-            </button>
-          </div>
-          {creating && (
-            <form
-              className="new-profile"
-              onSubmit={(e) => {
-                e.preventDefault();
-                create();
-              }}
-            >
-              <label>
-                Имя профиля
-                <input
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="например careful-review"
-                  autoFocus
-                />
-              </label>
-              <button className="primary" type="submit">
-                Создать черновик
+      <RetainedViews activeKey={tab}>
+        {tab === "config" ? (
+          <SettingsDocument
+            store={store}
+            source={{ scope: "home", kind: "config" }}
+            path="~/.goga/config.yml"
+            title="Конфигурация Goga"
+            description="Домашняя конфигурация. Личные профили находятся в отдельном разделе «Профили»."
+          />
+        ) : (
+          <LoadingBoundary
+            background={settled !== ""}
+            pending={settled !== loadKey}
+            label="Загружаем личные профили…"
+          >
+            <div className="subsection-intro">
+              <p>Личные профили для повторного использования в проектах.</p>
+              <button className="quiet" onClick={() => setCreating((v) => !v)}>
+                ＋ Новый профиль
               </button>
-              <button
-                type="button"
-                className="quiet"
-                onClick={() => setCreating(false)}
-              >
-                Отмена
-              </button>
-            </form>
-          )}
-          <div className="master-detail">
-            <div className="item-list">
-              <span className="eyebrow">ЛИЧНЫЕ ПРОФИЛИ</span>
-              {profiles.map((name) => (
-                <button
-                  key={name}
-                  className={profile === name ? "selected" : ""}
-                  aria-pressed={profile === name}
-                  onClick={() => setProfile(name)}
-                >
-                  {name}
-                </button>
-              ))}
-              <small>Проектные профили здесь не редактируются.</small>
             </div>
-            {profile ? (
-              <SettingsDocument
-                store={store}
-                source={{ scope: "home", kind: "profile", name: profile }}
-                path={`~/.goga/profiles/${profile}.yml`}
-                title={profile}
-                description="Содержимое выбранного личного профиля. Черновики других профилей сохраняются при переключении."
-              />
-            ) : (
-              <p className="hint">
-                {profiles.length
-                  ? "Выберите профиль."
-                  : "Личных профилей пока нет. Создайте новый профиль."}
-              </p>
+            {creating && (
+              <form
+                className="new-profile"
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  create();
+                }}
+              >
+                <label>
+                  Имя профиля
+                  <input
+                    value={newName}
+                    onChange={(e) => setNewName(e.target.value)}
+                    placeholder="например careful-review"
+                    autoFocus
+                  />
+                </label>
+                <button className="primary" type="submit">
+                  Создать черновик
+                </button>
+                <button
+                  type="button"
+                  className="quiet"
+                  onClick={() => setCreating(false)}
+                >
+                  Отмена
+                </button>
+              </form>
             )}
-          </div>
-        </LoadingBoundary>
-      )}
+            <div className="master-detail">
+              <div className="item-list">
+                <span className="eyebrow">ЛИЧНЫЕ ПРОФИЛИ</span>
+                {profiles.map((name) => (
+                  <button
+                    key={name}
+                    className={profile === name ? "selected" : ""}
+                    aria-pressed={profile === name}
+                    onClick={() => setProfile(name)}
+                  >
+                    {name}
+                  </button>
+                ))}
+                <small>Проектные профили здесь не редактируются.</small>
+              </div>
+              {profile ? (
+                <SettingsDocument
+                  store={store}
+                  source={{ scope: "home", kind: "profile", name: profile }}
+                  path={`~/.goga/profiles/${profile}.yml`}
+                  title={profile}
+                  description="Содержимое выбранного личного профиля. Черновики других профилей сохраняются при переключении."
+                />
+              ) : (
+                <p className="hint">
+                  {profiles.length
+                    ? "Выберите профиль."
+                    : "Личных профилей пока нет. Создайте новый профиль."}
+                </p>
+              )}
+            </div>
+          </LoadingBoundary>
+        )}
+      </RetainedViews>
       {tab === "profiles" && error && settled === loadKey && (
         <p className="error" role="alert">
           {error}

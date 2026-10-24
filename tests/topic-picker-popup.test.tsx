@@ -157,14 +157,90 @@ it("can grow again after filtering without using the shrunken child viewport as 
     ".topic-context-native-root",
   )!;
   const maxHeight = `${window.innerHeight - 100 - 8 - 16}px`;
-  expect(root.style.getPropertyValue("--topic-popup-max-height")).toBe(maxHeight);
+  expect(root.style.getPropertyValue("--topic-popup-max-height")).toBe(
+    maxHeight,
+  );
   for (const height of [100, 500]) {
-    Object.defineProperty(root, "scrollHeight", { value: height, configurable: true });
+    Object.defineProperty(root, "scrollHeight", {
+      value: height,
+      configurable: true,
+    });
     act(() => observer.callback());
     expect(api.setTopicPopupBounds.mock.calls.at(-1)[1].height).toBe(height);
-    expect(root.style.getPropertyValue("--topic-popup-max-height")).toBe(maxHeight);
+    expect(root.style.getPropertyValue("--topic-popup-max-height")).toBe(
+      maxHeight,
+    );
   }
   const css = readFileSync("src/renderer/TopicPickerPopup.css", "utf8");
   expect(css).toContain("max-height: var(--topic-popup-max-height)");
   expect(css).not.toContain("100vh");
+});
+
+it("waits for fonts and two layout frames before revealing a compact menu", async () => {
+  let resolve!: () => void;
+  const fonts = new Promise<void>((r) => (resolve = r));
+  Object.defineProperty(child.window.document, "fonts", {
+    value: { ready: fonts },
+    configurable: true,
+  });
+  const frames: Array<FrameRequestCallback> = [];
+  vi.spyOn(window, "requestAnimationFrame").mockImplementation((fn) => {
+    frames.push(fn);
+    return frames.length;
+  });
+  render(
+    <TopicPickerPopup anchor={anchor} width={254} onClose={() => {}}>
+      <div role="menu">
+        <button role="menuitem">Переименовать</button>
+      </div>
+    </TopicPickerPopup>,
+  );
+  await within(child.window.document.body).findByRole("menuitem");
+  expect(api.setTopicPopupBounds).not.toHaveBeenCalled();
+  await act(async () => {
+    resolve();
+    await fonts;
+  });
+  expect(api.setTopicPopupBounds).not.toHaveBeenCalled();
+  act(() => frames.shift()!(0));
+  expect(api.setTopicPopupBounds).not.toHaveBeenCalled();
+  act(() => frames.shift()!(16));
+  expect(api.setTopicPopupBounds).toHaveBeenCalledWith(
+    expect.any(String),
+    expect.objectContaining({ width: 254 }),
+  );
+});
+it("never reveals a menu closed while its fonts were pending", async () => {
+  let resolve!: () => void;
+  const fonts = new Promise<void>((r) => (resolve = r));
+  Object.defineProperty(child.window.document, "fonts", {
+    value: { ready: fonts },
+    configurable: true,
+  });
+  const view = mount();
+  await within(child.window.document.body).findByRole("combobox");
+  view.unmount();
+  await act(async () => {
+    resolve();
+    await fonts;
+  });
+  expect(api.setTopicPopupBounds).not.toHaveBeenCalled();
+});
+it("fails with a dismissible error if font/layout readiness never resolves", async () => {
+  vi.useFakeTimers();
+  try {
+    Object.defineProperty(child.window.document, "fonts", {
+      value: { ready: new Promise(() => {}) },
+      configurable: true,
+    });
+    mount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5000);
+    });
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(api.setTopicPopupBounds).not.toHaveBeenCalled();
+    expect(api.closeTopicPopup).toHaveBeenCalled();
+  } finally {
+    vi.useRealTimers();
+  }
 });

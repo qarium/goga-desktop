@@ -18,6 +18,9 @@ export class TopicPopup {
     detach: () => void;
   } | null = null;
   private disposed = false;
+  get isOpen(): boolean {
+    return !this.disposed && this.current !== null;
+  }
   private closeCurrent = () => {
     if (this.current) this.close(this.current.id);
   };

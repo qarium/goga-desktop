@@ -1,0 +1,22 @@
+.retained-view[hidden] {
+  display: none !important;
+}
+.retained-view:not([hidden]) {
+  min-width: 0;
+}
+/* Native terminal placeholder must keep the same stretch geometry as before. */
+.scroll-area:has(
+  > .retained-view:not([hidden]) > .retained-content > .terminal-workspace
+),
+.retained-view:has(> .retained-content > .terminal-workspace) {
+  display: flex;
+  flex-direction: column;
+}
+.retained-view:has(> .retained-content > .terminal-workspace) {
+  flex: 1;
+  min-height: 0;
+}
+
+.retained-content {
+  display: contents;
+}

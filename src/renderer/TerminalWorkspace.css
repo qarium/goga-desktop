@@ -1,0 +1,281 @@
+.terminal-workspace {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+  gap: 12px;
+}
+.terminal-heading {
+  margin: 0 0 8px;
+  font-size: 21px;
+  font-weight: 550;
+}
+.terminal-tabs-row {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border-bottom: 1px solid var(--line, #26334a);
+  min-width: 0;
+}
+.terminal-tabs {
+  display: flex;
+  overflow-x: auto;
+  flex: 0 1 auto;
+  min-width: 0;
+  gap: 2px;
+}
+.terminal-tab {
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 240px;
+  border-bottom: 2px solid transparent;
+  color: #91a2ba;
+}
+.terminal-tab[data-selected="true"] {
+  border-bottom-color: #19cabb;
+  color: #19cabb;
+}
+.terminal-tab button,
+.terminal-add-button,
+.terminal-icon-button {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+}
+.terminal-tab [role="tab"] {
+  min-width: 0;
+  padding: 9px 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  display: inline-flex;
+}
+.terminal-tab button:not([role="tab"]) {
+  width: 26px;
+  padding: 6px;
+  flex-shrink: 0;
+  color: #91a2ba;
+}
+.terminal-add-button {
+  width: 34px;
+  padding: 5px;
+  flex-shrink: 0;
+}
+.terminal-tabtools {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+  padding: 4px;
+  flex-shrink: 0;
+}
+.terminal-icon-button {
+  width: 32px;
+  padding: 5px;
+  border-radius: 6px;
+}
+.terminal-tab button:hover,
+.terminal-add-button:hover,
+.terminal-icon-button:hover {
+  color: #19cabb;
+  background: #101728;
+}
+.terminal-actions-menu {
+  position: absolute;
+  right: 0;
+  top: 100%;
+  z-index: 3;
+  width: 220px;
+  padding: 6px;
+  border: 1px solid #26334a;
+  border-radius: 8px;
+  background: #101728;
+}
+.terminal-actions-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: 0;
+  background: transparent;
+  padding: 8px 10px;
+}
+.terminal-actions-menu button:hover {
+  background: #15332f;
+  color: #19cabb;
+}
+.terminal-workspace svg {
+  flex-shrink: 0;
+}
+.terminal-footer {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  border-top: 1px solid #26334a;
+  padding: 8px 0;
+  color: #91a2ba;
+  font-size: 11px;
+}
+.terminal-surface {
+  flex: 1;
+  min-height: 160px;
+  min-width: 0;
+  background: #0a0e1a;
+}
+.terminal-confirmation {
+  border: 1px solid #28354e;
+  border-radius: 8px;
+  padding: 16px;
+  background: #101a2c;
+}
+.terminal-confirmation {
+  max-width: 680px;
+}
+.terminal-confirmation button {
+  margin-right: 8px;
+}
+.terminal-error {
+  border: 1px solid #a7584e;
+  padding: 12px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  overflow-wrap: anywhere;
+}
+.terminal-empty {
+  margin: auto;
+  text-align: center;
+  color: #8d9db5;
+}
+
+/* Only the terminal page stretches; other project pages retain their scroll layout. */
+.scroll-area:has(> .terminal-workspace) {
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-tab > .repository-action-anchor {
+  min-width: 0;
+  flex: 1;
+}
+
+/* Native overlay content must participate in its own document's measurement. */
+.topic-context-native-root .terminal-actions-menu,
+.topic-context-native-root .terminal-add-menu {
+  position: relative;
+  top: auto;
+  right: auto;
+  width: 100%;
+  max-height: var(--topic-popup-max-height);
+  overflow-y: auto;
+}
+/* Browser fallback also overlays rather than resizing the console. */
+.terminal-add-menu {
+  position: absolute;
+  top: 100px;
+  z-index: 3;
+}
+
+.terminal-add-split {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  margin-left: 4px;
+}
+.terminal-type-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-left: 1px solid #28354e;
+  border-radius: 0;
+  width: 26px;
+  min-height: 30px;
+  padding: 5px;
+  color: #91a2ba;
+}
+.terminal-type-button:hover,
+.terminal-type-button[aria-expanded="true"] {
+  color: #19cabb;
+  background: #101728;
+}
+.terminal-tab-label span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.terminal-inline-rename {
+  padding: 3px 4px;
+  max-width: 190px;
+}
+.terminal-inline-rename input {
+  width: 170px;
+  max-width: 100%;
+  padding: 5px 8px;
+  min-height: 30px;
+}
+.terminal-tab[data-drop="true"] {
+  box-shadow: inset 3px 0 #19cabb;
+  background: #15332f;
+}
+.terminal-add-menu {
+  width: 270px;
+  padding: 6px;
+  border: 1px solid #26334a;
+  border-radius: 8px;
+  background: #101728;
+}
+.terminal-add-menu button {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  text-align: left;
+  padding: 10px;
+  border: 0;
+  background: transparent;
+}
+.terminal-add-menu button:hover {
+  background: #15332f;
+}
+.terminal-add-menu button svg {
+  margin-top: 3px;
+}
+.terminal-add-menu small {
+  display: block;
+  color: #91a2ba;
+  font-size: 12px;
+  line-height: 1.4;
+  margin-top: 3px;
+}
+.terminal-menu-divider {
+  border-top: 1px solid #28354e;
+  margin: 4px;
+}
+
+/* Same glyph and scale as the topics list refresh action. */
+.terminal-refresh-icon {
+  font-size: 20px;
+  line-height: 1;
+}
+
+.terminal-session-loading {
+  flex: 1;
+  min-height: 180px;
+  display: grid;
+  place-items: center;
+}

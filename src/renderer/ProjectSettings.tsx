@@ -1,3 +1,5 @@
+import "./ProjectContent.css";
+import { RetainedViews, useViewActive } from "./RetainedViews";
 import type { TopicContextRef } from "../shared/worktrees";
 import { contextRef } from "./topic-context";
 import { useReadScope } from "./read-request";
@@ -156,6 +158,7 @@ export function ProjectSettings({
   guard: MutableRefObject<ProjectSettingsGuard | null>;
   onBusy: (busy: boolean) => void;
 }) {
+  const viewActive = useViewActive();
   const scope = owner ? contextRef(owner) : project.id;
   const scopeKey = documentScopeId(scope);
   const [ownDocuments] = useState(createSettingsDocuments);
@@ -282,7 +285,6 @@ export function ProjectSettings({
     return () => {
       current = false;
       alive.current = false;
-      guard.current = null;
     };
   }, [scopeKey, attempt]);
   // Refresh only profile metadata, never value/version or timeout/env drafts.
@@ -384,7 +386,14 @@ export function ProjectSettings({
       if (guard.current) guard.current.dirty = false;
     }
   }
-  guard.current = { dirty, busy: saving || inFlight.current, save, discard };
+  useLayoutEffect(() => {
+    if (!viewActive) return;
+    const current = { dirty, busy: saving || inFlight.current, save, discard };
+    guard.current = current;
+    return () => {
+      if (guard.current === current) guard.current = null;
+    };
+  });
   function edit(next: Value) {
     if (saving || inFlight.current) return;
     setValue(next);
@@ -395,7 +404,7 @@ export function ProjectSettings({
     !!value?.profile && !doc?.profiles.some((p) => p.name === value.profile);
   return (
     <section
-      className={`project-settings-panel ${embedded ? "project-home-panel" : ""}`}
+      className={`project-settings-panel ${embedded ? "project-home-panel project-content" : ""}`}
       aria-busy={loading || saving}
     >
       <div className="section-heading">
@@ -424,6 +433,7 @@ export function ProjectSettings({
           ["workflows", "Рабочие процессы"],
           ["pipelines", "Конвейеры"],
           ["image", "Образ"],
+          ["history", "История"],
           ["tools", "Инструменты"],
           ["profiles", "Профили"],
         ]}
@@ -761,18 +771,22 @@ export function ProjectSettings({
           )}
         </LoadingBoundary>
       </div>
-      <ProjectDocuments
-        project={project}
-        owner={owner}
-        tab={tab}
-        store={documentStore}
-        savedSettingsVersion={doc?.version}
-      />
-      <p className="memory-note">
-        Черновики настроек и YAML сохраняются при переходах в этом окне до его
-        закрытия или перезагрузки. На диск записывается только выбранный файл по
-        кнопке «Сохранить».
-      </p>
+      <RetainedViews activeKey={tab === "launch" ? null : tab}>
+        <ProjectDocuments
+          project={project}
+          owner={owner}
+          tab={tab}
+          store={documentStore}
+          savedSettingsVersion={doc?.version}
+        />
+      </RetainedViews>
+      {tab !== "history" && (
+        <p className="memory-note">
+          Черновики настроек и YAML сохраняются при переходах в этом окне до его
+          закрытия или перезагрузки. На диск записывается только выбранный файл
+          по кнопке «Сохранить».
+        </p>
+      )}
     </section>
   );
 }

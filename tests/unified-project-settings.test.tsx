@@ -555,3 +555,28 @@ it("keeps personal profiles explicitly global and clone workflow suggestions sco
   );
   expect(api.saveProjectDocument).not.toHaveBeenCalled();
 });
+
+it("retains selected subsection, editor DOM and its draft across project navigation", async () => {
+  const { RetainedViews } = await import("../src/renderer/RetainedViews");
+  const ui = (key: string) => (
+    <RetainedViews activeKey={key}>
+      {key === "a" ? panel(a) : panel(b)}
+    </RetainedViews>
+  );
+  const f = render(ui("a"));
+  await ready();
+  fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
+  const button = await screen.findByRole("button", {
+    name: "Открыть редактор",
+  });
+  const reads = api.readProjectSettings.mock.calls.length;
+  f.rerender(ui("b"));
+  await ready();
+  f.rerender(ui("a"));
+  expect(screen.getByRole("button", { name: "Открыть редактор" })).toBe(button);
+  expect(api.readProjectSettings.mock.calls).toHaveLength(reads + 1);
+  // Returning within Project also preserves the exact subsection view.
+  fireEvent.click(screen.getByRole("button", { name: "Запуск" }));
+  fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
+  expect(screen.getByRole("button", { name: "Открыть редактор" })).toBe(button);
+});

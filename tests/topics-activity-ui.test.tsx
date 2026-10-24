@@ -75,7 +75,7 @@ const run = (patch: Partial<RunWithContext> = {}): RunWithContext => ({
 let readBoard: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   readBoard = vi.fn(async () => board);
-  window.goga = { readTopicBoard: readBoard } as any;
+  window.goga = { readTopicTable: readBoard } as any;
 });
 afterEach(cleanup);
 function props(runs: RunWithContext[] = []) {
@@ -103,7 +103,9 @@ it("offers the approved accessible switch, run column and useful zero-active emp
     name: "Только с активными запусками",
   });
   expect(toggle.getAttribute("aria-checked")).toBe("false");
-  expect(screen.getByRole("columnheader", { name: "Запуск" })).toBeTruthy();
+  expect(
+    screen.getByRole("columnheader", { name: "Активные запуски" }),
+  ).toBeTruthy();
   expect(screen.getAllByText("Нет активного")).toHaveLength(2);
   fireEvent.click(toggle);
   expect(topicA()).toHaveLength(0);
@@ -125,8 +127,7 @@ it("keeps the board global, composes views/search, resets active too, and refilt
   );
   expect(topicA()).toHaveLength(1);
   expect(topicB()).toHaveLength(0);
-  fireEvent.click(screen.getByRole("switch", { name: "Состояния по веткам" }));
-  expect(topicA()).toHaveLength(2);
+  expect(topicA()).toHaveLength(1);
   fireEvent.change(screen.getByPlaceholderText("Часть имени топика"), {
     target: { value: "feature-b" },
   });
@@ -141,9 +142,7 @@ it("keeps the board global, composes views/search, resets active too, and refilt
   fireEvent.click(
     screen.getByRole("switch", { name: "Только с активными запусками" }),
   );
-  fireEvent.click(
-    screen.getByRole("switch", { name: "Только удалённые ветки" }),
-  );
+
   expect(topicA()).toHaveLength(1);
   view.rerender(
     <TopicsWorkspace {...initial} runs={[run({ status: "stopped" })]} />,
@@ -201,4 +200,55 @@ it("does not call an unverified recovery reservation running", async () => {
     screen.getByRole("switch", { name: "Только с активными запусками" }),
   );
   expect(topicA()).toHaveLength(1);
+});
+
+it("keeps runs and active filtering separate for branches that normalize to the same topic", async () => {
+  const twin = { ...a, branch: "feature-a" };
+  const twinOwner = {
+    ...context,
+    branch: twin.branch,
+    contextId: "copy-twin",
+    path: "/copies/twin",
+  };
+  const twinRun = run({
+    id: "twin-run",
+    branch: twin.branch,
+    context: twinOwner,
+  });
+  readBoard.mockResolvedValue({
+    ...board,
+    entries: [
+      { ...a, hosts: [a.branch] },
+      { ...twin, hosts: [twin.branch] },
+    ],
+    records: [a, twin],
+  });
+  render(
+    <TopicsWorkspace
+      {...props([twinRun])}
+      knownContexts={[context, twinOwner]}
+    />,
+  );
+  const names = await screen.findAllByRole("button", {
+    name: "Открыть топик feature-a",
+  });
+  expect(
+    within(names[0]!.closest("tr")!).queryByRole("button", {
+      name: /Открыть запуск twin-run/,
+    }),
+  ).toBeNull();
+  expect(
+    within(names[1]!.closest("tr")!).getByRole("button", {
+      name: /Открыть запуск twin-run/,
+    }),
+  ).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("switch", { name: "Только с активными запусками" }),
+  );
+  expect(
+    screen.getAllByRole("button", { name: "Открыть топик feature-a" }),
+  ).toHaveLength(1);
+  expect(
+    screen.getByRole("button", { name: /Открыть запуск twin-run/ }),
+  ).toBeTruthy();
 });

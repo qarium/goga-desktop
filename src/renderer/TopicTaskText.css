@@ -1,0 +1,16 @@
+/* Scope headings against the dialog's generic h2/h3 rules. */
+.topic-task-markdown .history-markdown h1 {
+  font-size: 20px;
+  margin: 0 0 20px;
+}
+.topic-task-markdown .history-markdown h2 {
+  font-size: 18px;
+  margin: 28px 0 12px;
+}
+.topic-task-markdown .history-markdown h3 {
+  font-size: 16px;
+  margin: 24px 0 10px;
+}
+.topic-task-markdown .history-markdown > :first-child {
+  margin-top: 0;
+}

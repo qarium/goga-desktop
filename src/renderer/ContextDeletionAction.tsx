@@ -13,11 +13,17 @@ export function ContextDeletionAction({
   current,
   active,
   onDeleted,
+  autoPrepare = false,
+  onBusy,
+  onCancel,
 }: {
   owner: TopicContextRef;
   current: boolean;
   active: boolean;
   onDeleted: () => void;
+  autoPrepare?: boolean;
+  onBusy?: (value: boolean) => void;
+  onCancel?: () => void;
 }) {
   const [plan, setPlan] = useState<Plan | null>(null),
     [busy, setBusy] = useState(false),
@@ -97,6 +103,22 @@ export function ContextDeletionAction({
       if (mounted.current) setBusy(false);
     }
   }
+  const autoStarted = useRef(false);
+  useEffect(() => {
+    if (
+      autoPrepare &&
+      !autoStarted.current &&
+      !recoveryLoading &&
+      !recoveryFailed
+    ) {
+      autoStarted.current = true;
+      void prepare();
+    }
+  }, [autoPrepare, recoveryLoading, recoveryFailed]);
+  useEffect(() => {
+    onBusy?.(busy);
+    return () => onBusy?.(false);
+  }, [busy, onBusy]);
   async function execute() {
     if (!plan || reason || flight.current) return;
     const token = plan.token;
@@ -148,19 +170,21 @@ export function ContextDeletionAction({
               {reason}
             </p>
           )}
-          <button
-            type="button"
-            className="danger"
-            aria-describedby={reason ? reasonId : undefined}
-            disabled={busy || !!reason || recoveryLoading || recoveryFailed}
-            onClick={() => void prepare()}
-          >
-            {recoveryLoading
-              ? "Проверяем незавершённое удаление…"
-              : plan
-                ? "Продолжить удаление…"
-                : "Удалить топик и копию…"}
-          </button>
+          {(!autoPrepare || !confirmationOpen) && (
+            <button
+              type="button"
+              className="danger"
+              aria-describedby={reason ? reasonId : undefined}
+              disabled={busy || !!reason || recoveryLoading || recoveryFailed}
+              onClick={() => void prepare()}
+            >
+              {recoveryLoading
+                ? "Проверяем незавершённое удаление…"
+                : plan
+                  ? "Продолжить удаление…"
+                  : "Удалить топик и копию…"}
+            </button>
+          )}
           {recoveryFailed && (
             <button
               type="button"
@@ -203,7 +227,10 @@ export function ContextDeletionAction({
                 <button
                   type="button"
                   disabled={busy}
-                  onClick={() => setConfirmationOpen(false)}
+                  onClick={() => {
+                    setConfirmationOpen(false);
+                    onCancel?.();
+                  }}
                 >
                   Отмена
                 </button>

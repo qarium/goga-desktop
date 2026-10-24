@@ -790,3 +790,11 @@ it("still rejects dirty independent switch and current-topic update", async () =
   }
   expect(f.mutations).toEqual([]);
 });
+
+it("exposes only local branch choices separately from remote-tracking board branches", async () => {
+  const f = await fixture();
+  await f.git("update-ref", "refs/remotes/origin/remote", "HEAD");
+  const board = await f.board();
+  expect(board.branches).toContain("origin/remote");
+  expect(board.localBranches).toEqual(["feature", "main"]);
+});

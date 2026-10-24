@@ -67,7 +67,7 @@ async function openSettings(primary = false) {
     await openPrototypeDocuments();
   else {
     click("Проект");
-    await screen.findByRole("textbox", { name: "Исполняемый файл" });
+    await screen.findByRole("heading", { name: "Проект" });
   }
   click("Конвейеры");
   await waitFor(() => expect(api.listProjectPipelines).toHaveBeenCalled());
@@ -808,7 +808,7 @@ it.each(["success", "failure"])(
   },
 );
 
-it("has exactly seven project tabs and isolates workflow and pipeline drafts with the same namespace stem", async () => {
+it("has exactly eight project tabs and isolates workflow and pipeline drafts with the same namespace stem", async () => {
   api.listProjectWorkflows = vi.fn(async () => []);
   await setup();
   const navigation = screen.getByRole("navigation", {
@@ -824,6 +824,7 @@ it("has exactly seven project tabs and isolates workflow and pipeline drafts wit
     "Рабочие процессы",
     "Конвейеры",
     "Образ",
+    "История",
     "Инструменты",
     "Профили",
   ]);

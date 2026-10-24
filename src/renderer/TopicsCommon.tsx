@@ -1,3 +1,4 @@
+import { useViewActive } from "./RetainedViews";
 import { useReadScope } from "./read-request";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import type {
@@ -16,18 +17,22 @@ export function topicError(e: unknown): string {
 }
 export function TopicModal({
   title,
+  className = "",
   children,
   busy = false,
   onClose,
 }: {
   title: string;
+  className?: string;
   children: ReactNode;
   busy?: boolean;
   onClose: () => void;
 }) {
+  const active = useViewActive();
   const node = useRef<HTMLDialogElement>(null),
     id = useId();
   useEffect(() => {
+    if (!active) return;
     const el = node.current!;
     const previous = document.activeElement as HTMLElement | null;
     el.showModal();
@@ -35,11 +40,11 @@ export function TopicModal({
       el.close();
       previous?.focus();
     };
-  }, []);
+  }, [active]);
   return (
     <dialog
       ref={node}
-      className="topic-dialog"
+      className={`topic-dialog ${className}`}
       aria-labelledby={id}
       onCancel={(e) => {
         e.preventDefault();

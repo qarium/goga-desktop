@@ -1,3 +1,4 @@
+import { useViewActive } from "../src/renderer/RetainedViews";
 // @vitest-environment jsdom
 import React, { useState } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -16,7 +17,7 @@ vi.mock("../src/renderer/ProjectSettings", () => ({
     const [mountedOwner] = useState(owner?.contextId ?? project.id);
     return (
       <div
-        data-testid="settings"
+        data-testid={useViewActive() ? "settings" : "retained-settings"}
         data-owner={JSON.stringify(owner ?? null)}
         data-mounted-owner={mountedOwner}
       >
@@ -582,3 +583,147 @@ it.each(["primary", "clone"])(
     expect(repeat.disabled).toBe(true);
   },
 );
+it("keeps Terminal between Project and Topics, follows selector context without affecting run tabs", async () => {
+  api.terminal = {
+    onChanged: () => () => {},
+    request: vi.fn(async (request: any) => {
+      if (request.kind === "read")
+        return {
+          revision: "v",
+          context:
+            typeof request.scope === "string"
+              ? { kind: "primary", projectId: request.scope }
+              : { kind: "topic", ...request.scope },
+          initialized: true,
+          tabs: [],
+          selectedId: null,
+          sessions: [],
+        };
+      return null;
+    }),
+  };
+  await mount();
+  const nav = screen.getByRole("tablist", { name: "Разделы проекта" });
+  expect(
+    within(nav)
+      .getAllByRole("button")
+      .slice(0, 3)
+      .map((b) => b.textContent),
+  ).toEqual(["Проект", "Терминал", "Топики"]);
+  fireEvent.click(screen.getByRole("button", { name: "Терминал" }));
+  await screen.findByRole("heading", { name: "Нет открытых терминалов" });
+  await choose("alpha");
+  await waitFor(() =>
+    expect(api.terminal.request).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "read",
+        scope: expect.objectContaining({ contextId: ownerA.contextId }),
+      }),
+    ),
+  );
+  expect(
+    screen
+      .getByRole("button", { name: "Терминал" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  const reads = api.terminal.request.mock.calls.length;
+  await choose("Без топика");
+  await screen.findByRole("heading", { name: "Нет открытых терминалов" });
+  expect(api.terminal.request.mock.calls).toHaveLength(reads);
+  expect(
+    screen
+      .getByRole("button", { name: "Терминал" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+});
+
+it("returns to each project section instead of resetting to Project", async () => {
+  api.listProjects.mockResolvedValue([
+    { id: "p", name: "Fixture", path: "/fixture/project" },
+    { id: "q", name: "Other", path: "/fixture/other" },
+  ]);
+  api.terminal = {
+    onChanged: () => () => {},
+    request: vi.fn(async (r: any) => ({
+      revision: "v",
+      initialized: true,
+      context: { kind: "primary", projectId: r.scope },
+      tabs: [],
+      selectedId: null,
+      sessions: [],
+    })),
+  };
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: "Терминал" }));
+  const savedScreen = await screen.findByRole("heading", {
+    name: "Нет открытых терминалов",
+  });
+  api.terminal.request.mockClear();
+  fireEvent.click(screen.getByRole("button", { name: "Other" }));
+  await screen.findByTestId("settings");
+  fireEvent.click(screen.getByRole("button", { name: "Fixture" }));
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("button", { name: "Терминал" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true"),
+  );
+  expect(
+    await screen.findByRole("heading", { name: "Нет открытых терминалов" }),
+  ).toBe(savedScreen);
+  expect(
+    api.terminal.request.mock.calls.filter(([r]: any) => r.kind === "read"),
+  ).toEqual([]);
+});
+
+it("restores the same topics table and filter while return-time catalog reads are delayed", async () => {
+  api.listProjects.mockResolvedValue([
+    { id: "p", name: "Fixture", path: "/fixture/project" },
+    { id: "q", name: "Other", path: "/fixture/other" },
+  ]);
+  const board = await api.readTopicBoard("p");
+  board.records = [
+    {
+      topic: "alpha",
+      branch: "feature/alpha",
+      remote: false,
+      statuses: [],
+      task: "",
+    },
+  ];
+  board.entries = board.records.map((r: any) => ({
+    ...r,
+    todo: "",
+    hosts: [],
+    divergence: null,
+  }));
+  api.readTopicBoard.mockImplementation(async (id: string) => ({
+    ...board,
+    projectId: id,
+  }));
+  api.readTopicTable = vi.fn(async (id: string) => ({
+    ...board,
+    projectId: id,
+    revision: "display:table",
+  }));
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: "Топики" }));
+  const row = await screen.findByRole("button", {
+    name: "Открыть топик alpha",
+  });
+  expect(api.readTopicTable).toHaveBeenCalledWith("p", "2026");
+  const filter = screen.getByRole("searchbox");
+  fireEvent.change(filter, { target: { value: "alpha" } });
+  const table = screen.getByRole("table");
+  fireEvent.click(screen.getByRole("button", { name: "Other" }));
+  await screen.findByTestId("settings");
+  api.readTopicBoard.mockImplementation(() => new Promise(() => {}));
+  api.readTopicTable.mockImplementation(() => new Promise(() => {}));
+  fireEvent.click(screen.getByRole("button", { name: "Fixture" }));
+  expect(screen.getByRole("table")).toBe(table);
+  expect(screen.getByRole("button", { name: "Открыть топик alpha" })).toBe(row);
+  expect(screen.getByRole("searchbox")).toBe(filter);
+  expect((filter as HTMLInputElement).value).toBe("alpha");
+  expect(screen.queryByText("Загружаем топики…")).toBeNull();
+});

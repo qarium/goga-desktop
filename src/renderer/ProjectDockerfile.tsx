@@ -1,3 +1,4 @@
+import { useViewActive } from "./RetainedViews";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Project } from "../shared/types";
 import type { TopicContextRef } from "../shared/worktrees";
@@ -9,6 +10,7 @@ import {
   type SettingsDocuments,
 } from "./settings-documents";
 import { useReadScope } from "./read-request";
+import { LoadingBoundary } from "./LoadingBoundary";
 import { SettingsDocument } from "./SettingsDocument";
 export function ProjectDockerfile({
   project,
@@ -19,6 +21,7 @@ export function ProjectDockerfile({
   owner?: TopicContextRef;
   store: SettingsDocuments;
 }) {
+  const viewActive = useViewActive();
   const scope = owner ? contextRef(owner) : project.id,
     key = documentScopeId(scope);
   const active = useSyncExternalStore(store.subscribe, () =>
@@ -38,6 +41,7 @@ export function ProjectDockerfile({
     target: { kind: "dockerfile", path: metadata.relativePath },
   });
   useEffect(() => {
+    if (!viewActive) return;
     let current = true;
     setPending(true);
     setError("");
@@ -73,7 +77,7 @@ export function ProjectDockerfile({
     return () => {
       current = false;
     };
-  }, [key, revision]);
+  }, [key, revision, viewActive]);
   const stale =
     !!active &&
     !!latest &&
@@ -83,8 +87,11 @@ export function ProjectDockerfile({
     active ? store.get(sourceFor(active)) : undefined,
   );
   return (
-    <>
-      {pending && <p role="status">Проверяем путь Dockerfile…</p>}
+    <LoadingBoundary
+      pending={pending}
+
+      label="Проверяем путь Dockerfile…"
+    >
       {error && <p role="alert">{error}</p>}
       {stale && (
         <div role="alert">
@@ -117,6 +124,6 @@ export function ProjectDockerfile({
           }
         />
       )}
-    </>
+    </LoadingBoundary>
   );
 }

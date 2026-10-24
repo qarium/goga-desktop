@@ -11,9 +11,10 @@ import {
   within,
 } from "@testing-library/react";
 import { App } from "../src/renderer/App";
-// Keep App's explicit card-to-preparation boundary real while isolating the
-// card editor's separate persistence workflow. Header primary launch no longer
-// enters this flow in .51; it opens the original-folder form directly.
+// Synthetic intent source: this suite tests App's onPrepare safety boundary,
+// not the actions offered by either real card. The informational TopicOverview
+// deliberately has no preparation action; topics-redesign.test.tsx covers that
+// real UI contract. Header primary launch opens the original-folder form directly.
 vi.mock("../src/renderer/TopicCard", () => ({
   TopicCard: ({ target, year, onPrepare, onClose }: any) => (
     <div role="dialog" aria-label="Карточка топика">
@@ -24,6 +25,11 @@ vi.mock("../src/renderer/TopicCard", () => ({
     </div>
   ),
 }));
+// Reuse the same synthetic callback emitter for the new normal-card route.
+vi.mock("../src/renderer/TopicOverview", async () => {
+  const { TopicCard } = await import("../src/renderer/TopicCard");
+  return { TopicOverview: TopicCard };
+});
 let api: any;
 let focusRun: (id: string) => void;
 let emitRuns: (runs: any[]) => void;
@@ -105,6 +111,7 @@ beforeEach(() => {
     })),
     listSettings: vi.fn(async () => ({ profiles: [] })),
     readTopicBoard: vi.fn(async (id) => board(id)),
+    readTopicTable: vi.fn(async (id) => board(id)),
     listTopicContexts: vi.fn(async () => []),
     ensureTopicContext: vi.fn(async () => owner),
     resolveTopicContext: vi.fn(async () => owner),
@@ -531,6 +538,9 @@ it("times out preparation finitely and reuses the in-flight write on explicit re
       await vi.advanceTimersByTimeAsync(300_001);
     });
     expect(screen.getByRole("alert").textContent).toMatch(/больше 300 с/);
+    expect(
+      screen.queryByRole("status", { name: "Подготовка запуска" }),
+    ).toBeNull();
     retryPreparation();
     expect(api.ensureTopicContext).toHaveBeenCalledTimes(1);
     await act(async () => finish(owner));
@@ -615,7 +625,7 @@ it.each(["build", "pipeline"])(
     assertNoExecution();
   },
 );
-it("explicit idle known owner supplies exact contextual history and launch verifies readiness", async () => {
+it("explicit idle known owner supplies exact contextual history and opens the form directly", async () => {
   const other = {
     ...owner,
     topic: "feature",
@@ -649,9 +659,7 @@ it("explicit idle known owner supplies exact contextual history and launch verif
   );
   headerPrepare();
   await screen.findByRole("textbox", { name: "Что нужно сделать?" });
-  expect(api.checkTopicContextReadiness).toHaveBeenCalledWith(
-    expect.objectContaining({ contextId: owner.contextId }),
-  );
+  expect(api.checkTopicContextReadiness).not.toHaveBeenCalled();
   assertNoExecution();
 });
 it("ambiguous explicit card owners fail closed without guessing a copy or inheriting history", async () => {
@@ -766,7 +774,8 @@ it("Topics current-context marker follows selected clone B without rewriting nat
   expect(featureRow.getAttribute("aria-current")).toBe("true");
   expect(featureRow.classList.contains("topic-current-row")).toBe(true);
   expect(primaryRow.getAttribute("aria-current")).toBeNull();
-  expect((await api.readTopicBoard("p")).currentTopic.topic).toBe("main");
+  expect(screen.getAllByRole("row")[1]).toBe(featureRow);
+  expect((await api.readTopicTable("p")).currentTopic.topic).toBe("main");
   expect(api.ensureTopicContext).toHaveBeenCalledTimes(1);
   assertNoExecution();
 });
@@ -786,6 +795,9 @@ it("reconciles a completed timed-out preparation on explicit retry instead of is
       await vi.advanceTimersByTimeAsync(300_001);
     });
     expect(screen.getByRole("alert").textContent).toMatch(/больше 300 с/);
+    expect(
+      screen.queryByRole("status", { name: "Подготовка запуска" }),
+    ).toBeNull();
     await act(async () => finish(owner));
     expect(api.discover).not.toHaveBeenCalled();
     retryPreparation();
@@ -874,7 +886,11 @@ it("waits for the inventory before automatically continuing the captured intent"
   );
   await mount();
   await cardPrepare();
-  expect(screen.getByText("Проверяем доступные копии…")).toBeTruthy();
+  expect(
+    screen
+      .getByRole("status", { name: "Подготовка запуска" })
+      .querySelector(".loading-spinner"),
+  ).toBeTruthy();
   expect(api.ensureTopicContext).not.toHaveBeenCalled();
   assertNoExecution();
   await act(async () => finish([]));
@@ -944,7 +960,7 @@ it("cancelled preparation keeps completed write for verified reentry without ope
   await mount();
   await cardPrepare();
   await waitFor(() => expect(api.ensureTopicContext).toHaveBeenCalledTimes(1));
-  fireEvent.click(screen.getByRole("button", { name: "К запускам топика" }));
+  fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
   await act(async () => finish(owner));
   expect(
     screen.getByRole("region", { name: "Запуски выбранного топика" }),
@@ -1055,7 +1071,7 @@ it.each([
     await waitFor(() =>
       expect(api.ensureTopicContext).toHaveBeenCalledTimes(1),
     );
-    fireEvent.click(screen.getByRole("button", { name: "К запускам топика" }));
+    fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
     await act(async () => finish(owner));
     await cardPrepare();
     expect((await screen.findByRole("alert")).textContent).toMatch(
@@ -1295,7 +1311,7 @@ it("cancelled card preflight cannot ensure a clone after primary Build is intend
     expect(api.checkTopicContextReadiness).toHaveBeenCalledTimes(1),
   );
   expect(api.ensureTopicContext).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "К запускам топика" }));
+  fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
   headerPrepare("Сборка");
   await screen.findByRole("heading", { name: "Запустить сборку" });
   await act(async () => finish(null));
@@ -1484,7 +1500,7 @@ it("an explicit primary selection wins against a late restored owner", async () 
   expect(readWorkspaceSelection(p)).toBeNull();
 });
 
-it("retains the cached selector after refresh failure and loads the full board only for its table", async () => {
+it("retains the cached selector after refresh failure and loads only the display table on table navigation", async () => {
   const { writeCatalogCache } =
     await import("../src/renderer/topic-display-cache");
   const p = { id: "p", name: "Fixture", path: "/fixture/project" };
@@ -1507,7 +1523,10 @@ it("retains the cached selector after refresh failure and loads the full board o
     key: "Escape",
   });
   fireEvent.click(screen.getByRole("button", { name: "Топики" }));
-  await waitFor(() => expect(api.readTopicBoard).toHaveBeenCalled());
+  await waitFor(() =>
+    expect(api.readTopicTable).toHaveBeenCalledWith("p", "2026"),
+  );
+  expect(api.readTopicBoard).not.toHaveBeenCalled();
 });
 it("persists an explicit picker selection across a fresh App mount", async () => {
   const { readWorkspaceSelection } =
@@ -1596,3 +1615,146 @@ it("keeps an explicitly selected missing clone across restart instead of primary
   expect(screen.getByLabelText("Открыть карточку топика main")).toBeTruthy();
   expect(api.ensureTopicContext).not.toHaveBeenCalled();
 });
+
+it.each([
+  "resolveTopicContext",
+  "ensureTopicContext",
+  "checkTopicContextReadiness",
+])(
+  "shows only the shared spinner during %s, then reveals failure and retry",
+  async (method) => {
+    if (method === "resolveTopicContext")
+      api.listTopicContexts.mockResolvedValue([owner]);
+    let fail!: (error: Error) => void;
+    api[method].mockReturnValue(
+      new Promise((_, reject) => {
+        fail = reject;
+      }),
+    );
+    await mount();
+    await cardPrepare();
+    const spinner = screen.getByRole("status", { name: "Подготовка запуска" });
+    expect(spinner.querySelector(".loading-spinner")).toBeTruthy();
+    expect(spinner.textContent).toBe("");
+    expect(
+      screen.queryByRole("button", { name: "К запускам топика" }),
+    ).toBeNull();
+    expect(screen.queryByText("Подготавливаем рабочую копию…")).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: "Подготовка конвейера" }),
+    ).toBeNull();
+    await act(async () => fail(Error("Fixture preparation failed")));
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Fixture preparation failed",
+    );
+    expect(
+      screen.queryByRole("status", { name: "Подготовка запуска" }),
+    ).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Повторить подготовку" })
+        .hasAttribute("disabled"),
+    ).toBe(false);
+    assertNoExecution();
+  },
+);
+
+it.each([
+  "listTopicContexts",
+  "checkTopicContextReadiness",
+  "resolveTopicContext",
+])(
+  "removes the preparation spinner after a never-settling %s times out",
+  async (method) => {
+    if (method === "resolveTopicContext")
+      api.listTopicContexts.mockResolvedValue([owner]);
+    let finish!: (value: any) => void;
+    api[method].mockReturnValue(
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+    );
+    vi.useFakeTimers();
+    try {
+      render(<App />);
+      await act(async () => {});
+      fireEvent.click(screen.getByRole("button", { name: "Топики" }));
+      await act(async () => {});
+      fireEvent.click(
+        screen.getByRole("button", { name: "Открыть топик main" }),
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: "Подготовить запуск" }),
+      );
+      await act(async () => {});
+      expect(
+        screen.getByRole("status", { name: "Подготовка запуска" }),
+      ).toBeTruthy();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300_001);
+      });
+      expect(
+        screen.queryByRole("status", { name: "Подготовка запуска" }),
+      ).toBeNull();
+      expect(screen.getByRole("alert").textContent).toMatch(
+        /время ожидания|больше 300 с/,
+      );
+      await act(async () =>
+        finish(method === "listTopicContexts" ? [owner] : owner),
+      );
+      expect(
+        screen.queryByRole("status", { name: "Подготовка запуска" }),
+      ).toBeNull();
+      expect(api.discover).not.toHaveBeenCalled();
+      assertNoExecution();
+    } finally {
+      vi.useRealTimers();
+    }
+  },
+);
+
+it("opens a verified selected clone form without repeating physical preparation or readiness", async () => {
+  api.listTopicContexts.mockResolvedValue([owner]);
+  await mount();
+  await choose("main");
+  api.resolveTopicContext.mockClear();
+  api.checkTopicContextReadiness.mockReturnValue(new Promise(() => {}));
+  api.resolveTopicContext.mockReturnValue(new Promise(() => {}));
+  headerPrepare();
+  await screen.findByRole("textbox", { name: "Что нужно сделать?" });
+  expect(api.checkTopicContextReadiness).not.toHaveBeenCalled();
+  expect(api.resolveTopicContext).not.toHaveBeenCalled();
+  expect(api.ensureTopicContext).not.toHaveBeenCalled();
+  expect(api.discover).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({
+      contextId: owner.contextId,
+      revision: owner.revision,
+    }),
+  );
+  expect(api.readTopicTask).toHaveBeenCalledWith(
+    expect.objectContaining({
+      context: expect.objectContaining({ contextId: owner.contextId }),
+    }),
+  );
+  assertNoExecution();
+});
+
+it.each(["discover", "readTopicTask", "preview"])(
+  "settles the direct ready-clone form loader on %s failure",
+  async (method) => {
+    api.listTopicContexts.mockResolvedValue([owner]);
+    await mount();
+    await choose("main");
+    api[method].mockRejectedValue(Error("Fixture direct form load failed"));
+    headerPrepare();
+    await screen.findByText("Fixture direct form load failed");
+    expect(
+      screen.queryByRole("status", { name: "Подготовка запуска" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("status", { name: "Загружаем параметры конвейера…" }),
+    ).toBeNull();
+    expect(api.checkTopicContextReadiness).not.toHaveBeenCalled();
+    assertNoExecution();
+  },
+);

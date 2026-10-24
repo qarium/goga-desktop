@@ -461,19 +461,53 @@ it("refuses definitions changed while final launch composition is being resolved
     }),
   ).rejects.toThrow(/предпросмотр/i);
 });
-it("no workflow refuses an explicit profile rather than letting Goga silently ignore it", async () => {
-  const { service, project, calls } = await setup(true);
-  await expect(
-    service.preview({
+it.each([
+  ["none", "explicit"],
+  ["none", "project"],
+  ["none", "missing-project-profile"],
+  ["auto", "explicit"],
+  ["auto", "project"],
+  ["auto", "missing-project-profile"],
+])(
+  "previews a workflow-less pipeline (%s, %s) without activating its profile",
+  async (workflow, source) => {
+    const { service, project, repo, home, calls } = await setup(true);
+    if (workflow === "auto")
+      await rm(path.join(repo, ".goga/workflows/build.yml"));
+    if (source !== "explicit") {
+      const settings = await service.readProjectSettings(project.id);
+      await service.saveProjectSettings(
+        project.id,
+        {
+          ...settings.value,
+          profile: "local",
+        },
+        settings.version,
+      );
+    }
+    if (source === "missing-project-profile") {
+      await rm(path.join(repo, ".goga/profiles/local.yml"));
+      await rm(path.join(home, ".goga/profiles/local.yml"));
+    }
+    const preview = await service.preview({
       projectId: project.id,
       pipeline: "build",
-      workflow: "none",
-      profile: "local",
+      workflow,
+      profile: source === "explicit" ? "local" : "",
       skips: [],
-    }),
-  ).rejects.toThrow(/без рабочего процесса/);
-  expect(calls.some((c) => c.includes("--profile"))).toBe(false);
-});
+    });
+    expect(preview).toMatchObject({ workflow: null, profile: null });
+    expect(preview.stages.map((stage) => stage.id)).toEqual(["plan", "work"]);
+    expect(calls.at(-1)).toEqual([
+      "pipeline",
+      "build",
+      ...(workflow === "none" ? ["--no-workflow"] : []),
+      "--profile",
+      "local",
+      "--info",
+    ]);
+  },
+);
 it("rejects occupied branch before create and never claims a mutation", async () => {
   const { service, project, calls } = await setup(true);
   const req = {
@@ -1704,18 +1738,61 @@ it("isolates settings across two projects and keeps saved profile missing errors
     }),
   ).rejects.toThrow(/профиль отсутствует/);
 });
-it("refuses a selected profile when Goga would ignore it without a workflow", async () => {
-  const { service, project } = await setup();
-  await expect(
-    service.preview({
+it.each(["none", "auto"])(
+  "launches a workflow-less pipeline (%s) with a configured project profile",
+  async (workflow) => {
+    const { service, project, repo, calls } = await setup(true);
+    if (workflow === "auto")
+      await rm(path.join(repo, ".goga/workflows/build.yml"));
+    const settings = await service.readProjectSettings(project.id);
+    await service.saveProjectSettings(
+      project.id,
+      {
+        ...settings.value,
+        profile: "local",
+      },
+      settings.version,
+    );
+    const req = {
       projectId: project.id,
       pipeline: "build",
-      workflow: "none",
-      profile: "local",
+      workflow,
+      profile: "",
       skips: [],
-    }),
-  ).rejects.toThrow(/без рабочего процесса/);
-});
+    };
+    const preview = await service.preview(req);
+    const run = await service.launch({
+      ...req,
+      previewToken: preview.token,
+      topic: { mode: "existing", branch: "main", topic: "main" },
+      task: "",
+      confirmEmptyTask: false,
+      taskVersion: (
+        await service.readTopicTask({
+          projectId: project.id,
+          branch: "main",
+          topic: "main",
+        })
+      ).version,
+      expectedBranch: "main",
+      confirmBranchSwitch: true,
+      clean: false,
+    });
+    expect(run).toMatchObject({
+      status: "starting",
+      workflow: null,
+      profile: null,
+    });
+    expect(calls.at(-1)).toEqual([
+      "pipeline",
+      "build",
+      ...(workflow === "none" ? ["--no-workflow"] : []),
+      "--profile",
+      "local",
+    ]);
+    await service.stop(run.id);
+  },
+);
 it("rejects metadata finishing with changed settings and strips configured values from failures", async () => {
   const { service, project, runner } = await setup();
   const first = await service.readProjectSettings(project.id);

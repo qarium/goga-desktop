@@ -1006,3 +1006,217 @@ describe.each([0, 1])(
     );
   },
 );
+
+describe(
+  "ready clone form read budget",
+  { timeout: gitIntegrationBudget(30000) },
+  () => {
+    it("reads the clone task with one catalog snapshot rather than launch readiness", async () => {
+      const f = await fixture();
+      const before = await bytes(f.primary);
+      const begin = performance.now();
+      const task = await f.service.readTopicTask({
+        projectId: f.project.id,
+        context: worktreeContextRef(f.a),
+        branch: "alpha",
+        topic: "alpha",
+      });
+      const calls = [...f.calls];
+      const boards = calls.filter((call) => call.args.includes("board"));
+      process.stdout.write(
+        "READY_CLONE_TASK_READ " +
+          JSON.stringify({
+            ms: Math.round(performance.now() - begin),
+            boards: boards.length,
+            git: calls.filter((call) => call.exe === "git").length,
+          }) +
+          "\n",
+      );
+      expect(task.text).toBe("alpha task\n");
+      expect(calls.filter((call) => call.exe === "git").length).toBeLessThanOrEqual(33);
+      expect(boards).toHaveLength(1);
+      expect(boards[0]?.cwd).toBe(f.a.path);
+      expect(await bytes(f.primary)).toEqual(before);
+      expect(f.starts).toHaveLength(0);
+    });
+  },
+);
+
+it.each(["task", "branch", "owner", "catalog"])(
+  "rechecks %s at launch after a lightweight ready-clone form read",
+  { timeout: gitIntegrationBudget(30000) },
+  async (change) => {
+    const f = await fixture();
+    const request = await (await launchRequests(f, 1)).pipeline();
+    const taskPath = path.join(f.a.path, ".goga/history/2026/alpha/todo.md");
+    if (change === "task") await fs.writeFile(taskPath, "External task\n");
+    if (change === "branch")
+      await f.git(["switch", "-c", "external-branch"], f.a.path);
+    if (change === "owner") {
+      const file = path.join(f.home, ".goga/desktop/clones/registry.json");
+      const registry = JSON.parse(await fs.readFile(file, "utf8"));
+      registry.records.find(
+        (r: any) => r.contextId === f.a.contextId,
+      ).revision = "00000000-0000-4000-8000-000000000001";
+      await fs.writeFile(file, JSON.stringify(registry));
+    }
+    if (change === "catalog") {
+      const original = f.runner.command.bind(f.runner);
+      f.runner.command = async (...args) => {
+        const result = await original(...args);
+        if (args[0] !== "git" && args[1].includes("board")) {
+          const rows = JSON.parse(result.stdout);
+          return { ...result, stdout: JSON.stringify([...rows, ...rows]) };
+        }
+        return result;
+      };
+    }
+    const before = await fs.readFile(taskPath, "utf8");
+    const primary = await bytes(f.primary);
+    await expect(
+      f.service.launch({ ...request, task: "Must not be saved\n" }),
+    ).rejects.toThrow();
+    expect(f.starts).toHaveLength(0);
+    expect(await fs.readFile(taskPath, "utf8")).toBe(before);
+    expect(await bytes(f.primary)).toEqual(primary);
+  },
+);
+
+it(
+  "runs fresh readiness before launch composition or any task write",
+  { timeout: gitIntegrationBudget(30000) },
+  async () => {
+    const f = await fixture();
+    const request = await (await launchRequests(f, 1)).pipeline();
+    const taskPath = path.join(f.a.path, ".goga/history/2026/alpha/todo.md");
+    const before = await fs.readFile(taskPath, "utf8");
+    let boards = 0;
+    const original = f.runner.command.bind(f.runner);
+    f.runner.command = async (...args) => {
+      const result = await original(...args);
+      if (args[0] !== "git" && args[1].includes("board")) {
+        boards++;
+        if (boards === 2) {
+          const rows = JSON.parse(result.stdout);
+          return { ...result, stdout: JSON.stringify([...rows, ...rows]) };
+        }
+      }
+      return result;
+    };
+    f.calls.length = 0;
+    await expect(
+      f.service.launch({ ...request, task: "Must not be saved\n" }),
+    ).rejects.toThrow(/измен/);
+    expect(boards).toBe(2);
+    expect(f.calls.some((call) => call.args[0] === "pipeline")).toBe(false);
+    expect(f.starts).toHaveLength(0);
+    expect(await fs.readFile(taskPath, "utf8")).toBe(before);
+  },
+);
+
+it.each(["branch", "owner", "path"])(
+  "rejects %s replacement during a request-local optimized task read",
+  { timeout: gitIntegrationBudget(30000) },
+  async (kind) => {
+    const f = await fixture();
+    const ref = worktreeContextRef(f.a);
+    const before = await bytes(f.primary);
+    const original = f.runner.command.bind(f.runner);
+    let replaced = false;
+    f.runner.command = async (...args) => {
+      const result = await original(...args);
+      if (!replaced && args[0] !== "git" && args[1].includes("board")) {
+        replaced = true;
+        if (kind === "branch")
+          await f.git(["switch", "-c", "external"], f.a.path);
+        if (kind === "path") {
+          await fs.rename(f.a.path, f.a.path + ".preserved");
+          await fs.symlink(f.b.path, f.a.path);
+        }
+        if (kind === "owner") {
+          const file = path.join(f.home, ".goga/desktop/clones/registry.json");
+          const registry = JSON.parse(await fs.readFile(file, "utf8"));
+          registry.records.find(
+            (r: any) => r.contextId === f.a.contextId,
+          ).revision = "00000000-0000-4000-8000-000000000001";
+          await fs.writeFile(file, JSON.stringify(registry));
+        }
+      }
+      return result;
+    };
+    await expect(
+      f.service.readTopicTask({
+        projectId: f.project.id,
+        context: ref,
+        branch: "alpha",
+        topic: "alpha",
+      }),
+    ).rejects.toThrow();
+    expect(replaced).toBe(true);
+    expect(await bytes(f.primary)).toEqual(before);
+    expect(f.starts).toHaveLength(0);
+  },
+);
+
+it(
+  "does not reuse owner validation between separate or concurrent task reads",
+  { timeout: gitIntegrationBudget(30000) },
+  async () => {
+    const f = await fixture();
+    const read = (owner: typeof f.a) =>
+      f.service.readTopicTask({
+        projectId: f.project.id,
+        context: worktreeContextRef(owner),
+        branch: owner.branch,
+        topic: owner.topic,
+      });
+    expect(
+      (await Promise.all([read(f.a), read(f.b)])).map((task) => task.text),
+    ).toEqual(["alpha task\n", "beta task\n"]);
+    f.calls.length = 0;
+    await read(f.a);
+    expect(
+      f.calls.some(
+        (call) =>
+          call.args.includes("--show-toplevel") && call.cwd === f.a.path,
+      ),
+    ).toBe(true);
+    await f.git(["switch", "-c", "external"], f.a.path);
+    await expect(read(f.a)).rejects.toThrow();
+    expect((await read(f.b)).text).toBe("beta task\n");
+    expect(f.starts).toHaveLength(0);
+  },
+);
+
+it(
+  "reports the request-local Git optimization benchmark without cross-request caching",
+  { timeout: gitIntegrationBudget(30000) },
+  async () => {
+    const f = await fixture();
+    const samples: { ms: number; git: number; boards: number }[] = [];
+    let version: string | undefined;
+    for (let i = 0; i < 5; i++) {
+      f.calls.length = 0;
+      const begin = performance.now();
+      const task = await f.service.readTopicTask({
+        projectId: f.project.id,
+        context: worktreeContextRef(f.a),
+        branch: "alpha",
+        topic: "alpha",
+      });
+      samples.push({
+        ms: Math.round(performance.now() - begin),
+        git: f.calls.filter((call) => call.exe === "git").length,
+        boards: f.calls.filter((call) => call.args.includes("board")).length,
+      });
+      expect(task.text).toBe("alpha task\n");
+      if (version) expect(task.version).toBe(version);
+      version = task.version;
+    }
+    expect(new Set(samples.map((sample) => sample.git)).size).toBe(1);
+    expect(samples.every((sample) => sample.boards === 1)).toBe(true);
+    process.stdout.write(
+      "GIT_READ_BENCHMARK " + JSON.stringify(samples) + "\n",
+    );
+  },
+);

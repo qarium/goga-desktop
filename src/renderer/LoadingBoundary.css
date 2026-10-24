@@ -42,3 +42,22 @@
 .launch-panel > .form-actions[hidden] {
   display: none !important;
 }
+
+/* A refresh indicator is out of flow: retained content never shifts down/up. */
+.loading-boundary.loading-background {
+  display: block;
+  position: relative;
+}
+.loading-background > .loading-state {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  min-height: 0;
+  padding: 4px;
+  z-index: 2;
+  pointer-events: none;
+}
+.loading-background > .loading-state .loading-spinner {
+  width: 22px;
+  height: 22px;
+}

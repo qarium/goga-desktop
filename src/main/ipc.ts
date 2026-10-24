@@ -1,3 +1,4 @@
+import { historyYearSchema, historyEntrySchema, historyPathSchema } from "../shared/history";
 import {
   topicPopupBoundsSchema,
   topicPopupIdSchema,
@@ -337,8 +338,50 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   handle("repeat-build", (runId, confirmClean) =>
     d.service.repeatBuild(id.parse(runId), z.boolean().parse(confirmClean)),
   );
+  handle("prepare-history-prune", (projectId, year) =>
+    d.service.prepareHistoryPrune(id.parse(projectId), historyYearSchema.parse(year)),
+  );
+  handle("prune-history", (projectId, token) =>
+    d.service.pruneHistory(id.parse(projectId), z.uuid().parse(token)),
+  );
+  handle("list-history-years", (scope) =>
+    d.service.listHistoryYears(scopeRefSchema.parse(scope)),
+  );
+  handle("list-history-entries", (scope, year) =>
+    d.service.listHistoryEntries(
+      scopeRefSchema.parse(scope),
+      historyYearSchema.parse(year),
+    ),
+  );
+  handle("list-history-artifacts", (scope, year, entry, target) =>
+    d.service.listHistoryArtifacts(
+      scopeRefSchema.parse(scope),
+      historyYearSchema.parse(year),
+      historyEntrySchema.parse(entry),
+      topicTargetSchema.optional().parse(target),
+    ),
+  );
+  handle("read-history-artifact", (scope, year, entry, path, target) =>
+    d.service.readHistoryArtifact(
+      scopeRefSchema.parse(scope),
+      historyYearSchema.parse(year),
+      historyEntrySchema.parse(entry),
+      historyPathSchema.parse(path),
+      topicTargetSchema.optional().parse(target),
+    ),
+  );
   handle("read-topic-catalog", (projectId, year) =>
     d.service.readTopicCatalog(id.parse(projectId), topicYearSchema.parse(year)),
+  );
+  handle("read-topic-table", (projectId, year) =>
+    d.service.readTopicTable(id.parse(projectId), topicYearSchema.parse(year)),
+  );
+  handle("read-topic-overview", (scope, year, target) =>
+    d.service.readTopicOverview(
+      scopeRefSchema.parse(scope),
+      topicYearSchema.parse(year),
+      topicTargetSchema.parse(target),
+    ),
   );
   handle("read-topic-board", (projectId, year) =>
     d.service.readTopicBoard(

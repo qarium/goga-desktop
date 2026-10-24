@@ -6,6 +6,7 @@ import {
   useState,
   type RefObject,
   type ReactNode,
+  type ButtonHTMLAttributes,
 } from "react";
 import { createPortal } from "react-dom";
 import type { Project } from "../shared/types";
@@ -186,7 +187,17 @@ export function TooltipButton({
   buttonClassName = "repository-action-button",
   sidebar = false,
   tooltipEnabled = true,
+  tabProps,
 }: {
+  tabProps?: Pick<
+    ButtonHTMLAttributes<HTMLButtonElement>,
+    | "role"
+    | "aria-selected"
+    | "tabIndex"
+    | "onKeyDown"
+    | "onDoubleClick"
+    | "onContextMenu"
+  >;
   buttonClassName?: string;
   sidebar?: boolean;
   tooltipEnabled?: boolean;
@@ -342,6 +353,7 @@ export function TooltipButton({
       }}
     >
       <button
+        {...tabProps}
         type="button"
         className={buttonClassName}
         title={sidebar && !tooltipEnabled ? description : undefined}
@@ -389,22 +401,42 @@ export function RepositoryOperationPopup({
 }) {
   const controller = useRepositoryActionController();
   const failure = controller.failures[0];
-  const [ready, setReady] = useState<typeof failure>();
+  const [ready, setReady] = useState<{
+    failure: typeof failure;
+    modal: boolean;
+  }>();
   useEffect(() => {
     let alive = true;
     if (failure)
       void dismissActiveTopicPopup()
         .then(() => {
-          if (alive) setReady(failure);
+          if (alive)
+            setReady({
+              failure,
+              modal: !!document.querySelector(".topic-dialog[open]"),
+            });
         })
         .catch(() => {
-          if (alive) setReady(failure);
+          if (alive)
+            setReady({
+              failure,
+              modal: !!document.querySelector(".topic-dialog[open]"),
+            });
         });
     return () => {
       alive = false;
     };
   }, [failure]);
-  if (!failure || ready !== failure) return null;
+  if (!failure || ready?.failure !== failure) return null;
+  if (ready.modal)
+    return (
+      <RepositoryFailureDialog
+        label={failure.label}
+        log={failure.result.log}
+        error={failure.result.error || "Операция не выполнена"}
+        onClose={controller.close}
+      />
+    );
   return (
     <TopicPickerPopup
       anchor={anchor}
@@ -420,16 +452,47 @@ export function RepositoryOperationPopup({
     </TopicPickerPopup>
   );
 }
+/** Native dialog joins the top layer above an open topic card. A body portal
+ * alone would be inert behind that modal in the browser fallback. */
+function RepositoryFailureDialog(props: {
+  label: string;
+  log: string;
+  error: string;
+  onClose: () => void;
+}) {
+  const node = useRef<HTMLDialogElement>(null);
+  useLayoutEffect(() => {
+    const el = node.current!;
+    el.showModal();
+    return () => el.close();
+  }, []);
+  return createPortal(
+    <dialog
+      ref={node}
+      className="repository-operation-dialog"
+      aria-label="Ошибка операции"
+      onCancel={(e) => {
+        e.preventDefault();
+        props.onClose();
+      }}
+    >
+      <OperationFailure {...props} nested />
+    </dialog>,
+    document.body,
+  );
+}
 function OperationFailure({
   label,
   log,
   error,
   onClose,
+  nested = false,
 }: {
   label: string;
   log: string;
   error: string;
   onClose: () => void;
+  nested?: boolean;
 }) {
   const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -442,8 +505,8 @@ function OperationFailure({
   return (
     <section
       className="repository-operation-popup"
-      role="dialog"
-      aria-label="Ошибка операции"
+      role={nested ? undefined : "dialog"}
+      aria-label={nested ? undefined : "Ошибка операции"}
       onKeyDown={(e) => {
         if (e.key === "Escape") {
           e.stopPropagation();

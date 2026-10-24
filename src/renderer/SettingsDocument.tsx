@@ -1,7 +1,13 @@
+import { useSettingsEditorViewport } from "./useSettingsEditorViewport";
 import { LoadingBoundary } from "./LoadingBoundary";
 import { isDeletableDocument } from "../shared/document-deletion";
 import { DocumentDeleteConfirmation } from "./DocumentDeleteConfirmation";
-import { useEffect, useSyncExternalStore } from "react";
+import {
+  useEffect,
+  useRef,
+  useSyncExternalStore,
+  type CSSProperties,
+} from "react";
 import { YamlEditor } from "./YamlEditor";
 import {
   documentKey,
@@ -31,6 +37,12 @@ export function SettingsDocument({
     source.scope === "project" && source.target.kind === "workflow";
   const draft = useSyncExternalStore(store.subscribe, () => store.get(source));
   const key = documentKey(source);
+  const pane = useRef<HTMLElement>(null);
+  const editorHeight = useSettingsEditorViewport(
+    pane,
+    !!draft.document && (!draft.busy || !!draft.saving || !!draft.deleting),
+    key,
+  );
   useEffect(() => () => store.cancelDeletion(source), [store, key]);
   const deleteButton = isDeletableDocument(source) ? (
     <button
@@ -42,8 +54,40 @@ export function SettingsDocument({
       {draft.memoryOnly ? "Удалить черновик" : "Удалить"}
     </button>
   ) : null;
+  const feedback = (
+    <>
+      {draft.error && (
+        <p className="error" role="alert">
+          {draft.error}
+        </p>
+      )}
+      {draft.error && !draft.document && (
+        <button type="button" onClick={() => void store.open(source)}>
+          Повторить загрузку
+        </button>
+      )}
+      {draft.notice && (
+        <p className="success" role="status">
+          {draft.notice}
+        </p>
+      )}
+    </>
+  );
   return (
-    <section className="editor-pane" aria-label={title} aria-busy={draft.busy}>
+    <section
+      ref={pane}
+      className="editor-pane"
+      aria-label={title}
+      aria-busy={draft.busy}
+      style={
+        editorHeight === undefined
+          ? undefined
+          : ({
+              "--settings-editor-height": `${editorHeight}px`,
+              "--settings-editor-min-height": "0px",
+            } as CSSProperties)
+      }
+    >
       <LoadingBoundary
         pending={draft.busy && !draft.saving && !draft.deleting}
         label="Загружаем документ…"
@@ -54,11 +98,7 @@ export function SettingsDocument({
             <p className="context-path">{path}</p>
           </div>
           <small className="format">
-            {dockerfile
-              ? "Dockerfile"
-              : workflow
-                ? "YAML / Jinja"
-                : "YAML"}
+            {dockerfile ? "Dockerfile" : workflow ? "YAML / Jinja" : "YAML"}
           </small>
         </div>
         <p className="description">{description}</p>
@@ -105,63 +145,52 @@ export function SettingsDocument({
               onChange={(text) => store.edit(source, text)}
               readOnly={draft.busy}
             />
-            <p className="hint">
-              {dockerfile
-                ? "Dockerfile сохраняется как исходный текст без проверки YAML и преобразований. Перед атомарной записью проверяются файл и конфигурация."
-                : workflow
-                  ? "Исходный YAML / Jinja сохраняется без рендеринга, подстановок и проверки структуры. Goga проверяет рабочий процесс после рендеринга в контексте профиля и конвейера. Перед записью проверяются внешние изменения файла; запись атомарная."
-                  : pipeline
-                    ? "Исходный YAML конвейера сохраняется без рендеринга, подстановок и проверки структуры: заголовок, разделитель --- и тело остаются исходным текстом. Сохранение не гарантирует возможность запуска. Перед записью проверяются внешние изменения файла; запись атомарная."
-                    : "Исходный YAML сохраняет комментарии и неизвестные поля. Перед записью проверяются структура и внешние изменения файла; запись атомарная."}
-            </p>
-            <div className="savebar">
-              <span
-                className={
-                  draft.text !== draft.document.text
-                    ? "draft-status"
-                    : "saved-status"
-                }
-              >
-                {draft.text !== draft.document.text
-                  ? "Есть несохранённый черновик"
-                  : "Нет изменений"}
-              </span>
-              <div className="document-save-actions">
-                {deleteButton}
-                <div className="document-save-primary-actions">
-                  <button
-                    disabled={draft.busy}
-                    onClick={() => store.discard(source)}
-                  >
-                    Скрыть без сохранения
-                  </button>
-                  <button
-                    className="primary"
-                    disabled={draft.busy || saveDisabled}
-                    onClick={() => void store.save(source)}
-                  >
-                    {draft.busy ? "Сохраняем…" : "Сохранить"}
-                  </button>
+            <div className="document-editor-footer">
+              <p className="hint">
+                {dockerfile
+                  ? "Dockerfile сохраняется как исходный текст без проверки YAML и преобразований. Перед атомарной записью проверяются файл и конфигурация."
+                  : workflow
+                    ? "Исходный YAML / Jinja сохраняется без рендеринга, подстановок и проверки структуры. Goga проверяет рабочий процесс после рендеринга в контексте профиля и конвейера. Перед записью проверяются внешние изменения файла; запись атомарная."
+                    : pipeline
+                      ? "Исходный YAML конвейера сохраняется без рендеринга, подстановок и проверки структуры: заголовок, разделитель --- и тело остаются исходным текстом. Сохранение не гарантирует возможность запуска. Перед записью проверяются внешние изменения файла; запись атомарная."
+                      : "Исходный YAML сохраняет комментарии и неизвестные поля. Перед записью проверяются структура и внешние изменения файла; запись атомарная."}
+              </p>
+              <div className="savebar">
+                <span
+                  className={
+                    draft.text !== draft.document.text
+                      ? "draft-status"
+                      : "saved-status"
+                  }
+                >
+                  {draft.text !== draft.document.text
+                    ? "Есть несохранённый черновик"
+                    : "Нет изменений"}
+                </span>
+                <div className="document-save-actions">
+                  {deleteButton}
+                  <div className="document-save-primary-actions">
+                    <button
+                      disabled={draft.busy}
+                      onClick={() => store.discard(source)}
+                    >
+                      Скрыть без сохранения
+                    </button>
+                    <button
+                      className="primary"
+                      disabled={draft.busy || saveDisabled}
+                      onClick={() => void store.save(source)}
+                    >
+                      {draft.busy ? "Сохраняем…" : "Сохранить"}
+                    </button>
+                  </div>
                 </div>
               </div>
+              {feedback}
             </div>
           </>
         )}
-        {draft.error && (
-          <p className="error" role="alert">
-            {draft.error}
-          </p>
-        )}
-        {draft.error && !draft.document && (
-          <button type="button" onClick={() => void store.open(source)}>
-            Повторить загрузку
-          </button>
-        )}
-        {draft.notice && (
-          <p className="success" role="status">
-            {draft.notice}
-          </p>
-        )}
+        {!draft.document && feedback}
       </LoadingBoundary>
     </section>
   );

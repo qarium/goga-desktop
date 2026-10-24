@@ -1,3 +1,6 @@
+import { createWindowTerminal } from "./terminal-bootstrap";
+import { ShutdownCoordinator } from "./shutdown-coordinator";
+import { installShutdownHandlers } from "./shutdown-handlers";
 import { confirmCloseRun } from "./confirm-close";
 import {
   app,
@@ -162,6 +165,62 @@ if (!app.requestSingleInstanceLock()) {
         cb(false),
       );
       win.webContents.session.setPermissionCheckHandler(() => false);
+      const terminal = createWindowTerminal({
+        window: win,
+        shellURL,
+        home: os.homedir(),
+        appRoot: app.getAppPath(),
+        resources: process.resourcesPath,
+        packaged: app.isPackaged,
+        host: service,
+        canFocus: () => !topicPopup.isOpen,
+      });
+      const shutdown = new ShutdownCoordinator({
+        participants: [
+          { prepare: () => service.prepareShutdown() },
+          { prepare: () => terminal.sessions.prepareShutdown() },
+        ],
+        confirm: async (items) => {
+          const answer = await dialog.showMessageBox(win, {
+            type: "warning",
+            message: "Завершить запуски и терминалы и закрыть Goga Desktop?",
+            detail:
+              items.map((item) => item.label).join("\n") +
+              "\n\nИзменения файлов сохранятся. Вкладки терминала восстановятся при следующем запуске, но процессы не будут перезапущены.",
+            buttons: ["Остаться", "Завершить и выйти"],
+            defaultId: 0,
+            cancelId: 0,
+          });
+          return answer.response === 1;
+        },
+        finalize: async () => {
+          await service.finalizeShutdown();
+          terminal.sessions.finalizeShutdown();
+          terminal.disposeAfterExit();
+          topicPopup.dispose();
+          views.dispose();
+          exiting = true;
+          app.quit();
+        },
+      });
+      installShutdownHandlers({
+        app,
+        window: win,
+        shutdown,
+        isExiting: () => exiting,
+        report: async (result) => {
+          await dialog.showMessageBox(win, {
+            type: "error",
+            message: "Не удалось завершить выход",
+            detail:
+              (result.message ?? "Приложение остаётся открытым.") +
+              (result.inventoryComplete === false
+                ? "\nНе удалось проверить полный список процессов. Отсутствие процессов не подтверждено."
+                : `\nЗавершено: ${result.completed.length}. Осталось: ${result.remaining.length}.`),
+            buttons: ["Закрыть"],
+          });
+        },
+      });
       await loadShell(win, html);
       app.on("second-instance", () => {
         if (win.isMinimized()) win.restore();
@@ -171,48 +230,6 @@ if (!app.requestSingleInstanceLock()) {
       app.on("activate", () => {
         win.show();
         win.focus();
-      });
-      let closing = false;
-      async function close() {
-        if (exiting || closing) return;
-        closing = true;
-        try {
-          const active = service
-            .runs()
-            .filter((r) => r.status === "starting" || r.status === "running");
-          if (active.length) {
-            const answer = await dialog.showMessageBox(win, {
-              type: "warning",
-              message: `Остановить запуски (${active.length}) и закрыть Goga Desktop?`,
-              detail:
-                "Изменения проектов сохранятся; desktop не запускает процессы в фоне после выхода.",
-              buttons: ["Остаться", "Остановить и выйти"],
-              defaultId: 0,
-              cancelId: 0,
-            });
-            if (answer.response !== 1) return;
-            await Promise.all(active.map((r) => service.stop(r.id)));
-          }
-          await service.dispose();
-          exiting = true;
-          topicPopup.dispose();
-          views.dispose();
-          app.quit();
-        } finally {
-          closing = false;
-        }
-      }
-      win.on("close", (event) => {
-        if (!exiting) {
-          event.preventDefault();
-          void close();
-        }
-      });
-      app.on("before-quit", (event) => {
-        if (!exiting) {
-          event.preventDefault();
-          void close();
-        }
       });
     })
     .catch((error) => {
