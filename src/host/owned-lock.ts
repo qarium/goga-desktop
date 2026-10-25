@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { open, unlink } from "node:fs/promises";
+import { open, unlink, link, lstat } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -21,6 +21,8 @@ type Snapshot = {
   raw: string;
   owner: z.infer<typeof ownerSchema>;
 };
+const candidatePath = (file: string, nonce: string) =>
+  `${file}.${nonce}.prepared`;
 async function snapshot(file: string): Promise<Snapshot | undefined> {
   await noSymlinks(file);
   let handle;
@@ -37,7 +39,7 @@ async function snapshot(file: string): Promise<Snapshot | undefined> {
     const info = await handle.stat();
     if (
       !info.isFile() ||
-      info.nlink !== 1 ||
+      (info.nlink !== 1 && info.nlink !== 2) ||
       info.size > 1024 ||
       (info.mode & 0o077) !== 0 ||
       (process.getuid && info.uid !== process.getuid())
@@ -49,6 +51,25 @@ async function snapshot(file: string): Promise<Snapshot | undefined> {
       owner = ownerSchema.parse(JSON.parse(raw));
     } catch {
       throw busy();
+    }
+    if (info.nlink === 2) {
+      // link() publishes complete metadata atomically. During publication (or a
+      // crash immediately afterwards) the only allowed second name is this nonce.
+      const candidate = candidatePath(file, owner.nonce);
+      await noSymlinks(candidate);
+      const staged = await lstat(candidate).catch((error) => {
+        if (error.code === "ENOENT") return undefined;
+        throw error;
+      });
+      if (
+        !(
+          staged?.isFile() &&
+          staged.dev === info.dev &&
+          staged.ino === info.ino
+        ) &&
+        (await handle.stat()).nlink !== 1
+      )
+        throw busy();
     }
     return { dev: info.dev, ino: info.ino, raw, owner };
   } finally {
@@ -103,90 +124,120 @@ export async function acquireOwnedLock(
     delayMs > 1000
   )
     throw busy();
-  let reclaimed = false;
-  for (let attempt = 0; attempt < attempts; attempt++) {
-    await noSymlinks(file);
-    let handle;
-    try {
-      handle = await open(
-        file,
-        constants.O_WRONLY |
-          constants.O_CREAT |
-          constants.O_EXCL |
-          constants.O_NOFOLLOW,
-        0o600,
-      );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-      if (!reclaimed) {
-        let old;
-        try {
-          old = await snapshot(file);
-        } catch {
-          throw busy();
-        }
-        if (old) {
-          let dead = false;
-          try {
-            process.kill(old.owner.pid, 0);
-          } catch (error) {
-            dead = (error as NodeJS.ErrnoException).code === "ESRCH";
-          }
-          if (dead && (await same(file, old))) {
-            await noSymlinks(file);
-            if (await same(file, old)) {
-              await unlink(file);
-              await syncParent(file);
-              reclaimed = true;
-              attempt--;
-              continue;
+  const owner = {
+    schemaVersion: 1 as const,
+    pid: process.pid,
+    nonce: randomUUID(),
+  };
+  const raw = JSON.stringify(owner),
+    candidate = candidatePath(file, owner.nonce);
+  await noSymlinks(file);
+  await noSymlinks(candidate);
+  const handle = await open(
+    candidate,
+    constants.O_WRONLY |
+      constants.O_CREAT |
+      constants.O_EXCL |
+      constants.O_NOFOLLOW,
+    0o600,
+  );
+  let staged: { dev: number; ino: number } | undefined;
+  let published = false,
+    admitted = false;
+  const cleanupCandidate = async () => {
+    if (!staged) return;
+    await noSymlinks(candidate);
+    const current = await lstat(candidate).catch((error) => {
+      if (error.code === "ENOENT") return undefined;
+      throw error;
+    });
+    if (
+      current?.isFile() &&
+      current.dev === staged.dev &&
+      current.ino === staged.ino
+    )
+      await unlink(candidate);
+  };
+  let owned: Snapshot | undefined;
+  try {
+    staged = await handle.stat();
+    await handle.writeFile(raw);
+    await handle.sync();
+    owned = { dev: staged.dev, ino: staged.ino, raw, owner };
+    if (!(await same(candidate, owned))) throw busy();
+    let reclaimed = false;
+    for (let attempt = 0; attempt < attempts; attempt++) {
+      await noSymlinks(file);
+      try {
+        // Unlike rename, link is exclusive: an existing lock is never overwritten.
+        await link(candidate, file);
+        published = true;
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+        if (!reclaimed) {
+          const old = await snapshot(file);
+          if (old) {
+            let dead = false;
+            try {
+              process.kill(old.owner.pid, 0);
+            } catch (error) {
+              dead = (error as NodeJS.ErrnoException).code === "ESRCH";
+            }
+            if (dead && (await same(file, old))) {
+              await noSymlinks(file);
+              if (await same(file, old)) {
+                await unlink(file);
+                // A crash after link but before candidate cleanup is recoverable.
+                const oldCandidate = candidatePath(file, old.owner.nonce);
+                if (await same(oldCandidate, old)) await unlink(oldCandidate);
+                await syncParent(file);
+                reclaimed = true;
+                attempt--;
+                continue;
+              }
             }
           }
         }
+        if (attempt === attempts - 1) throw busy();
+        await new Promise((resolve) => setTimeout(resolve, delayMs));
+        continue;
       }
-      if (attempt === attempts - 1) throw busy();
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
-      continue;
-    }
-    const raw = JSON.stringify({
-      schemaVersion: 1,
-      pid: process.pid,
-      nonce: randomUUID(),
-    });
-    try {
-      await handle.writeFile(raw);
-      await handle.sync();
-      const info = await handle.stat();
+      await cleanupCandidate();
       await syncParent(file);
-      const owned: Snapshot = {
-        dev: info.dev,
-        ino: info.ino,
-        raw,
-        owner: ownerSchema.parse(JSON.parse(raw)),
-      };
       if (!(await same(file, owned))) throw busy();
+      await handle.close();
+      admitted = true;
       let released = false;
       return {
         release: async () => {
           if (released) return;
-          released = true;
-          try {
-            if (await same(file, owned)) {
-              await noSymlinks(file);
-              if (await same(file, owned)) {
-                await unlink(file);
-                await syncParent(file);
-              }
+          if (await same(file, owned!)) {
+            await noSymlinks(file);
+            if (await same(file, owned!)) {
+              await unlink(file);
+              await syncParent(file);
             }
-          } finally {
-            await handle.close();
           }
+          released = true;
         },
       };
-    } catch (error) {
-      await handle.close();
-      throw error;
+    }
+    throw busy();
+  } finally {
+    if (!admitted) {
+      try {
+        await handle.close();
+      } finally {
+        try {
+          await cleanupCandidate();
+        } finally {
+          // Cleanup errors must not skip rollback of our pinned publication.
+          if (published && owned && (await same(file, owned))) {
+            await unlink(file);
+            await syncParent(file);
+          }
+        }
+      }
     }
   }
-  throw busy();
 }

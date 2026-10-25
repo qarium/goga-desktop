@@ -1,3 +1,4 @@
+import { SearchablePicker } from "./SearchablePicker";
 import { HistoryArtifacts } from "./ProjectHistory";
 import { TopicDivergence } from "./TopicDivergence";
 import { useEffect, useId, useRef, useState } from "react";
@@ -36,6 +37,7 @@ function TopicOverviewView({
   target: source,
   board: initialBoard,
   owner,
+  deletionOwner,
   ownerReadState = "confirmed",
   ownerReadError,
   selectedContextId,
@@ -50,6 +52,7 @@ function TopicOverviewView({
   target: TopicTarget;
   board: TopicBoardSnapshot | null;
   owner?: WorktreeRecord;
+  deletionOwner?: WorktreeRecord;
   ownerReadState?: "loading" | "error" | "confirmed";
   ownerReadError?: string;
   selectedContextId?: string;
@@ -208,19 +211,13 @@ function TopicOverviewView({
     setBranchesError("");
     // Update captures its base from the original repository, not the clone's
     // stale local/remote branch inventory. This read is display-only.
-    const flight = read("readTopicBoard", project.id, year)
+    const flight = read("readProjectBranches", project.id)
       .then((value) => {
-        if (value.projectId !== project.id || value.year !== year)
+        if (value.projectId !== project.id)
           throw Error("Список веток относится к другому проекту.");
         if (mounted.current) {
           setBranches(value.branches);
-          setLocalBranches(
-            value.localBranches ??
-              value.branches.filter(
-                (branch) =>
-                  !value.remoteRecords.some((row) => row.branch === branch),
-              ),
-          );
+          setLocalBranches(value.localBranches);
         }
       })
       .catch((e) => {
@@ -492,28 +489,24 @@ function TopicOverviewView({
         <footer className="topic-overview-footer">
           <div className="topic-exchange-controls">
             <div className="topic-update-controls">
-              <label className="sr-only" htmlFor={`${id}-base`}>
-                Из ветки
-              </label>
-              <select
-                id={`${id}-base`}
+              <SearchablePicker
+                className="topic-branch-picker"
+                hideLabel
+                label="Из ветки"
+                placeholder="Из ветки"
+                emptyLabel="Из ветки"
+                searchLabel="Найти ветку для обновления"
+                searchPlaceholder="Название ветки"
+                listLabel="Ветки для обновления"
+                entries={(branches ?? []).filter(
+                  (branch) => branch !== target.branch,
+                )}
                 value={base}
                 disabled={busy || !!unavailable}
-                onFocus={() => void loadBranches()}
-                onPointerDown={() => void loadBranches()}
-                onChange={(e) => setBase(e.target.value)}
-              >
-                <option value="">
-                  {branchesLoading ? "Загружаем ветки…" : "Из ветки"}
-                </option>
-                {branches
-                  ?.filter((b) => b !== target.branch)
-                  .map((b) => (
-                    <option key={b} value={b}>
-                      {b}
-                    </option>
-                  ))}
-              </select>
+                loading={branchesLoading}
+                onOpen={() => void loadBranches()}
+                onChange={setBase}
+              />
               <button
                 type="button"
                 disabled={!base || busy || !!unavailable || !!operation.plan}
@@ -523,28 +516,24 @@ function TopicOverviewView({
               </button>
             </div>
             <div className="topic-update-controls">
-              <label className="sr-only" htmlFor={`${id}-destination`}>
-                В ветку
-              </label>
-              <select
-                id={`${id}-destination`}
+              <SearchablePicker
+                className="topic-branch-picker"
+                hideLabel
+                label="В ветку"
+                placeholder="В ветку"
+                emptyLabel="В ветку"
+                searchLabel="Найти ветку для публикации"
+                searchPlaceholder="Название ветки"
+                listLabel="Ветки для публикации"
+                entries={localBranches.filter(
+                  (branch) => branch !== target.branch,
+                )}
                 value={destination}
                 disabled={busy || !!unavailable || !!operation.plan}
-                onFocus={() => void loadBranches()}
-                onPointerDown={() => void loadBranches()}
-                onChange={(e) => setDestination(e.target.value)}
-              >
-                <option value="">
-                  {branchesLoading ? "Загружаем ветки…" : "В ветку"}
-                </option>
-                {localBranches
-                  .filter((branch) => branch !== target.branch)
-                  .map((branch) => (
-                    <option key={branch} value={branch}>
-                      {branch}
-                    </option>
-                  ))}
-              </select>
+                loading={branchesLoading}
+                onOpen={() => void loadBranches()}
+                onChange={setDestination}
+              />
               <button
                 type="button"
                 disabled={
@@ -583,7 +572,7 @@ function TopicOverviewView({
           project={project}
           year={year}
           target={target}
-          owner={owner}
+          owner={deletionOwner ?? owner}
           current={!!owner && owner.contextId === selectedContextId}
           active={!!owner && contextRunActivity(runs, owner).activeCount > 0}
           onClose={() => setDeleting(false)}

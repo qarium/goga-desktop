@@ -1,0 +1,70 @@
+.searchable-picker {
+  position: relative;
+  width: min(380px, 100%);
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--muted);
+}
+.searchable-picker > button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  min-width: 0;
+  text-align: left;
+}
+.searchable-picker > button > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.searchable-menu {
+  position: absolute;
+  z-index: 40;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 100%;
+  min-width: 240px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #101a2b;
+  box-shadow: 0 12px 40px #0006;
+}
+.searchable-menu input {
+  width: 100%;
+  margin: 0 0 8px;
+}
+.searchable-menu [role="listbox"] {
+  max-height: min(300px, 40vh);
+  overflow-y: auto;
+}
+.searchable-menu [role="option"] {
+  display: block;
+  width: 100%;
+  text-align: left;
+  border: 1px solid transparent;
+  background: transparent;
+  overflow-wrap: anywhere;
+}
+.searchable-menu [role="option"]:hover,
+.searchable-menu [data-cursor="true"] {
+  background: #1a2c40;
+}
+.searchable-menu [aria-selected="true"] {
+  color: var(--teal);
+}
+.searchable-menu {
+  display: flex;
+  flex-direction: column;
+}
+.searchable-menu input {
+  flex-shrink: 0;
+}
+.searchable-menu [role="listbox"] {
+  min-height: 0;
+  flex: 1;
+}

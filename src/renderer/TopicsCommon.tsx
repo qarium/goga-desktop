@@ -20,12 +20,14 @@ export function TopicModal({
   className = "",
   children,
   busy = false,
+  closeLabel = "Закрыть карточку",
   onClose,
 }: {
   title: string;
   className?: string;
   children: ReactNode;
   busy?: boolean;
+  closeLabel?: string;
   onClose: () => void;
 }) {
   const active = useViewActive();
@@ -56,7 +58,7 @@ export function TopicModal({
         <button
           type="button"
           className="icon-button"
-          aria-label="Закрыть карточку"
+          aria-label={closeLabel}
           disabled={busy}
           onClick={onClose}
         >

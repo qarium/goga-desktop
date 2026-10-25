@@ -410,3 +410,49 @@ it.each(["birth", "root"] as const)(
     expect(exit).toHaveBeenCalledOnce();
   },
 );
+
+it("waits for a stable root after an explicit transitional inspector sample", () => {
+  const f = fixture();
+  // libproc may observe setsid/TTY changing between its two reads and return
+  // { ok: false }, even though the birth identity was already captured.
+  f.inspector.root
+    .mockReturnValueOnce({ ok: false })
+    .mockReturnValueOnce({ ...root });
+  const pty = f.adapter.spawn(launch);
+  expect(() => pty.assertReady()).not.toThrow();
+  expect(f.inspector.birth).toHaveBeenCalledOnce();
+  expect(f.inspector.root).toHaveBeenCalledTimes(2);
+  expect(f.adapter.processes(pty).prepare().anchor).toEqual(root);
+  expect(f.signal).not.toHaveBeenCalled();
+});
+
+it("bounds repeated unstable startup samples without signalling or respawning", () => {
+  const f = fixture();
+  f.inspector.root.mockReturnValue({ ok: false });
+  const pty = f.adapter.spawn(launch);
+  expect(() => pty.assertReady()).toThrow("terminal:native-handshake");
+  expect(f.inspector.root.mock.calls.length).toBeLessThanOrEqual(100);
+  expect(f.driver.spawn).toHaveBeenCalledOnce();
+  expect(f.signal).not.toHaveBeenCalled();
+});
+it.each([null, {}, { ok: false, unexpected: true }])(
+  "rejects malformed startup sample %j without retry",
+  (sample) => {
+    const f = fixture();
+    f.inspector.root.mockReturnValueOnce(sample);
+    const pty = f.adapter.spawn(launch);
+    expect(() => pty.assertReady()).toThrow("terminal:native-handshake");
+    expect(f.inspector.root).toHaveBeenCalledOnce();
+    expect(f.signal).not.toHaveBeenCalled();
+  },
+);
+it("never adopts a changed process identity after an unstable sample", () => {
+  const f = fixture();
+  f.inspector.root
+    .mockReturnValueOnce({ ok: false })
+    .mockReturnValue({ ...root, startUsec: 3 });
+  const pty = f.adapter.spawn(launch);
+  expect(() => pty.assertReady()).toThrow("terminal:native-handshake");
+  expect(f.inspector.root).toHaveBeenCalledTimes(2);
+  expect(f.signal).not.toHaveBeenCalled();
+});

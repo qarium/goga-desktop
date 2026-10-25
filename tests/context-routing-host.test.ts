@@ -65,7 +65,11 @@ async function fixture(
             path.join(cwd, ".git/index"),
             path.join(cwd, ".git/objects"),
           ].join("\n") + "\n"
-        : "feature\n",
+        : cwd === primary &&
+            args[0] === "branch" &&
+            args[1] === "--show-current"
+          ? "main\n"
+          : "feature\n",
       stderr: "",
     })),
     start: vi.fn(),
@@ -78,6 +82,7 @@ async function fixture(
     trashItem: options.trashItem,
   });
   vi.spyOn(service, "listProjects").mockResolvedValue([project]);
+  vi.spyOn(service as any, "contextTopicDeletion").mockResolvedValue(undefined);
   return {
     service,
     record,
@@ -122,7 +127,7 @@ it("a lost context never falls back to primary or starts a process", async () =>
   expect(f.runner.command).not.toHaveBeenCalled();
   await f.service.dispose();
 });
-it("recovers a partial deletion by durable token without resolving deleting owner as ready", async () => {
+it("refuses to reinterpret an old archive-first journal as a new deletion", async () => {
   const f = await fixture();
   vi.spyOn(CloneManager.prototype, "deletionRecovery").mockResolvedValue([
     {
@@ -136,8 +141,8 @@ it("recovers a partial deletion by durable token without resolving deleting owne
   vi.mocked(CloneManager.prototype.resolve).mockRejectedValue(
     Error("deleting"),
   );
-  expect((await f.service.prepareContextDeletion(f.ref)).stage).toBe(
-    "archived",
+  await expect(f.service.prepareContextDeletion(f.ref)).rejects.toThrow(
+    /старый журнал/,
   );
   await f.service.dispose();
 });
@@ -307,14 +312,14 @@ it("holds a clone lease and blocks deletion preparation", async () => {
     f.project,
   );
   const prepare = vi
-    .spyOn(CloneManager.prototype, "prepareDeletion")
+    .spyOn(CloneManager.prototype, "prepareContextDeletion")
     .mockRejectedValue(Error("fixture-delete"));
   const lease = await f.service.acquireTerminalContext(f.ref, {
     accountShell: () => "/bin/zsh",
     inherited: { HOME: f.home },
   });
   await expect(f.service.prepareContextDeletion(f.ref)).rejects.toThrow(
-    /активный/,
+    /активный/i,
   );
   expect(prepare).not.toHaveBeenCalled();
   const dispose = vi.spyOn(lease.launch, "dispose");
@@ -338,7 +343,7 @@ it("releases failed terminal preparation instead of permanently blocking deletio
     }),
   ).rejects.toThrow(/оболочк/i);
   const prepare = vi
-    .spyOn(CloneManager.prototype, "prepareDeletion")
+    .spyOn(CloneManager.prototype, "prepareContextDeletion")
     .mockRejectedValue(Error("fixture-delete"));
   await expect(f.service.prepareContextDeletion(f.ref)).rejects.toThrow(
     "fixture-delete",
@@ -376,16 +381,18 @@ it("rejects a previously prepared deletion after a terminal acquired the clone",
     f.project,
   );
   const token = "00000000-0000-4000-8000-000000000009";
-  vi.spyOn(CloneManager.prototype, "deletionRecovery").mockResolvedValue([
-    { token, owner: f.ref },
-  ] as any);
+  vi.spyOn(CloneManager.prototype, "readContextDeletion").mockResolvedValue({
+    token,
+    owner: f.ref,
+    projectPath: f.project.path,
+  } as any);
   const execute = vi
-    .spyOn(CloneManager.prototype, "executeDeletion")
+    .spyOn(CloneManager.prototype, "trashContext")
     .mockRejectedValue(Error("fixture-execute"));
   const lease = await f.service.acquireTerminalContext(f.ref);
   await expect(
     f.service.deleteContext({ projectId: "p", token }),
-  ).rejects.toThrow(/активный/);
+  ).rejects.toThrow(/активный/i);
   expect(execute).not.toHaveBeenCalled();
   expect(trashItem).not.toHaveBeenCalled();
   lease.release();
@@ -411,11 +418,11 @@ it("serializes pending acquisition with deletion preparation", async () => {
     await gate;
     return f.record;
   });
-  const prepare = vi.spyOn(CloneManager.prototype, "prepareDeletion");
+  const prepare = vi.spyOn(CloneManager.prototype, "prepareContextDeletion");
   const opening = f.service.acquireTerminalContext(f.ref);
   await started;
   const deletion = f.service.prepareContextDeletion(f.ref);
-  const rejected = expect(deletion).rejects.toThrow(/активный/);
+  const rejected = expect(deletion).rejects.toThrow(/активный/i);
   expect(prepare).not.toHaveBeenCalled();
   unblock();
   const lease = await opening;
@@ -430,9 +437,11 @@ it("a completed deletion wins over a queued acquisition; no stale root is grante
     f.project,
   );
   const token = "00000000-0000-4000-8000-000000000009";
-  vi.spyOn(CloneManager.prototype, "deletionRecovery").mockResolvedValue([
-    { token, owner: f.ref },
-  ] as any);
+  vi.spyOn(CloneManager.prototype, "readContextDeletion").mockResolvedValue({
+    token,
+    owner: f.ref,
+    projectPath: f.project.path,
+  } as any);
   let unblock!: () => void, entered!: () => void;
   const gate = new Promise<void>((r) => {
       unblock = r;
@@ -440,7 +449,7 @@ it("a completed deletion wins over a queued acquisition; no stale root is grante
     started = new Promise<void>((r) => {
       entered = r;
     });
-  vi.spyOn(CloneManager.prototype, "executeDeletion").mockImplementation(
+  vi.spyOn(CloneManager.prototype, "trashContext").mockImplementation(
     async () => {
       entered();
       await gate;
@@ -473,11 +482,11 @@ it("keeps deletion blocked until every terminal lease in that clone is released"
   one.release();
   one.release();
   await expect(f.service.prepareContextDeletion(f.ref)).rejects.toThrow(
-    /активный/,
+    /активный/i,
   );
   two.release();
   const prepare = vi
-    .spyOn(CloneManager.prototype, "prepareDeletion")
+    .spyOn(CloneManager.prototype, "prepareContextDeletion")
     .mockRejectedValue(Error("fixture-delete"));
   await expect(f.service.prepareContextDeletion(f.ref)).rejects.toThrow(
     "fixture-delete",
@@ -524,5 +533,25 @@ it("validates terminal presentation identity once, without repeating clone Git d
       args.includes("--show-toplevel"),
     ),
   ).toHaveLength(1);
+  await f.service.dispose();
+});
+
+it("a late clone selection cannot overwrite a newer primary selection", async () => {
+  const f = await fixture();
+  let release!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  vi.spyOn(f.service, "resolveTopicContext").mockImplementationOnce(
+    async () => {
+      await gate;
+      return f.record;
+    },
+  );
+  const selecting = f.service.selectTopicContext(f.ref);
+  await f.service.selectTopicContext(null);
+  release();
+  await selecting;
+  expect((f.service as any).selectedContext).toBeNull();
   await f.service.dispose();
 });

@@ -38,6 +38,7 @@ interface Props {
   scope: ScopeRef;
   blocked?: string;
   obscured?: boolean;
+  suspendOpen?: boolean;
 }
 type PendingConfirmation = TerminalConfirmation & { closingTabId?: string };
 const errorText = (error: unknown) =>
@@ -52,7 +53,7 @@ export function TerminalWorkspace(props: Props) {
     );
   return <Workspace key={ownerKey(scope)} {...props} scope={scope} />;
 }
-function Workspace({ api, scope, obscured }: Props) {
+function Workspace({ api, scope, obscured, suspendOpen }: Props) {
   const viewActive = useViewActive();
   const activeRef = useRef(viewActive);
   activeRef.current = viewActive;
@@ -215,6 +216,7 @@ function Workspace({ api, scope, obscured }: Props) {
     // Existing sessions already own a live screen. Selecting one is presentation,
     // never a request to reopen it. New sessions wait for durable selection.
     if (
+      suspendOpen ||
       restarting ||
       (closingTarget.current !== undefined &&
         closingTarget.current === selected?.id) ||
@@ -248,7 +250,15 @@ function Workspace({ api, scope, obscured }: Props) {
       setOpening(false);
     };
     // A registry rename/order notification is not permission to retry a failed spawn.
-  }, [api, scope, selected?.id, validated, optimisticId, restarting]);
+  }, [
+    api,
+    scope,
+    selected?.id,
+    validated,
+    optimisticId,
+    restarting,
+    suspendOpen,
+  ]);
   async function action(
     work: () => Promise<void>,
     backgroundSelection = false,

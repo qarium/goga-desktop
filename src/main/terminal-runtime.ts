@@ -12,7 +12,8 @@ import {
 
 export interface TerminalRuntimeOptions {
   home: string;
-  host: Pick<HostService, "resolveTerminalOwner" | "acquireTerminalContext">;
+  host: Pick<HostService, "resolveTerminalOwner" | "acquireTerminalContext"> &
+    Partial<Pick<HostService, "setTerminalDeletionController">>;
   driver: NativeTerminalDriver;
   inspector: TerminalInspector;
   createView: ConstructorParameters<typeof TerminalTransport>[0];
@@ -42,6 +43,7 @@ export function createTerminalRuntime(options: TerminalRuntimeOptions) {
     prepareScreen: surface.prepare,
     removeTab: (tab) => catalog.removeTerminatedTab(tab),
   });
+  options.host.setTerminalDeletionController?.(sessions);
   // Host-only objects; IPC exposes IDs and filtered snapshots, never this object.
   return { catalog, sessions, surface };
 }

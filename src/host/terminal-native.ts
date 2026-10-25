@@ -263,7 +263,7 @@ class ManagedTerminal {
       this.startupPhase = "native-handshake";
       while (true) {
         if (this.now() >= deadline) throw Error();
-        const captured = this.capture(remaining());
+        const captured = this.capture(remaining(), true);
         if (this.now() > deadline) throw Error();
         if (captured) break;
         this.wait(Math.min(5, deadline - this.now()));
@@ -273,11 +273,20 @@ class ManagedTerminal {
       this.fault();
     }
   }
-  private capture(timeoutMs?: number): boolean {
+  private capture(timeoutMs?: number, starting = false): boolean {
     if (!this.birth || this.poisoned) throw new TerminalStopError("uncertain");
-    const result = rootSchema.safeParse(
-      this.inspector.root(this.birth.pid, timeoutMs),
-    );
+    const sample = this.inspector.root(this.birth.pid, timeoutMs);
+    // A native TTY/session transition can make the double-read unstable.
+    // Only startup may retry this explicit response, within its original deadline.
+    if (
+      starting &&
+      sample &&
+      typeof sample === "object" &&
+      Object.keys(sample).length === 1 &&
+      (sample as { ok?: unknown }).ok === false
+    )
+      return false;
+    const result = rootSchema.safeParse(sample);
     if (!result.success) throw new TerminalStopError("uncertain");
     const root = result.data;
     if (!sameBirth(this.birth, root)) {

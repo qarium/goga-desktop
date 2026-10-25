@@ -4,6 +4,7 @@ import type { TopicCatalogSnapshot } from "../shared/topics";
 import {
   topicContextRefSchema,
   type WorktreeRecord,
+  type TopicContextRef,
 } from "../shared/worktrees";
 import { contextRef } from "./topic-context";
 
@@ -102,4 +103,34 @@ export function writeWorkspaceSelection(
     path: record.path,
   });
   if (parsed.success) put(key("selection", project), parsed.data);
+}
+
+/** Unlike optional display preferences, deletion must durably leave a removed clone. */
+export function persistDeletedWorkspaceSelection(
+  project: Project,
+  owner: TopicContextRef,
+) {
+  try {
+    const storageKey = key("selection", project);
+    const raw = localStorage.getItem(storageKey);
+    const stored = raw === null ? null : JSON.parse(raw);
+    const parsed = selectionSchema.safeParse(stored);
+    // A deletion of another topic must not replace an unrelated saved choice.
+    if (
+      parsed.success &&
+      (parsed.data.projectId !== owner.projectId ||
+        parsed.data.contextId !== owner.contextId ||
+        parsed.data.year !== owner.year ||
+        parsed.data.topic !== owner.topic ||
+        parsed.data.branch !== owner.branch)
+    )
+      return;
+    localStorage.setItem(storageKey, "null");
+    if (localStorage.getItem(storageKey) !== "null")
+      throw Error("Selection was not saved");
+  } catch {
+    throw Error(
+      "Не удалось сохранить переход в «Без топика». Клон уже в Корзине; удаление топика не продолжено.",
+    );
+  }
 }

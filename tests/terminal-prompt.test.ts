@@ -7,7 +7,7 @@ import {
   rm,
   stat,
 } from "node:fs/promises";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import { prepareTopicPrompt } from "../src/host/terminal-prompt";
 const cleanup: Array<() => Promise<unknown> | void> = [];
 afterEach(async () => {
@@ -38,7 +38,7 @@ async function fixture(topic = "support-afm-hooks", custom = false) {
       encoding: "utf8",
       timeout: 5000,
     });
-  return { dir, root, zdot, rc, integration, run };
+  return { dir, root, home, env, zdot, rc, integration, run };
 }
 const update = 'for hook in $precmd_functions; do "$hook"; done;';
 it("preserves custom themes, startup files, history location and ZDOTDIR for nested shells", async () => {
@@ -72,3 +72,125 @@ it("treats topic text as literal, including percent and shell expansions, and st
   expect(changed).not.toContain("INJECTED");
   expect(changed).not.toContain("BACKTICK");
 });
+
+it("records line-editor readiness and invalidates it for preexec and host input", async () => {
+  const f = await fixture();
+  const pid = Number(
+    f.run("CONTEXT=start; _goga_desktop_idle; print -r -- $$").trim(),
+  );
+  expect(f.integration.activity.idle(pid)).toBe(true);
+  expect(f.integration.activity.idle(pid + 1)).toBe(false);
+  f.integration.activity.input("echo x\r");
+  expect(f.integration.activity.idle(pid)).toBe(false);
+  const busyPid = Number(
+    f.run("_goga_desktop_idle; _goga_desktop_busy; print -r -- $$").trim(),
+  );
+  expect(f.integration.activity.idle(busyPid)).toBe(false);
+});
+
+it.skipIf(process.platform !== "darwin")(
+  "real interactive zsh distinguishes its prompt, builtin read and exec without relying on child jobs",
+  async () => {
+    const f = await fixture();
+    const child = spawn(
+      "/usr/bin/python3",
+      [
+        "-u",
+        "-c",
+        `
+import os, pty, select, signal
+pid, master = pty.fork()
+if pid == 0:
+    os.execv('/bin/zsh', ['/bin/zsh', '-l', '-i'])
+def stop(*_):
+    try: os.kill(pid, signal.SIGHUP)
+    except ProcessLookupError: pass
+signal.signal(signal.SIGTERM, stop)
+fds = [0, master]
+try:
+    while True:
+        ready, _, _ = select.select(fds, [], [])
+        if master in ready:
+            try: data = os.read(master, 8192)
+            except OSError: break
+            if not data: break
+            os.write(1, data)
+        if 0 in ready:
+            data = os.read(0, 8192)
+            if data: os.write(master, data)
+            else: fds.remove(0)
+finally:
+    stop()
+    os.waitpid(pid, 0)
+`,
+      ],
+      {
+        cwd: f.root,
+        env: {
+          ...f.env,
+          ZDOTDIR: f.integration.directory,
+          TERM: "xterm-256color",
+          TMPDIR: f.dir,
+        },
+        stdio: ["pipe", "pipe", "pipe"],
+      },
+    );
+    let output = "";
+    child.stdout.on("data", (data) => {
+      output += data;
+    });
+    child.stderr.on("data", (data) => {
+      output += data;
+    });
+    const exited = new Promise<void>((resolve, reject) => {
+      child.on("error", reject);
+      child.on("exit", () => resolve());
+    });
+    const waitFor = async (check: () => Promise<boolean>) => {
+      const deadline = Date.now() + 3000;
+      while (!(await check())) {
+        if (Date.now() > deadline)
+          throw Error("shell state deadline: " + output.slice(-2000));
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    };
+    let pid = 0;
+    try {
+      await waitFor(async () => {
+        try {
+          pid = Number(
+            (
+              await readFile(f.integration.directory + "/activity", "utf8")
+            ).split(":")[0],
+          );
+        } catch {
+          return false;
+        }
+        return f.integration.activity.idle(pid);
+      });
+      // Send through the PTY directly so this proves shell hooks, not host input invalidation.
+      child.stdin.write("read -t 1 answer\r");
+      await waitFor(async () => !f.integration.activity.idle(pid));
+      await waitFor(async () => f.integration.activity.idle(pid));
+      child.stdin.write("vared -p 'VARED_READY> ' -c answer\r");
+      await waitFor(async () => output.split("VARED_READY> ").length >= 3);
+      await new Promise((r) => setTimeout(r, 30));
+      expect(f.integration.activity.idle(pid)).toBe(false);
+      child.stdin.write("fixture\r");
+      await waitFor(async () => f.integration.activity.idle(pid));
+      child.stdin.write("exec /bin/sleep 0.3\r");
+      await waitFor(async () => !f.integration.activity.idle(pid));
+      await exited;
+      expect(f.integration.activity.idle(pid)).toBe(false);
+    } finally {
+      child.stdin.end("exit\r");
+      const timer = setTimeout(() => child.kill("SIGTERM"), 2000);
+      try {
+        await exited;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+  },
+  10000,
+);

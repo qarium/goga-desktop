@@ -117,6 +117,7 @@ export class TerminalSessions {
     tabId?: string;
     key?: string;
   }>();
+  private deletionContexts = new Set<string>();
   private closed = false;
   private shutdown = false;
   private listeners = new Set<() => void>();
@@ -154,6 +155,7 @@ export class TerminalSessions {
     return (
       this.closed ||
       this.shutdown ||
+      this.deletionContexts.has(terminalContextKey(selected.context)) ||
       [...this.closing].some(
         (lock) =>
           !lock.projectId ||
@@ -235,6 +237,101 @@ export class TerminalSessions {
       structuredClone(entry.view),
     );
   }
+  private contextEntries(scope: ScopeRef): Entry[] {
+    const parsed = scopeRefSchema.parse(scope);
+    return [...this.entries.values()].filter((entry) =>
+      typeof parsed === "string"
+        ? entry.view.context.kind === "primary" &&
+          entry.view.context.projectId === parsed
+        : entry.view.context.kind === "topic" &&
+          entry.view.context.projectId === parsed.projectId &&
+          entry.view.context.contextId === parsed.contextId,
+    );
+  }
+  private idleContextPlans(scope: ScopeRef) {
+    return this.contextEntries(scope)
+      .filter((e) => e.view.state !== "exited")
+      .map((entry) => {
+        if (entry.view.state !== "running" || !entry.control)
+          throw Error(
+            "Дождитесь завершения операции терминала перед удалением топика.",
+          );
+        const plan = entry.control.prepare();
+        if (plan.jobs.length)
+          throw Error(
+            `В терминале «${entry.tab.name}» выполняется команда. Завершите её перед удалением топика.`,
+          );
+        this.assertIdlePrompt(entry, plan);
+        return { entry, plan };
+      });
+  }
+  private assertIdlePrompt(entry: Entry, plan: TerminalProcessPlan) {
+    if (!entry.lease?.launch.activity?.idle(plan.anchor.pid))
+      throw Error(
+        `Не удалось подтвердить ожидание ввода в терминале «${entry.tab.name}». Завершите команду или закройте эту сессию перед удалением топика. Если команда не выполняется, нажмите Enter на пустой строке.`,
+      );
+  }
+  /** Read-only: an idle shell is not an active job. Unknown ownership fails closed. */
+  inspectIdleContext(scope: ScopeRef): number {
+    return this.idleContextPlans(scope).length;
+  }
+  /** Host-only context gate; no tab/catalog removal and no effect on other contexts. */
+  prepareContextDeletion(scope: ScopeRef) {
+    const parsed = scopeRefSchema.parse(scope);
+    const key =
+      typeof parsed === "string"
+        ? terminalContextKey({ kind: "primary", projectId: parsed })
+        : terminalContextKey({ kind: "topic", ...parsed });
+    if (
+      this.closed ||
+      this.shutdown ||
+      this.deletionContexts.has(key) ||
+      this.contextEntries(parsed).some((e) =>
+        this.admissionClosed(selection(e.tab, e.scope)),
+      )
+    )
+      throw Error(
+        "Дождитесь завершения операции терминала перед удалением топика.",
+      );
+    const planned = this.idleContextPlans(parsed);
+    this.deletionContexts.add(key);
+    let released = false;
+    const validate = () => {
+      if (released)
+        throw Error("Подготовка терминала к удалению уже завершена.");
+      const current = this.contextEntries(parsed).filter(
+        (e) => e.view.state !== "exited",
+      );
+      if (current.some((e) => !planned.some((p) => p.entry === e)))
+        throw new TerminalStopError("stale");
+      for (const { entry, plan } of planned) {
+        if (entry.view.state === "exited") continue;
+        if (entry.view.state !== "running" || !entry.control)
+          throw new TerminalStopError("stale");
+        entry.control.validate(plan);
+        this.assertIdlePrompt(entry, plan);
+      }
+    };
+    return {
+      count: planned.length,
+      validate,
+      stopIdle: async () => {
+        validate();
+        for (const { entry, plan } of planned) {
+          if (entry.view.state === "exited") continue;
+          this.assertIdlePrompt(entry, plan);
+          // stop rechecks the exact empty job inventory before SIGHUP. No jobs are killed.
+          await this.stop(entry.view, plan);
+        }
+      },
+      release: () => {
+        if (released) return;
+        released = true;
+        this.deletionContexts.delete(key);
+        this.flushSizes();
+      },
+    };
+  }
   prepareClose(request: TerminalCloseRequest): TerminalClosePreview {
     if (this.shutdown) throw Error("Приложение готовится к выходу.");
     return this.coordinator.prepare(request);
@@ -251,7 +348,12 @@ export class TerminalSessions {
   }
   /** Host-only gate held through the entire app-wide confirmation/stop sequence. */
   async prepareShutdown(): Promise<PreparedShutdown> {
-    if (this.shutdown || this.closed || this.closing.size)
+    if (
+      this.shutdown ||
+      this.closed ||
+      this.closing.size ||
+      this.deletionContexts.size
+    )
       throw Error("Дождитесь завершения текущей операции терминала.");
     this.shutdown = true;
     let used = false,
@@ -333,6 +435,12 @@ export class TerminalSessions {
   private freeze(request: TerminalCloseRequest): () => void {
     if (this.closed) throw Error("Приложение завершает работу.");
     const entries = this.closeEntries(request);
+    if (
+      entries.some((e) =>
+        this.deletionContexts.has(terminalContextKey(e.view.context)),
+      )
+    )
+      throw Error("Терминал участвует в удалении топика.");
     const lock =
       request.kind === "exit"
         ? {}
@@ -557,7 +665,9 @@ export class TerminalSessions {
         .success
     )
       throw Error("Недопустимый ввод терминала.");
-    this.running(ref).pty!.write(data);
+    const entry = this.running(ref);
+    entry.lease?.launch.activity?.input(data);
+    entry.pty!.write(data);
   }
   resize(ref: TerminalSessionRef, cols: number, rows: number): void {
     if (

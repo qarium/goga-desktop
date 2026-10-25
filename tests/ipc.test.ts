@@ -451,3 +451,154 @@ it("validates finite integer startup minutes end-to-end through project-settings
     );
   expect(service.saveProjectSettings).not.toHaveBeenCalled();
 });
+
+it("validates split context deletion and explicit ahead consent without accepting target paths", async () => {
+  const handlers = new Map<string, Function>();
+  const service = { deleteContext: vi.fn(), finishContextDeletion: vi.fn() };
+  registerIPC(
+    { handle: (key: string, fn: Function) => handlers.set(key, fn) } as any,
+    {
+      service,
+      window: { webContents: { id: 1 } },
+      shellURL: "file:///app/index.html",
+    } as any,
+  );
+  const event = {
+    sender: { id: 1 },
+    senderFrame: { url: "file:///app/index.html", parent: null },
+  };
+  const request = {
+    projectId: "p",
+    token: "00000000-0000-4000-8000-000000000001",
+  };
+  for (const allowAhead of [false, null, "true", 1, {}])
+    expect(() =>
+      handlers.get("goga:delete-context")!(event, { ...request, allowAhead }),
+    ).toThrow();
+  for (const extra of [
+    { path: "/unsafe" },
+    { contextId: "other" },
+    { confirmed: true },
+  ])
+    for (const name of ["delete-context", "finish-context-deletion"])
+      expect(() =>
+        handlers.get(`goga:${name}`)!(event, { ...request, ...extra }),
+      ).toThrow();
+  expect(() =>
+    handlers.get("goga:finish-context-deletion")!(event, {
+      ...request,
+      allowAhead: true,
+    }),
+  ).toThrow();
+  expect(() =>
+    handlers.get("goga:finish-context-deletion")!(
+      { ...event, sender: { id: 2 } },
+      request,
+    ),
+  ).toThrow(/IPC/);
+  expect(service.deleteContext).not.toHaveBeenCalled();
+  expect(service.finishContextDeletion).not.toHaveBeenCalled();
+  await handlers.get("goga:delete-context")!(event, request);
+  await handlers.get("goga:delete-context")!(event, {
+    ...request,
+    allowAhead: true,
+  });
+  expect(service.deleteContext).toHaveBeenLastCalledWith({
+    ...request,
+    allowAhead: true,
+  });
+  await handlers.get("goga:finish-context-deletion")!(event, request);
+  expect(service.finishContextDeletion).toHaveBeenCalledWith(request);
+});
+it("passes a validated deletion branch through the read-request envelope without accepting paths or forced switching", async () => {
+  const handlers = new Map<string, Function>();
+  const service = {
+    prepareContextDeletion: vi.fn(async () => ({ stage: "prepared" })),
+  };
+  registerIPC(
+    { handle: (key: string, fn: Function) => handlers.set(key, fn) } as any,
+    {
+      service,
+      window: { webContents: { id: 1 } },
+      shellURL: "file:///app/index.html",
+    } as any,
+  );
+  const event = {
+    sender: { id: 1 },
+    senderFrame: { url: "file:///app/index.html", parent: null },
+  };
+  const ref = {
+    projectId: "p",
+    year: "2026",
+    topic: "feature-test",
+    branch: "feature/test",
+    contextId: "ctx-" + "a".repeat(64),
+    revision: "00000000-0000-4000-8000-000000000001",
+  };
+  await handlers.get("goga:read-request")!(
+    event,
+    "branch-preview",
+    "prepareContextDeletion",
+    [ref, "release/2"],
+  );
+  expect(service.prepareContextDeletion).toHaveBeenCalledWith(ref, "release/2");
+  service.prepareContextDeletion.mockClear();
+  for (const invalid of [
+    null,
+    42,
+    { branch: "main", force: true },
+    "",
+    "x".repeat(1025),
+  ])
+    expect(() =>
+      handlers.get("goga:prepare-context-deletion")!(event, ref, invalid),
+    ).toThrow();
+  expect(service.prepareContextDeletion).not.toHaveBeenCalled();
+});
+
+it("routes branch inventory through bounded reads and accepts only a registered project ID shape", async () => {
+  const handlers = new Map<string, Function>();
+  const service = {
+    readProjectBranches: vi.fn(async (projectId: string) => ({
+      projectId,
+      branches: [],
+      localBranches: [],
+    })),
+  };
+  registerIPC(
+    { handle: (key: string, fn: Function) => handlers.set(key, fn) } as any,
+    {
+      service,
+      settings: {},
+      window: { webContents: { id: 1 } },
+      shellURL: "file:///app/index.html",
+      choose: async () => null,
+      select: () => {},
+      stop: async () => {},
+    } as any,
+  );
+  const event = {
+    sender: { id: 1 },
+    senderFrame: { url: "file:///app/index.html", parent: null },
+  };
+  for (const value of ["", null, {}, { projectId: "p", path: "/tmp/other" }])
+    expect(() =>
+      handlers.get("goga:read-project-branches")!(event, value),
+    ).toThrow();
+  expect(service.readProjectBranches).not.toHaveBeenCalled();
+  await expect(
+    handlers.get("goga:read-request")!(
+      event,
+      "branch-read",
+      "readProjectBranches",
+      ["p"],
+    ),
+  ).resolves.toEqual({ projectId: "p", branches: [], localBranches: [] });
+  expect(service.readProjectBranches).toHaveBeenCalledExactlyOnceWith("p");
+  expect(() =>
+    handlers.get("goga:read-project-branches")!(
+      { ...event, sender: { id: 2 } },
+      "p",
+    ),
+  ).toThrow(/IPC/);
+});

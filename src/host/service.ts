@@ -1,7 +1,21 @@
+import type { TerminalSessions } from "./terminal-sessions";
+import {
+  deletionSwitchBranches,
+  prepareDeletionSwitch,
+  verifyDeletionSwitch,
+  type DeletionSwitch,
+} from "./deletion-branch-switch";
 import { HistoryPruner, type PruneAccess } from "./history-prune";
-import type { HistoryPrunePreview, HistoryPruneResult } from "../shared/history";
+import type {
+  HistoryPrunePreview,
+  HistoryPruneResult,
+} from "../shared/history";
 import * as history from "./history";
-import { historyYearSchema, historyEntrySchema, historyPathSchema } from "../shared/history";
+import {
+  historyYearSchema,
+  historyEntrySchema,
+  historyPathSchema,
+} from "../shared/history";
 import type { PreparedShutdown } from "./shutdown";
 import type { TerminalContext } from "../shared/terminal";
 import {
@@ -34,7 +48,11 @@ import {
 } from "../shared/build-repeat";
 import { ContextRunsStore } from "./context-runs-store";
 import { ContextSyncManager } from "./context-sync";
-import { CloneManager } from "./clones";
+import { CloneManager, type ContextDeletionPlan } from "./clones";
+import type {
+  ContextDeletionPreview,
+  ContextDeletionResult,
+} from "../shared/context-deletion";
 import {
   scopeProjectId,
   scopeRefSchema,
@@ -74,7 +92,7 @@ import {
   type BuildOptions,
   type BuildRequest,
 } from "../shared/build";
-import { TopicsDomain, type TopicsContext } from "./topics";
+import { TopicsDomain, readBranchChoices, type TopicsContext } from "./topics";
 import { readTopicTableDisplay, readTopicTaskOverview } from "./topic-display";
 import type {
   TopicTarget,
@@ -187,6 +205,7 @@ export class HostService extends EventEmitter {
   private recovery?: RunRecoveryManager;
   private sync: ContextSyncManager;
   private selectedContext: TopicContextRef | null = null;
+  private selectionEpoch = 0;
   private buildRequests = new Map<string, BuildRequest>();
   private topicDomain = new TopicsDomain();
   private deletionTickets = new DocumentDeletionTickets();
@@ -1411,7 +1430,14 @@ export class HostService extends EventEmitter {
       throw Error(
         "Реестр относится к прежней папке проекта. Требуется проверка.",
       );
-    return records.filter((r) => !r.deletedAt);
+    const pending = records.some((r) => r.deletedAt)
+      ? await this.clones.contextDeletionRecovery(id)
+      : [];
+    return records.filter(
+      (r) =>
+        !r.deletedAt ||
+        pending.some((plan) => plan.owner.contextId === r.contextId),
+    );
   }
   private contextActive(contextId: string): boolean {
     return this.runList.some(
@@ -1453,8 +1479,9 @@ export class HostService extends EventEmitter {
   async selectTopicContext(input: TopicContextRef | null) {
     this.check();
     const ref = topicContextRefSchema.nullable().parse(input);
+    const epoch = ++this.selectionEpoch;
     if (ref) await this.resolveTopicContext(ref);
-    this.selectedContext = ref;
+    if (epoch === this.selectionEpoch) this.selectedContext = ref;
   }
   async syncTopicContext(input: TopicContextRef) {
     this.check();
@@ -1584,148 +1611,452 @@ export class HostService extends EventEmitter {
       this.sync.apply(await this.project(input.projectId), input),
     );
   }
+  private terminalDeletion?: Pick<
+    TerminalSessions,
+    "inspectIdleContext" | "prepareContextDeletion"
+  >;
+  /** Main-process wiring only; never exposed through IPC. */
+  setTerminalDeletionController(
+    controller: NonNullable<HostService["terminalDeletion"]>,
+  ) {
+    if (this.terminalDeletion && this.terminalDeletion !== controller)
+      throw Error("Терминальный контроллер уже установлен.");
+    this.terminalDeletion = controller;
+  }
+  private terminalDeletionBlocked(scope: ScopeRef): boolean {
+    const key =
+      typeof scope === "string" ? `primary:${scope}` : scope.contextId;
+    const leases = this.terminalLeases.get(key) ?? 0;
+    if (!leases) return false;
+    // Unknown/starting leases must not be mistaken for safely idle sessions.
+    return (
+      !this.terminalDeletion ||
+      this.terminalDeletion.inspectIdleContext(scope) !== leases
+    );
+  }
   private deletionGuards(ref: TopicContextRef) {
     return {
       active:
-        this.contextActive(ref.contextId) ||
-        this.terminalLeases.has(ref.contextId),
+        this.contextActive(ref.contextId) || this.terminalDeletionBlocked(ref),
       current: this.selectedContext?.contextId === ref.contextId,
     };
   }
-  async contextDeletionRecovery(input: TopicContextRef) {
+  private contextDeletionPreview(
+    plan: ContextDeletionPlan,
+  ): ContextDeletionPreview {
+    return {
+      token: plan.token,
+      contextId: plan.owner.contextId,
+      stage: plan.stage,
+      switchBranch: plan.primarySwitch?.to,
+      clonePath: plan.path,
+      aheadCount: plan.aheadCount,
+      requiresAheadConfirmation:
+        plan.stage === "prepared" && plan.aheadCount > 0,
+      details: [
+        ...(plan.primarySwitch
+          ? [
+              `После перехода в «Без топика» основная папка будет переключена с «${plan.primarySwitch.from}» на «${plan.primarySwitch.to}» без force, затем Goga удалит топик.`,
+            ]
+          : []),
+        "Простаивающие сессии этого топика будут закрыты. Выполняющиеся команды блокируют удаление; сессии других контекстов сохраняются.",
+        "Рабочая копия целиком, включая .git, будет перемещена в системную Корзину.",
+        "После переключения в основную папку Goga удалит топик. Основная папка и внешние рабочие копии не удаляются.",
+        "Незакоммиченные, неотслеживаемые и ignored-файлы блокируют удаление. Архивные refs, синхронизация и публикация не создаются.",
+      ],
+    };
+  }
+  async contextDeletionRecovery(
+    input: TopicContextRef,
+  ): Promise<ContextDeletionPreview | null> {
     this.check();
     const ref = topicContextRefSchema.parse(input);
     const project = await this.project(ref.projectId);
-    const plans = (await this.clones.deletionRecovery(ref.projectId))
+    const owned = (p: { owner: TopicContextRef; projectPath: string }) =>
+      p.owner.contextId === ref.contextId &&
+      p.owner.projectId === ref.projectId &&
+      p.owner.year === ref.year &&
+      p.owner.topic === ref.topic &&
+      p.owner.branch === ref.branch &&
+      p.projectPath === project.path;
+    const legacyPlans = await this.clones.deletionRecovery(ref.projectId);
+    if (
+      legacyPlans.some(
+        (p) => owned(p) && (p.stage !== "prepared" || p.expiresAt > Date.now()),
+      )
+    )
+      throw Error(
+        "Найден старый журнал archive-first. Требуется ручная проверка; новый порядок удаления к нему не применяется.",
+      );
+    const plans = (await this.clones.contextDeletionRecovery(ref.projectId))
       .filter(
-        (p) =>
-          p.owner.contextId === ref.contextId &&
-          p.owner.projectId === ref.projectId &&
-          p.owner.year === ref.year &&
-          p.owner.topic === ref.topic &&
-          p.owner.branch === ref.branch &&
-          p.projectPath === project.path &&
-          p.stage !== "completed" &&
-          (p.stage !== "prepared" || p.expiresAt > Date.now()),
+        (p) => owned(p) && (p.stage !== "prepared" || p.expiresAt > Date.now()),
       )
       .sort((a, b) => b.expiresAt - a.expiresAt);
-    const plan = plans[0];
-    return plan
-      ? {
-          token: plan.token,
-          contextId: ref.contextId,
-          stage: plan.stage,
-          details: [
-            "Незавершённое удаление восстановлено из журнала.",
-            "Повтор использует прежний снимок и архивные refs; основная папка не удаляется.",
-          ],
-        }
-      : null;
+    return plans[0] ? this.contextDeletionPreview(plans[0]) : null;
   }
-  async prepareContextDeletion(input: TopicContextRef) {
+  /** Preview the actual native operation before any clone loss. The exemption is
+   * host-created and scoped to one exact registry owner/revision, never IPC input. */
+  private async contextTopicDeletion(
+    plan: Pick<
+      ContextDeletionPlan,
+      "owner" | "projectPath" | "recordRevision"
+    > &
+      Partial<
+        Pick<
+          ContextDeletionPlan,
+          "primaryHead" | "primaryTopicAbsent" | "primarySwitch"
+        >
+      >,
+    execute = false,
+    beforeExecute?: () => Promise<void>,
+    beforeMutation?: () => void,
+  ) {
+    return this.snapshot(
+      plan.owner.projectId,
+      async () => {
+        const project = await this.project(plan.owner.projectId);
+        if (project.path !== plan.projectPath)
+          throw Error("Основная папка проекта изменилась.");
+        const d = await this.topicsContext(
+          plan.owner.projectId,
+          {
+            owner: plan.owner,
+            revision: plan.recordRevision,
+          },
+          execute ? beforeMutation : undefined,
+        );
+        if (
+          d.active() ||
+          (plan.primarySwitch &&
+            this.terminalDeletionBlocked(plan.owner.projectId))
+        )
+          throw Error("Основная папка занята.");
+        if (!execute && plan.primarySwitch) {
+          await verifyDeletionSwitch(
+            d.git,
+            plan.projectPath,
+            plan.primarySwitch,
+          );
+          d.deletionSwitchFrom = plan.primarySwitch.from;
+          // Permit only this primary checkout during the read-only preview;
+          // any foreign worktree still blocks deletion.
+          d.assertBranchesAvailable = (branches) =>
+            assertTopicBranchesAvailable(
+              d.git,
+              plan.projectPath,
+              branches,
+              "update",
+            );
+        }
+        const refs = (
+          await d.git([
+            "for-each-ref",
+            "--format=%(refname)",
+            "refs/heads",
+            "refs/remotes",
+          ])
+        )
+          .split("\n")
+          .filter(Boolean);
+        const normalize = (name: string) =>
+          name
+            .toLowerCase()
+            .replace(/[^\x00-\x7f]/g, "")
+            .replace(/[^a-z0-9]+/g, "-")
+            .replace(/^-|-$/g, "");
+        if (
+          refs.some(
+            (ref) =>
+              ref.startsWith("refs/remotes/origin/") &&
+              normalize(ref.slice("refs/remotes/origin/".length)) ===
+                plan.owner.topic,
+          )
+        )
+          throw Error(
+            "Удаление внешней ветки не разрешено этим подтверждением.",
+          );
+        const matching = refs.filter(
+          (ref) =>
+            ref.startsWith("refs/heads/") &&
+            normalize(ref.slice("refs/heads/".length)) === plan.owner.topic,
+        );
+        if (matching.some((ref) => ref !== `refs/heads/${plan.owner.branch}`))
+          throw Error(
+            "Одноимённый топик основной папки принадлежит другой ветке. Удаление не разрешено.",
+          );
+        if (
+          execute &&
+          matching.length &&
+          (
+            await d.git(["rev-parse", "--verify", `${matching[0]}^{commit}`])
+          ).trim() !== plan.primaryHead
+        )
+          throw Error(
+            "Ветка основной папки изменилась после подтверждения удаления.",
+          );
+        const request = {
+          projectId: plan.owner.projectId,
+          year: plan.owner.year,
+          action: "delete" as const,
+          topics: [plan.owner.topic],
+        };
+        await d.assertPrimaryOwnerAvailable?.({
+          ...request,
+          expectedRevision: "",
+        });
+        const relative = `.goga/history/${plan.owner.year}/${plan.owner.topic}`;
+        await noSymlinks(path.join(project.path, relative));
+        let exists = true;
+        try {
+          await lstat(path.join(project.path, relative));
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          exists = false;
+        }
+        const ownBranch = refs.some(
+          (ref) =>
+            normalize(
+              ref.startsWith("refs/heads/")
+                ? ref.slice("refs/heads/".length)
+                : ref
+                    .slice("refs/remotes/".length)
+                    .split("/")
+                    .slice(1)
+                    .join("/"),
+            ) === plan.owner.topic,
+        );
+        let carried = false;
+        if (!ownBranch) {
+          for (const ref of refs) {
+            if (
+              (
+                await d.git([
+                  "ls-tree",
+                  "-d",
+                  "--name-only",
+                  ref,
+                  "--",
+                  relative,
+                ])
+              ).trim() === relative
+            ) {
+              carried = true;
+              break;
+            }
+          }
+        }
+        const absent = !ownBranch && !exists && !carried;
+        if (plan.primaryTopicAbsent && !absent)
+          throw Error(
+            "Топик появился в основной папке после подтверждения. Его удаление не разрешено.",
+          );
+        // A clone-only topic has nothing to remove in primary. This absence is
+        // bound into the journal so later primary data is never silently deleted.
+        if (absent) return true;
+        // After an uncertain native result, a survivor-hosted directory is
+        // deliberately retained by Goga; no own branch means nothing remains to delete.
+        if (execute && !ownBranch && carried) return false;
+        const board = await this.topicDomain.board(d, plan.owner.year);
+        const ticket = await this.topicDomain.prepare(d, {
+          ...request,
+          expectedRevision: board.revision,
+        });
+        if (execute) {
+          // Bind the fresh native ticket to the original deletion consent, not
+          // to files or refs introduced while board/prepare was reading.
+          await beforeExecute?.();
+          if (this.deletionGuards(plan.owner).current)
+            throw Error("Сначала переключитесь в основную папку.");
+          const removed = await this.topicDomain.execute(d, ticket.token);
+          if (removed.status !== "success") throw Error(removed.message);
+        }
+        return false;
+      },
+      false,
+    );
+  }
+  async prepareContextDeletion(
+    input: TopicContextRef,
+    branch?: string,
+  ): Promise<ContextDeletionPreview> {
     return this.operation(async () => {
       this.check();
       const ref = topicContextRefSchema.parse(input);
-      const guards = this.deletionGuards(ref);
-      if (guards.active || guards.current)
-        throw Error("Выбранный или активный контекст нельзя удалить.");
+      if (this.deletionGuards(ref).active)
+        throw Error("Активный контекст нельзя удалить.");
       const recovered = await this.contextDeletionRecovery(ref);
       if (recovered) return recovered;
-      await this.resolveTopicContext(ref);
-      const plan = await this.clones.prepareDeletion(
+      const row = await this.resolveTopicContext(ref);
+      const git = (args: string[]) =>
+        this.runner.command("git", args, row.projectPath).then((r) => r.stdout);
+      const currentBranch = (await git(["branch", "--show-current"])).trim();
+      let primarySwitch: DeletionSwitch | undefined;
+      if (currentBranch === ref.branch) {
+        if (!branch)
+          return {
+            token: "",
+            contextId: ref.contextId,
+            stage: "choose-branch",
+            switchBranches: await deletionSwitchBranches(git, ref.topic),
+            details: [
+              `В основной папке открыта ветка «${currentBranch}». Выберите другую локальную ветку для перехода перед удалением топика.`,
+            ],
+          };
+        primarySwitch = await prepareDeletionSwitch(
+          git,
+          row.projectPath,
+          currentBranch,
+          branch,
+        );
+      } else if (branch)
+        throw Error(
+          "Ветка основной папки изменилась. Откройте подтверждение заново.",
+        );
+      const primaryTopicAbsent = await this.contextTopicDeletion({
+        owner: ref,
+        projectPath: row.projectPath,
+        recordRevision: row.revision,
+        primarySwitch,
+      });
+      const plan = await this.clones.prepareContextDeletion(
         ref,
         this.deletionGuards(ref),
+        primaryTopicAbsent,
+        primarySwitch,
       );
-      return {
-        token: plan.token,
-        contextId: ref.contextId,
-        stage: plan.stage,
-        details: [
-          "Все коммиты, ветки, теги и reflog будут сохранены в служебных refs основной папки.",
-          "Owned clone будет перемещён в системную Корзину. Основная папка и внешние рабочие копии не удаляются.",
-          "Незакоммиченные и ценные ignored-файлы блокируют удаление.",
-        ],
-      };
+      return this.contextDeletionPreview(plan);
     });
   }
-  async deleteContext(input: { projectId: string; token: string }) {
+  private async ownedContextDeletion(input: {
+    projectId: string;
+    token: string;
+  }) {
+    const plan = await this.clones.readContextDeletion(input.token);
+    if (
+      plan.owner.projectId !== input.projectId ||
+      plan.projectPath !== (await this.project(input.projectId)).path
+    )
+      throw Error("Подтверждение удаления другого проекта или основной папки.");
+    return plan;
+  }
+  async deleteContext(input: {
+    projectId: string;
+    token: string;
+    allowAhead?: true;
+  }): Promise<ContextDeletionResult> {
     this.check();
     if (!this.trashItem) throw Error("Системная Корзина недоступна.");
     return this.operation(async () => {
-      const plan = (await this.clones.deletionRecovery(input.projectId)).find(
-        (p) => p.token === input.token,
+      const plan = await this.ownedContextDeletion(input);
+      if (this.deletionGuards(plan.owner).active)
+        throw Error("Активный контекст нельзя удалить.");
+      const terminals = this.terminalDeletion?.prepareContextDeletion(
+        plan.owner,
       );
-      if (!plan) throw Error("Подтверждение удаления отсутствует.");
-      const guards = this.deletionGuards(plan.owner);
-      if (guards.active || guards.current)
-        throw Error("Выбранный или активный контекст нельзя удалить.");
-      const result = await this.clones.executeDeletion(
-        input.token,
-        this.deletionGuards(plan.owner),
-        {
-          trashItem: async (root) => {
-            if (
-              this.deletionGuards(plan.owner).active ||
-              this.deletionGuards(plan.owner).current
-            )
-              throw Error("Контекст активен или выбран.");
-            await this.trashItem!(root);
+      try {
+        const result = await this.clones.trashContext(
+          input.token,
+          this.deletionGuards(plan.owner),
+          {
+            beforeTrash: async (latest) => {
+              if (this.deletionGuards(plan.owner).active)
+                throw Error("Активный контекст нельзя удалить.");
+              await this.contextTopicDeletion(latest);
+            },
+            stopIdleTerminals: async () => {
+              await terminals?.stopIdle();
+              if (this.terminalLeases.has(plan.owner.contextId))
+                throw Error(
+                  "Не удалось подтвердить закрытие терминалов топика. Копия сохранена.",
+                );
+            },
+            trashItem: async (root) => {
+              if (this.deletionGuards(plan.owner).active)
+                throw Error("Активный контекст нельзя удалить.");
+              await this.trashItem!(root);
+            },
           },
-          removeTopic: async () =>
-            this.snapshot(
-              input.projectId,
+          input.allowAhead,
+        );
+        this.catalogEpoch++;
+        this.previews.clear();
+        return {
+          projectId: input.projectId,
+          status: result.status,
+          message: result.message,
+          stage: result.stage,
+          cloneRemoved: result.cloneRemoved,
+        };
+      } finally {
+        terminals?.release();
+      }
+    });
+  }
+  async finishContextDeletion(input: {
+    projectId: string;
+    token: string;
+  }): Promise<ContextDeletionResult> {
+    this.check();
+    return this.operation(async () => {
+      const plan = await this.ownedContextDeletion(input);
+      if (this.deletionGuards(plan.owner).current)
+        throw Error(
+          "Сначала переключитесь в основную папку; удаляемый контекст ещё выбран.",
+        );
+      if (this.deletionGuards(plan.owner).active)
+        throw Error("Активный контекст нельзя удалить.");
+      const terminals = plan.primarySwitch
+        ? this.terminalDeletion?.prepareContextDeletion(plan.owner.projectId)
+        : undefined;
+      try {
+        if (plan.primarySwitch) {
+          await this.snapshot(plan.owner.projectId, async () => {
+            const primary = await this.topicsContext(plan.owner.projectId);
+            if (
+              primary.active() ||
+              this.terminalDeletionBlocked(plan.owner.projectId)
+            )
+              throw Error("Основная папка занята.");
+          });
+        }
+        const result = await this.clones.finishContextDeletion(
+          input.token,
+          async (latest, validatePrimarySnapshot) => {
+            await this.contextTopicDeletion(
+              latest,
+              true,
               async () => {
-                const d = await this.topicsContext(input.projectId, {
-                  owner: plan.owner,
-                  revision: plan.deletionRevision,
-                });
-                if (d.active()) throw Error("Основная папка занята.");
-                const refs = await d.git([
-                  "for-each-ref",
-                  "--format=%(refname)",
-                  "refs/heads",
-                  "refs/remotes",
-                ]);
-                if (
-                  refs
-                    .split("\n")
-                    .includes("refs/remotes/origin/" + plan.owner.branch)
-                )
-                  throw Error(
-                    "Удаление внешней ветки не разрешено этим подтверждением.",
-                  );
-                if (
-                  !refs.split("\n").includes("refs/heads/" + plan.owner.branch)
-                )
-                  return;
-                const board = await this.topicDomain.board(d, plan.owner.year);
-                const ticket = await this.topicDomain.prepare(d, {
-                  projectId: input.projectId,
-                  year: plan.owner.year,
-                  action: "delete",
-                  expectedRevision: board.revision,
-                  topics: [plan.owner.topic],
-                });
-                const removed = await this.topicDomain.execute(d, ticket.token);
-                if (removed.status !== "success") throw Error(removed.message);
+                await validatePrimarySnapshot();
+                terminals?.validate();
               },
-              false,
-            ),
-        },
-      );
-      this.catalogEpoch++;
-      this.previews.clear();
-      return {
-        projectId: input.projectId,
-        status: result.status,
-        message: result.message,
-        stage: result.stage,
-      };
+              () => {
+                terminals?.validate();
+              },
+            );
+          },
+          () => {
+            terminals?.validate();
+          },
+        );
+        this.catalogEpoch++;
+        this.previews.clear();
+        return {
+          projectId: input.projectId,
+          status: result.status,
+          message: result.message,
+          stage: result.stage,
+          cloneRemoved: result.cloneRemoved,
+        };
+      } finally {
+        terminals?.release();
+      }
     });
   }
   private async topicsContext(
     id: ScopeRef,
     confirmedDeletion?: { owner: TopicContextRef; revision: string },
+    beforeCommand?: () => void,
   ): Promise<TopicsContext> {
     const project = await this.project(id);
     const key = await this.key(project);
@@ -1741,6 +2072,7 @@ export class HostService extends EventEmitter {
         await this.assertSettings(scopeProjectId(id));
         await this.validateBinding(project);
         const call = this.invocation(project);
+        beforeCommand?.();
         try {
           return (
             await this.runner.command(
@@ -1780,7 +2112,8 @@ export class HostService extends EventEmitter {
         const topics = new Set(
           request.topics ?? (request.target ? [request.target.topic] : []),
         );
-        const owners = (await this.clones.list(project.id)).filter(
+        const allOwners = await this.clones.list(project.id);
+        const owners = allOwners.filter(
           (row) =>
             row.projectId === project.id &&
             row.year === request.year &&
@@ -1788,8 +2121,8 @@ export class HostService extends EventEmitter {
             row.ownership === "managed" &&
             !row.deletedAt,
         );
-        // This exemption is issued only inside executeDeletion's confirmed
-        // removeTopic callback. Never expose it as an IPC/request field or exempt
+        // This exemption is issued only by the dedicated host deletion flow.
+        // Never expose it as an IPC/request field or exempt
         // another owner merely because it is also in the deleting state.
         const confirmed = (row: WorktreeRecord) =>
           !!confirmedDeletion &&
@@ -1804,9 +2137,11 @@ export class HostService extends EventEmitter {
           row.topic === confirmedDeletion.owner.topic &&
           row.branch === confirmedDeletion.owner.branch &&
           row.projectPath === project.path &&
-          row.state === "deleting" &&
+          (row.state === "ready" ||
+            row.state === "deleting" ||
+            (row.state === "missing" && !!row.deletedAt)) &&
           row.revision === confirmedDeletion.revision;
-        if (confirmedDeletion && !owners.some(confirmed))
+        if (confirmedDeletion && !allOwners.some(confirmed))
           throw Error(
             "Подтверждённый владелец удаления изменился. Обновите подтверждение.",
           );
@@ -2282,6 +2617,24 @@ export class HostService extends EventEmitter {
       await this.validateBinding(context.project);
       assertReadActive();
       return details;
+    });
+    assertReadActive();
+    return result;
+  }
+  /** Primary-only display read; no clone reconciliation or mutation proofs. */
+  async readProjectBranches(projectId: string) {
+    this.check();
+    assertReadActive();
+    if (typeof projectId !== "string" || this.context.getStore()?.binding)
+      throw Error("Ветки доступны только для основной папки проекта.");
+    this.parseScope(projectId);
+    const result = await this.snapshot(projectId, async () => {
+      const project = await this.project(projectId);
+      const choices = await readBranchChoices((args) =>
+        this.cmd(project, args, true),
+      );
+      assertReadActive();
+      return { projectId, ...choices };
     });
     assertReadActive();
     return result;

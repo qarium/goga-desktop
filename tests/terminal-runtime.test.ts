@@ -59,6 +59,7 @@ async function setup() {
     sources: TerminalTransportSource[] = [];
   const release = vi.fn();
   const host = {
+    setTerminalDeletionController: vi.fn(),
     resolveTerminalOwner: vi.fn(async (scope: ScopeRef) => owner(scope)),
     acquireTerminalContext: vi.fn(async (scope: ScopeRef) => ({
       release,
@@ -157,6 +158,9 @@ async function initialized(f: Awaited<ReturnType<typeof setup>>) {
 }
 it("composes lazily: construction and persisted catalog operations never launch a shell or inspect processes", async () => {
   const f = await setup();
+  expect(f.host.setTerminalDeletionController).toHaveBeenCalledWith(
+    f.runtime.sessions,
+  );
   expect(f.host.resolveTerminalOwner).not.toHaveBeenCalled();
   const state = await initialized(f);
   expect(state.tabs.map((t) => t.name)).toEqual(["console"]);

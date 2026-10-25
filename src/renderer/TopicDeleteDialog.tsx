@@ -50,10 +50,10 @@ export function TopicDeleteDialog({
     [error, setError] = useState("");
   const [ownerBusy, setOwnerBusy] = useState(false);
   const operation = useTopicOperation(key, onChanged);
-  const reason = current
-    ? "Текущий топик удалить нельзя. Сначала выберите другой."
-    : active
-      ? "Сначала завершите запуски топика."
+  const reason = active
+    ? "Сначала завершите запуски топика."
+    : !owner && current
+      ? "Сначала выберите другой топик."
       : "";
   useEffect(() => {
     let alive = true;

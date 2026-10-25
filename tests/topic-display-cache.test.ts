@@ -5,6 +5,7 @@ import {
   writeCatalogCache,
   readWorkspaceSelection,
   writeWorkspaceSelection,
+  persistDeletedWorkspaceSelection,
 } from "../src/renderer/topic-display-cache";
 const project = { id: "p", name: "P", path: "/fixture/p" };
 const owner = {
@@ -23,6 +24,18 @@ const owner = {
   state: "ready",
 } as const;
 beforeEach(() => localStorage.clear());
+it("strict deletion persistence clears only the deleted owner and preserves another topic", () => {
+  writeWorkspaceSelection(project, owner);
+  persistDeletedWorkspaceSelection(project, {
+    ...owner,
+    contextId: "ctx-" + "b".repeat(64),
+    topic: "other",
+    branch: "other",
+  });
+  expect(readWorkspaceSelection(project)?.contextId).toBe(owner.contextId);
+  persistDeletedWorkspaceSelection(project, owner);
+  expect(readWorkspaceSelection(project)).toBeNull();
+});
 it("stores only catalog identities and isolates project path and year", () => {
   const catalog = {
     projectId: "p",

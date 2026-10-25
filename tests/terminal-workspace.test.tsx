@@ -951,3 +951,17 @@ it("does not initialize a context hidden while its first read is pending", async
     f.request.mock.calls.filter(([r]) => r.kind === "initialize"),
   ).toHaveLength(1);
 });
+it("defers opening the primary session during topic deletion without discarding tab state", async () => {
+  const f = fixture();
+  const view = render(<TerminalWorkspace api={f.api} scope="p" suspendOpen />);
+  await waitFor(() => expect(screen.getByText("console")).toBeTruthy());
+  expect(f.request.mock.calls.some(([r]) => r.kind === "open")).toBe(false);
+  view.rerender(
+    <TerminalWorkspace api={f.api} scope="p" suspendOpen={false} />,
+  );
+  await waitFor(() =>
+    expect(
+      f.request.mock.calls.filter(([r]) => r.kind === "open"),
+    ).toHaveLength(1),
+  );
+});

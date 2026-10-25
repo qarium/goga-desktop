@@ -32,6 +32,8 @@ import {
   validateTaskText,
 } from "./topic-task";
 export interface TopicsContext {
+  /** Host-only read-only preview; never used by execute. */
+  deletionSwitchFrom?: string;
   project: Project;
   root?: string;
   owner?: import("../shared/worktrees").TopicContextRef;
@@ -93,7 +95,7 @@ class TopicSnapshotChangedError extends Error {
     this.name = "TopicSnapshotChangedError";
   }
 }
-async function refs(d: TopicsContext): Promise<Ref[]> {
+async function refs(d: Pick<TopicsContext, "git">): Promise<Ref[]> {
   const raw = await d.git([
     "for-each-ref",
     "--format=%(refname)%00%(objectname)%00%(symref)",
@@ -111,6 +113,14 @@ async function refs(d: TopicsContext): Promise<Ref[]> {
       const remote = full.startsWith("refs/remotes/");
       return [{ full, commit, remote, name: full.slice(remote ? 13 : 11) }];
     });
+}
+/** Names only; deliberately no state fingerprint, Goga, base config or clone inventory. */
+export async function readBranchChoices(git: TopicsContext["git"]) {
+  const inventory = await refs({ git });
+  return {
+    branches: inventory.map((r) => r.name),
+    localBranches: inventory.filter((r) => !r.remote).map((r) => r.name),
+  };
 }
 // A bounded buffer, not a bounded file: unrelated large files must not hide
 // read-only boards. Pin the descriptor and verify its identity/metadata so a
@@ -724,7 +734,7 @@ export class TopicsDomain {
       );
     }
     for (const topic of topics) {
-      if (normalize(s.current) === topic)
+      if (normalize(s.current) === topic && d.deletionSwitchFrom !== s.current)
         throw Error(
           "Нельзя удалить топик текущей ветки. Сначала переключитесь.",
         );
@@ -810,6 +820,10 @@ export class TopicsDomain {
     d: TopicsContext,
     token: string,
   ): Promise<TopicOperationResult> {
+    if (d.deletionSwitchFrom)
+      throw Error(
+        "Предпросмотр переключения не разрешает выполнение удаления.",
+      );
     const id = this.projectForToken(token),
       ticket = this.tickets.get(token)!;
     this.tickets.delete(token);

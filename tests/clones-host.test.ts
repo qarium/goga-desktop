@@ -881,3 +881,371 @@ it.each(["missing", "extra", "relative", "foreign"])(
   },
   15000,
 );
+
+describe("trash-first context deletion", { timeout: 30000 }, () => {
+  it("allows selected owner, requires explicit ahead consent and never writes archive refs", async () => {
+    const f = await setup();
+    const row = await f.manager.ensure(f.project, f.identity);
+    await fs.writeFile(path.join(row.path, "unique"), "only clone\n");
+    await f.git(["add", "."], row.path);
+    await f.git(["commit", "-m", "unique"], row.path);
+    const plan = await f.manager.prepareContextDeletion(
+      worktreeContextRef(row),
+      { active: false, current: true },
+    );
+    expect(plan).toMatchObject({
+      schemaVersion: 2,
+      stage: "prepared",
+      aheadCount: 1,
+      path: row.path,
+    });
+    const trashItem = vi.fn(async (source: string) =>
+      fs.rename(source, path.join(f.root, "trash-v2")),
+    );
+    const beforeTrash = vi.fn(async () => {});
+    await expect(
+      f.manager.trashContext(
+        plan.token,
+        { active: false, current: true },
+        { trashItem, beforeTrash },
+      ),
+    ).rejects.toThrow(/подтвер/i);
+    expect(trashItem).not.toHaveBeenCalled();
+    const result = await f.manager.trashContext(
+      plan.token,
+      { active: false, current: true },
+      { trashItem, beforeTrash },
+      true,
+    );
+    expect(result).toMatchObject({
+      status: "success",
+      stage: "clone-trashed",
+      cloneRemoved: true,
+    });
+    expect((await f.git(["for-each-ref", "refs/desktop"])).stdout).toBe("");
+    expect(
+      await fs.readFile(path.join(f.root, "trash-v2/unique"), "utf8"),
+    ).toBe("only clone\n");
+    await expect(
+      fs.access(path.join(f.root, "trash-v2/.git")),
+    ).resolves.toBeUndefined();
+    const restarted = new CloneManager(f.home, f.runner);
+    expect(
+      await restarted.trashContext(
+        plan.token,
+        { active: false, current: false },
+        { trashItem, beforeTrash },
+      ),
+    ).toMatchObject({ cloneRemoved: true });
+    const removeTopic = vi.fn(async () => {});
+    expect(
+      await restarted.finishContextDeletion(plan.token, removeTopic),
+    ).toMatchObject({
+      status: "success",
+      stage: "completed",
+      cloneRemoved: true,
+    });
+    await restarted.finishContextDeletion(plan.token, removeTopic);
+    expect(removeTopic).toHaveBeenCalledTimes(1);
+    expect(trashItem).toHaveBeenCalledTimes(1);
+    expect(
+      f.calls.some(
+        (c) =>
+          c.args.includes("fetch") &&
+          c.args.some((a) => a.includes("refs/desktop/archive")),
+      ),
+    ).toBe(false);
+  });
+  it("blocks active, ignored, stale snapshots and failed feasibility before trash", async () => {
+    const f = await setup(),
+      row = await f.manager.ensure(f.project, f.identity),
+      ref = worktreeContextRef(row);
+    await expect(
+      f.manager.prepareContextDeletion(ref, { active: true, current: true }),
+    ).rejects.toThrow(/актив/i);
+    await fs.writeFile(path.join(row.path, ".git/info/exclude"), "valuable\n");
+    await fs.writeFile(path.join(row.path, "valuable"), "secret fixture\n");
+    await expect(
+      f.manager.prepareContextDeletion(ref, { active: false, current: true }),
+    ).rejects.toThrow(/ignored/);
+    await fs.unlink(path.join(row.path, "valuable"));
+    const plan = await f.manager.prepareContextDeletion(ref, {
+      active: false,
+      current: true,
+    });
+    const trashItem = vi.fn(async () => {});
+    const result = await f.manager.trashContext(
+      plan.token,
+      { active: false, current: true },
+      {
+        trashItem,
+        beforeTrash: async () => {
+          throw Error("main feasibility denied");
+        },
+      },
+    );
+    expect(result.cloneRemoved).not.toBe(true);
+    expect(trashItem).not.toHaveBeenCalled();
+    await fs.writeFile(path.join(row.path, "dirty"), "dirty\n");
+    await expect(
+      f.manager.trashContext(
+        plan.token,
+        { active: false, current: true },
+        { trashItem, beforeTrash: async () => {} },
+      ),
+    ).rejects.toThrow();
+    expect(trashItem).not.toHaveBeenCalled();
+  });
+  it("does not accept legacy archive-first journals or infer trash success after callback uncertainty", async () => {
+    const f = await setup(),
+      row = await f.manager.ensure(f.project, f.identity),
+      ref = worktreeContextRef(row);
+    const legacy = await f.manager.prepareDeletion(ref, {
+      active: false,
+      current: false,
+    });
+    await expect(f.manager.readContextDeletion(legacy.token)).rejects.toThrow();
+    const plan = await f.manager.prepareContextDeletion(ref, {
+      active: false,
+      current: true,
+    });
+    const trashItem = vi.fn(async (source: string) => {
+      await fs.rename(source, path.join(f.root, "uncertain-trash"));
+      throw Error("lost acknowledgement");
+    });
+    expect(
+      await f.manager.trashContext(
+        plan.token,
+        { active: false, current: true },
+        { trashItem, beforeTrash: async () => {} },
+      ),
+    ).toMatchObject({ status: "partial", stage: "trashing" });
+    const restarted = new CloneManager(f.home, f.runner);
+    const result = await restarted.trashContext(
+      plan.token,
+      { active: false, current: false },
+      { trashItem, beforeTrash: async () => {} },
+    );
+    expect(result.cloneRemoved).not.toBe(true);
+    expect(trashItem).toHaveBeenCalledTimes(1);
+    const removeTopic = vi.fn(async () => {});
+    await expect(
+      restarted.finishContextDeletion(plan.token, removeTopic),
+    ).rejects.toThrow();
+    expect(removeTopic).not.toHaveBeenCalled();
+  });
+});
+
+it("compares ahead commits only against the same-named local primary branch, not main or stale clone remotes", async () => {
+  const f = await setup(),
+    row = await f.manager.ensure(f.project, f.identity),
+    ref = worktreeContextRef(row);
+  await fs.writeFile(path.join(row.path, "ahead-only"), "ahead\n");
+  await f.git(["add", "."], row.path);
+  await f.git(["commit", "-m", "ahead"], row.path);
+  await f.git(["fetch", row.path, "HEAD"]);
+  await f.git(["update-ref", "refs/heads/main", "FETCH_HEAD"]);
+  const first = await f.manager.prepareContextDeletion(ref, {
+    active: false,
+    current: false,
+  });
+  expect(first.aheadCount).toBe(1);
+  await f.git(["update-ref", "refs/heads/alpha", "FETCH_HEAD"]);
+  const trashItem = vi.fn(async () => {});
+  await expect(
+    f.manager.trashContext(
+      first.token,
+      { active: false, current: false },
+      { trashItem, beforeTrash: async () => {} },
+      true,
+    ),
+  ).rejects.toThrow();
+  expect(trashItem).not.toHaveBeenCalled();
+  const second = await f.manager.prepareContextDeletion(ref, {
+    active: false,
+    current: false,
+  });
+  expect(second.aheadCount).toBe(0);
+}, 30000);
+
+it("returns confirmed cloneRemoved despite a lost tombstone update and recovers without retrashing", async () => {
+  const f = await setup(),
+    row = await f.manager.ensure(f.project, f.identity);
+  const plan = await f.manager.prepareContextDeletion(worktreeContextRef(row), {
+    active: false,
+    current: true,
+  });
+  const update = f.manager.store.update.bind(f.manager.store);
+  vi.spyOn(f.manager.store, "update").mockImplementation(
+    async (value, revision) => {
+      const saved = await update(value, revision);
+      if (value.deletedAt) throw Error("lost tombstone acknowledgement");
+      return saved;
+    },
+  );
+  const trashItem = vi.fn(async (source: string) =>
+    fs.rename(source, path.join(f.root, "trash-registry")),
+  );
+  expect(
+    await f.manager.trashContext(
+      plan.token,
+      { active: false, current: true },
+      { trashItem, beforeTrash: async () => {} },
+    ),
+  ).toMatchObject({
+    status: "partial",
+    cloneRemoved: true,
+    stage: "clone-trashed",
+  });
+  const restarted = new CloneManager(f.home, f.runner);
+  expect(
+    await restarted.trashContext(
+      plan.token,
+      { active: false, current: false },
+      { trashItem, beforeTrash: async () => {} },
+    ),
+  ).toMatchObject({ status: "success", cloneRemoved: true });
+  expect(trashItem).toHaveBeenCalledTimes(1);
+}, 30000);
+
+it("revalidates primary refs and checkout after feasibility callbacks before trash", async () => {
+  const f = await setup(),
+    row = await f.manager.ensure(f.project, f.identity);
+  const plan = await f.manager.prepareContextDeletion(worktreeContextRef(row), {
+    active: false,
+    current: false,
+  });
+  const trashItem = vi.fn(async (source: string) =>
+    fs.rename(source, path.join(f.root, "trash-changed-primary")),
+  );
+  const result = await f.manager.trashContext(
+    plan.token,
+    { active: false, current: false },
+    {
+      beforeTrash: async () => {
+        await f.git(["switch", "alpha"]);
+      },
+      trashItem,
+    },
+  );
+  expect(result.cloneRemoved).not.toBe(true);
+  expect(trashItem).not.toHaveBeenCalled();
+}, 30000);
+
+it("excludes expired prepared journals from pending context deletion recovery", async () => {
+  const f = await setup(),
+    row = await f.manager.ensure(f.project, f.identity);
+  const plan = await f.manager.prepareContextDeletion(worktreeContextRef(row), {
+    active: false,
+    current: false,
+  });
+  await fs.writeFile(
+    path.join(f.manager.store.root, `.context-deletion-${plan.token}.json`),
+    JSON.stringify({ ...plan, expiresAt: 0 }),
+  );
+  expect(await f.manager.contextDeletionRecovery(f.project.id)).toEqual([]);
+}, 30000);
+
+it("switches the primary branch only after trash, pins checkout, then removes the topic", async () => {
+  const { prepareDeletionSwitch } =
+    await import("../src/host/deletion-branch-switch");
+  const f = await setup();
+  try {
+    const row = await f.manager.ensure(f.project, f.identity);
+    await f.git(["switch", row.branch]);
+    const git = async (args: string[]) => (await f.git(args)).stdout;
+    const primarySwitch = await prepareDeletionSwitch(
+      git,
+      f.repo,
+      row.branch,
+      "main",
+    );
+    const plan = await f.manager.prepareContextDeletion(
+      worktreeContextRef(row),
+      { active: false, current: true },
+      false,
+      primarySwitch,
+    );
+    expect((await git(["branch", "--show-current"])).trim()).toBe(row.branch);
+    const events: string[] = [];
+    await f.manager.trashContext(
+      plan.token,
+      { active: false, current: true },
+      {
+        beforeTrash: async () => {
+          events.push("checks");
+        },
+        trashItem: async (root) => {
+          expect((await git(["branch", "--show-current"])).trim()).toBe(
+            row.branch,
+          );
+          await fs.rename(root, path.join(f.root, "trash"));
+          events.push("trash");
+        },
+      },
+    );
+    events.push("leave");
+    const result = await f.manager.finishContextDeletion(
+      plan.token,
+      async (latest, validate) => {
+        expect(latest.primarySwitch?.state).toBe("applied");
+        expect((await git(["branch", "--show-current"])).trim()).toBe("main");
+        await validate();
+        events.push("delete");
+        await git(["branch", "-d", row.branch]);
+      },
+    );
+    expect(result.status).toBe("success");
+    expect(events).toEqual(["checks", "checks", "trash", "leave", "delete"]);
+    expect(
+      (await f.manager.readContextDeletion(plan.token)).primarySwitch?.state,
+    ).toBe("applied");
+    const repeated = vi.fn();
+    await f.manager.finishContextDeletion(plan.token, repeated);
+    expect(repeated).not.toHaveBeenCalled();
+  } finally {
+    await fs.rm(f.root, { recursive: true, force: true });
+  }
+}, 15000);
+it("preserves primary edits made after trash and does not switch or delete", async () => {
+  const { prepareDeletionSwitch } =
+    await import("../src/host/deletion-branch-switch");
+  const f = await setup();
+  try {
+    const row = await f.manager.ensure(f.project, f.identity);
+    await f.git(["switch", row.branch]);
+    const git = async (args: string[]) => (await f.git(args)).stdout;
+    const primarySwitch = await prepareDeletionSwitch(
+      git,
+      f.repo,
+      row.branch,
+      "main",
+    );
+    const plan = await f.manager.prepareContextDeletion(
+      worktreeContextRef(row),
+      { active: false, current: true },
+      false,
+      primarySwitch,
+    );
+    await f.manager.trashContext(
+      plan.token,
+      { active: false, current: true },
+      {
+        beforeTrash: async () => {},
+        trashItem: async (root) => fs.rename(root, path.join(f.root, "trash")),
+      },
+    );
+    await fs.writeFile(path.join(f.repo, "README"), "user edit");
+    const remove = vi.fn();
+    expect(
+      (await f.manager.finishContextDeletion(plan.token, remove)).status,
+    ).toBe("partial");
+    expect(remove).not.toHaveBeenCalled();
+    expect((await git(["branch", "--show-current"])).trim()).toBe(row.branch);
+    expect(await fs.readFile(path.join(f.repo, "README"), "utf8")).toBe(
+      "user edit",
+    );
+  } finally {
+    await fs.rm(f.root, { recursive: true, force: true });
+  }
+}, 15000);

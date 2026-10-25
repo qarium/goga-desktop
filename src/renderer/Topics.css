@@ -740,7 +740,7 @@ button.topic-link:hover:not(:disabled) {
   gap: 8px;
   min-width: 0;
 }
-.topic-update-controls select {
+.topic-update-controls .topic-branch-picker {
   width: 200px;
   max-width: 40vw;
   font-size: 12px;
@@ -840,9 +840,27 @@ button.topic-link:hover:not(:disabled) {
   gap: 8px;
   min-width: 0;
 }
-.topic-exchange-controls .topic-update-controls button {
+.topic-exchange-controls .topic-update-controls > button {
   min-width: 112px;
 }
 .topic-overview-footer > .danger {
   align-self: flex-end;
+}
+
+.topic-operation-log {
+  padding: 20px;
+  min-width: 0;
+}
+.topic-operation-log pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 45vh;
+  overflow: auto;
+}
+
+.topic-overview-footer .searchable-menu [role="option"] {
+  white-space: normal;
+}
+.topic-update-controls .topic-branch-picker {
+  display: block;
 }

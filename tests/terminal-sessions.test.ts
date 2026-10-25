@@ -75,6 +75,7 @@ function fixture() {
         args: ["-l", "-i"],
         env: { SECRET: "synthetic-secret", ENV_VERSION: String(leases.length) },
         verifyRoot: vi.fn(async () => {}),
+        activity: { idle: vi.fn(() => true), input: vi.fn() },
       },
     };
     leases.push(lease);
@@ -661,4 +662,84 @@ it("switching a live screen validates its existing lease without filesystem work
   ).toThrow();
   f.ptys[0].emit("fault");
   expect(() => f.manager.assertPresentation(first)).toThrow();
+});
+
+it("gates and closes only idle sessions of the deleted context, preserving common tabs elsewhere", async () => {
+  const f = fixture();
+  const first = await f.manager.open(common, a);
+  const other = await f.manager.open(common, b);
+  const base = await f.manager.open(common, "p");
+  expect(f.manager.inspectIdleContext(a)).toBe(1);
+  const gate = f.manager.prepareContextDeletion(a);
+  expect(f.stop).not.toHaveBeenCalled();
+  await expect(f.manager.open(common, a)).rejects.toThrow();
+  expect(() => f.manager.write(first, "echo nope\r")).toThrow();
+  await gate.stopIdle();
+  expect(f.leases[0].release).toHaveBeenCalledOnce();
+  expect(
+    f.manager.list().find((v) => v.sessionId === first.sessionId)?.state,
+  ).toBe("exited");
+  expect(
+    f.manager
+      .list()
+      .filter((v) => v.state === "running")
+      .map((v) => v.sessionId),
+  ).toEqual([other.sessionId, base.sessionId]);
+  expect(f.stop).toHaveBeenCalledTimes(1);
+  expect(await f.manager.open(common, b)).toEqual(other);
+  gate.release();
+});
+
+it("blocks deletion for jobs or uncertain ownership, without stopping a shell", async () => {
+  const f = fixture();
+  const view = await f.manager.open(common, a);
+  const entry = [...(f.manager as any).entries.values()][0];
+  entry.control.prepare = () => ({ anchor: {}, jobs: [{}] });
+  expect(() => f.manager.inspectIdleContext(a)).toThrow(/команд/);
+  expect(() => f.manager.prepareContextDeletion(a)).toThrow(/команд/);
+  expect(f.stop).not.toHaveBeenCalled();
+  entry.control.prepare = () => {
+    throw Error("unknown owner");
+  };
+  expect(() => f.manager.inspectIdleContext(a)).toThrow();
+  expect(f.manager.list()[0].sessionId).toBe(view.sessionId);
+});
+
+it("revalidates idle plans for every session before closing the first shell", async () => {
+  const f = fixture();
+  await f.manager.open(common, a);
+  await f.manager.open({ ...common, id: "second" }, a);
+  const gate = f.manager.prepareContextDeletion(a);
+  const entries = [...(f.manager as any).entries.values()];
+  entries[1].control.validate = () => {
+    throw Error("new job");
+  };
+  await expect(gate.stopIdle()).rejects.toThrow("new job");
+  expect(f.stop).not.toHaveBeenCalled();
+  gate.release();
+  expect(f.manager.inspectIdleContext(a)).toBe(2);
+});
+
+it("never treats an executing root command or unknown shell prompt as idle", async () => {
+  const f = fixture();
+  const view = await f.manager.open(common, a);
+  f.leases[0].launch.activity!.idle = () => false;
+  expect(() => f.manager.inspectIdleContext(a)).toThrow(/ожидан/);
+  expect(f.stop).not.toHaveBeenCalled();
+  delete f.leases[0].launch.activity;
+  expect(() => f.manager.prepareContextDeletion(a)).toThrow(/ожидан/);
+  expect(f.manager.list()[0].sessionId).toBe(view.sessionId);
+});
+it("invalidates prompt readiness before forwarding input and rechecks it before stopping", async () => {
+  const f = fixture();
+  const view = await f.manager.open(common, a);
+  f.manager.write(view, "exec sleep 30\r");
+  expect(f.leases[0].launch.activity!.input).toHaveBeenCalledWith(
+    "exec sleep 30\r",
+  );
+  const gate = f.manager.prepareContextDeletion(a);
+  f.leases[0].launch.activity!.idle = () => false;
+  await expect(gate.stopIdle()).rejects.toThrow(/ожидан/);
+  expect(f.stop).not.toHaveBeenCalled();
+  gate.release();
 });

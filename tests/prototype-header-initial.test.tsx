@@ -86,6 +86,15 @@ const board = (projectId = "p") => ({
   remoteRecords: [],
 });
 beforeEach(() => {
+  // jsdom does not implement native dialog top-layer APIs. Global failures now
+  // use the same real dialog as topic cards instead of clipped header text.
+  HTMLDialogElement.prototype.showModal = function () {
+    this.open = true;
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.open = false;
+  };
+
   localStorage.clear();
   api = {
     listProjects: vi.fn(async () => [

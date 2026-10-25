@@ -35,8 +35,12 @@ const api: DesktopAPI = {
   prepareContextApply: (v) => invoke("prepare-context-apply", v),
   applyContext: (v) => invoke("apply-context", v),
   contextDeletionRecovery: (v) => invoke("context-deletion-recovery", v),
-  prepareContextDeletion: (v) => invoke("prepare-context-deletion", v),
+  prepareContextDeletion: (v, branch) =>
+    branch === undefined
+      ? invoke("prepare-context-deletion", v)
+      : invoke("prepare-context-deletion", v, branch),
   deleteContext: (v) => invoke("delete-context", v),
+  finishContextDeletion: (v) => invoke("finish-context-deletion", v),
   ensureTopicContext: (identity) => invoke("ensure-topic-context", identity),
   resolveTopicContext: (ref) => invoke("resolve-topic-context", ref),
   checkTopicContextReadiness: (ref) =>
@@ -49,7 +53,8 @@ const api: DesktopAPI = {
   readBuildPlan: (id, path) => invoke("read-build-plan", id, path),
   launchBuild: (request) => invoke("launch-build", request),
   repeatBuild: (id, confirmClean) => invoke("repeat-build", id, confirmClean),
-  prepareHistoryPrune: (projectId, year) => invoke("prepare-history-prune", projectId, year),
+  prepareHistoryPrune: (projectId, year) =>
+    invoke("prepare-history-prune", projectId, year),
   pruneHistory: (projectId, token) => invoke("prune-history", projectId, token),
   listHistoryYears: (scope) => invoke("list-history-years", scope),
   listHistoryEntries: (scope, year) =>
@@ -62,6 +67,7 @@ const api: DesktopAPI = {
   readTopicTable: (id, year) => invoke("read-topic-table", id, year),
   readTopicOverview: (id, year, target) =>
     invoke("read-topic-overview", id, year, target),
+  readProjectBranches: (id) => invoke("read-project-branches", id),
   readTopicBoard: (id, year) => invoke("read-topic-board", id, year),
   readTopicDetails: (id, year, target) =>
     invoke("read-topic-details", id, year, target),

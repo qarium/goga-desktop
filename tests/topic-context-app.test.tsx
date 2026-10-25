@@ -443,3 +443,40 @@ it("shows project name and full path on hover and focus in the collapsed sidebar
   fireEvent.blur(project);
   expect(screen.queryByRole("tooltip")).toBeNull();
 });
+
+it("dismisses a dashboard presentation failure without reopening it in a loop", async () => {
+  const pipeline = {
+    ...run,
+    kind: "pipeline",
+    pipeline: "refinement",
+    status: "running",
+    url: "http://127.0.0.1:8000",
+  };
+  api.runs.mockResolvedValue([pipeline]);
+  api.selectRun.mockImplementation(async (id: string | null) => {
+    if (id) throw Error("Synthetic native view failure");
+  });
+  render(<App />);
+  await screen.findByRole("button", { name: /Alpha/ });
+  fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Открыть запуск refinement" }),
+  );
+  const dialog = await screen.findByRole("dialog", {
+    name: "Не удалось выполнить операцию",
+  });
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "Закрыть сообщение" }),
+  );
+  await act(async () => {});
+  expect(
+    screen.queryByRole("dialog", { name: "Не удалось выполнить операцию" }),
+  ).toBeNull();
+  expect(
+    api.selectRun.mock.calls.filter(
+      ([id]: [string | null]) => id === pipeline.id,
+    ),
+  ).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Проект" }));
+  expect(await screen.findByRole("heading", { name: "Проект" })).toBeTruthy();
+});

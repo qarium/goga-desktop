@@ -762,3 +762,271 @@ it("restores the same topics table and filter while return-time catalog reads ar
   expect((filter as HTMLInputElement).value).toBe("alpha");
   expect(screen.queryByText("Загружаем топики…")).toBeNull();
 });
+
+it.each([false, true])(
+  "deletes selected clone then commits primary navigation before Goga (failure=%s)",
+  async (fail) => {
+    HTMLDialogElement.prototype.showModal = function () {
+      this.open = true;
+    };
+    HTMLDialogElement.prototype.close = function () {
+      this.open = false;
+    };
+    api.readTopicOverview = vi.fn(async () => ({
+      projectId: "p",
+      year: "2026",
+      target: { topic: ownerA.topic, branch: ownerA.branch, remote: false },
+      text: "Task",
+      exists: true,
+      version: "v",
+      editable: false,
+    }));
+    api.contextDeletionRecovery = vi.fn(async () => null);
+    api.prepareContextDeletion = vi.fn(async () => ({
+      token: "delete-alpha",
+      contextId: ownerA.contextId,
+      stage: "prepared",
+      clonePath: ownerA.path,
+      details: ["Move clone to Trash"],
+    }));
+    let trash!: () => void;
+    api.deleteContext = vi.fn(async () => {
+      await new Promise<void>((resolve) => {
+        trash = resolve;
+      });
+      return {
+        projectId: "p",
+        status: "success",
+        cloneRemoved: true,
+        stage: "clone-trashed",
+        message: "Moved",
+      };
+    });
+    api.finishContextDeletion = vi.fn(async () => {
+      expect(screen.getByRole("button", { name: "Без топика" })).toBeTruthy();
+      expect(
+        screen.getByLabelText("Путь выбранного контекста").textContent,
+      ).toBe("/fixture/project");
+      expect(api.selectTopicContext).toHaveBeenLastCalledWith(null);
+      expect(screen.queryByRole("dialog", { name: /Топик alpha/ })).toBeNull();
+      if (fail) throw Error("Goga delete failed");
+      return {
+        projectId: "p",
+        status: "success",
+        cloneRemoved: true,
+        message: "Deleted",
+      };
+    });
+    await mount();
+    await choose("alpha");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Открыть карточку топика alpha" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Удалить топик…" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Подтвердить удаление" }),
+    );
+    await waitFor(() => expect(trash).toBeDefined());
+    expect(
+      screen.getByRole("button", { name: "Открыть карточку топика alpha" }),
+    ).toBeTruthy();
+    expect(api.finishContextDeletion).not.toHaveBeenCalled();
+    await act(async () => trash());
+    await waitFor(() =>
+      expect(api.finishContextDeletion).toHaveBeenCalledTimes(1),
+    );
+    expect(screen.getByRole("button", { name: "Без топика" })).toBeTruthy();
+    if (fail)
+      expect(await screen.findByRole("alert")).toHaveProperty(
+        "textContent",
+        "Goga delete failed",
+      );
+  },
+);
+
+it("keeps primary visible but stops before Goga until selection is durably saved", async () => {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.open = true;
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.open = false;
+  };
+  api.readTopicOverview = vi.fn(async () => ({
+    projectId: "p",
+    year: "2026",
+    target: { topic: ownerA.topic, branch: ownerA.branch, remote: false },
+    text: "Task",
+    exists: true,
+    version: "v",
+    editable: false,
+  }));
+  api.contextDeletionRecovery = vi.fn(async () => null);
+  api.prepareContextDeletion = vi.fn(async () => ({
+    token: "persist-alpha",
+    contextId: ownerA.contextId,
+    stage: "prepared",
+    details: [],
+  }));
+  api.deleteContext = vi.fn(async () => ({
+    projectId: "p",
+    status: "success",
+    cloneRemoved: true,
+    stage: "clone-trashed",
+    message: "Moved",
+  }));
+  api.finishContextDeletion = vi.fn(async () => ({
+    projectId: "p",
+    status: "success",
+    message: "Done",
+  }));
+  await mount();
+  await choose("alpha");
+  fireEvent.click(
+    screen.getByRole("button", { name: "Открыть карточку топика alpha" }),
+  );
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Удалить топик…" }),
+  );
+  const confirm = await screen.findByRole("button", {
+    name: "Подтвердить удаление",
+  });
+  const persist = vi
+    .spyOn(Storage.prototype, "setItem")
+    .mockImplementation(() => {
+      throw Error("Storage denied");
+    });
+  try {
+    fireEvent.click(confirm);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Без топика" })).toBeTruthy(),
+    );
+    await screen.findByRole("alert");
+    expect(api.finishContextDeletion).not.toHaveBeenCalled();
+    expect(api.selectTopicContext).toHaveBeenLastCalledWith(null);
+  } finally {
+    persist.mockRestore();
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Продолжить удаление" }));
+  await waitFor(() =>
+    expect(api.finishContextDeletion).toHaveBeenCalledTimes(1),
+  );
+  const key = `goga.desktop.selection.v1:${JSON.stringify(["p", "/fixture/project", ""])}`;
+  expect(localStorage.getItem(key)).toBe("null");
+});
+
+it("keeps the selected context and card after failed clone trash", async () => {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.open = true;
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.open = false;
+  };
+  api.readTopicOverview = vi.fn(async () => ({
+    projectId: "p",
+    year: "2026",
+    target: { topic: ownerA.topic, branch: ownerA.branch, remote: false },
+    text: "Task",
+    exists: true,
+    version: "v",
+    editable: false,
+  }));
+  api.contextDeletionRecovery = vi.fn(async () => null);
+  api.prepareContextDeletion = vi.fn(async () => ({
+    token: "before-trash",
+    contextId: ownerA.contextId,
+    stage: "prepared",
+    details: [],
+  }));
+  api.deleteContext = vi.fn(async () => ({
+    projectId: "p",
+    status: "failed",
+    cloneRemoved: false,
+    message: "Trash denied",
+  }));
+  api.finishContextDeletion = vi.fn();
+  await mount();
+  await choose("alpha");
+  fireEvent.click(
+    screen.getByRole("button", { name: "Открыть карточку топика alpha" }),
+  );
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Удалить топик…" }),
+  );
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Подтвердить удаление" }),
+  );
+  await screen.findByText("Trash denied");
+  expect(
+    screen.getByRole("button", { name: "Открыть карточку топика alpha" }),
+  ).toBeTruthy();
+  expect(screen.getByLabelText("Путь выбранного контекста").textContent).toBe(
+    ownerA.path,
+  );
+  expect(api.finishContextDeletion).not.toHaveBeenCalled();
+});
+
+it("deletes a different topic without replacing the selected context", async () => {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.open = true;
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.open = false;
+  };
+  const board = await api.readTopicBoard("p");
+  board.entries = [ownerA, ownerB].map((o) => ({
+    topic: o.topic,
+    branch: o.branch,
+    remote: false,
+    hosts: [],
+    statuses: [],
+    divergence: null,
+    todo: "",
+  }));
+  board.records = board.entries;
+  api.readTopicTable = vi.fn(async () => board);
+  api.contextDeletionRecovery = vi.fn(async () => null);
+  api.prepareContextDeletion = vi.fn(async () => ({
+    token: "delete-beta",
+    contextId: ownerB.contextId,
+    stage: "prepared",
+    details: [],
+  }));
+  api.deleteContext = vi.fn(async () => ({
+    projectId: "p",
+    status: "success",
+    cloneRemoved: true,
+    stage: "clone-trashed",
+    message: "Moved",
+  }));
+  api.finishContextDeletion = vi.fn(async () => ({
+    projectId: "p",
+    status: "success",
+    message: "Done",
+  }));
+  await mount();
+  await choose("alpha");
+  fireEvent.click(screen.getByRole("button", { name: "Топики" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Удалить топик beta" }),
+  );
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Подтвердить удаление" }),
+  );
+  await waitFor(() =>
+    expect(api.finishContextDeletion).toHaveBeenCalledTimes(1),
+  );
+  expect(
+    screen.getByRole("button", { name: "Открыть карточку топика alpha" }),
+  ).toBeTruthy();
+  expect(screen.getByLabelText("Путь выбранного контекста").textContent).toBe(
+    ownerA.path,
+  );
+  const saved = JSON.parse(
+    localStorage.getItem(
+      `goga.desktop.selection.v1:${JSON.stringify(["p", "/fixture/project", ""])}`,
+    )!,
+  );
+  expect(saved.contextId).toBe(ownerA.contextId);
+});

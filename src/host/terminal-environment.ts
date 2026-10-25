@@ -27,6 +27,8 @@ export interface TerminalLaunch {
   env: Record<string, string>;
   verifyRoot: () => Promise<void>;
   dispose?: () => void;
+  /** Private shell integration; absence is unknown, never proof of idle. */
+  activity?: { idle(shellPid: number): boolean; input(data: string): void };
 }
 export async function prepareTerminalEnvironment(
   context: TerminalContext,
@@ -98,8 +100,12 @@ export async function prepareTerminalEnvironment(
   };
   await verifyRoot();
   const prompt =
-    owner.data.kind === "topic" && path.basename(shell) === "zsh"
-      ? await prepareTopicPrompt(initial.root, owner.data.topic, env)
+    path.basename(shell) === "zsh"
+      ? await prepareTopicPrompt(
+          initial.root,
+          owner.data.kind === "topic" ? owner.data.topic : undefined,
+          env,
+        )
       : undefined;
   if (prompt) env.ZDOTDIR = prompt.directory;
   return {
@@ -109,7 +115,7 @@ export async function prepareTerminalEnvironment(
     args: ["-l", "-i"],
     env,
     verifyRoot,
-    ...(prompt ? { dispose: prompt.dispose } : {}),
+    ...(prompt ? { dispose: prompt.dispose, activity: prompt.activity } : {}),
   };
 }
 

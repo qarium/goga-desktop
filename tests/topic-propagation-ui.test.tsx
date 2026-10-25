@@ -57,6 +57,11 @@ beforeEach(() => {
       editable: false,
     })),
     readTopicBoard: vi.fn(async () => board),
+    readProjectBranches: vi.fn(async () => ({
+      projectId: "p",
+      branches: board.branches,
+      localBranches: board.localBranches,
+    })),
     runRepositoryAction: vi.fn(async (r) => ({
       projectId: r.projectId,
       contextId: r.context?.contextId,
@@ -94,13 +99,11 @@ function mount(record: any = owner, extra: any = {}) {
 }
 async function chooseDestination() {
   const select = screen.getByRole("combobox", { name: "В ветку" });
-  fireEvent.focus(select);
-  await waitFor(() =>
-    expect(
-      within(select).getByRole("option", { name: "release" }),
-    ).toBeTruthy(),
-  );
-  fireEvent.change(select, { target: { value: "release" } });
+  fireEvent.click(select);
+  await screen.findByRole("option", { name: "release" });
+  expect(screen.queryByRole("option", { name: "origin/release" })).toBeNull();
+  expect(screen.queryByRole("option", { name: "alpha" })).toBeNull();
+  fireEvent.click(screen.getByRole("option", { name: "release" }));
   return select;
 }
 it.each([true, false])(
@@ -109,16 +112,16 @@ it.each([true, false])(
     mount(clone ? owner : null);
     expect(api.readTopicBoard).not.toHaveBeenCalled();
     const destination = await chooseDestination();
-    expect(api.readTopicBoard).toHaveBeenCalledExactlyOnceWith("p", "2026");
+    expect(api.readProjectBranches).toHaveBeenCalledExactlyOnceWith("p");
+    expect(api.readTopicBoard).not.toHaveBeenCalled();
     expect(
       within(destination).queryByRole("option", { name: "origin/release" }),
     ).toBeNull();
     expect(
       within(destination).queryByRole("option", { name: "alpha" }),
     ).toBeNull();
-    fireEvent.change(screen.getByRole("combobox", { name: "Из ветки" }), {
-      target: { value: "main" },
-    });
+    fireEvent.click(screen.getByRole("combobox", { name: "Из ветки" }));
+    fireEvent.click(await screen.findByRole("option", { name: "main" }));
     expect(api.runRepositoryAction).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Опубликовать" }));
     await waitFor(() =>
@@ -198,19 +201,54 @@ it("does not publish when ownership is unknown or the target is remote", () => {
   );
   expect(api.runRepositoryAction).not.toHaveBeenCalled();
 });
-it("settles a branch load error and allows another focus to retry", async () => {
-  api.readTopicBoard.mockRejectedValueOnce(Error("Branches failed"));
+it("settles a branch load error and allows reopening to retry", async () => {
+  api.readProjectBranches.mockRejectedValueOnce(Error("Branches failed"));
   mount();
   const select = screen.getByRole("combobox", { name: "В ветку" });
-  fireEvent.focus(select);
+  fireEvent.click(select);
   await screen.findByText("Branches failed");
   expect(screen.getByRole("button", { name: "Опубликовать" })).toHaveProperty(
     "disabled",
     true,
   );
+  fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Escape" });
   await chooseDestination();
   expect(screen.getByRole("button", { name: "Опубликовать" })).toHaveProperty(
     "disabled",
     false,
   );
+});
+
+it("uses searchable pickers with independent choices and Escape keeps the card open", async () => {
+  const { onClose } = mount();
+  fireEvent.click(screen.getByRole("combobox", { name: "Из ветки" }));
+  const search = await screen.findByRole("searchbox", {
+    name: "Найти ветку для обновления",
+  });
+  await screen.findByRole("option", { name: "main" });
+  fireEvent.change(search, { target: { value: "MAIN" } });
+  expect(screen.queryByRole("option", { name: "release" })).toBeNull();
+  fireEvent.keyDown(search, { key: "ArrowDown" });
+  fireEvent.keyDown(search, { key: "Enter" });
+  expect(
+    screen.getByRole("combobox", { name: "Из ветки" }).textContent,
+  ).toContain("main");
+  fireEvent.click(screen.getByRole("combobox", { name: "В ветку" }));
+  const destination = screen.getByRole("searchbox", {
+    name: "Найти ветку для публикации",
+  });
+  expect(screen.queryByRole("option", { name: "origin/release" })).toBeNull();
+  expect(screen.queryByRole("option", { name: "alpha" })).toBeNull();
+  fireEvent.change(destination, { target: { value: "unknown" } });
+  expect(screen.getByText("Ничего не найдено")).toBeTruthy();
+  fireEvent.keyDown(destination, { key: "Escape" });
+  expect(screen.queryByRole("searchbox")).toBeNull();
+  expect(onClose).not.toHaveBeenCalled();
+  expect(
+    screen.getByRole("combobox", { name: "Из ветки" }).textContent,
+  ).toContain("main");
+  expect(api.readProjectBranches).toHaveBeenCalledTimes(1);
+  expect(api.readTopicBoard).not.toHaveBeenCalled();
+  expect(api.runRepositoryAction).not.toHaveBeenCalled();
+  expect(api.prepareTopicOperation).not.toHaveBeenCalled();
 });

@@ -61,3 +61,49 @@ it("keeps a compact project header with Runs and Launch actions and settings in 
     ),
   ).toBeTruthy();
 });
+
+it.each(["button", "escape"])(
+  "shows global failure outside the header and dismisses it by %s without blocking navigation",
+  async (method) => {
+    HTMLDialogElement.prototype.showModal = function () {
+      this.setAttribute("open", "");
+    };
+    HTMLDialogElement.prototype.close = function () {
+      this.removeAttribute("open");
+    };
+    const failure =
+      "Хранилище занято. " + "Полная диагностика без обрезания. ".repeat(80);
+    window.goga.runs = vi.fn(async () => {
+      throw Error(failure);
+    });
+    const { container } = render(<App />);
+    await screen.findByRole("heading", { name: "Synthetic project" });
+    const dialog = await screen.findByRole("dialog", {
+      name: "Не удалось выполнить операцию",
+    });
+    expect(within(dialog).getByRole("alert").textContent).toBe(failure);
+    expect(container.querySelector(".project-bar")?.contains(dialog)).toBe(
+      false,
+    );
+    expect(container.querySelector(".project-bar .close-error")).toBeNull();
+    const close = within(dialog).getByRole("button", {
+      name: "Закрыть сообщение",
+    });
+    expect((close as HTMLButtonElement).disabled).toBe(false);
+    if (method === "button") fireEvent.click(close);
+    else
+      fireEvent(
+        dialog,
+        new Event("cancel", { bubbles: true, cancelable: true }),
+      );
+    expect(
+      screen.queryByRole("dialog", { name: "Не удалось выполнить операцию" }),
+    ).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Топики" }));
+    expect(
+      screen
+        .getByRole("button", { name: "Топики" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+  },
+);

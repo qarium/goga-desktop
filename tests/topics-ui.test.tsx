@@ -591,7 +591,7 @@ it.each(["draft", "active"])(
       ).toBe(true);
   },
 );
-it("row deletion ignores unrelated dirt but protects selected context", async () => {
+it("row deletion ignores unrelated dirt and permits selected context", async () => {
   api.readTopicBoard.mockResolvedValue({ ...board, dirty: true });
   render(
     <TopicsWorkspace
@@ -599,6 +599,16 @@ it("row deletion ignores unrelated dirt but protects selected context", async ()
       store={createTopicsStore()}
       onOpenTopic={vi.fn()}
       onChanged={vi.fn()}
+      knownContexts={[
+        {
+          projectId: "p",
+          year: "2026",
+          topic: a.topic,
+          branch: a.branch,
+          contextId: "a",
+          state: "ready",
+        } as any,
+      ]}
       selectedContext={{
         projectId: "p",
         year: "2026",
@@ -620,7 +630,7 @@ it("row deletion ignores unrelated dirt but protects selected context", async ()
         name: "Удалить топик feature-a",
       }) as HTMLButtonElement
     ).disabled,
-  ).toBe(true);
+  ).toBe(false);
   expect(api.executeTopicOperation).not.toHaveBeenCalled();
 });
 
@@ -683,3 +693,81 @@ it("does not introduce a propagation prohibition from the board marker", async (
   ).toBeNull();
   expect(api.prepareTopicOperation).not.toHaveBeenCalled();
 });
+
+it.each([false, true])(
+  "offers unfinished deletion absent from this year, despite unrelated activity=%s",
+  async (otherActive) => {
+    const owner: any = {
+      projectId: "p",
+      year: "2025",
+      topic: "gone",
+      branch: "gone",
+      contextId: "ctx-" + "a".repeat(64),
+      revision: "00000000-0000-4000-8000-000000000001",
+      deletedAt: new Date().toISOString(),
+      state: "missing",
+    };
+    api.readTopicTable = vi.fn(async () => ({
+      ...board,
+      entries: otherActive
+        ? [{ ...a, topic: "gone", branch: "gone", hosts: [] }]
+        : [],
+      records: [],
+    }));
+    api.contextDeletionRecovery = vi.fn(async () => ({
+      token: "recover-gone",
+      contextId: owner.contextId,
+      stage: "removing-topic",
+      details: ["Same unfinished operation"],
+    }));
+    api.prepareContextDeletion = vi.fn();
+    const otherOwner = {
+      ...owner,
+      year: "2026",
+      contextId: "ctx-" + "b".repeat(64),
+      deletedAt: undefined,
+      state: "ready",
+    };
+    render(
+      <TopicsWorkspace
+        project={project}
+        store={createTopicsStore()}
+        knownContexts={[owner, otherOwner]}
+        runs={
+          otherActive
+            ? [
+                {
+                  id: "other-year-run",
+                  projectId: "p",
+                  topic: "gone",
+                  branch: "gone",
+                  context: otherOwner,
+                  status: "running",
+                  kind: "pipeline",
+                } as any,
+              ]
+            : []
+        }
+        onOpenTopic={() => {}}
+        onChanged={() => {}}
+      />,
+    );
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Продолжить удаление gone · 2025",
+      }),
+    );
+    await screen.findByText("Same unfinished operation");
+    expect(api.contextDeletionRecovery).toHaveBeenCalledWith(
+      expect.objectContaining({ year: "2025", contextId: owner.contextId }),
+    );
+    expect(api.prepareContextDeletion).not.toHaveBeenCalled();
+    expect(
+      (
+        screen.getByRole("button", {
+          name: "Повторить удаление",
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(false);
+  },
+);

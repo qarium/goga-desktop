@@ -20,6 +20,7 @@ export const READ_BUDGETS = {
   readTopicCatalog: 300000,
   readTopicTable: 300000,
   readTopicOverview: 300000,
+  readProjectBranches: 30000,
   readTopicBoard: 300000,
   readTopicDetails: 300000,
   readTopicTask: 300000,

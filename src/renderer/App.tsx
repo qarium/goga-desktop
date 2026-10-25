@@ -1,3 +1,9 @@
+import { flushSync } from "react-dom";
+import {
+  ContextDeletionProvider,
+  ContextDeletionPopup,
+  useContextDeletionController,
+} from "./ContextDeletionController";
 import { TopicOverview } from "./TopicOverview";
 import { RetainedViews } from "./RetainedViews";
 import { TerminalWorkspace } from "./TerminalWorkspace";
@@ -6,6 +12,7 @@ import {
   writeCatalogCache,
   readWorkspaceSelection,
   writeWorkspaceSelection,
+  persistDeletedWorkspaceSelection,
   type DisplayCatalog,
 } from "./topic-display-cache";
 import {
@@ -14,7 +21,8 @@ import {
   workspacePath,
   workspaceLaunchBlockReason,
 } from "./workspace-context";
-import { topicError } from "./TopicsCommon";
+import { dismissActiveTopicPopup } from "./TopicPickerPopup";
+import { topicError, TopicModal } from "./TopicsCommon";
 import { preparationErrorMessage } from "./preparation-error";
 import {
   buildRepeatPreparationSchema,
@@ -316,7 +324,6 @@ export function App() {
           [...(selectedContext ? [selectedContext] : []), ...knownContexts]
             .filter(
               (record) =>
-                !record.deletedAt &&
                 record.projectId === topicCard.project.id &&
                 record.year === topicCard.year &&
                 record.topic === topicCard.target.topic &&
@@ -326,10 +333,15 @@ export function App() {
         ).values(),
       ]
     : [];
+  const deletionOwner =
+    matchingCardOwners.length === 1 ? matchingCardOwners[0] : undefined;
   const cardOwner =
-    matchingCardOwners.find(
-      (record) => record.contextId === selectedContext?.contextId,
-    ) ?? (matchingCardOwners.length === 1 ? matchingCardOwners[0] : undefined);
+    matchingCardOwners
+      .filter((record) => !record.deletedAt)
+      .find((record) => record.contextId === selectedContext?.contextId) ??
+    (matchingCardOwners.length === 1 && !matchingCardOwners[0].deletedAt
+      ? matchingCardOwners[0]
+      : undefined);
   const cardOwnerError =
     !cardOwner && matchingCardOwners.length > 1
       ? "У топика несколько рабочих контекстов. Выберите нужный в селекторе топиков."
@@ -466,6 +478,7 @@ export function App() {
   function navigate(action: () => void) {
     if (
       topicsBusy ||
+      deletion.busy ||
       repeatPending ||
       repeatBusy ||
       topicCard ||
@@ -685,9 +698,14 @@ export function App() {
   useEffect(() => {
     if (page === "project" && run) setProjectId(run.projectId);
   }, [selected]);
+  useEffect(() => {
+    // Never await presentation cleanup to enable the error's close controls.
+    if (error) void dismissActiveTopicPopup().catch(() => {});
+  }, [error]);
   const canShowDashboard =
     !!run && dashboardReady(run) && !run.error && !viewErrors[run.id];
   const visibleRun =
+    !error &&
     !topicCard &&
     page === "project" &&
     run &&
@@ -696,7 +714,14 @@ export function App() {
       ? run.id
       : null;
   useEffect(() => {
-    window.goga.selectRun(visibleRun).catch((e) => setError(message(e)));
+    window.goga.selectRun(visibleRun).catch((e) => {
+      if (visibleRun)
+        setViewErrors((previous) => ({
+          ...previous,
+          [visibleRun]: message(e),
+        }));
+      setError(message(e));
+    });
   }, [visibleRun]);
   useEffect(() => {
     if (
@@ -965,6 +990,7 @@ export function App() {
   function navigateContext(action: () => void) {
     if (
       settingsBusy ||
+      deletion.busy ||
       settingsGuard.current?.busy ||
       topicCard ||
       pendingNavigation
@@ -991,6 +1017,71 @@ export function App() {
       (project) => project.id === id && project.path === path,
     );
   };
+  const deletion = useContextDeletionController(async (owner) => {
+    const saved = contextSelectionsRef.current[owner.projectId];
+    const matches = saved && contextKey(saved) === contextKey(owner);
+    const deletingProject = projects.find(
+      (item) => item.id === owner.projectId,
+    );
+    // The operation outlives the card. Commit and persist navigation before Goga.
+    flushSync(() => {
+      if (matches) {
+        const next = {
+          ...contextSelectionsRef.current,
+          [owner.projectId]: null,
+        };
+        contextSelectionsRef.current = next;
+        setContextSelections(next);
+        restoration.current.delete(owner.projectId);
+        if (projectId === owner.projectId) {
+          selectedContextRef.current = null;
+          selectedRef.current = null;
+          setSelected(null);
+          setPage(
+            pageRef.current === "terminal"
+              ? "terminal"
+              : pageRef.current === "topics"
+                ? "topics"
+                : "project-settings",
+          );
+        }
+      }
+      setKnownContexts((values) =>
+        values.map((record) =>
+          record.contextId === owner.contextId
+            ? {
+                ...record,
+                state: "missing",
+                deletedAt: new Date().toISOString(),
+              }
+            : record,
+        ),
+      );
+      setTopicCard((value) =>
+        value?.project.id === owner.projectId &&
+        value.year === owner.year &&
+        value.target.topic === owner.topic &&
+        value.target.branch === owner.branch
+          ? null
+          : value,
+      );
+    });
+    const current = contextSelectionsRef.current[projectId];
+    await window.goga.selectTopicContext(
+      current?.state === "ready" &&
+        current.storageKind === "clone" &&
+        current.ownership === "managed" &&
+        !current.preparation &&
+        !current.deletedAt &&
+        current.compatibility !== "legacy-linked" &&
+        topicContextRefSchema.safeParse(contextRef(current)).success
+        ? contextRef(current)
+        : null,
+    );
+    if (!deletingProject)
+      throw Error("Не удалось сохранить выбор: проект недоступен.");
+    persistDeletedWorkspaceSelection(deletingProject, owner);
+  }, topicsChanged);
   const catalogError = page !== "settings" && currentTopicsError && (
     <div className="context-board-error">
       <p role="alert">{currentTopicsError}</p>
@@ -1002,7 +1093,7 @@ export function App() {
       </button>
     </div>
   );
-  return (
+  const content = (
     <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
       <header className="titlebar">
         <div className="wordmark">
@@ -1208,11 +1299,6 @@ export function App() {
               />
             )}
           </div>
-          {error && (
-            <p className="close-error" role="alert" title={error}>
-              {error}
-            </p>
-          )}
           {page !== "settings" && project && (
             <div className="project-actions">
               <button
@@ -1249,6 +1335,16 @@ export function App() {
           )}
           <RepositoryOperationPopup anchor={repositoryPopupAnchor} />
         </div>
+        {error && (
+          <TopicModal
+            title="Не удалось выполнить операцию"
+            closeLabel="Закрыть сообщение"
+            className="app-error-dialog"
+            onClose={() => setError("")}
+          >
+            <pre role="alert">{error}</pre>
+          </TopicModal>
+        )}
         {!visibleRun && catalogError}
         <RetainedViews activeKey={page === "settings" ? "settings" : null}>
           <div className="scroll-area">
@@ -1712,10 +1808,7 @@ export function App() {
                     )
                       setPage("context-runs");
                     else
-                      showContextPreparation(
-                        initialPreparation.kind,
-                        record,
-                      );
+                      showContextPreparation(initialPreparation.kind, record);
                   }}
                 />
               )}
@@ -1964,14 +2057,17 @@ export function App() {
             >
               {project && window.goga.terminal && (
                 <TerminalWorkspace
+                  suspendOpen={deletion.busy}
                   api={window.goga.terminal}
                   scope={displayOwner ? contextRef(displayOwner) : project.id}
                   blocked={contextUnavailable || undefined}
                   obscured={Boolean(
+                    error ||
                     topicCard ||
                     pendingNavigation ||
                     repeatPending ||
-                    repositoryActions.failures.length,
+                    repositoryActions.failures.length ||
+                    deletion.operation,
                   )}
                 />
               )}
@@ -2117,6 +2213,7 @@ export function App() {
             ])
           }
           owner={cardOwner}
+          deletionOwner={deletionOwner}
           selectedContextId={selectedContext?.contextId}
           runs={runs as RunWithContext[]}
           store={topicsStore.current}
@@ -2186,7 +2283,13 @@ export function App() {
           }}
         />
       )}
+      <ContextDeletionPopup controller={deletion} />
     </div>
+  );
+  return (
+    <ContextDeletionProvider value={deletion.execute}>
+      {content}
+    </ContextDeletionProvider>
   );
 }
 

@@ -75,6 +75,7 @@ export function TopicCard({
   onBusy?: (busy: boolean) => void;
   minimal?: boolean;
   owner?: WorktreeRecord;
+  deletionOwner?: WorktreeRecord;
   contextRequired?: boolean;
   ownerReadState?: "loading" | "error" | "confirmed";
   ownerReadError?: string;
@@ -712,7 +713,6 @@ export function TopicCard({
                           ? "«Применить в базу» — только локально. «Перенести в базу и опубликовать» включает публикацию; точный внешний адрес покажем в подтверждении. "
                           : !owner &&
                             "Перенос в базу включает её публикацию на origin. "}
-                        {current && "Текущий топик нельзя удалить."}
                       </p>
                     </section>
                   )}

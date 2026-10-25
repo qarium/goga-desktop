@@ -1,4 +1,8 @@
-import { historyYearSchema, historyEntrySchema, historyPathSchema } from "../shared/history";
+import {
+  historyYearSchema,
+  historyEntrySchema,
+  historyPathSchema,
+} from "../shared/history";
 import {
   topicPopupBoundsSchema,
   topicPopupIdSchema,
@@ -50,7 +54,12 @@ import type { SettingsStore } from "../host/settings";
 import { validShellSender } from "./security";
 const id = z.string().min(1).max(256);
 const documentTarget = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("dockerfile"), path: z.string().refine(isProjectDockerfilePath) }).strict(),
+  z
+    .object({
+      kind: z.literal("dockerfile"),
+      path: z.string().refine(isProjectDockerfilePath),
+    })
+    .strict(),
   z
     .object({
       kind: z.literal("profile"),
@@ -298,11 +307,27 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   handle("context-deletion-recovery", (ref) =>
     d.service.contextDeletionRecovery(topicContextRefSchema.parse(ref)),
   );
-  handle("prepare-context-deletion", (ref) =>
-    d.service.prepareContextDeletion(topicContextRefSchema.parse(ref)),
-  );
+  handle("prepare-context-deletion", (ref, branch) => {
+    const owner = topicContextRefSchema.parse(ref);
+    const selected = z.string().min(1).max(1024).optional().parse(branch);
+    return selected === undefined
+      ? d.service.prepareContextDeletion(owner)
+      : d.service.prepareContextDeletion(owner, selected);
+  });
   handle("delete-context", (input) =>
     d.service.deleteContext(
+      z
+        .object({
+          projectId: id,
+          token: z.string().uuid(),
+          allowAhead: z.literal(true).optional(),
+        })
+        .strict()
+        .parse(input),
+    ),
+  );
+  handle("finish-context-deletion", (input) =>
+    d.service.finishContextDeletion(
       z
         .object({ projectId: id, token: z.string().uuid() })
         .strict()
@@ -339,7 +364,10 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
     d.service.repeatBuild(id.parse(runId), z.boolean().parse(confirmClean)),
   );
   handle("prepare-history-prune", (projectId, year) =>
-    d.service.prepareHistoryPrune(id.parse(projectId), historyYearSchema.parse(year)),
+    d.service.prepareHistoryPrune(
+      id.parse(projectId),
+      historyYearSchema.parse(year),
+    ),
   );
   handle("prune-history", (projectId, token) =>
     d.service.pruneHistory(id.parse(projectId), z.uuid().parse(token)),
@@ -371,7 +399,10 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
     ),
   );
   handle("read-topic-catalog", (projectId, year) =>
-    d.service.readTopicCatalog(id.parse(projectId), topicYearSchema.parse(year)),
+    d.service.readTopicCatalog(
+      id.parse(projectId),
+      topicYearSchema.parse(year),
+    ),
   );
   handle("read-topic-table", (projectId, year) =>
     d.service.readTopicTable(id.parse(projectId), topicYearSchema.parse(year)),
@@ -382,6 +413,9 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
       topicYearSchema.parse(year),
       topicTargetSchema.parse(target),
     ),
+  );
+  handle("read-project-branches", (projectId) =>
+    d.service.readProjectBranches(id.parse(projectId)),
   );
   handle("read-topic-board", (projectId, year) =>
     d.service.readTopicBoard(
@@ -418,7 +452,9 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   handle("list-project-tools", (projectId) =>
     d.service.listProjectTools(scopeRefSchema.parse(projectId)),
   );
-  handle("resolve-project-dockerfile", (projectId) => d.service.resolveProjectDockerfile(scopeRefSchema.parse(projectId)));
+  handle("resolve-project-dockerfile", (projectId) =>
+    d.service.resolveProjectDockerfile(scopeRefSchema.parse(projectId)),
+  );
   handle("list-project-pipelines", (projectId) =>
     d.service.listProjectPipelines(scopeRefSchema.parse(projectId)),
   );

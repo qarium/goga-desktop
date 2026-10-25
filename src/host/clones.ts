@@ -1,3 +1,10 @@
+import {
+  deletionSwitchSchema,
+  type DeletionSwitch,
+  executeDeletionSwitch,
+  verifyDeletionSwitch,
+  verifyAppliedDeletionSwitch,
+} from "./deletion-branch-switch";
 import { constants } from "node:fs";
 import {
   lstat,
@@ -33,7 +40,7 @@ const changed = () =>
   Error("Контекст изменён или его ревизия устарела. Выберите топик заново.");
 const deleted = () =>
   Error(
-    "Клон этого топика удалён. Для повторного создания требуется новая идентичность; архивные refs сохранены.",
+    "Клон этого топика удалён. Для повторного создания требуется новая идентичность.",
   );
 const ambiguous = () =>
   Error(
@@ -108,6 +115,39 @@ const deletionSchema = z
     deletedAt: z.string().datetime().optional(),
   })
   .strict();
+const contextDeletionSchema = deletionSchema
+  .omit({ archives: true })
+  .extend({
+    schemaVersion: z.literal(2),
+    flow: z.literal("trash-first"),
+    primarySwitch: deletionSwitchSchema.optional(),
+    aheadCount: z.number().int().nonnegative(),
+    primaryHead: oidSchema.nullable(),
+    primaryTopicAbsent: z.boolean(),
+    primaryFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    primarySurvivorsFingerprint: z.string().regex(/^[a-f0-9]{64}$/),
+    primaryHistoryFingerprint: z
+      .string()
+      .regex(/^[a-f0-9]{64}$/)
+      .nullable(),
+    stage: z.enum([
+      "prepared",
+      "trashing",
+      "clone-trashed",
+      "removing-topic",
+      "completed",
+    ]),
+  })
+  .strict();
+export type ContextDeletionPlan = z.infer<typeof contextDeletionSchema>;
+export interface ContextCloneDeletionResult {
+  token: string;
+  owner: TopicContextRef;
+  status: "success" | "partial" | "failed";
+  stage: ContextDeletionPlan["stage"];
+  message: string;
+  cloneRemoved?: boolean;
+}
 export type CloneDeletionPlan = z.infer<typeof deletionSchema>;
 export interface CloneDeletionResult {
   token: string;
@@ -155,11 +195,17 @@ export class CloneManager {
     ])
       this.env[key] = undefined;
   }
-  private async git(args: string[], cwd: string, owner?: WorktreeRecord) {
+  private async git(
+    args: string[],
+    cwd: string,
+    owner?: WorktreeRecord,
+    beforeCommand?: () => void,
+  ) {
     await this.store.assertRoot();
     await noSymlinks(cwd);
     await noSymlinks(path.join(cwd, ".git"));
     if (owner) await this.store.assertOwned(owner);
+    beforeCommand?.();
     const result = await this.runner.command(
       "git",
       ["-c", "core.hooksPath=/dev/null", ...args],
@@ -729,10 +775,18 @@ export class CloneManager {
       await handle.close();
     }
   }
-  private async writeDeletion(plan: CloneDeletionPlan, create = false) {
-    deletionSchema.parse(plan);
+  private async writeDeletion(
+    plan: CloneDeletionPlan | ContextDeletionPlan,
+    create = false,
+  ) {
+    (plan.schemaVersion === 1 ? deletionSchema : contextDeletionSchema).parse(
+      plan,
+    );
     await this.store.assertRoot();
-    const file = this.deletionFile(plan.token),
+    const file =
+        plan.schemaVersion === 1
+          ? this.deletionFile(plan.token)
+          : this.contextDeletionFile(plan.token),
       temp = `${file}.${randomUUID()}.tmp`;
     await noSymlinks(file);
     if (create) {
@@ -1138,6 +1192,614 @@ export class CloneManager {
         }
       },
     );
+  }
+  private contextDeletionFile(token: string) {
+    z.string().uuid().parse(token);
+    return path.join(this.store.root, `.context-deletion-${token}.json`);
+  }
+  /** New journals have a separate filename and strict version; legacy archive-first
+   * journals can never enter the trash-first state machine. */
+  async readContextDeletion(token: string): Promise<ContextDeletionPlan> {
+    await this.store.assertRoot();
+    const file = this.contextDeletionFile(token);
+    await noSymlinks(file);
+    const handle = await open(
+      file,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    try {
+      const info = await handle.stat();
+      if (
+        !info.isFile() ||
+        info.nlink !== 1 ||
+        info.size > 1024 * 1024 ||
+        (info.mode & 0o077) !== 0 ||
+        (process.getuid && info.uid !== process.getuid())
+      )
+        throw unavailable();
+      const plan = contextDeletionSchema.parse(
+        JSON.parse(await handle.readFile("utf8")),
+      );
+      if (plan.token !== token) throw changed();
+      return plan;
+    } finally {
+      await handle.close();
+    }
+  }
+  async contextDeletionRecovery(
+    projectId: string,
+  ): Promise<ContextDeletionPlan[]> {
+    await this.store.assertRoot();
+    const result: ContextDeletionPlan[] = [];
+    for (const name of await readdir(this.store.root)) {
+      const match = /^\.context-deletion-([a-f0-9-]{36})\.json$/.exec(name);
+      if (!match) continue;
+      const plan = await this.readContextDeletion(match[1]);
+      if (
+        plan.owner.projectId === projectId &&
+        plan.stage !== "completed" &&
+        (plan.stage !== "prepared" || plan.expiresAt > Date.now())
+      )
+        result.push(plan);
+    }
+    return result;
+  }
+  private async primaryDeletionHead(
+    row: WorktreeRecord,
+  ): Promise<string | null> {
+    const refs = (
+      await this.git(
+        ["for-each-ref", "--format=%(refname)%00%(objectname)", "refs/heads"],
+        row.projectPath,
+      )
+    ).trim();
+    const exact = refs
+      .split("\n")
+      .find((line) => line.startsWith(`refs/heads/${row.branch}\0`));
+    return exact ? oidSchema.parse(exact.slice(exact.indexOf("\0") + 1)) : null;
+  }
+  private async primaryDeletionFingerprint(
+    row: WorktreeRecord,
+    survivors = false,
+    expectedBranch?: string,
+  ) {
+    const refs = await this.git(
+      [
+        "for-each-ref",
+        "--format=%(refname)%00%(objectname)",
+        "refs/heads",
+        "refs/remotes",
+      ],
+      row.projectPath,
+    );
+    const head = await this.git(
+      ["rev-parse", "--symbolic-full-name", "HEAD"],
+      row.projectPath,
+    );
+    return createHash("sha256")
+      .update(
+        JSON.stringify([
+          survivors
+            ? refs
+                .split("\n")
+                .filter(
+                  (line) => !line.startsWith(`refs/heads/${row.branch}\0`),
+                )
+                .join("\n")
+            : refs,
+          expectedBranch ? `refs/heads/${expectedBranch}\n` : head,
+        ]),
+      )
+      .digest("hex");
+  }
+  private async primaryHistoryFingerprint(
+    row: WorktreeRecord,
+  ): Promise<string | null> {
+    const root = path.join(
+      row.projectPath,
+      ".goga/history",
+      row.year,
+      row.topic,
+    );
+    const parts: unknown[] = [];
+    const visit = async (target: string, depth = 0): Promise<void> => {
+      if (depth > 32 || parts.length > 100000)
+        throw Error("Каталог топика слишком велик для безопасной проверки.");
+      await noSymlinks(target);
+      const info = await lstat(target);
+      if (!info.isDirectory() && !info.isFile()) throw unavailable();
+      parts.push([
+        path.relative(root, target),
+        info.ino,
+        info.dev,
+        info.size,
+        info.mtimeMs,
+        info.ctimeMs,
+        info.mode,
+      ]);
+      if (info.isDirectory()) {
+        for (const entry of (await readdir(target)).sort())
+          await visit(path.join(target, entry), depth + 1);
+      }
+    };
+    await noSymlinks(root);
+    try {
+      await lstat(root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    await visit(root);
+    return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
+  }
+  async prepareContextDeletion(
+    ref: TopicContextRef,
+    guards: { active: boolean; current: boolean },
+    primaryTopicAbsent = false,
+    primarySwitch?: DeletionSwitch,
+  ): Promise<ContextDeletionPlan> {
+    this.deletionGuards({ ...guardsSchema.parse(guards), current: false });
+    const initial = await this.resolve(ref);
+    return this.store.withRepositoryLock(initial.repositoryKey, async () => {
+      const row = (await this.store.read()).records.find(
+        (r) => r.contextId === ref.contextId,
+      );
+      if (!row || row.revision !== ref.revision || row.state !== "ready")
+        throw changed();
+      const snapshot = await this.deletionSnapshot(row);
+      const primaryHead = await this.primaryDeletionHead(row);
+      // Compare commit identities from the two local repositories. No fetch,
+      // temporary refs, publication, or object writes are needed for this preview.
+      const primaryCommits = new Set(
+        primaryHead
+          ? (await this.git(["rev-list", primaryHead], row.projectPath))
+              .trim()
+              .split("\n")
+          : [],
+      );
+      const cloneCommits = (
+        await this.git(["rev-list", snapshot.head], row.path, row)
+      )
+        .trim()
+        .split("\n");
+      const plan: ContextDeletionPlan = {
+        schemaVersion: 2,
+        flow: "trash-first",
+        token: randomUUID(),
+        owner: worktreeContextRef(row),
+        path: row.path,
+        projectPath: row.projectPath,
+        sourceCommonDir: row.sourceCommonDir!,
+        sourceRoot: snapshot.sourceRoot,
+        sourceGit: snapshot.sourceGit,
+        head: snapshot.head,
+        fingerprint: snapshot.fingerprint,
+        primaryHead,
+        primaryTopicAbsent,
+        ...(primarySwitch ? { primarySwitch } : {}),
+        primaryFingerprint: await this.primaryDeletionFingerprint(row),
+        primarySurvivorsFingerprint: await this.primaryDeletionFingerprint(
+          row,
+          true,
+        ),
+        primaryHistoryFingerprint: await this.primaryHistoryFingerprint(row),
+        aheadCount: cloneCommits.filter(
+          (oid) => !primaryCommits.has(oidSchema.parse(oid)),
+        ).length,
+        stage: "prepared",
+        expiresAt: Date.now() + 120000,
+        recordRevision: row.revision,
+        deletionRevision: randomUUID(),
+        tombstoneRevision: randomUUID(),
+      };
+      await this.assertContextDeletionSnapshot(plan, row);
+      await this.writeDeletion(plan, true);
+      return plan;
+    });
+  }
+  private assertContextDeletionOwner(
+    plan: ContextDeletionPlan,
+    row: WorktreeRecord,
+  ) {
+    if (
+      row.contextId !== plan.owner.contextId ||
+      !sameIdentity(row, plan.owner) ||
+      row.path !== plan.path ||
+      row.projectPath !== plan.projectPath ||
+      row.sourceCommonDir !== plan.sourceCommonDir ||
+      row.storageKind !== "clone" ||
+      row.ownership !== "managed"
+    )
+      throw changed();
+  }
+  private async assertContextDeletionSource(
+    plan: ContextDeletionPlan,
+    row: WorktreeRecord,
+  ) {
+    this.assertContextDeletionOwner(plan, row);
+    if (
+      JSON.stringify(await this.inode(row.projectPath)) !==
+        JSON.stringify(plan.sourceRoot) ||
+      JSON.stringify(await this.inode(row.sourceCommonDir!)) !==
+        JSON.stringify(plan.sourceGit)
+    )
+      throw changed();
+  }
+  private async assertContextDeletionSnapshot(
+    plan: ContextDeletionPlan,
+    row: WorktreeRecord,
+  ) {
+    this.assertContextDeletionOwner(plan, row);
+    if (
+      row.revision !== plan.recordRevision ||
+      row.deletedAt ||
+      (row.state !== "ready" && row.state !== "deleting")
+    )
+      throw changed();
+    if (plan.primarySwitch)
+      await verifyDeletionSwitch(
+        (args) => this.git(args, row.projectPath),
+        row.projectPath,
+        plan.primarySwitch,
+      );
+    const fresh = await this.deletionSnapshot(row);
+    if (
+      fresh.head !== plan.head ||
+      fresh.fingerprint !== plan.fingerprint ||
+      JSON.stringify(fresh.sourceRoot) !== JSON.stringify(plan.sourceRoot) ||
+      JSON.stringify(fresh.sourceGit) !== JSON.stringify(plan.sourceGit) ||
+      (await this.primaryDeletionHead(row)) !== plan.primaryHead ||
+      (plan.primaryTopicAbsent && plan.primaryHead !== null) ||
+      (await this.primaryDeletionFingerprint(row)) !==
+        plan.primaryFingerprint ||
+      (await this.primaryHistoryFingerprint(row)) !==
+        plan.primaryHistoryFingerprint
+    )
+      throw changed();
+  }
+  private async recordContextTrash(
+    plan: ContextDeletionPlan,
+    row: WorktreeRecord,
+  ) {
+    await this.assertContextDeletionSource(plan, row);
+    if (!plan.deletedAt) throw changed();
+    try {
+      await lstat(row.path);
+      throw changed();
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (row.state === "deleting" && row.revision === plan.deletionRevision)
+      row = await this.store.update(
+        {
+          ...row,
+          state: "missing",
+          reason: "missing",
+          revision: plan.tombstoneRevision,
+          deletedAt: plan.deletedAt,
+        },
+        row.revision,
+      );
+    else if (
+      row.state !== "missing" ||
+      row.revision !== plan.tombstoneRevision ||
+      row.deletedAt !== plan.deletedAt
+    )
+      throw changed();
+    plan.recordRevision = row.revision;
+    await this.writeDeletion(plan);
+    return row;
+  }
+  private contextDeletionResult(
+    plan: ContextDeletionPlan,
+    status: ContextCloneDeletionResult["status"],
+    message: string,
+  ): ContextCloneDeletionResult {
+    return {
+      token: plan.token,
+      owner: plan.owner,
+      stage: plan.stage,
+      status,
+      message,
+      ...(["clone-trashed", "removing-topic", "completed"].includes(
+        plan.stage,
+      ) && plan.deletedAt
+        ? { cloneRemoved: true }
+        : {}),
+    };
+  }
+  async trashContext(
+    token: string,
+    guards: { active: boolean; current: boolean },
+    callbacks: {
+      trashItem: (root: string) => Promise<void>;
+      beforeTrash: (plan: ContextDeletionPlan) => Promise<void>;
+      stopIdleTerminals?: () => Promise<void>;
+    },
+    allowAhead?: true,
+  ): Promise<ContextCloneDeletionResult> {
+    this.deletionGuards({ ...guardsSchema.parse(guards), current: false });
+    const initial = await this.readContextDeletion(token);
+    const initialRow = (await this.store.read()).records.find(
+      (r) => r.contextId === initial.owner.contextId,
+    );
+    if (!initialRow) throw unavailable();
+    return this.store.withRepositoryLock(initialRow.repositoryKey, async () => {
+      const plan = await this.readContextDeletion(token);
+      let row = (await this.store.read()).records.find(
+        (r) => r.contextId === plan.owner.contextId,
+      );
+      if (!row) throw unavailable();
+      this.assertContextDeletionOwner(plan, row);
+      if (
+        ["clone-trashed", "removing-topic", "completed"].includes(plan.stage)
+      ) {
+        try {
+          await this.recordContextTrash(plan, row);
+          return this.contextDeletionResult(
+            plan,
+            "success",
+            "Рабочая копия уже перемещена в Корзину. Осталось завершить удаление топика.",
+          );
+        } catch {
+          return this.contextDeletionResult(
+            plan,
+            "partial",
+            "Корзина подтверждена; согласование реестра не завершено. Повторите завершение удаления.",
+          );
+        }
+      }
+      if (plan.stage === "prepared" && Date.now() >= plan.expiresAt)
+        throw changed();
+      if (plan.stage === "prepared" && plan.aheadCount && allowAhead !== true)
+        throw Error(
+          "Подтвердите удаление коммитов, отсутствующих в одноимённой ветке основной папки.",
+        );
+      // Lost acknowledgement is not evidence of a recoverable move.
+      if (plan.stage === "trashing") {
+        try {
+          await lstat(row.path);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          return this.contextDeletionResult(
+            plan,
+            "partial",
+            "Результат перемещения в Корзину неоднозначен. Нужна ручная проверка.",
+          );
+        }
+        if (row.state === "deleting" && row.revision === plan.deletionRevision)
+          plan.recordRevision = row.revision;
+      }
+      await this.assertContextDeletionSnapshot(plan, row);
+      try {
+        await callbacks.beforeTrash(plan);
+        await this.assertContextDeletionSnapshot(plan, row);
+        if (plan.stage === "prepared") {
+          plan.stage = "trashing";
+          await this.writeDeletion(plan);
+        }
+        if (row.state === "ready") {
+          row = await this.store.update(
+            { ...row, state: "deleting", revision: plan.deletionRevision },
+            row.revision,
+          );
+          plan.recordRevision = row.revision;
+          await this.writeDeletion(plan);
+        } else if (
+          row.state !== "deleting" ||
+          row.revision !== plan.deletionRevision
+        )
+          throw changed();
+        // Feasibility and immutable snapshot are checked once more at the destructive boundary.
+        await callbacks.beforeTrash(plan);
+        await this.assertContextDeletionSnapshot(plan, row);
+        await callbacks.stopIdleTerminals?.();
+        // Shell exit hooks/history may change files. Never trash unchecked new data.
+        await this.assertContextDeletionSnapshot(plan, row);
+        await callbacks.trashItem(row.path);
+        try {
+          await lstat(row.path);
+          throw Error("Корзина не убрала исходный каталог.");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+        }
+        plan.stage = "clone-trashed";
+        plan.deletedAt = new Date().toISOString();
+        await this.writeDeletion(plan);
+        await this.recordContextTrash(plan, row);
+        return this.contextDeletionResult(
+          plan,
+          "success",
+          "Рабочая копия целиком, включая .git, перемещена в Корзину. Переключитесь в основную папку для завершения.",
+        );
+      } catch (error) {
+        assertReadActive();
+        return this.contextDeletionResult(
+          plan,
+          plan.stage === "prepared" ? "failed" : "partial",
+          `${error instanceof Error ? error.message : "Удаление не завершено."} Сохранён журнал для безопасного повтора.`,
+        );
+      }
+    });
+  }
+  async finishContextDeletion(
+    token: string,
+    removeTopic: (
+      plan: ContextDeletionPlan,
+      validatePrimarySnapshot: () => Promise<void>,
+    ) => Promise<void>,
+    beforePrimarySwitch?: () => void,
+  ): Promise<ContextCloneDeletionResult> {
+    const initial = await this.readContextDeletion(token);
+    const initialRow = (await this.store.read()).records.find(
+      (r) => r.contextId === initial.owner.contextId,
+    );
+    if (!initialRow) throw unavailable();
+    return this.store.withRepositoryLock(initialRow.repositoryKey, async () => {
+      const plan = await this.readContextDeletion(token);
+      const row = (await this.store.read()).records.find(
+        (r) => r.contextId === plan.owner.contextId,
+      );
+      if (
+        !row ||
+        !["clone-trashed", "removing-topic", "completed"].includes(plan.stage)
+      )
+        throw changed();
+      await this.recordContextTrash(plan, row);
+      if (plan.stage === "completed")
+        return this.contextDeletionResult(
+          plan,
+          "success",
+          "Топик удалён. Рабочая копия сохранена в Корзине.",
+        );
+      try {
+        const validatePrimarySnapshot = async () => {
+          await this.assertContextDeletionSource(plan, row);
+          if (plan.primarySwitch?.state === "applied") {
+            await verifyAppliedDeletionSwitch(
+              (args) => this.git(args, row.projectPath),
+              plan.primarySwitch,
+            );
+            if (
+              (
+                await this.git(
+                  [
+                    "ls-files",
+                    "--others",
+                    "--ignored",
+                    "--exclude-standard",
+                    "-z",
+                    "--",
+                    `.goga/history/${row.year}/${row.topic}`,
+                  ],
+                  row.projectPath,
+                )
+              ).length
+            )
+              throw Error(
+                "В истории основной папки есть ignored-файлы. Удаление остановлено; файлы сохранены.",
+              );
+          }
+          const history = await this.primaryHistoryFingerprint(row);
+          const primaryHead = await this.primaryDeletionHead(row);
+          if (
+            (history !== null && history !== plan.primaryHistoryFingerprint) ||
+            (primaryHead !== null && primaryHead !== plan.primaryHead) ||
+            (await this.primaryDeletionFingerprint(row, true)) !==
+              plan.primarySurvivorsFingerprint
+          )
+            throw Error(
+              "Данные основной папки изменились после подтверждения удаления. Новые данные не удалены.",
+            );
+          if (plan.primarySwitch?.state === "applied")
+            await verifyAppliedDeletionSwitch(
+              (args) => this.git(args, row.projectPath),
+              plan.primarySwitch,
+            );
+        };
+        if (plan.primarySwitch?.state === "switching")
+          throw Error(
+            "Предыдущее переключение ветки не подтверждено. Требуется ручная проверка основной папки; повторное переключение не выполняется.",
+          );
+        await validatePrimarySnapshot();
+        plan.stage = "removing-topic";
+        await this.writeDeletion(plan);
+        if (plan.primarySwitch?.state === "pending") {
+          const selected = { ...plan.primarySwitch };
+          await verifyDeletionSwitch(
+            (args) => this.git(args, row.projectPath),
+            row.projectPath,
+            selected,
+          );
+          plan.primarySwitch.state = "switching";
+          await this.writeDeletion(plan);
+          let switchIssued = false;
+          try {
+            await executeDeletionSwitch(
+              (args) =>
+                this.git(
+                  args,
+                  row.projectPath,
+                  undefined,
+                  args[0] === "switch"
+                    ? () => {
+                        beforePrimarySwitch?.();
+                        switchIssued = true;
+                      }
+                    : undefined,
+                ),
+              row.projectPath,
+              selected,
+            );
+          } catch (error) {
+            // A known pre-switch refusal is retryable, unlike a lost Git acknowledgement.
+            if (!switchIssued) {
+              plan.primarySwitch.state = "pending";
+              await this.writeDeletion(plan);
+            }
+            throw error;
+          }
+          // Only the authorized checkout may rebase the working-history snapshot.
+          // All refs (including the destination OID) must remain pinned.
+          const previousHead = selected.from;
+          const refsAfter = await this.primaryDeletionFingerprint(
+            row,
+            true,
+            previousHead,
+          );
+          if (
+            refsAfter !== plan.primarySurvivorsFingerprint ||
+            (await this.primaryDeletionHead(row)) !== plan.primaryHead
+          )
+            throw changed();
+          // Checkout changes tracked history legitimately; ignored additions are
+          // not part of the selected commit and must never gain deletion consent.
+          if (
+            (
+              await this.git(
+                [
+                  "ls-files",
+                  "--others",
+                  "--ignored",
+                  "--exclude-standard",
+                  "-z",
+                  "--",
+                  `.goga/history/${row.year}/${row.topic}`,
+                ],
+                row.projectPath,
+              )
+            ).length
+          )
+            throw Error(
+              "В истории основной папки есть ignored-файлы. Удаление остановлено; файлы сохранены.",
+            );
+          plan.primarySurvivorsFingerprint =
+            await this.primaryDeletionFingerprint(row, true);
+          plan.primaryHistoryFingerprint =
+            await this.primaryHistoryFingerprint(row);
+          plan.primarySwitch.state = "applied";
+          // Do not grant consent to concurrent working-tree changes when
+          // adopting the tracked history changed by our checkout.
+          await validatePrimarySnapshot();
+          await this.writeDeletion(plan);
+        }
+        await removeTopic(plan, validatePrimarySnapshot);
+        plan.stage = "completed";
+        await this.writeDeletion(plan);
+        return this.contextDeletionResult(
+          plan,
+          "success",
+          "Топик удалён. Рабочая копия целиком сохранена в Корзине.",
+        );
+      } catch (error) {
+        assertReadActive();
+        return this.contextDeletionResult(
+          plan,
+          "partial",
+          `Рабочая копия в Корзине, но топик не удалён: ${error instanceof Error ? error.message : "ошибка"}. Повторите завершение.`,
+        );
+      }
+    });
   }
   async deletionRecovery(projectId?: string): Promise<CloneDeletionPlan[]> {
     await this.store.assertRoot();

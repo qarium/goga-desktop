@@ -707,13 +707,21 @@ code {
   outline: 2px solid var(--teal);
   outline-offset: -3px;
 }
-.close-error {
-  color: #ff9898;
-  font-size: 12px;
-  max-width: 45%;
+.app-error-dialog[open] {
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+.app-error-dialog > header {
+  flex: 0 0 auto;
+}
+.app-error-dialog > pre {
+  margin: 0;
+  min-height: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
 }
 
 .topic-block {

@@ -8,7 +8,7 @@ import { ActionReason } from "./ActionReason";
 import { Fragment, useCallback, useEffect, useId, useState } from "react";
 import type { Project } from "../shared/types";
 import type { TopicContextIdentity, WorktreeRecord } from "../shared/worktrees";
-import type { RunWithContext } from "./topic-context";
+import { contextRunActivity, type RunWithContext } from "./topic-context";
 import type {
   TopicBoardRecord,
   TopicBoardSnapshot,
@@ -162,6 +162,9 @@ export function TopicsWorkspace({
         .sort((a, b) => Number(current(b)) - Number(current(a)))
     : [];
   const pending = loading || settled !== key;
+  const pendingDeletions = knownContexts.filter(
+    (owner) => owner.projectId === project.id && owner.deletedAt,
+  );
   const reasonId = useId();
   const createReasons = pending
     ? []
@@ -315,7 +318,6 @@ export function TopicsWorkspace({
                 );
                 const matchingOwners = knownContexts.filter(
                   (owner) =>
-                    !owner.deletedAt &&
                     owner.projectId === project.id &&
                     owner.year === year &&
                     owner.topic === r.topic &&
@@ -425,8 +427,8 @@ export function TopicsWorkspace({
                         <TooltipButton
                           disabled={
                             disabled ||
-                            current(r) ||
                             matchingOwners.length > 1 ||
+                            (!matchingOwners.length && current(r)) ||
                             activity.activeCount > 0 ||
                             ownerReadState !== "confirmed"
                           }
@@ -439,11 +441,9 @@ export function TopicsWorkspace({
                               : ownerReadState !== "confirmed"
                                 ? ownerReadError ||
                                   "Проверяем контексты топиков"
-                                : current(r)
-                                  ? "Сначала выберите другой топик"
-                                  : activity.activeCount
-                                    ? "Сначала завершите запуски топика"
-                                    : "Удаление после подтверждения"
+                                : activity.activeCount
+                                  ? "Сначала завершите запуски топика"
+                                  : "Удаление после подтверждения"
                           }
                           buttonClassName="repository-action-button topic-delete-icon"
                           onClick={() =>
@@ -478,6 +478,39 @@ export function TopicsWorkspace({
           </p>
         )}
       </LoadingBoundary>
+      {pendingDeletions.length > 0 && (
+        <section
+          className="topic-card-section"
+          aria-label="Незавершённые удаления"
+        >
+          <h3>Незавершённые удаления</h3>
+          <p className="hint">
+            Копия уже удалена. Можно продолжить оставшийся шаг в основном
+            проекте.
+          </p>
+          {pendingDeletions.map((owner) => (
+            <button
+              key={owner.contextId}
+              type="button"
+              disabled={
+                disabled || createBusy || ownerReadState !== "confirmed"
+              }
+              onClick={() =>
+                setDeleting({
+                  target: {
+                    topic: owner.topic,
+                    branch: owner.branch,
+                    remote: false,
+                  },
+                  owner,
+                })
+              }
+            >
+              Продолжить удаление {owner.topic} · {owner.year}
+            </button>
+          ))}
+        </section>
+      )}
       {picker && (
         <TopicPicker
           kind={picker}
@@ -503,19 +536,21 @@ export function TopicsWorkspace({
       {deleting && (
         <TopicDeleteDialog
           project={project}
-          year={year}
+          year={deleting.owner?.year ?? year}
           target={deleting.target}
           owner={deleting.owner}
           current={current(deleting.target)}
           active={
-            !!board &&
-            topicRowActivity(
-              board,
-              deleting.target as TopicBoardRecord,
-              runs,
-              knownContexts,
-              true,
-            ).activeCount > 0
+            deleting.owner
+              ? contextRunActivity(runs, deleting.owner).activeCount > 0
+              : !!board &&
+                topicRowActivity(
+                  board,
+                  deleting.target as TopicBoardRecord,
+                  runs,
+                  knownContexts,
+                  true,
+                ).activeCount > 0
           }
           onClose={() => setDeleting(null)}
           onChanged={changed}

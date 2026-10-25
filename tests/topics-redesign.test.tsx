@@ -61,6 +61,11 @@ beforeEach(() => {
       version: "v",
       editable: false,
     })),
+    readProjectBranches: vi.fn(async () => ({
+      projectId: "p",
+      branches: board.branches,
+      localBranches: board.branches,
+    })),
     readTopicBoard: vi.fn(async () => ({ ...board, revision: "fresh" })),
     prepareTopicOperation: vi.fn(async (r) => ({
       token: "t",
@@ -192,12 +197,8 @@ it("selecting a base only picks it; update obtains a fresh proof and requires co
   const base = screen.getByRole("combobox", {
     name: "Из ветки",
   });
-  fireEvent.focus(base);
-  await within(screen.getByRole("combobox", { name: "Из ветки" })).findByRole(
-    "option",
-    { name: "main" },
-  );
-  fireEvent.change(base, { target: { value: "main" } });
+  fireEvent.click(base);
+  fireEvent.click(await screen.findByRole("option", { name: "main" }));
   expect(api.prepareTopicOperation).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Обновить" }));
   await waitFor(() =>
@@ -211,7 +212,8 @@ it("selecting a base only picks it; update obtains a fresh proof and requires co
       }),
     ),
   );
-  expect(api.readTopicBoard).toHaveBeenCalledTimes(2);
+  expect(api.readTopicBoard).toHaveBeenCalledTimes(1);
+  expect(api.readProjectBranches).toHaveBeenCalledTimes(1);
   expect(api.executeTopicOperation).not.toHaveBeenCalled();
 });
 it("does not substitute primary catalog while owner inventory is uncertain", async () => {
@@ -260,17 +262,11 @@ it("reloads placements after a confirmed update without switching tabs", async (
       screen.queryByRole("status", { name: "Загружаем размещение…" }),
     ).toBeNull(),
   );
-  fireEvent.focus(screen.getByRole("combobox", { name: "Из ветки" }));
-  await within(screen.getByRole("combobox", { name: "Из ветки" })).findByRole(
-    "option",
-    { name: "main" },
-  );
-  fireEvent.change(screen.getByRole("combobox", { name: "Из ветки" }), {
-    target: { value: "main" },
-  });
+  fireEvent.click(screen.getByRole("combobox", { name: "Из ветки" }));
+  fireEvent.click(await screen.findByRole("option", { name: "main" }));
   fireEvent.click(screen.getByRole("button", { name: "Обновить" }));
   fireEvent.click(await screen.findByRole("button", { name: "Подтвердить" }));
-  await waitFor(() => expect(api.readTopicBoard).toHaveBeenCalledTimes(4));
+  await waitFor(() => expect(api.readTopicBoard).toHaveBeenCalledTimes(3));
   await waitFor(() =>
     expect(screen.getByRole("table").textContent).toContain("beta"),
   );

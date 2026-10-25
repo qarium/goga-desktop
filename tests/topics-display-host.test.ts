@@ -1,3 +1,5 @@
+import { EventEmitter } from "node:events";
+import { TerminalSessions } from "../src/host/terminal-sessions";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   mkdtemp,
@@ -58,12 +60,15 @@ async function fixture(options: { simulateTopicDeletion?: boolean } = {}) {
   ];
   const boards = new Map<string, typeof rows>();
   const calls: { exe: string; args: string[]; cwd: string }[] = [];
+  let beforeCall:
+    ((exe: string, args: string[], cwd: string) => void) | undefined;
   let afterCall:
     ((exe: string, args: string[], cwd: string) => Promise<void>) | undefined;
   const runner: Runner = {
     start: node.start.bind(node),
     kill: node.kill.bind(node),
     command: async (exe, args, cwd, env, input) => {
+      beforeCall?.(exe, args, cwd);
       calls.push({ exe, args, cwd });
       if (
         options.simulateTopicDeletion &&
@@ -118,6 +123,9 @@ async function fixture(options: { simulateTopicDeletion?: boolean } = {}) {
     project,
     manager,
     identity,
+    beforeCall: (fn: typeof beforeCall) => {
+      beforeCall = fn;
+    },
     afterCall: (fn: typeof afterCall) => {
       afterCall = fn;
     },
@@ -644,20 +652,49 @@ it("marks multiple owners of the same topic and branch unknown without querying 
   expect(f.calls.filter((c) => c.exe !== "git")).toHaveLength(1);
 });
 
-it("allows confirmed dedicated deletion of exactly its deleting owner while removing the primary topic", async () => {
+it("trashes selected owner before primary topic removal and requires an explicit primary switch", async () => {
   const f = await fixture({ simulateTopicDeletion: true });
   const owner = await f.manager.ensure(f.project, f.identity);
   await f.git("switch", "-c", "main");
   f.rows[0]!.current = false;
+  await f.service.selectTopicContext(worktreeContextRef(owner));
   const plan = await f.service.prepareContextDeletion(
     worktreeContextRef(owner),
   );
+  expect(plan).toMatchObject({
+    clonePath: owner.path,
+    aheadCount: 0,
+    requiresAheadConfirmation: false,
+  });
   const result = await f.service.deleteContext({
     projectId: f.project.id,
     token: plan.token,
   });
   expect(result.status).toBe("success");
-  expect(result.stage).toBe("completed");
+  expect(result).toMatchObject({ stage: "clone-trashed", cloneRemoved: true });
+  expect((await f.git("branch", "--list", target.branch)).stdout).toContain(
+    target.branch,
+  );
+  expect(
+    f.calls.some((c) => c.exe !== "git" && c.args.includes("delete")),
+  ).toBe(false);
+  await expect(
+    f.service.finishContextDeletion({
+      projectId: f.project.id,
+      token: plan.token,
+    }),
+  ).rejects.toThrow(/основн|выбран/);
+  await f.service.selectTopicContext(null);
+  expect(
+    await f.service.finishContextDeletion({
+      projectId: f.project.id,
+      token: plan.token,
+    }),
+  ).toMatchObject({
+    status: "success",
+    stage: "completed",
+    cloneRemoved: true,
+  });
   expect((await f.git("branch", "--list", target.branch)).stdout).toBe("");
   await expect(access(owner.path)).rejects.toThrow();
   await expect(
@@ -680,7 +717,7 @@ it.each(["second-owner", "wrong-stage", "wrong-revision"] as const)(
     vi.spyOn(clones, "list").mockImplementation(async (projectId) => {
       const rows = await list(projectId);
       if (fault === "wrong-stage")
-        return rows.map((row) => ({ ...row, state: "ready" as const }));
+        return rows.map((row) => ({ ...row, state: "conflict" as const }));
       if (fault === "wrong-revision")
         return rows.map((row) => ({ ...row, revision: randomUUID() }));
       return [
@@ -698,7 +735,7 @@ it.each(["second-owner", "wrong-stage", "wrong-revision"] as const)(
       projectId: f.project.id,
       token: plan.token,
     });
-    expect(result.status).toBe("partial");
+    expect(result.status).toBe("failed");
     expect(
       f.calls.some((c) => c.exe !== "git" && c.args.includes("delete")),
     ).toBe(false);
@@ -708,3 +745,809 @@ it.each(["second-owner", "wrong-stage", "wrong-revision"] as const)(
     );
   },
 );
+
+it.each(["checked-out", "external-remote"] as const)(
+  "checks %s safety before trash",
+  async (fault) => {
+    const f = await fixture({ simulateTopicDeletion: true });
+    const owner = await f.manager.ensure(f.project, f.identity);
+    if (fault === "external-remote") {
+      await f.git("switch", "-c", "main");
+      f.rows[0]!.current = false;
+      await f.git("update-ref", "refs/remotes/origin/" + target.branch, "HEAD");
+    }
+    if (fault === "checked-out") {
+      const choice = await f.service.prepareContextDeletion(
+        worktreeContextRef(owner),
+      );
+      expect(choice).toMatchObject({
+        stage: "choose-branch",
+        token: "",
+        switchBranches: [],
+      });
+      await expect(
+        f.service.deleteContext({
+          projectId: f.project.id,
+          token: choice.token,
+        }),
+      ).rejects.toThrow();
+    } else {
+      await expect(
+        f.service.prepareContextDeletion(worktreeContextRef(owner)),
+      ).rejects.toThrow();
+    }
+    await expect(access(owner.path)).resolves.toBeUndefined();
+    expect(
+      f.calls.some((c) => c.exe !== "git" && c.args.includes("delete")),
+    ).toBe(false);
+  },
+);
+it("keeps metadata failure recoverable without retrashing and rejects foreign project tokens", async () => {
+  const f = await fixture({ simulateTopicDeletion: true });
+  const owner = await f.manager.ensure(f.project, f.identity);
+  await f.git("switch", "-c", "main");
+  f.rows[0]!.current = false;
+  const plan = await f.service.prepareContextDeletion(
+    worktreeContextRef(owner),
+  );
+  await expect(
+    f.service.deleteContext({ projectId: "foreign", token: plan.token }),
+  ).rejects.toThrow();
+  expect(
+    await f.service.deleteContext({
+      projectId: f.project.id,
+      token: plan.token,
+    }),
+  ).toMatchObject({ cloneRemoved: true });
+  const domain = (f.service as any).topicDomain;
+  const execute = vi
+    .spyOn(domain, "execute")
+    .mockRejectedValueOnce(Error("metadata failure"));
+  expect(
+    await f.service.finishContextDeletion({
+      projectId: f.project.id,
+      token: plan.token,
+    }),
+  ).toMatchObject({ status: "partial", cloneRemoved: true });
+  const tombstone = (await f.service.listTopicContexts(f.project.id)).find(
+    (r) => r.contextId === owner.contextId,
+  )!;
+  expect(tombstone.deletedAt).toBeTruthy();
+  expect(
+    await f.service.contextDeletionRecovery(worktreeContextRef(tombstone)),
+  ).toMatchObject({ token: plan.token, stage: "removing-topic" });
+  expect(
+    await f.service.deleteContext({
+      projectId: f.project.id,
+      token: plan.token,
+    }),
+  ).toMatchObject({ cloneRemoved: true });
+  execute.mockRestore();
+  expect(
+    await f.service.finishContextDeletion({
+      projectId: f.project.id,
+      token: plan.token,
+    }),
+  ).toMatchObject({ status: "success" });
+  expect(
+    await f.service.finishContextDeletion({
+      projectId: f.project.id,
+      token: plan.token,
+    }),
+  ).toMatchObject({ status: "success" });
+  expect(
+    f.calls.filter((c) => c.exe !== "git" && c.args.includes("delete")),
+  ).toHaveLength(1);
+});
+
+it("will not remove a primary branch changed after trash", async () => {
+  const f = await fixture({ simulateTopicDeletion: true });
+  const owner = await f.manager.ensure(f.project, f.identity);
+  await f.git("switch", "-c", "main");
+  f.rows[0]!.current = false;
+  const plan = await f.service.prepareContextDeletion(
+    worktreeContextRef(owner),
+  );
+  await f.service.deleteContext({ projectId: f.project.id, token: plan.token });
+  await writeFile(path.join(f.repo, "new-primary"), "new work\n");
+  await f.git("add", ".");
+  await f.git("commit", "-m", "new primary work");
+  await f.git("branch", "-f", target.branch, "HEAD");
+  const result = await f.service.finishContextDeletion({
+    projectId: f.project.id,
+    token: plan.token,
+  });
+  expect(result).toMatchObject({ status: "partial", cloneRemoved: true });
+  expect(
+    f.calls.some((c) => c.exe !== "git" && c.args.includes("delete")),
+  ).toBe(false);
+  expect((await f.git("branch", "--list", target.branch)).stdout).toContain(
+    target.branch,
+  );
+});
+
+it("recovers a lost native deletion acknowledgement without running Goga or trash twice", async () => {
+  const f = await fixture({ simulateTopicDeletion: true });
+  const owner = await f.manager.ensure(f.project, f.identity);
+  await f.git("switch", "-c", "main");
+  f.rows[0]!.current = false;
+  const plan = await f.service.prepareContextDeletion(
+    worktreeContextRef(owner),
+  );
+  await f.service.deleteContext({ projectId: f.project.id, token: plan.token });
+  f.afterCall(async (exe, args) => {
+    if (exe !== "git" && args.includes("delete"))
+      throw Error("lost native acknowledgement");
+  });
+  expect(
+    await f.service.finishContextDeletion({
+      projectId: f.project.id,
+      token: plan.token,
+    }),
+  ).toMatchObject({ status: "partial", cloneRemoved: true });
+  expect((await f.git("branch", "--list", target.branch)).stdout).toBe("");
+  f.afterCall(async () => {});
+  expect(
+    await f.service.finishContextDeletion({
+      projectId: f.project.id,
+      token: plan.token,
+    }),
+  ).toMatchObject({ status: "success", cloneRemoved: true });
+  expect(
+    f.calls.filter((c) => c.exe !== "git" && c.args.includes("delete")),
+  ).toHaveLength(1);
+});
+
+it.each([false, true])(
+  "deletes clone-only topic with explicit ahead consent; newly appearing primary topic blocks finish: %s",
+  async (appeared) => {
+    const f = await fixture({ simulateTopicDeletion: true });
+    const owner = await f.manager.create(f.project, {
+      year: "2026",
+      branch: "new-only",
+      baseRef: target.branch,
+    });
+    const plan = await f.service.prepareContextDeletion(
+      worktreeContextRef(owner),
+    );
+    expect(plan.requiresAheadConfirmation).toBe(true);
+    expect(plan.aheadCount).toBeGreaterThan(0);
+    await expect(
+      f.service.deleteContext({ projectId: f.project.id, token: plan.token }),
+    ).rejects.toThrow(/подтверд/i);
+    expect(
+      await f.service.deleteContext({
+        projectId: f.project.id,
+        token: plan.token,
+        allowAhead: true,
+      }),
+    ).toMatchObject({ cloneRemoved: true });
+    if (appeared) {
+      await mkdir(path.join(f.repo, ".goga/history/2026/new-only"), {
+        recursive: true,
+      });
+      await writeFile(
+        path.join(f.repo, ".goga/history/2026/new-only/todo.md"),
+        "new independent data\n",
+      );
+    }
+    const result = await f.service.finishContextDeletion({
+      projectId: f.project.id,
+      token: plan.token,
+    });
+    expect(result.status).toBe(appeared ? "partial" : "success");
+    expect(
+      f.calls.some((c) => c.exe !== "git" && c.args.includes("delete")),
+    ).toBe(false);
+  },
+);
+
+it("rejects a same-slug but differently named primary branch before trash", async () => {
+  const f = await fixture({ simulateTopicDeletion: true });
+  const owner = await f.manager.ensure(f.project, f.identity);
+  await f.git("switch", "-c", "main");
+  f.rows[0]!.current = false;
+  await f.git("branch", "-m", target.branch, target.topic);
+  await expect(
+    f.service.prepareContextDeletion(worktreeContextRef(owner)),
+  ).rejects.toThrow();
+  await expect(access(owner.path)).resolves.toBeUndefined();
+});
+
+it("does not delete newly added primary history files after clone trash", async () => {
+  const f = await fixture({ simulateTopicDeletion: true });
+  const owner = await f.manager.ensure(f.project, f.identity);
+  await f.git("switch", "-c", "main");
+  f.rows[0]!.current = false;
+  await f.git("rm", "-r", ".goga/history");
+  await f.git("commit", "-m", "main without topic history");
+  const directory = path.join(f.repo, ".goga/history/2026", target.topic);
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    path.join(directory, "existing.md"),
+    "previous primary data\n",
+  );
+  const plan = await f.service.prepareContextDeletion(
+    worktreeContextRef(owner),
+  );
+  await f.service.deleteContext({ projectId: f.project.id, token: plan.token });
+  await writeFile(path.join(directory, "new.md"), "valuable newer data\n");
+  expect(
+    await f.service.finishContextDeletion({
+      projectId: f.project.id,
+      token: plan.token,
+    }),
+  ).toMatchObject({ status: "partial", cloneRemoved: true });
+  expect(
+    f.calls.some((c) => c.exe !== "git" && c.args.includes("delete")),
+  ).toBe(false);
+  await expect(access(path.join(directory, "new.md"))).resolves.toBeUndefined();
+});
+
+it("rechecks pinned primary history after finish board preparation before native deletion", async () => {
+  const f = await fixture({ simulateTopicDeletion: true });
+  const owner = await f.manager.ensure(f.project, f.identity);
+  await f.git("switch", "-c", "main");
+  f.rows[0]!.current = false;
+  await f.git("rm", "-r", ".goga/history");
+  await f.git("commit", "-m", "main without topic history");
+  const directory = path.join(f.repo, ".goga/history/2026", target.topic);
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    path.join(directory, "existing.md"),
+    "confirmed primary data\n",
+  );
+  const plan = await f.service.prepareContextDeletion(
+    worktreeContextRef(owner),
+  );
+  await f.service.deleteContext({ projectId: f.project.id, token: plan.token });
+  let injected = false;
+  f.afterCall(async (exe, args, cwd) => {
+    if (
+      !injected &&
+      exe !== "git" &&
+      cwd === f.repo &&
+      args.includes("board")
+    ) {
+      injected = true;
+      await writeFile(
+        path.join(directory, "late.md"),
+        "new data during finish preparation\n",
+      );
+    }
+  });
+  const result = await f.service.finishContextDeletion({
+    projectId: f.project.id,
+    token: plan.token,
+  });
+  expect(injected).toBe(true);
+  expect(result).toMatchObject({ status: "partial", cloneRemoved: true });
+  expect(
+    f.calls.some((c) => c.exe !== "git" && c.args.includes("delete")),
+  ).toBe(false);
+  await expect(
+    access(path.join(directory, "late.md")),
+  ).resolves.toBeUndefined();
+  expect((await f.git("branch", "--list", target.branch)).stdout).toContain(
+    target.branch,
+  );
+});
+
+it("deletes the selected topic when primary is on its branch: choose, preview, trash, leave, checkout, Goga", async () => {
+  const f = await fixture({ simulateTopicDeletion: true });
+  await f.git("switch", "-c", "main");
+  await f.git("rm", ".goga/history/2026/feature-test/todo.md");
+  await writeFile(path.join(f.repo, "base-file"), "base branch content");
+  await f.git("add", "base-file");
+  await f.git("commit", "-m", "different base tree");
+  await f.git("switch", "feature/test");
+  const owner = await f.manager.ensure(f.project, f.identity),
+    ref = worktreeContextRef(owner);
+  await f.service.selectTopicContext(ref);
+  const choice = await f.service.prepareContextDeletion(ref);
+  expect(choice).toMatchObject({
+    stage: "choose-branch",
+    token: "",
+    switchBranches: ["main"],
+  });
+  const plan = await f.service.prepareContextDeletion(ref, "main");
+  expect(plan).toMatchObject({ stage: "prepared", switchBranch: "main" });
+  expect((await f.git("branch", "--show-current")).stdout.trim()).toBe(
+    "feature/test",
+  );
+  expect(
+    (
+      await f.service.deleteContext({
+        projectId: f.project.id,
+        token: plan.token,
+      })
+    ).cloneRemoved,
+  ).toBe(true);
+  expect((await f.git("branch", "--show-current")).stdout.trim()).toBe(
+    "feature/test",
+  );
+  await expect(
+    f.service.finishContextDeletion({
+      projectId: f.project.id,
+      token: plan.token,
+    }),
+  ).rejects.toThrow(/основн|выбран/);
+  await f.service.selectTopicContext(null);
+  const result = await f.service.finishContextDeletion({
+    projectId: f.project.id,
+    token: plan.token,
+  });
+  expect(result).toMatchObject({ status: "success", stage: "completed" });
+  expect((await f.git("branch", "--show-current")).stdout.trim()).toBe("main");
+  const mutation = f.calls.find(
+    (c) => c.exe !== "git" && c.args.includes("delete"),
+  );
+  expect(mutation?.cwd).toBe(f.repo);
+  expect((await f.git("branch", "--list", "feature/test")).stdout).toBe("");
+  await expect(
+    access(path.join(f.root, "trashed-clone", ".git")),
+  ).resolves.toBeUndefined();
+}, 15000);
+it.each(["delete-ack", "switch-ack"] as const)(
+  "keeps an interrupted %s safe without repeating checkout",
+  async (fault) => {
+    const f = await fixture({ simulateTopicDeletion: true });
+    await f.git("branch", "main");
+    const owner = await f.manager.ensure(f.project, f.identity),
+      ref = worktreeContextRef(owner);
+    const plan = await f.service.prepareContextDeletion(ref, "main");
+    await f.service.deleteContext({
+      projectId: f.project.id,
+      token: plan.token,
+    });
+    await f.service.selectTopicContext(null);
+    let injected = false;
+    f.afterCall(async (exe, args) => {
+      if (
+        !injected &&
+        (fault === "delete-ack"
+          ? exe !== "git" && args.includes("delete")
+          : exe === "git" && args.includes("switch"))
+      ) {
+        injected = true;
+        throw Error("fixture lost acknowledgement");
+      }
+    });
+    const first = await f.service.finishContextDeletion({
+      projectId: f.project.id,
+      token: plan.token,
+    });
+    expect(first).toMatchObject({ status: "partial", cloneRemoved: true });
+    expect((await f.git("branch", "--show-current")).stdout.trim()).toBe(
+      "main",
+    );
+    const switches = () =>
+      f.calls.filter((c) => c.exe === "git" && c.args.includes("switch"))
+        .length;
+    expect(switches()).toBe(1);
+    const second = await f.service.finishContextDeletion({
+      projectId: f.project.id,
+      token: plan.token,
+    });
+    expect(switches()).toBe(1);
+    expect(second.status).toBe(fault === "delete-ack" ? "success" : "partial");
+    if (fault === "switch-ack") {
+      expect(second.message).toMatch(/ручная проверка/);
+      expect(
+        f.calls.some((c) => c.exe !== "git" && c.args.includes("delete")),
+      ).toBe(false);
+    }
+  },
+  15000,
+);
+it("does not adopt new primary history created between checkout and snapshot rebasing", async () => {
+  const f = await fixture({ simulateTopicDeletion: true });
+  await f.git("switch", "-c", "main");
+  await f.git("rm", ".goga/history/2026/feature-test/todo.md");
+  await f.git("commit", "-m", "base without topic");
+  await f.git("switch", "feature/test");
+  const owner = await f.manager.ensure(f.project, f.identity),
+    ref = worktreeContextRef(owner);
+  const plan = await f.service.prepareContextDeletion(ref, "main");
+  await f.service.deleteContext({ projectId: f.project.id, token: plan.token });
+  await f.service.selectTopicContext(null);
+  let switched = false,
+    injected = false;
+  const late = path.join(f.repo, ".goga/history/2026/feature-test/late.md");
+  f.afterCall(async (exe, args) => {
+    if (exe === "git" && args.includes("switch")) switched = true;
+    if (
+      switched &&
+      !injected &&
+      args.includes("--format=%(refname)%00%(objectname)")
+    ) {
+      injected = true;
+      await mkdir(path.dirname(late), { recursive: true });
+      await writeFile(late, "late user data");
+    }
+  });
+  const result = await f.service.finishContextDeletion({
+    projectId: f.project.id,
+    token: plan.token,
+  });
+  expect(injected).toBe(true);
+  expect(result.status).toBe("partial");
+  expect(
+    f.calls.some((c) => c.exe !== "git" && c.args.includes("delete")),
+  ).toBe(false);
+  await expect(access(late)).resolves.toBeUndefined();
+}, 15000);
+
+async function deletionTerminals(f: Awaited<ReturnType<typeof fixture>>) {
+  let busy = false;
+  let onStop = async (_cwd: string) => {};
+  const stopped: string[] = [];
+  const sessions = new TerminalSessions({
+    acquire: async (scope) => {
+      const lease = await f.service.acquireTerminalContext(scope, {
+        accountShell: () => "/bin/zsh",
+        inherited: { HOME: f.home },
+      });
+      lease.launch.activity = { idle: () => !busy, input: () => {} };
+      return lease;
+    },
+    spawn: (launch) => {
+      const emitter = new EventEmitter();
+      const subscription = (event: string, fn: (...args: any[]) => void) => {
+        emitter.on(event, fn);
+        return {
+          dispose: () => {
+            emitter.off(event, fn);
+          },
+        };
+      };
+      return {
+        cwd: launch.cwd,
+        emitter,
+        assertReady() {},
+        pause() {},
+        resume() {},
+        write() {},
+        resize() {},
+        onFault: (fn) => subscription("fault", fn),
+        onData: (fn) => subscription("data", fn),
+        onExit: (fn) => subscription("exit", fn),
+      };
+    },
+    processes: (pty) => ({
+      prepare: () => ({ anchor: {} as any, jobs: busy ? [{} as any] : [] }),
+      validate: () => {
+        if (busy) throw Error("new job");
+      },
+      stop: async () => {
+        if (busy) throw Error("new job");
+        await onStop((pty as any).cwd);
+        stopped.push((pty as any).cwd);
+        (pty as any).emitter.emit("exit", { exitCode: 0 });
+      },
+    }),
+    prepareScreen: async () =>
+      ({
+        assertReady() {},
+        bind() {},
+        output() {},
+        exited() {},
+        drainAfterHangup() {},
+        finishClose() {},
+        dispose() {},
+        fail() {},
+      }) as any,
+    removeTab: async () => {
+      throw Error("must preserve catalog");
+    },
+  });
+  f.service.setTerminalDeletionController(sessions);
+  return {
+    sessions,
+    stopped,
+    onStop: (fn: typeof onStop) => {
+      onStop = fn;
+    },
+    setBusy: (value: boolean) => {
+      busy = value;
+    },
+  };
+}
+it("deletes a selected topic with an idle common terminal; keeps primary session and closes only after checks", async () => {
+  const f = await fixture({ simulateTopicDeletion: true });
+  await f.git("branch", "main");
+  const owner = await f.manager.ensure(f.project, f.identity);
+  const ref = worktreeContextRef(owner);
+  await f.service.selectTopicContext(ref);
+  const t = await deletionTerminals(f);
+  const tab = {
+    id: "console",
+    projectId: f.project.id,
+    name: "console",
+    scope: { kind: "common" as const },
+  };
+  const topicSession = await t.sessions.open(tab, ref);
+  const primarySession = await t.sessions.open(tab, f.project.id);
+  expect(await f.service.prepareContextDeletion(ref)).toMatchObject({
+    stage: "choose-branch",
+  });
+  const plan = await f.service.prepareContextDeletion(ref, "main");
+  expect(t.stopped).toEqual([]);
+  const input = { projectId: f.project.id, token: plan.token };
+  expect(await f.service.deleteContext(input)).toMatchObject({
+    cloneRemoved: true,
+  });
+  expect(t.stopped).toEqual([owner.path]);
+  expect(
+    t.sessions.list().find((v) => v.sessionId === topicSession.sessionId)
+      ?.state,
+  ).toBe("exited");
+  await f.service.selectTopicContext(null);
+  expect(await f.service.finishContextDeletion(input)).toMatchObject({
+    status: "success",
+  });
+  expect(
+    t.sessions.list().find((v) => v.sessionId === primarySession.sessionId)
+      ?.state,
+  ).toBe("running");
+  expect((await f.git("branch", "--show-current")).stdout.trim()).toBe("main");
+  expect((await f.git("branch", "--list", target.branch)).stdout).toBe("");
+});
+it("keeps idle shells alive for dirty clones and blocks jobs introduced after preview", async () => {
+  const f = await fixture();
+  await f.git("branch", "main");
+  const owner = await f.manager.ensure(f.project, f.identity);
+  const ref = worktreeContextRef(owner);
+  const t = await deletionTerminals(f);
+  await t.sessions.open(
+    {
+      id: "console",
+      projectId: f.project.id,
+      name: "console",
+      scope: { kind: "common" },
+    },
+    ref,
+  );
+  const plan = await f.service.prepareContextDeletion(ref, "main");
+  const input = { projectId: f.project.id, token: plan.token };
+  await writeFile(path.join(owner.path, "untracked.txt"), "keep me");
+  await expect(f.service.deleteContext(input)).rejects.toThrow();
+  expect(t.stopped).toEqual([]);
+  await rm(path.join(owner.path, "untracked.txt"));
+  t.setBusy(true);
+  await expect(f.service.deleteContext(input)).rejects.toThrow(/команд/);
+  expect(t.stopped).toEqual([]);
+  await expect(access(owner.path)).resolves.toBeUndefined();
+});
+
+it("preserves the clone when an idle shell exit hook writes a new file", async () => {
+  const f = await fixture();
+  await f.git("branch", "main");
+  const owner = await f.manager.ensure(f.project, f.identity);
+  const ref = worktreeContextRef(owner);
+  const t = await deletionTerminals(f);
+  await t.sessions.open(
+    {
+      id: "console",
+      projectId: f.project.id,
+      name: "console",
+      scope: { kind: "common" },
+    },
+    ref,
+  );
+  const plan = await f.service.prepareContextDeletion(ref, "main");
+  t.onStop(async (cwd) => {
+    await writeFile(path.join(cwd, "shell-exit.txt"), "do not lose");
+  });
+  const result = await f.service.deleteContext({
+    projectId: f.project.id,
+    token: plan.token,
+  });
+  expect(result.status).not.toBe("success");
+  expect(result.cloneRemoved).not.toBe(true);
+  await expect(
+    access(path.join(owner.path, "shell-exit.txt")),
+  ).resolves.toBeUndefined();
+  expect(
+    f.calls.some((c) => c.exe !== "git" && c.args.includes("delete")),
+  ).toBe(false);
+});
+
+it("stops before primary checkout when a terminal becomes busy during checks; retry is not ambiguous", async () => {
+  const f = await fixture({ simulateTopicDeletion: true });
+  await f.git("branch", "main");
+  const owner = await f.manager.ensure(f.project, f.identity);
+  const ref = worktreeContextRef(owner);
+  const t = await deletionTerminals(f);
+  await t.sessions.open(
+    {
+      id: "console",
+      projectId: f.project.id,
+      name: "console",
+      scope: { kind: "common" },
+    },
+    f.project.id,
+  );
+  const plan = await f.service.prepareContextDeletion(ref, "main");
+  const input = { projectId: f.project.id, token: plan.token };
+  expect(await f.service.deleteContext(input)).toMatchObject({
+    cloneRemoved: true,
+  });
+  await f.service.selectTopicContext(null);
+  f.afterCall(async (exe, args) => {
+    if (exe === "git" && args.includes("read-tree")) t.setBusy(true);
+  });
+  expect(await f.service.finishContextDeletion(input)).toMatchObject({
+    status: "partial",
+  });
+  expect((await f.git("branch", "--show-current")).stdout.trim()).toBe(
+    "feature/test",
+  );
+  f.afterCall(undefined);
+  t.setBusy(false);
+  expect(await f.service.finishContextDeletion(input)).toMatchObject({
+    status: "success",
+  });
+  expect(t.stopped).toEqual([]);
+});
+
+it("checks primary terminal readiness in the same synchronous turn as each mutation spawn", async () => {
+  const f = await fixture({ simulateTopicDeletion: true });
+  await f.git("branch", "main");
+  const owner = await f.manager.ensure(f.project, f.identity);
+  const ref = worktreeContextRef(owner);
+  const t = await deletionTerminals(f);
+  await t.sessions.open(
+    {
+      id: "console",
+      projectId: f.project.id,
+      name: "console",
+      scope: { kind: "common" },
+    },
+    f.project.id,
+  );
+  const plan = await f.service.prepareContextDeletion(ref, "main");
+  const input = { projectId: f.project.id, token: plan.token };
+  expect(await f.service.deleteContext(input)).toMatchObject({
+    cloneRemoved: true,
+  });
+  await f.service.selectTopicContext(null);
+  let fresh = false;
+  const original = t.sessions.prepareContextDeletion.bind(t.sessions);
+  vi.spyOn(t.sessions, "prepareContextDeletion").mockImplementation((scope) => {
+    const gate = original(scope);
+    return {
+      ...gate,
+      validate: () => {
+        gate.validate();
+        fresh = true;
+        queueMicrotask(() => {
+          fresh = false;
+        });
+      },
+    };
+  });
+  const mutations: string[] = [];
+  f.beforeCall((exe, args) => {
+    if (
+      (exe === "git" && args.includes("switch")) ||
+      (exe !== "git" && args.includes("delete"))
+    ) {
+      expect(fresh).toBe(true);
+      mutations.push(exe === "git" ? "checkout" : "delete");
+    }
+  });
+  expect(await f.service.finishContextDeletion(input)).toMatchObject({
+    status: "success",
+  });
+  expect(mutations).toEqual(["checkout", "delete"]);
+});
+
+it("reads branch choices with one Git command, no board or clone traversal, and no cross-read cache", async () => {
+  const f = await fixture();
+  await f.git("branch", "release");
+  await f.git("update-ref", "refs/remotes/origin/release", "HEAD");
+  await f.git(
+    "symbolic-ref",
+    "refs/remotes/origin/HEAD",
+    "refs/remotes/origin/release",
+  );
+  const reconcile = vi.spyOn(CloneManager.prototype, "reconcile");
+  const list = vi.spyOn(CloneManager.prototype, "list");
+  const full = vi.spyOn(f.service, "readTopicBoard");
+  f.calls.length = 0;
+  const first = await f.service.readProjectBranches(f.project.id);
+  expect(first).toEqual({
+    projectId: f.project.id,
+    branches: ["feature/test", "release", "origin/release"],
+    localBranches: ["feature/test", "release"],
+  });
+  expect(f.calls).toEqual([
+    {
+      exe: "git",
+      cwd: f.repo,
+      args: [
+        "for-each-ref",
+        "--format=%(refname)%00%(objectname)%00%(symref)",
+        "refs/heads",
+        "refs/remotes",
+      ],
+    },
+  ]);
+  expect(full).not.toHaveBeenCalled();
+  expect(reconcile).not.toHaveBeenCalled();
+  expect(list).not.toHaveBeenCalled();
+  await f.git("branch", "new-branch");
+  expect(
+    (await f.service.readProjectBranches(f.project.id)).localBranches,
+  ).toContain("new-branch");
+  expect(first).not.toHaveProperty("revision");
+  await expect(f.service.readProjectBranches("unknown")).rejects.toThrow(
+    /Неизвестный проект/,
+  );
+  await expect(
+    f.service.readProjectBranches({ projectId: f.project.id } as any),
+  ).rejects.toThrow();
+});
+
+it("branch choices fail cleanly on Git errors, empty repositories and cancelled reads", async () => {
+  const f = await fixture();
+  f.beforeCall((exe, args) => {
+    if (exe === "git" && args[0] === "for-each-ref")
+      throw Error("Git unavailable");
+  });
+  await expect(f.service.readProjectBranches(f.project.id)).rejects.toThrow(
+    "Git unavailable",
+  );
+  f.beforeCall(undefined);
+  const abort = new AbortController();
+  f.afterCall(async () => abort.abort());
+  await expect(
+    withReadScope(abort.signal, () =>
+      f.service.readProjectBranches(f.project.id),
+    ),
+  ).rejects.toThrow(/отмен/);
+  f.afterCall(undefined);
+  // A fresh repository without commits is valid and has no branch refs.
+  await f.git("update-ref", "-d", "refs/heads/feature/test");
+  expect(await f.service.readProjectBranches(f.project.id)).toEqual({
+    projectId: f.project.id,
+    branches: [],
+    localBranches: [],
+  });
+});
+
+it("branch choices ignore clone-only refs even with a ready clone", async () => {
+  const f = await fixture();
+  const owner = await f.manager.ensure(f.project, f.identity);
+  const node = new NodeRunner();
+  clean.push(() => node.dispose());
+  await node.command("git", ["branch", "only-in-clone"], owner.path);
+  f.calls.length = 0;
+  const result = await f.service.readProjectBranches(f.project.id);
+  expect(result.branches).not.toContain("only-in-clone");
+  expect(f.calls).toHaveLength(1);
+  expect(f.calls[0]?.cwd).toBe(f.repo);
+});
+
+it("measures full-board versus branch-only reads on temporary Git data (Goga stub has zero delay)", async () => {
+  const f = await fixture();
+  await f.manager.ensure(f.project, f.identity);
+  const report: Record<string, unknown[]> = { board: [], branches: [] };
+  for (let i = 0; i < 5; i++)
+    for (const method of ["board", "branches"] as const) {
+      f.calls.length = 0;
+      const start = performance.now();
+      if (method === "board")
+        await f.service.readTopicBoard(f.project.id, "2026");
+      else await f.service.readProjectBranches(f.project.id);
+      report[method].push({
+        ms: Math.round((performance.now() - start) * 10) / 10,
+        git: f.calls.filter((c) => c.exe === "git").length,
+        goga: f.calls.filter((c) => c.exe !== "git").length,
+        cloneCalls: f.calls.filter((c) => c.cwd !== f.repo).length,
+      });
+    }
+  console.log("BRANCH_READ_BENCHMARK", JSON.stringify(report));
+  expect(report.branches).toHaveLength(5);
+}, 30000);

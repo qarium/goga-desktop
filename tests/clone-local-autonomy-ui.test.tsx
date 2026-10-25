@@ -692,7 +692,7 @@ it("missing card retry retains a stale-version local draft and the save host rej
   expect(api.executeTopicOperation).not.toHaveBeenCalled();
 });
 it.each(["current", "active", "other"])(
-  "missing card keeps independent exchange and %s deletion guard",
+  "missing card permits selected deletion but retains active guard: %s",
   async (mode) => {
     localMissing();
     render(
@@ -733,7 +733,7 @@ it.each(["current", "active", "other"])(
       screen.getByRole<HTMLButtonElement>("button", {
         name: "Удалить топик и копию…",
       }).disabled,
-    ).toBe(mode !== "other");
+    ).toBe(mode === "active");
     expect(
       screen.getByRole<HTMLButtonElement>("button", { name: "Опубликовать…" })
         .disabled,

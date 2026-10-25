@@ -1,4 +1,13 @@
-import type { HistoryArtifact, HistoryDocument, HistoryPrunePreview, HistoryPruneResult } from "./history";
+import type {
+  ContextDeletionPreview,
+  ContextDeletionResult,
+} from "./context-deletion";
+import type {
+  HistoryArtifact,
+  HistoryDocument,
+  HistoryPrunePreview,
+  HistoryPruneResult,
+} from "./history";
 import type { TerminalAPI } from "./terminal-control";
 import type { TopicPopupBounds } from "./topic-popup";
 import type {
@@ -28,6 +37,7 @@ import type {
 } from "./build";
 import type {
   TopicBoardSnapshot,
+  ProjectBranches,
   TopicCatalogSnapshot,
   TopicDetails,
   TopicTarget,
@@ -95,24 +105,22 @@ export interface DesktopAPI {
     token: string;
     confirmed: true;
   }): Promise<ContextApplyResult>;
-  contextDeletionRecovery(ref: TopicContextRef): Promise<{
-    token: string;
-    contextId: string;
-    stage: string;
-    details: string[];
-  } | null>;
-  prepareContextDeletion(ref: TopicContextRef): Promise<{
-    token: string;
-    contextId: string;
-    stage: string;
-    details: string[];
-  }>;
-  deleteContext(input: { projectId: string; token: string }): Promise<{
+  contextDeletionRecovery(
+    ref: TopicContextRef,
+  ): Promise<ContextDeletionPreview | null>;
+  prepareContextDeletion(
+    ref: TopicContextRef,
+    branch?: string,
+  ): Promise<ContextDeletionPreview>;
+  deleteContext(input: {
     projectId: string;
-    status: "success" | "partial" | "failed";
-    message: string;
-    stage?: string;
-  }>;
+    token: string;
+    allowAhead?: true;
+  }): Promise<ContextDeletionResult>;
+  finishContextDeletion(input: {
+    projectId: string;
+    token: string;
+  }): Promise<ContextDeletionResult>;
 
   ensureTopicContext(identity: TopicContextIdentity): Promise<WorktreeRecord>;
   resolveTopicContext(ref: TopicContextRef): Promise<WorktreeRecord>;
@@ -137,7 +145,10 @@ export interface DesktopAPI {
   readBuildPlan(projectId: ScopeRef, path: string): Promise<BuildPlanDocument>;
   launchBuild(request: BuildRequest): Promise<Run>;
   repeatBuild(runId: string, confirmClean: boolean): Promise<Run>;
-  prepareHistoryPrune(projectId: string, year: string): Promise<HistoryPrunePreview>;
+  prepareHistoryPrune(
+    projectId: string,
+    year: string,
+  ): Promise<HistoryPrunePreview>;
   pruneHistory(projectId: string, token: string): Promise<HistoryPruneResult>;
   listHistoryYears(scope: ScopeRef): Promise<string[]>;
   listHistoryEntries(scope: ScopeRef, year: string): Promise<string[]>;
@@ -166,6 +177,7 @@ export interface DesktopAPI {
     year: string,
     target: TopicTarget,
   ): Promise<TopicDetails>;
+  readProjectBranches(projectId: string): Promise<ProjectBranches>;
   readTopicBoard(
     projectId: ScopeRef,
     year: string,

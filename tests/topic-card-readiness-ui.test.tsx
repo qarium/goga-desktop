@@ -355,7 +355,7 @@ it.each(["resolve", "reject"] as const)(
   },
 );
 it.each(["current", "active", "noncurrent"])(
-  "keeps independent safe actions and the %s deletion guard on a failed card",
+  "keeps safe actions and permits selected deletion, only active blocks: %s",
   async (mode) => {
     const activeRun: any = {
       id: "active",
@@ -395,9 +395,9 @@ it.each(["current", "active", "noncurrent"])(
     const deletion = await screen.findByRole<HTMLButtonElement>("button", {
       name: "Удалить топик и копию…",
     });
-    expect(deletion.disabled).toBe(mode !== "noncurrent");
+    expect(deletion.disabled).toBe(mode === "active");
     fireEvent.click(deletion);
-    if (mode === "noncurrent") {
+    if (mode !== "active") {
       await screen.findByRole("region", {
         name: "Подтверждение удаления топика и копии",
       });
@@ -408,9 +408,7 @@ it.each(["current", "active", "noncurrent"])(
       expect(api.prepareContextDeletion).not.toHaveBeenCalled();
       expect(
         screen.getByText(
-          mode === "current"
-            ? "Текущий топик удалить нельзя. Сначала выберите другой."
-            : "Недоступно во время активного запуска в этой рабочей копии.",
+          "Недоступно во время активного запуска в этой рабочей копии.",
         ),
       ).toBeTruthy();
     }

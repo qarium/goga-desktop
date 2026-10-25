@@ -25,6 +25,12 @@ export interface TopicCatalogSnapshot {
   entries: TopicTarget[];
   currentTopic: TopicTarget | null;
 }
+/** Display-only branch inventory of the original repository, never mutation authority. */
+export interface ProjectBranches {
+  projectId: string;
+  branches: string[];
+  localBranches: string[];
+}
 export interface TopicBoardSnapshot {
   projectId: string;
   year: string;
