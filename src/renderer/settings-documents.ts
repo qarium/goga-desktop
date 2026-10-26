@@ -108,6 +108,8 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 // implicitly. Operation results are keyed to the captured source, not the selection.
 export function createSettingsDocuments() {
   const entries = new Map<string, DocumentDraft>();
+  const sources = new Map<string, DocumentSource>();
+  const loads = new Map<string, Promise<SettingsFile>>();
   const dockerfiles = new Map<
     string,
     import("../shared/project-documents").ProjectDockerfile
@@ -186,6 +188,7 @@ export function createSettingsDocuments() {
   const get = (source: DocumentSource) =>
     entries.get(documentKey(source)) ?? empty;
   function put(source: DocumentSource, value: DocumentDraft) {
+    sources.set(documentKey(source), source);
     removed.delete(documentKey(source));
     entries.set(documentKey(source), value);
     if (
@@ -320,6 +323,50 @@ export function createSettingsDocuments() {
     ) => createFlat("profile", projectId, name, catalog),
     workflowState,
     updateWorkflow,
+    /** A checkout invalidates disk snapshots, never editor drafts or hidden files. */
+    async refreshProject(scope: ScopeRef): Promise<void> {
+      const id = documentScopeId(scope);
+      revisions.set(id, (revisions.get(id) ?? 0) + 1);
+      const reloads: Promise<void>[] = [];
+      for (const [key, source] of sources) {
+        if (
+          source.scope !== "project" ||
+          documentScopeId(source.context ?? source.projectId) !== id
+        )
+          continue;
+        const value = entries.get(key);
+        if (!value || value.memoryOnly || value.saving || value.deleting)
+          continue;
+        if (value.document && value.text !== value.document.text) {
+          entries.set(key, {
+            ...value,
+            // Replacing the entry invalidates a pending deletion preview. Its
+            // late reply cannot clear these flags; keep the retained draft editable.
+            busy: false,
+            preparing: false,
+            deletion: undefined,
+            notice:
+              "Файлы проекта могли измениться. Ваш черновик сохранён; перед записью проверяется версия файла.",
+          });
+          continue;
+        }
+        const stale = { ...empty, busy: true };
+        entries.set(key, stale);
+        const pending = loads.get(key);
+        reloads.push(
+          (async () => {
+            // A cancelled logical read can still physically finish: drain it before
+            // rereading the same key, and never let its stale response become visible.
+            if (pending) await pending.catch(() => {});
+            if (entries.get(key) !== stale) return;
+            entries.delete(key);
+            await this.open(source);
+          })(),
+        );
+      }
+      listeners.forEach((fn) => fn());
+      await Promise.all(reloads);
+    },
     projectRevision: (projectId: ScopeRef) =>
       projectId ? (revisions.get(documentScopeId(projectId)) ?? 0) : 0,
     pipelineState,
@@ -503,14 +550,18 @@ export function createSettingsDocuments() {
       };
       put(source, pending);
       try {
-        const document =
+        const loading =
           source.scope === "home"
-            ? await readRequest("readSettings", source.kind, source.name)
-            : await readRequest(
+            ? readRequest("readSettings", source.kind, source.name)
+            : readRequest(
                 "readProjectDocument",
                 source.context ? contextRef(source.context) : source.projectId,
                 source.target,
               );
+        loads.set(documentKey(source), loading);
+        const document = await loading;
+        if (loads.get(documentKey(source)) === loading)
+          loads.delete(documentKey(source));
         if (get(source) !== pending) return;
         put(source, {
           document,

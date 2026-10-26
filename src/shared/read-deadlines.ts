@@ -1,5 +1,18 @@
 /** File IO is distinct from CLI snapshots (the host already allows 120s/command). */
 export const READ_BUDGETS = {
+  readGitBranches: 30000,
+  prepareGitBranch: 30000,
+  prepareGitUpdateHandoff: 30000,
+  prepareGitSequencerOperation: 30000,
+  prepareGitRebaseOperation: 30000,
+  prepareGitMergeOperation: 30000,
+  prepareGitDiscard: 30000,
+  prepareGitCommit: 30000,
+  prepareGitConflictSave: 30000,
+  readGitSummary: 30000,
+  readGitWorkspace: 30000,
+  readGitConflict: 30000,
+  readGitDiff: 30000,
   prepareHistoryPrune: 300000,
   listHistoryYears: 30000,
   listHistoryEntries: 30000,

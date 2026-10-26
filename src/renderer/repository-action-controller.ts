@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import type { ScopeRef } from "../shared/context";
 import type { DesktopAPI } from "../shared/bridge";
 import type {
   RepositoryActionRequest,
@@ -7,6 +8,7 @@ import type {
 
 export interface RepositoryActionFailure {
   label: string;
+  scope: ScopeRef;
   result: RepositoryActionResult;
 }
 interface Snapshot {
@@ -60,7 +62,10 @@ class RepositoryActionController {
       if (result.status === "error")
         this.update({
           ...this.state,
-          failures: [...this.state.failures, { label, result }],
+          failures: [
+            ...this.state.failures,
+            { label, scope: request.context ?? request.projectId, result },
+          ],
         });
     } catch (e) {
       if (window.goga !== this.api) return;
@@ -74,6 +79,7 @@ class RepositoryActionController {
           ...this.state.failures,
           {
             label,
+            scope: request.context ?? request.projectId,
             result: {
               projectId: request.projectId,
               contextId: request.context?.contextId,

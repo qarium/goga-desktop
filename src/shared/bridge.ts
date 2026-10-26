@@ -1,4 +1,55 @@
 import type {
+  GitDiscardRequest,
+  GitDiscardPreview,
+  GitDiscardResult,
+} from "./git-discard";
+import type {
+  GitUpdateHandoffRequest,
+  GitUpdateHandoffPreview,
+  GitUpdateHandoffResult,
+} from "./git-update-handoff";
+import type {
+  GitSequencerOperationRequest,
+  GitSequencerOperationPreview,
+  GitSequencerOperationResult,
+} from "./git-sequencer-operations";
+import type {
+  GitRebaseOperationRequest,
+  GitRebaseOperationPreview,
+  GitRebaseOperationResult,
+} from "./git-rebase-operations";
+import type {
+  GitMergeOperationRequest,
+  GitMergeOperationPreview,
+  GitMergeOperationResult,
+} from "./git-operations";
+import type {
+  GitConflictSaveRequest,
+  GitConflictSavePreview,
+  GitConflictSaveResult,
+} from "./git-conflict-save";
+import type {
+  GitConflictDocument,
+  GitConflictReadRequest,
+} from "./git-conflicts";
+import type {
+  GitBranchRequest,
+  GitBranchInventory,
+  GitBranchPreview,
+  GitBranchResult,
+} from "./git-branches";
+import type {
+  GitCommitRequest,
+  GitCommitPreview,
+  GitCommitResult,
+} from "./git-commit";
+import type {
+  GitDiffRequest,
+  GitWorkspaceDiff,
+  GitWorkspaceSnapshot,
+  GitWorkspaceSummary,
+} from "./git-workspace";
+import type {
   ContextDeletionPreview,
   ContextDeletionResult,
 } from "./context-deletion";
@@ -78,6 +129,41 @@ export interface SettingsFile {
   version: string;
 }
 export interface DesktopAPI {
+  prepareGitRebaseOperation(
+    request: GitRebaseOperationRequest,
+  ): Promise<GitRebaseOperationPreview>;
+  executeGitRebaseOperation(token: string): Promise<GitRebaseOperationResult>;
+  prepareGitUpdateHandoff(
+    request: GitUpdateHandoffRequest,
+  ): Promise<GitUpdateHandoffPreview>;
+  executeGitUpdateHandoff(token: string): Promise<GitUpdateHandoffResult>;
+  prepareGitSequencerOperation(
+    request: GitSequencerOperationRequest,
+  ): Promise<GitSequencerOperationPreview>;
+  executeGitSequencerOperation(
+    token: string,
+  ): Promise<GitSequencerOperationResult>;
+  prepareGitConflictSave(
+    request: GitConflictSaveRequest,
+  ): Promise<GitConflictSavePreview>;
+  executeGitConflictSave(token: string): Promise<GitConflictSaveResult>;
+  readGitBranches(projectId: string): Promise<GitBranchInventory>;
+  prepareGitBranch(request: GitBranchRequest): Promise<GitBranchPreview>;
+  executeGitBranch(token: string): Promise<GitBranchResult>;
+  prepareGitMergeOperation(
+    request: GitMergeOperationRequest,
+  ): Promise<GitMergeOperationPreview>;
+  executeGitMergeOperation(token: string): Promise<GitMergeOperationResult>;
+  prepareGitDiscard(request: GitDiscardRequest): Promise<GitDiscardPreview>;
+  executeGitDiscard(token: string): Promise<GitDiscardResult>;
+  prepareGitCommit(request: GitCommitRequest): Promise<GitCommitPreview>;
+  executeGitCommit(token: string): Promise<GitCommitResult>;
+  readGitConflict(
+    request: GitConflictReadRequest,
+  ): Promise<GitConflictDocument>;
+  readGitSummary(scope: ScopeRef): Promise<GitWorkspaceSummary>;
+  readGitWorkspace(scope: ScopeRef): Promise<GitWorkspaceSnapshot>;
+  readGitDiff(request: GitDiffRequest): Promise<GitWorkspaceDiff>;
   /** Optional for compatibility with older hosts and isolated fixtures. */
   terminal?: TerminalAPI;
   runRepositoryAction(

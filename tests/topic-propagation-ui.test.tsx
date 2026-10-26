@@ -252,3 +252,44 @@ it("uses searchable pickers with independent choices and Escape keeps the card o
   expect(api.runRepositoryAction).not.toHaveBeenCalled();
   expect(api.prepareTopicOperation).not.toHaveBeenCalled();
 });
+it("offers the failed update candidate through TopicOverview with its exact scope", async () => {
+  const handoff = {
+    candidateId: "c".repeat(64),
+    scope: contextRef(owner),
+    root: owner.path,
+    targetBranch: owner.branch,
+    targetHead: "a".repeat(40),
+    sourceRef: "refs/source",
+    sourceOid: "b".repeat(40),
+    baseRef: "main",
+    strategy: "merge",
+    algorithm: "merge",
+    conflicts: ["file.txt"],
+    expiresAt: Date.now() + 300000,
+  };
+  api.prepareTopicOperation.mockResolvedValue({
+    token: "operation-token",
+    projectId: "p",
+    year: "2026",
+    action: "update",
+    title: "Update preview",
+    details: ["Changes"],
+    expiresAt: Date.now() + 300000,
+  });
+  api.executeTopicOperation = vi.fn(async () => ({
+    projectId: "p",
+    status: "failed",
+    message: "Update conflict",
+    handoff,
+  }));
+  const onHandoff = vi.fn();
+  mount(owner, { onHandoff });
+  fireEvent.click(screen.getByRole("combobox", { name: "Из ветки" }));
+  fireEvent.click(await screen.findByRole("option", { name: "main" }));
+  fireEvent.click(screen.getByRole("button", { name: "Обновить" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Подтвердить" }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Разрешить конфликт вручную…" }),
+  );
+  expect(onHandoff).toHaveBeenCalledExactlyOnceWith(handoff);
+});

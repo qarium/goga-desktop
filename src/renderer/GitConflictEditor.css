@@ -1,0 +1,219 @@
+.git-workspace-conflicts .git-workspace-content {
+  flex-direction: column;
+}
+.git-workspace-conflicts .git-workspace-files {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+  padding: 5px 10px;
+  max-height: 80px;
+  border-right: 0;
+  border-bottom: 1px solid var(--line);
+  overflow-x: auto;
+}
+.git-workspace-conflicts .git-file-row {
+  flex: 0 0 auto;
+  max-width: 280px;
+}
+.git-workspace-conflicts .git-workspace-files button {
+  padding: 7px 9px;
+  margin: 0;
+}
+.git-conflict-editor {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+.git-conflict-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 7px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.git-conflict-toolbar strong {
+  flex: 1;
+  min-width: 80px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-conflict-toolbar button,
+.git-conflict-footer button {
+  padding: 5px 10px;
+  font-size: 11px;
+}
+.git-conflict-panes {
+  flex: 1;
+  min-height: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.05fr) minmax(0, 1fr);
+}
+.git-conflict-pane {
+  min-height: 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  border-right: 1px solid var(--line);
+  background: #0c1321;
+}
+.git-conflict-pane:last-child {
+  border: 0;
+}
+.git-conflict-pane > header {
+  padding: 7px 10px;
+  min-height: 44px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  background: #111b2b;
+  border-bottom: 1px solid var(--line);
+  font-size: 12px;
+}
+.git-conflict-pane > header strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-conflict-pane > header small {
+  font-size: 10px;
+  color: var(--muted);
+}
+.git-conflict-result > header {
+  background: #14262d;
+}
+.git-conflict-current > header strong {
+  color: #e9c47d;
+}
+.git-conflict-incoming > header strong {
+  color: #bad8ff;
+}
+.git-conflict-code {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  display: flex;
+}
+.git-conflict-code .yaml-code-editor {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  margin-top: 0;
+  --settings-editor-height: 100%;
+  --settings-editor-min-height: 100%;
+  border: 0;
+  border-radius: 0;
+}
+.git-conflict-warning {
+  margin: 0;
+  padding: 6px 12px;
+  font-size: 11px;
+  background: #2e261b;
+  color: #dfbf89;
+  border-bottom: 1px solid #4c3d29;
+}
+.git-conflict-save-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+.git-conflict-save-row > span {
+  flex: 1;
+  min-width: 100px;
+}
+.git-conflict-save-row label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.git-conflict-save-row input {
+  width: 14px;
+  height: 14px;
+}
+.git-conflict-whole-file {
+  margin-top: 8px;
+}
+.git-conflict-whole-file summary {
+  cursor: pointer;
+}
+.git-conflict-whole-file > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding-top: 8px;
+}
+.git-conflict-modal-body {
+  padding: 20px;
+  max-width: 700px;
+  overflow-wrap: anywhere;
+}
+.git-conflict-modal-body p {
+  line-height: 1.5;
+}
+.git-conflict-modal-body dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 8px 20px;
+}
+.git-conflict-modal-body dd {
+  margin: 0;
+}
+.git-conflict-loading {
+  flex: 1;
+  position: relative;
+  min-height: 0;
+}
+@media (max-height: 720px) {
+  .git-workspace-conflicts .git-workspace-heading {
+    padding: 10px 16px;
+  }
+  .git-workspace-conflicts .git-workspace-heading h2 {
+    font-size: 18px;
+    margin: 0;
+  }
+  .git-workspace-conflicts .git-workspace-heading p {
+    display: none;
+  }
+  .git-workspace-conflicts .git-workspace-notice {
+    padding: 6px 16px;
+  }
+  .git-workspace-conflicts .git-workspace-footer {
+    padding: 8px 12px;
+  }
+}
+
+.git-conflict-help {
+  margin: 0;
+  padding: 4px 12px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+  border-bottom: 1px solid var(--line);
+}
+
+.git-conflict-help summary {
+  cursor: pointer;
+}
+.git-conflict-help p {
+  margin: 6px 0 2px;
+}
+
+.git-workspace-conflicts .git-file-row:has(.git-file-close) {
+  background: rgba(26, 206, 192, 0.13);
+  border-radius: 6px;
+}
+.git-workspace-conflicts .git-file-row .git-file-close {
+  flex: 0 0 28px;
+  width: 28px;
+  padding: 4px;
+  align-self: stretch;
+  font-size: 18px;
+  background: transparent;
+}

@@ -79,14 +79,26 @@ export function TopicPickerPopup({
     const off = api.onTopicPopupClosed!((closedId) => {
       if (!disposed && closedId === id) close.current();
     });
+    // React unmount only starts IPC cleanup. A replacement must keep the whole
+    // release chain, including an intermediate menu cancelled before it opened.
+    const previous = activePopup;
+    previous?.close();
+    const previousReleased = previous?.release();
     let released: Promise<void> | null = null;
     const release = () =>
-      (released ??= api.closeTopicPopup!(id).finally(() => {
+      (released ??= (
+        previousReleased
+          ? previousReleased.then(() => api.closeTopicPopup!(id))
+          : api.closeTopicPopup!(id)
+      ).finally(() => {
         if (activePopup === active) activePopup = null;
       }));
     const active = {
       close: () => {
-        if (!disposed) close.current();
+        if (!disposed) {
+          state.alive = false;
+          close.current();
+        }
       },
       release,
     };
@@ -104,56 +116,69 @@ export function TopicPickerPopup({
       },
     };
     layer.current = state;
-    try {
-      const bounds = position();
-      const popup = window.open(
-        "about:blank",
-        `goga-topic-picker:${id}`,
-        Object.entries(bounds)
-          .map(([key, value]) => `${key}=${value}`)
-          .join(","),
-      );
-      if (!popup) throw Error("Native popup denied");
-      const doc = popup.document;
-      doc.documentElement.lang = document.documentElement.lang || "ru";
-      doc.documentElement.classList.add("topic-popup-document");
-      doc.title = label;
-      const links = [
-        ...document.querySelectorAll<HTMLLinkElement>('link[rel="stylesheet"]'),
-      ];
-      let remaining = links.length;
-      if (!remaining) setStyled(true);
-      else timer = setTimeout(state.fail, 5000);
-      for (const source of links) {
-        const link = doc.createElement("link");
-        link.rel = "stylesheet";
-        link.href = source.href;
-        const loaded = () => {
-          if (disposed || !state.alive) return;
-          if (--remaining === 0) {
-            clearTimeout(timer);
-            setStyled(true);
-          }
-        };
-        link.addEventListener("load", loaded, { once: true });
-        link.addEventListener("error", state.fail, { once: true });
-        listeners.push(() => {
-          link.removeEventListener("load", loaded);
-          link.removeEventListener("error", state.fail);
-        });
-        doc.head.append(link);
+    setContainer(null);
+    setStyled(false);
+    setError("");
+    const open = () => {
+      if (disposed || !state.alive) return;
+      clearTimeout(timer);
+      try {
+        const bounds = position();
+        const popup = window.open(
+          "about:blank",
+          `goga-topic-picker:${id}`,
+          Object.entries(bounds)
+            .map(([key, value]) => `${key}=${value}`)
+            .join(","),
+        );
+        if (!popup) throw Error("Native popup denied");
+        const doc = popup.document;
+        doc.documentElement.lang = document.documentElement.lang || "ru";
+        doc.documentElement.classList.add("topic-popup-document");
+        doc.title = label;
+        const links = [
+          ...document.querySelectorAll<HTMLLinkElement>(
+            'link[rel="stylesheet"]',
+          ),
+        ];
+        let remaining = links.length;
+        if (!remaining) setStyled(true);
+        else timer = setTimeout(state.fail, 5000);
+        for (const source of links) {
+          const link = doc.createElement("link");
+          link.rel = "stylesheet";
+          link.href = source.href;
+          const loaded = () => {
+            if (disposed || !state.alive) return;
+            if (--remaining === 0) {
+              clearTimeout(timer);
+              setStyled(true);
+            }
+          };
+          link.addEventListener("load", loaded, { once: true });
+          link.addEventListener("error", state.fail, { once: true });
+          listeners.push(() => {
+            link.removeEventListener("load", loaded);
+            link.removeEventListener("error", state.fail);
+          });
+          doc.head.append(link);
+        }
+        const root = doc.createElement("div");
+        root.className = "topic-context-native-root";
+        root.style.setProperty(
+          "--topic-popup-max-height",
+          `${Math.max(1, bounds.height - 16)}px`,
+        );
+        doc.body.append(root);
+        setContainer(root);
+      } catch {
+        state.fail();
       }
-      const root = doc.createElement("div");
-      root.className = "topic-context-native-root";
-      root.style.setProperty(
-        "--topic-popup-max-height",
-        `${Math.max(1, bounds.height - 16)}px`,
-      );
-      doc.body.append(root);
-      setContainer(root);
-    } catch {
-      state.fail();
-    }
+    };
+    if (previousReleased) {
+      timer = setTimeout(state.fail, 5000);
+      void previousReleased.then(open, state.fail);
+    } else open();
     return () => {
       disposed = true;
       state.alive = false;
@@ -183,7 +208,10 @@ export function TopicPickerPopup({
       const key = JSON.stringify(bounds);
       if (key === last) return;
       last = key;
-      void window.goga.setTopicPopupBounds!(state.id, bounds).catch(state.fail);
+      void window.goga.setTopicPopupBounds!(state.id, bounds).then(
+        () => clearTimeout(readyDeadline),
+        state.fail,
+      );
     };
     const observer = new ResizeObserver(measure);
     observer.observe(container);
@@ -196,7 +224,6 @@ export function TopicPickerPopup({
         frame = window.requestAnimationFrame(() => {
           frame = window.requestAnimationFrame(() => {
             if (disposed || !state.alive) return;
-            clearTimeout(readyDeadline);
             ready = true;
             measure();
             container

@@ -1,3 +1,5 @@
+import type { GitUpdateHandoffCandidate } from "../shared/git-update-handoff";
+import { documentScopeId } from "./settings-documents";
 import {
   useEffect,
   useId,
@@ -18,7 +20,11 @@ import {
   repositoryActionKey,
   useRepositoryActionController,
 } from "./repository-action-controller";
-import { TopicPickerPopup, dismissActiveTopicPopup } from "./TopicPickerPopup";
+import {
+  TopicPickerPopup,
+  dismissActiveTopicPopup,
+  hasNativeTopicPopup,
+} from "./TopicPickerPopup";
 import "./RepositoryActions.css";
 
 export function RepositoryIcon({
@@ -193,6 +199,7 @@ export function TooltipButton({
     ButtonHTMLAttributes<HTMLButtonElement>,
     | "role"
     | "aria-selected"
+    | "aria-pressed"
     | "tabIndex"
     | "onKeyDown"
     | "onDoubleClick"
@@ -396,8 +403,10 @@ export function TooltipButton({
 /** Same-origin native overlay stays above Electron's pipeline WebContentsView. */
 export function RepositoryOperationPopup({
   anchor,
+  onHandoff,
 }: {
   anchor: RefObject<HTMLDivElement | null>;
+  onHandoff?: (candidate: GitUpdateHandoffCandidate) => void;
 }) {
   const controller = useRepositoryActionController();
   const failure = controller.failures[0];
@@ -428,6 +437,17 @@ export function RepositoryOperationPopup({
     };
   }, [failure]);
   if (!failure || ready?.failure !== failure) return null;
+  const candidate = failure.result.handoff;
+  const handoff =
+    candidate &&
+    onHandoff &&
+    failure.result.status === "error" &&
+    documentScopeId(candidate.scope) === documentScopeId(failure.scope)
+      ? () => {
+          onHandoff(candidate);
+          if (ready.modal || !hasNativeTopicPopup()) controller.close();
+        }
+      : undefined;
   if (ready.modal)
     return (
       <RepositoryFailureDialog
@@ -435,6 +455,7 @@ export function RepositoryOperationPopup({
         log={failure.result.log}
         error={failure.result.error || "Операция не выполнена"}
         onClose={controller.close}
+        onHandoff={handoff}
       />
     );
   return (
@@ -448,6 +469,7 @@ export function RepositoryOperationPopup({
         log={failure.result.log}
         error={failure.result.error || "Операция не выполнена"}
         onClose={controller.close}
+        onHandoff={handoff}
       />
     </TopicPickerPopup>
   );
@@ -459,6 +481,7 @@ function RepositoryFailureDialog(props: {
   log: string;
   error: string;
   onClose: () => void;
+  onHandoff?: () => void;
 }) {
   const node = useRef<HTMLDialogElement>(null);
   useLayoutEffect(() => {
@@ -487,12 +510,14 @@ function OperationFailure({
   error,
   onClose,
   nested = false,
+  onHandoff,
 }: {
   label: string;
   log: string;
   error: string;
   onClose: () => void;
   nested?: boolean;
+  onHandoff?: () => void;
 }) {
   const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -530,6 +555,11 @@ function OperationFailure({
         </button>
       </header>
       <pre aria-label="Лог операции">{log}</pre>
+      {onHandoff && (
+        <button type="button" onClick={onHandoff}>
+          Разрешить конфликт вручную…
+        </button>
+      )}
       <p className="repository-operation-error" role="alert">
         {error}
       </p>

@@ -1,3 +1,6 @@
+import type { GitUpdateHandoffCandidate } from "../shared/git-update-handoff";
+import type { ScopeRef } from "../shared/context";
+import { documentScopeId } from "./settings-documents";
 import { useViewActive } from "./RetainedViews";
 import { useReadScope } from "./read-request";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
@@ -220,8 +223,12 @@ export function TopicConfirmation({
 }
 export function TopicFeedback({
   operation,
+  handoffScope,
+  onHandoff,
 }: {
   operation: ReturnType<typeof useTopicOperation>;
+  handoffScope?: ScopeRef;
+  onHandoff?: (candidate: GitUpdateHandoffCandidate) => void;
 }) {
   const notice = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -229,8 +236,22 @@ export function TopicFeedback({
       notice.current?.scrollIntoView?.({ block: "nearest" });
   }, [operation.error, operation.result]);
   if (!operation.error && !operation.result) return null;
+  const candidate =
+    operation.result?.status === "failed" ||
+    operation.result?.status === "partial"
+      ? operation.result.handoff
+      : undefined;
+  const eligible =
+    candidate &&
+    handoffScope &&
+    documentScopeId(candidate.scope) === documentScopeId(handoffScope);
   return (
     <div ref={notice} className="topic-feedback">
+      {eligible && onHandoff && (
+        <button type="button" onClick={() => onHandoff(candidate!)}>
+          Разрешить конфликт вручную…
+        </button>
+      )}
       {operation.error && (
         <p role="alert" className="error">
           {operation.error}

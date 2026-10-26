@@ -1,3 +1,4 @@
+import type { GitUpdateHandoffCandidate } from "../shared/git-update-handoff";
 import { SearchablePicker } from "./SearchablePicker";
 import { HistoryArtifacts } from "./ProjectHistory";
 import { TopicDivergence } from "./TopicDivergence";
@@ -46,6 +47,7 @@ function TopicOverviewView({
   onClose,
   onChanged,
   onBusy,
+  onHandoff,
 }: {
   project: Project;
   year: string;
@@ -61,6 +63,7 @@ function TopicOverviewView({
   onClose: () => void;
   onChanged: () => void;
   onBusy?: (v: boolean) => void;
+  onHandoff?: (candidate: GitUpdateHandoffCandidate) => void;
 }) {
   const target = {
     topic: source.topic,
@@ -479,7 +482,11 @@ function TopicOverviewView({
               </LoadingBoundary>
             </div>
           )}
-          <TopicFeedback operation={operation} />
+          <TopicFeedback
+            operation={operation}
+            handoffScope={scope}
+            onHandoff={onHandoff}
+          />
           {actionError && (
             <p className="error" role="alert">
               {actionError}

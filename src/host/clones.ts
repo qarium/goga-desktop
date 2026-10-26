@@ -30,7 +30,8 @@ import {
 import { RunnerShutdownError, type Runner } from "./process";
 import { CloneStore, managedCloneLocation } from "./clone-store";
 import { noSymlinks } from "./settings";
-import { assertReadActive } from "./read-scope";
+import { assertReadActive, withOfflineGitReadScope } from "./read-scope";
+import { readRebaseBinding } from "./git-rebase-read-binding";
 import { assertClonePublicationOrigin } from "./context-exchange";
 const unavailable = () =>
   Error(
@@ -168,11 +169,13 @@ type Repository = { projectPath: string; sourceCommonDir: string };
 export class CloneManager {
   readonly store: CloneStore;
   private readonly env: NodeJS.ProcessEnv;
+  private readonly readStore: CloneStore;
   constructor(
     private readonly home: string,
     readonly runner: Pick<Runner, "command">,
   ) {
     this.store = new CloneStore(home);
+    this.readStore = new CloneStore(home, "read-only");
     this.env = {
       HOME: home,
       GIT_CONFIG_NOSYSTEM: "1",
@@ -200,11 +203,12 @@ export class CloneManager {
     cwd: string,
     owner?: WorktreeRecord,
     beforeCommand?: () => void,
+    store = this.store,
   ) {
-    await this.store.assertRoot();
+    await store.assertRoot();
     await noSymlinks(cwd);
     await noSymlinks(path.join(cwd, ".git"));
-    if (owner) await this.store.assertOwned(owner);
+    if (owner) await store.assertOwned(owner);
     beforeCommand?.();
     const result = await this.runner.command(
       "git",
@@ -212,14 +216,18 @@ export class CloneManager {
       cwd,
       this.env,
     );
-    await this.store.assertRoot();
+    await store.assertRoot();
     await noSymlinks(cwd);
     await noSymlinks(path.join(cwd, ".git"));
-    if (owner) await this.store.assertOwned(owner);
+    if (owner) await store.assertOwned(owner);
     return result.stdout;
   }
   /** One Git process observes all repository paths; malformed output fails closed. */
-  private async gitPaths(cwd: string, owner?: WorktreeRecord) {
+  private async gitPaths(
+    cwd: string,
+    owner?: WorktreeRecord,
+    store = this.store,
+  ) {
     const raw = await this.git(
       [
         "rev-parse",
@@ -230,17 +238,22 @@ export class CloneManager {
       ],
       cwd,
       owner,
+      undefined,
+      store,
     );
     const values = raw.replace(/\n$/, "").split("\n");
     if (values.length !== 3 || values.some((value) => !path.isAbsolute(value)))
       throw Error("Не удалось проверить пути Git-репозитория.");
     return { top: values[0]!, common: values[1]!, git: values[2]! };
   }
-  private async repository(project: Project): Promise<Repository> {
+  private async repository(
+    project: Project,
+    store = this.store,
+  ): Promise<Repository> {
     if (!project || !path.isAbsolute(project.path)) throw unavailable();
     const canonical = await realpath(project.path);
     await noSymlinks(canonical);
-    const paths = await this.gitPaths(canonical);
+    const paths = await this.gitPaths(canonical, undefined, store);
     if ((await realpath(paths.top)) !== canonical)
       throw Error("Выберите корневую папку Git-проекта.");
     const common = await realpath(paths.common);
@@ -295,12 +308,19 @@ export class CloneManager {
       await handle.close();
     }
   }
-  private async validate(record: WorktreeRecord): Promise<{
+  private async validate(
+    record: WorktreeRecord,
+    readStore?: CloneStore,
+  ): Promise<{
     state: "ready" | "missing" | "conflict";
     reason?: WorktreeRecord["reason"];
+    operationBinding?: string;
   }> {
+    const store = readStore ?? this.store;
+    const git = (args: string[]) =>
+      this.git(args, record.path, record, undefined, store);
     try {
-      await this.store.assertRoot();
+      await store.assertRoot();
       try {
         await lstat(record.path);
       } catch (error) {
@@ -308,12 +328,15 @@ export class CloneManager {
           return { state: "missing", reason: "missing" };
         throw error;
       }
-      await this.store.assertOwned(record);
-      const source = await this.repository({
-        id: record.projectId,
-        name: "",
-        path: record.projectPath,
-      });
+      await store.assertOwned(record);
+      const source = await this.repository(
+        {
+          id: record.projectId,
+          name: "",
+          path: record.projectPath,
+        },
+        store,
+      );
       if (source.sourceCommonDir !== record.sourceCommonDir)
         return { state: "conflict", reason: "repository" };
       for (const relative of ["objects", "objects/info", "config", "index"])
@@ -340,57 +363,38 @@ export class CloneManager {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
-      const { top, common, git } = await this.gitPaths(record.path, record);
+      const {
+        top,
+        common,
+        git: gitDir,
+      } = await this.gitPaths(record.path, record, store);
       if (
         (await realpath(top)) !== record.path ||
         (await realpath(common)) !== record.gitCommonDir ||
-        (await realpath(git)) !== record.gitCommonDir
+        (await realpath(gitDir)) !== record.gitCommonDir
       )
         return { state: "conflict", reason: "repository" };
-      const branch = (
-        await this.git(
-          ["rev-parse", "--abbrev-ref", "HEAD"],
-          record.path,
-          record,
-        )
-      ).trim();
-      if (branch !== record.branch)
+      const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+      let operationBinding: string | undefined;
+      if (branch === "HEAD" && readStore)
+        operationBinding = await readRebaseBinding(record, git);
+      else if (branch !== record.branch)
         return { state: "conflict", reason: "branch" };
-      await this.git(
-        ["rev-parse", "--verify", "HEAD^{commit}"],
-        record.path,
-        record,
-      );
+      await git(["rev-parse", "--verify", "HEAD^{commit}"]);
       const index = await lstat(path.join(record.gitCommonDir, "index"));
       if (!index.isFile() || index.nlink !== 1)
         return { state: "conflict", reason: "repository" };
       if (
         record.preparation &&
-        (
-          await this.git(
-            ["status", "--porcelain", "--untracked-files=all"],
-            record.path,
-            record,
-          )
-        ).trim()
+        (await git(["status", "--porcelain", "--untracked-files=all"])).trim()
       )
         return { state: "conflict", reason: "ambiguous-add" };
       const remote = (
-        await this.git(
-          ["remote", "get-url", "desktop-source"],
-          record.path,
-          record,
-        )
+        await git(["remote", "get-url", "desktop-source"])
       ).trim();
-      const remotes = (await this.git(["remote"], record.path, record))
-        .trim()
-        .split("\n");
+      const remotes = (await git(["remote"])).trim().split("\n");
       const pushUrl = (
-        await this.git(
-          ["remote", "get-url", "--push", "desktop-source"],
-          record.path,
-          record,
-        )
+        await git(["remote", "get-url", "--push", "desktop-source"])
       ).trim();
       if (remote !== record.projectPath || pushUrl !== "/dev/null")
         return { state: "conflict", reason: "repository" };
@@ -398,8 +402,21 @@ export class CloneManager {
       // Exchange prepare/verify checks effective endpoints under the final child env.
       if (remotes.includes("origin"))
         await assertClonePublicationOrigin(this.home, this.runner, record);
-      await this.store.assertOwned(record);
-      return { state: "ready" };
+      await store.assertOwned(record);
+      if (readStore) {
+        if (operationBinding) {
+          if (operationBinding !== (await readRebaseBinding(record, git)))
+            throw unavailable();
+        } else if (
+          (await git(["rev-parse", "--abbrev-ref", "HEAD"])).trim() !==
+          record.branch
+        )
+          throw unavailable();
+      }
+      return {
+        state: "ready",
+        ...(operationBinding ? { operationBinding } : {}),
+      };
     } catch (error) {
       if (error instanceof RunnerShutdownError) throw error;
       assertReadActive();
@@ -713,6 +730,109 @@ export class CloneManager {
       if (current.state !== "ready") throw unavailable();
       if (current.revision !== ref.revision) throw changed();
       return current;
+    });
+  }
+  /** Host-only display admission. Never refreshes a row, takes a lifecycle lock,
+   * or makes this owner available to the ordinary resolver and write operations. */
+  async resolveGitRead(input: TopicContextRef): Promise<{
+    record: WorktreeRecord;
+    operationBinding?: string;
+  }> {
+    return withOfflineGitReadScope(async () => {
+      const ref = topicContextRefSchema.parse(input);
+      const initial = (await this.readStore.read()).records.find(
+        (r) => r.contextId === ref.contextId,
+      );
+      if (!initial || !sameIdentity(initial, ref)) throw unavailable();
+      if (initial.revision !== ref.revision) throw changed();
+      if (
+        initial.preparation ||
+        initial.deletedAt ||
+        !(
+          (initial.state === "ready" && initial.reason === undefined) ||
+          (initial.state === "conflict" && initial.reason === "branch")
+        )
+      )
+        throw unavailable();
+      const result = await this.validate(initial, this.readStore);
+      if (
+        result.state !== "ready" ||
+        (initial.state !== "ready" && !result.operationBinding)
+      )
+        throw unavailable();
+      const current = (await this.readStore.read()).records.find(
+        (r) => r.contextId === ref.contextId,
+      );
+      if (JSON.stringify(current) !== JSON.stringify(initial)) throw changed();
+      await this.readStore.assertOwned(initial);
+      assertReadActive();
+      return {
+        record: initial,
+        ...(result.operationBinding
+          ? { operationBinding: result.operationBinding }
+          : {}),
+      };
+    });
+  }
+  /** Host-only completion check for an already-authorized operation. This grants
+   * no resolved context and never repairs the persisted conflict/branch row. */
+  async verifyGitOperationOwner(
+    input: TopicContextRef,
+    expected: WorktreeRecord,
+  ): Promise<void> {
+    return withOfflineGitReadScope(async () => {
+      const ref = topicContextRefSchema.parse(input);
+      const initial = (await this.readStore.read()).records.find(
+        (r) => r.contextId === ref.contextId,
+      );
+      if (!initial || !sameIdentity(initial, ref)) throw unavailable();
+      if (
+        initial.revision !== ref.revision ||
+        JSON.stringify(initial) !== JSON.stringify(expected)
+      )
+        throw changed();
+      if (
+        initial.preparation ||
+        initial.deletedAt ||
+        !(
+          (initial.state === "ready" && initial.reason === undefined) ||
+          (initial.state === "conflict" && initial.reason === "branch")
+        )
+      )
+        throw unavailable();
+      const assertNoOperation = async () => {
+        for (const name of [
+          "MERGE_HEAD",
+          "CHERRY_PICK_HEAD",
+          "REVERT_HEAD",
+          "REBASE_HEAD",
+          "AUTO_MERGE",
+          "rebase-merge",
+          "rebase-apply",
+          "sequencer",
+          "BISECT_START",
+        ]) {
+          let present = false;
+          try {
+            await lstat(path.join(initial.gitCommonDir, name));
+            present = true;
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+          if (present) throw unavailable();
+        }
+      };
+      await assertNoOperation();
+      const result = await this.validate(initial, this.readStore);
+      if (result.state !== "ready" || result.operationBinding)
+        throw unavailable();
+      const current = (await this.readStore.read()).records.find(
+        (r) => r.contextId === ref.contextId,
+      );
+      if (JSON.stringify(current) !== JSON.stringify(initial)) throw changed();
+      await this.readStore.assertOwned(initial);
+      await assertNoOperation();
+      assertReadActive();
     });
   }
   async list(projectId?: string): Promise<WorktreeRecord[]> {

@@ -9,6 +9,36 @@ function listen<T>(name: string, callback: (value: T) => void) {
   return () => ipcRenderer.removeListener(`goga:${name}`, fn);
 }
 const api: DesktopAPI = {
+  prepareGitRebaseOperation: (request) =>
+    invoke("prepare-git-rebase-operation", request),
+  executeGitRebaseOperation: (token) =>
+    invoke("execute-git-rebase-operation", token),
+  prepareGitUpdateHandoff: (request) =>
+    invoke("prepare-git-update-handoff", request),
+  executeGitUpdateHandoff: (token) =>
+    invoke("execute-git-update-handoff", token),
+  prepareGitSequencerOperation: (request) =>
+    invoke("prepare-git-sequencer-operation", request),
+  executeGitSequencerOperation: (token) =>
+    invoke("execute-git-sequencer-operation", token),
+  prepareGitMergeOperation: (request) =>
+    invoke("prepare-git-merge-operation", request),
+  executeGitMergeOperation: (token) =>
+    invoke("execute-git-merge-operation", token),
+  prepareGitConflictSave: (request) =>
+    invoke("prepare-git-conflict-save", request),
+  executeGitConflictSave: (token) => invoke("execute-git-conflict-save", token),
+  readGitBranches: (projectId) => invoke("read-git-branches", projectId),
+  prepareGitBranch: (request) => invoke("prepare-git-branch", request),
+  executeGitBranch: (token) => invoke("execute-git-branch", token),
+  readGitSummary: (scope) => invoke("read-git-summary", scope),
+  readGitWorkspace: (scope) => invoke("read-git-workspace", scope),
+  readGitConflict: (request) => invoke("read-git-conflict", request),
+  readGitDiff: (request) => invoke("read-git-diff", request),
+  prepareGitDiscard: (request) => invoke("prepare-git-discard", request),
+  executeGitDiscard: (token) => invoke("execute-git-discard", token),
+  prepareGitCommit: (request) => invoke("prepare-git-commit", request),
+  executeGitCommit: (token) => invoke("execute-git-commit", token),
   terminal: createTerminalControlAPI(
     (channel, value) =>
       ipcRenderer.invoke(channel, ...(value === undefined ? [] : [value])),

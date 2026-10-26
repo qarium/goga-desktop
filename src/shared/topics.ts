@@ -1,3 +1,4 @@
+import type { GitUpdateHandoffCandidate } from "./git-update-handoff";
 import type { TopicContextRef } from "./worktrees";
 export interface TopicBoardRecord {
   topic: string;
@@ -93,6 +94,7 @@ export interface TopicOperationPlan {
   expiresAt: number;
 }
 export interface TopicOperationResult {
+  handoff?: GitUpdateHandoffCandidate;
   projectId: string;
   status: "success" | "partial" | "failed";
   message: string;

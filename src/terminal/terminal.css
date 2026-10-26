@@ -10,9 +10,9 @@ body,
 #terminal-root {
   position: relative;
 }
-.terminal-screen {
-  box-sizing: border-box;
-  padding: 8px;
+.terminal-screen-content {
+  position: absolute;
+  inset: 8px;
 }
 .terminal-confirmation {
   box-sizing: border-box;

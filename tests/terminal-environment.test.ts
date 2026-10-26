@@ -279,3 +279,25 @@ it("abbreviates only the standard zsh prompt at the topic root without changing 
     await (launch as any).dispose?.();
   }
 });
+
+it("does not inherit the Desktop launcher's NO_COLOR into an interactive terminal", async () => {
+  const f = await fixture();
+  const inherited = { ...system.inherited, NO_COLOR: "1" };
+  const launch = await prepareTerminalEnvironment(primary, f.resolve, {
+    ...system,
+    inherited,
+  });
+  expect(launch.env.NO_COLOR).toBeUndefined();
+  expect(launch.env.TERM).toBe("xterm-256color");
+  expect(launch.env.COLORTERM).toBe("truecolor");
+  expect(inherited.NO_COLOR).toBe("1");
+});
+it("preserves an explicit project NO_COLOR instead of forcing terminal colors", async () => {
+  const f = await fixture();
+  f.resolved.env = [
+    { key: "NO_COLOR", value: "1", runtime: false, secret: false },
+  ];
+  const launch = await prepareTerminalEnvironment(primary, f.resolve, system);
+  expect(launch.env.NO_COLOR).toBe("1");
+  expect(launch.env.FORCE_COLOR).toBeUndefined();
+});

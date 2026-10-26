@@ -1,0 +1,281 @@
+import { afterEach, expect, it } from "vitest";
+import * as fs from "node:fs/promises";
+import path from "node:path";
+import { HostService } from "../src/host/service";
+import { NodeRunner, CommandExitError, type Runner } from "../src/host/process";
+import { CloneManager } from "../src/host/clones";
+import { worktreeContextRef } from "../src/shared/worktrees";
+const cleanup: (() => Promise<unknown>)[] = [];
+afterEach(async () => {
+  for (const fn of cleanup.splice(0).reverse()) await fn();
+});
+async function fixture(kind: "primary" | "managed", strategy = "merge") {
+  const base = await fs.mkdtemp("/private/tmp/goga-handoff-host-"),
+    home = path.join(base, "home"),
+    source = path.join(base, "source");
+  cleanup.push(() => fs.rm(base, { recursive: true, force: true }));
+  await fs.mkdir(home);
+  await fs.mkdir(source);
+  const env = {
+    HOME: home,
+    XDG_CONFIG_HOME: home,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_AUTHOR_NAME: "Fixture",
+    GIT_AUTHOR_EMAIL: "fixture@example.invalid",
+    GIT_COMMITTER_NAME: "Fixture",
+    GIT_COMMITTER_EMAIL: "fixture@example.invalid",
+    GIT_TERMINAL_PROMPT: "0",
+    GIT_NO_LAZY_FETCH: "1",
+    GIT_ALLOW_PROTOCOL: "file",
+  };
+  const node = new NodeRunner(10000, env);
+  cleanup.push(() => node.dispose());
+  const git = (root: string, args: string[]) =>
+    node.command(
+      "git",
+      ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...args],
+      root,
+      env,
+    );
+  await git(source, ["init", "-b", "main"]);
+  await fs.mkdir(path.join(source, ".goga"));
+  await fs.writeFile(
+    path.join(source, ".goga/config.yml"),
+    `topics:\n  base_ref: main\n  update:\n    strategy: ${strategy}\n`,
+  );
+  await fs.writeFile(path.join(source, "file"), "base\n");
+  await git(source, ["add", "."]);
+  await git(source, ["commit", "-m", "base"]);
+  await git(source, ["branch", "feature"]);
+  await fs.writeFile(path.join(source, "file"), "incoming\n");
+  await git(source, ["commit", "-am", "incoming"]);
+  let refusal: Error = new CommandExitError(
+      "opaque refusal",
+      1,
+      "",
+      "opaque diagnostic",
+    ),
+    updates = 0;
+  let onUpdate: ((cwd: string, args: string[]) => Promise<void>) | undefined;
+  const runner: Runner = {
+    start: node.start.bind(node),
+    kill: node.kill.bind(node),
+    command: async (exe, args, cwd, e, input) => {
+      if (exe === "git") return node.command(exe, args, cwd, e, input);
+      if (args[0] === "config")
+        return {
+          stdout: `base_ref: main\nupdate:\n  strategy: ${strategy}\n`,
+          stderr: "",
+        };
+      if (args.includes("board"))
+        return {
+          stdout: JSON.stringify(
+            args.includes("--remote")
+              ? []
+              : [
+                  {
+                    topic: "feature",
+                    branch: "feature",
+                    current: true,
+                    remote: false,
+                    todo: "task",
+                    statuses: [],
+                    divergence: "behind",
+                    ...(!args.includes("--per-host")
+                      ? { hosts: ["feature"] }
+                      : {}),
+                  },
+                ],
+          ),
+          stderr: "",
+        };
+      if (args.includes("update")) {
+        updates++;
+        await onUpdate?.(cwd, args);
+        throw refusal;
+      }
+      throw Error("unexpected fixture Goga: " + args.join(" "));
+    },
+  };
+  const host = new HostService({
+    home,
+    dataDir: path.join(base, "data"),
+    runner,
+    goga: "fixture-goga",
+  });
+  cleanup.push(() => host.dispose());
+  const project = await host.addProject(source),
+    manager = new CloneManager(home, runner);
+  const record =
+    kind === "managed"
+      ? await manager.ensure(project, {
+          projectId: project.id,
+          year: "2026",
+          topic: "feature",
+          branch: "feature",
+        })
+      : null;
+  const root = record?.path ?? source,
+    scope = record ? worktreeContextRef(record) : project.id;
+  if (!record) await git(root, ["checkout", "feature"]);
+  await fs.writeFile(path.join(root, "file"), "local\n");
+  await git(root, ["commit", "-am", "local"]);
+  // Materialize settings so synchronous publication pins refer to a durable owner.
+  await host.readProjectSettings(scope);
+  const update = async () => {
+    const board = await host.readTopicBoard(scope, "2026");
+    const plan = await host.prepareTopicOperation({
+      projectId: project.id,
+      ...(record ? { context: worktreeContextRef(record) } : {}),
+      year: "2026",
+      expectedRevision: board.revision,
+      action: "update",
+      target: { topic: "feature", branch: "feature", remote: false },
+      baseRef: "main",
+    });
+    return host.executeTopicOperation(plan.token);
+  };
+  return {
+    host,
+    project,
+    root,
+    scope,
+    source,
+    git,
+    update,
+    setUpdate: (fn: typeof onUpdate) => (onUpdate = fn),
+    setRefusal: (e: Error) => (refusal = e),
+    updates: () => updates,
+  };
+}
+it.each([
+  ["primary", "merge"],
+  ["managed", "merge"],
+  ["primary", "rebase"],
+  ["managed", "rebase"],
+] as const)(
+  "%s %s card refusal offers a separately confirmed native operation",
+  async (kind, strategy) => {
+    const f = await fixture(kind, strategy);
+    const original = (await f.git(f.root, ["rev-parse", "HEAD"])).stdout;
+    const result = await f.update();
+    expect(result.status).toBe("failed");
+    expect(result.handoff).toBeDefined();
+    expect((await f.host.readGitWorkspace(f.scope)).files).toEqual([]);
+    const preview = await f.host.prepareGitUpdateHandoff({
+      scope: f.scope,
+      revision: (await f.host.readGitWorkspace(f.scope)).revision,
+      candidateId: result.handoff!.candidateId,
+    });
+    expect(preview.candidate.scope).toEqual(f.scope);
+    expect(preview.publishes).toBe(false);
+    expect((await f.git(f.root, ["rev-parse", "HEAD"])).stdout).toBe(original);
+    const started = await f.host.executeGitUpdateHandoff(preview.token);
+    expect(started, started.log).toMatchObject({
+      scope: f.scope,
+      status: "conflict",
+      changed: true,
+      conflicts: ["file"],
+    });
+    expect((await f.host.readGitWorkspace(f.scope)).operation).toBe(strategy);
+    await expect(
+      f.host.executeGitUpdateHandoff(preview.token),
+    ).rejects.toThrow();
+  },
+  30000,
+);
+it("ordinary CLI failure is not authority to offer manual Git", async () => {
+  const f = await fixture("primary");
+  f.setRefusal(Error("conflict merge rebase"));
+  expect((await f.update()).handoff).toBeUndefined();
+  expect(f.updates()).toBe(1);
+});
+
+it("header update-base captures the clone only after refreshing its original base", async () => {
+  const f = await fixture("managed");
+  const remote = path.join(path.dirname(f.source), "remote.git");
+  await f.git(f.source, ["init", "--bare", remote]);
+  await f.git(f.source, ["remote", "add", "origin", remote]);
+  await f.git(f.source, ["push", "-u", "origin", "main"]);
+  const originalBase = (
+    await f.git(f.source, ["rev-parse", "HEAD"])
+  ).stdout.trim();
+  const remoteHead = (
+    await f.git(f.source, [
+      "commit-tree",
+      "HEAD^{tree}",
+      "-p",
+      "HEAD",
+      "-m",
+      "remote-only fixture",
+    ])
+  ).stdout.trim();
+  await f.git(f.source, ["push", "origin", `${remoteHead}:refs/heads/main`]);
+  expect((await f.git(f.source, ["rev-parse", "HEAD"])).stdout.trim()).toBe(
+    originalBase,
+  );
+  const result = await f.host.runRepositoryAction({
+    projectId: f.project.id,
+    context: f.scope as Exclude<typeof f.scope, string>,
+    action: "update-base",
+  });
+  expect(result.status).toBe("error");
+  expect(result.handoff).toMatchObject({
+    scope: f.scope,
+    baseRef: "main",
+    targetBranch: "feature",
+    sourceOid: remoteHead,
+  });
+  expect((await f.git(f.source, ["rev-parse", "HEAD"])).stdout.trim()).toBe(
+    remoteHead,
+  );
+  expect(result.handoff!.sourceRef).toMatch(
+    /^refs\/desktop\/repository-actions\//,
+  );
+  const preview = await f.host.prepareGitUpdateHandoff({
+    scope: f.scope,
+    revision: (await f.host.readGitWorkspace(f.scope)).revision,
+    candidateId: result.handoff!.candidateId,
+  });
+  expect((await f.host.executeGitUpdateHandoff(preview.token)).status).toBe(
+    "conflict",
+  );
+}, 30000);
+it("a non-current original topic never offers an implicit checkout", async () => {
+  const f = await fixture("primary");
+  await f.git(f.root, ["checkout", "-b", "other"]);
+  const result = await f.update();
+  expect(result.handoff).toBeUndefined();
+  expect(
+    (await f.git(f.root, ["branch", "--show-current"])).stdout.trim(),
+  ).toBe("other");
+});
+it("changing the pinned source invalidates preparation without starting Git", async () => {
+  const f = await fixture("primary"),
+    result = await f.update();
+  expect(result.handoff).toBeDefined();
+  await f.git(f.root, ["update-ref", "refs/heads/main", "HEAD"]);
+  await expect(
+    f.host.prepareGitUpdateHandoff({
+      scope: f.scope,
+      revision: (await f.host.readGitWorkspace(f.scope)).revision,
+      candidateId: result.handoff!.candidateId,
+    }),
+  ).rejects.toThrow();
+  expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("none");
+});
+
+it("a real operation already left by Goga is not offered a second START", async () => {
+  const f = await fixture("primary");
+  f.setUpdate(async (root, args) => {
+    await f
+      .git(root, ["merge", "--no-edit", args[args.indexOf("--base-ref") + 1]])
+      .catch(() => {});
+  });
+  const result = await f.update();
+  expect(result.handoff).toBeUndefined();
+  expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("merge");
+  expect(f.updates()).toBe(1);
+});

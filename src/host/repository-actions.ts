@@ -1,3 +1,4 @@
+import type { GitUpdateAttemptInput } from "./git-update-handoff";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { lstat, realpath } from "node:fs/promises";
@@ -27,6 +28,10 @@ interface Dependencies {
   ): Promise<ContextSyncState>;
   git(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }>;
   goga(args: string[]): Promise<{ stdout: string; stderr: string }>;
+  gogaUpdate?(
+    args: string[],
+    input: GitUpdateAttemptInput,
+  ): Promise<{ stdout: string; stderr: string }>;
   gogaOriginal(args: string[]): Promise<{ stdout: string; stderr: string }>;
   verify(): Promise<void>;
   secrets: string[];
@@ -751,7 +756,7 @@ export class RepositoryActions {
           "Обновление топика: goga topics update (клон, без публикации)…",
         );
         // Native Goga reads topics.update.strategy itself; there is no --strategy option.
-        const result = await this.deps.goga([
+        const updateArgs = [
           "topics",
           "--year",
           this.owner.year,
@@ -759,7 +764,14 @@ export class RepositoryActions {
           this.owner.branch,
           "--base-ref",
           cloneRef,
-        ]);
+        ];
+        const result = this.deps.gogaUpdate
+          ? await this.deps.gogaUpdate(updateArgs, {
+              targetBranch: this.owner.branch,
+              sourceRef: cloneRef,
+              baseRef: parsed.data.base_ref,
+            })
+          : await this.deps.goga(updateArgs);
         this.lines.push(
           result.stdout,
           result.stderr,

@@ -1,3 +1,4 @@
+import type { GitUpdateHandoffCandidate } from "./git-update-handoff";
 import { z } from "zod";
 import { topicContextRefSchema } from "./worktrees";
 import {
@@ -66,6 +67,7 @@ export type RepositoryActionRequest = z.infer<
   typeof repositoryActionRequestSchema
 >;
 export interface RepositoryActionResult {
+  handoff?: GitUpdateHandoffCandidate;
   projectId: string;
   contextId?: string;
   action: RepositoryAction;

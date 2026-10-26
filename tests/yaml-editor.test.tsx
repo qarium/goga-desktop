@@ -366,56 +366,212 @@ it.each([false, true])(
     }
   },
 );
-it('plain text mode keeps CRLF and history without YAML highlighting', () => {
- const onChange=vi.fn();render(<YamlEditor plainText label="Dockerfile" value={'FROM alpine\r\nRUN true\r\n'} onChange={onChange}/>);
- const v=editor();expect(v.contentDOM.getAttribute('aria-label')).toBe('Dockerfile');expect(v.contentDOM.querySelector('[class^="yaml-"]')).toBeNull();
- act(()=>v.dispatch({changes:{from:v.state.doc.length,insert:'RUN echo 42\r\n'}}));
- expect(onChange).toHaveBeenLastCalledWith('FROM alpine\r\nRUN true\r\nRUN echo 42\r\n');
- act(()=>{undo(v);});expect(v.state.doc.toString()).toBe('FROM alpine\r\nRUN true\r\n');
+it("plain text mode keeps CRLF and history without YAML highlighting", () => {
+  const onChange = vi.fn();
+  render(
+    <YamlEditor
+      plainText
+      label="Dockerfile"
+      value={"FROM alpine\r\nRUN true\r\n"}
+      onChange={onChange}
+    />,
+  );
+  const v = editor();
+  expect(v.contentDOM.getAttribute("aria-label")).toBe("Dockerfile");
+  expect(v.contentDOM.querySelector('[class^="yaml-"]')).toBeNull();
+  act(() =>
+    v.dispatch({
+      changes: { from: v.state.doc.length, insert: "RUN echo 42\r\n" },
+    }),
+  );
+  expect(onChange).toHaveBeenLastCalledWith(
+    "FROM alpine\r\nRUN true\r\nRUN echo 42\r\n",
+  );
+  act(() => {
+    undo(v);
+  });
+  expect(v.state.doc.toString()).toBe("FROM alpine\r\nRUN true\r\n");
 });
 
 it("highlights Dockerfile instructions, comments and strings while preserving raw bytes and undo", () => {
-  const original = '# build\r\nFROM alpine AS base\r\nRUN ["echo", "ok"]\nEXPOSE 8080\r\n';
+  const original =
+    '# build\r\nFROM alpine AS base\r\nRUN ["echo", "ok"]\nEXPOSE 8080\r\n';
   const onChange = vi.fn();
-  render(<YamlEditor language="dockerfile" label="Dockerfile" value={original} onChange={onChange} />);
+  render(
+    <YamlEditor
+      language="dockerfile"
+      label="Dockerfile"
+      value={original}
+      onChange={onChange}
+    />,
+  );
   const v = editor();
-  expect(v.contentDOM.querySelector(".dockerfile-keyword")?.textContent).toBe("FROM");
-  expect(v.contentDOM.querySelector(".dockerfile-comment")?.textContent).toBe("# build");
-  expect(v.contentDOM.querySelector(".dockerfile-string")?.textContent).toContain('"echo"');
-  expect(v.contentDOM.querySelector(".dockerfile-number")?.textContent).toBe("8080");
+  expect(v.contentDOM.querySelector(".dockerfile-keyword")?.textContent).toBe(
+    "FROM",
+  );
+  expect(v.contentDOM.querySelector(".dockerfile-comment")?.textContent).toBe(
+    "# build",
+  );
+  expect(
+    v.contentDOM.querySelector(".dockerfile-string")?.textContent,
+  ).toContain('"echo"');
+  expect(v.contentDOM.querySelector(".dockerfile-number")?.textContent).toBe(
+    "8080",
+  );
   expect(v.contentDOM.querySelector('[class^="yaml-"]')).toBeNull();
   expect(v.state.doc.toString()).toBe(original);
   expect(onChange).not.toHaveBeenCalled();
-  act(() => v.dispatch({ changes: { from: v.state.doc.length, insert: 'RUN {{ [ not YAML\r\n' } }));
-  expect(onChange).toHaveBeenLastCalledWith(original + 'RUN {{ [ not YAML\r\n');
-  act(() => { undo(v); });
+  act(() =>
+    v.dispatch({
+      changes: { from: v.state.doc.length, insert: "RUN {{ [ not YAML\r\n" },
+    }),
+  );
+  expect(onChange).toHaveBeenLastCalledWith(original + "RUN {{ [ not YAML\r\n");
+  act(() => {
+    undo(v);
+  });
   expect(v.state.doc.toString()).toBe(original);
-  act(() => { redo(v); });
-  expect(v.state.doc.toString()).toBe(original + 'RUN {{ [ not YAML\r\n');
+  act(() => {
+    redo(v);
+  });
+  expect(v.state.doc.toString()).toBe(original + "RUN {{ [ not YAML\r\n");
 });
 
-it.each(["\n", "\r\n"])("keeps Dockerfile continuation context across %j without coloring shell commands as instructions", (newline) => {
-  const source = ["RUN echo \\", '  FROM "argument"', "FROM alpine"].join(newline);
-  render(<YamlEditor language="dockerfile" value={source} onChange={() => {}} />);
-  const v = editor();
-  expect(Array.from(v.contentDOM.querySelectorAll(".dockerfile-keyword"), (node) => node.textContent)).toEqual(["RUN", "FROM"]);
-  expect(v.contentDOM.querySelector(".dockerfile-string")?.textContent).toBe('"argument"');
-  expect(v.state.doc.toString()).toBe(source);
-});
+it.each(["\n", "\r\n"])(
+  "keeps Dockerfile continuation context across %j without coloring shell commands as instructions",
+  (newline) => {
+    const source = ["RUN echo \\", '  FROM "argument"', "FROM alpine"].join(
+      newline,
+    );
+    render(
+      <YamlEditor language="dockerfile" value={source} onChange={() => {}} />,
+    );
+    const v = editor();
+    expect(
+      Array.from(
+        v.contentDOM.querySelectorAll(".dockerfile-keyword"),
+        (node) => node.textContent,
+      ),
+    ).toEqual(["RUN", "FROM"]);
+    expect(v.contentDOM.querySelector(".dockerfile-string")?.textContent).toBe(
+      '"argument"',
+    );
+    expect(v.state.doc.toString()).toBe(source);
+  },
+);
 
-it.each(["yaml", "dockerfile"] as const)("shows line numbers in %s without changing source", (language) => {
-  const value = "first\r\nsecond\nthird";
-  const onChange = vi.fn();
-  render(<YamlEditor language={language} value={value} onChange={onChange} />);
-  const v = editor();
-  const numbers = () => Array.from(v.dom.querySelectorAll('.cm-lineNumbers .cm-gutterElement'), e => e.textContent);
-  expect(numbers()).toContain("1");
-  expect(numbers()).toContain("2");
-  expect(numbers()).toContain("3");
-  expect(v.state.doc.toString()).toBe(value);
-  expect(onChange).not.toHaveBeenCalled();
-  act(() => v.dispatch({changes: {from: 0, insert: "new\n"}}));
-  expect(numbers()).toContain("4");
-  act(() => { undo(v); });
-  expect(v.state.doc.toString()).toBe(value);
+it.each(["yaml", "dockerfile"] as const)(
+  "shows line numbers in %s without changing source",
+  (language) => {
+    const value = "first\r\nsecond\nthird";
+    const onChange = vi.fn();
+    render(
+      <YamlEditor language={language} value={value} onChange={onChange} />,
+    );
+    const v = editor();
+    const numbers = () =>
+      Array.from(
+        v.dom.querySelectorAll(".cm-lineNumbers .cm-gutterElement"),
+        (e) => e.textContent,
+      );
+    expect(numbers()).toContain("1");
+    expect(numbers()).toContain("2");
+    expect(numbers()).toContain("3");
+    expect(v.state.doc.toString()).toBe(value);
+    expect(onChange).not.toHaveBeenCalled();
+    act(() => v.dispatch({ changes: { from: 0, insert: "new\n" } }));
+    expect(numbers()).toContain("4");
+    act(() => {
+      undo(v);
+    });
+    expect(v.state.doc.toString()).toBe(value);
+  },
+);
+it("exposes exact local ChangeSets and restores editor memory without replaying stale callbacks", () => {
+  const memory: import("../src/renderer/YamlEditor").YamlEditorMemory = {};
+  const first = vi.fn(),
+    second = vi.fn();
+  const rendered = render(
+    <YamlEditor
+      value={"a\r\nb"}
+      onChange={() => {}}
+      onUpdate={first}
+      memory={memory}
+    />,
+  );
+  const view = editor();
+  act(() =>
+    view.dispatch({
+      changes: { from: 0, insert: "new\r\n" },
+      selection: { anchor: 2 },
+    }),
+  );
+  expect(first).toHaveBeenCalledOnce();
+  expect(first.mock.calls[0][0].changes.length).toBe(4);
+  rendered.unmount();
+  render(
+    <YamlEditor
+      value={"new\r\na\r\nb"}
+      onChange={() => {}}
+      onUpdate={second}
+      memory={memory}
+    />,
+  );
+  expect(editor().state.selection.main.anchor).toBe(2);
+  expect(undoDepth(editor().state)).toBe(1);
+  act(() => editor().dispatch({ changes: { from: 0, insert: "x" } }));
+  expect(second).toHaveBeenCalledOnce();
+  expect(first).toHaveBeenCalledOnce();
+});
+it("rejects a mismatched precise controlled change without replacing text, history or selection", () => {
+  const rejected = vi.fn();
+  const rendered = render(
+    <YamlEditor value={"actual\r\ntext"} onChange={() => {}} />,
+  );
+  const view = editor();
+  act(() =>
+    view.dispatch({
+      changes: { from: 0, insert: "mine" },
+      selection: { anchor: 2 },
+    }),
+  );
+  const actual = view.state.doc.toString();
+  rendered.rerender(
+    <YamlEditor
+      value="new result"
+      onChange={() => {}}
+      externalChange={{
+        before: "wrong before",
+        changes: view.state.changes({
+          from: 0,
+          to: view.state.doc.length,
+          insert: "new result",
+        }),
+      }}
+      onExternalChangeRejected={rejected}
+    />,
+  );
+  expect(rejected).toHaveBeenCalledWith(actual);
+  expect(view.state.doc.toString()).toBe(actual);
+  expect(view.state.selection.main.anchor).toBe(2);
+  expect(undoDepth(view.state)).toBe(1);
+});
+it("rejects a precise change whose computed text does not match the requested value", () => {
+  const rejected = vi.fn();
+  const rendered = render(<YamlEditor value="before" onChange={() => {}} />);
+  const view = editor();
+  rendered.rerender(
+    <YamlEditor
+      value="different result"
+      onChange={() => {}}
+      externalChange={{
+        before: "before",
+        changes: view.state.changes({ from: 0, to: 6, insert: "actual patch" }),
+      }}
+      onExternalChangeRejected={rejected}
+    />,
+  );
+  expect(rejected).toHaveBeenCalledWith("before");
+  expect(view.state.doc.toString()).toBe("before");
+  expect(undoDepth(view.state)).toBe(0);
 });

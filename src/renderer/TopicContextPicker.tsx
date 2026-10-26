@@ -28,6 +28,8 @@ import { TopicPickerPopup, hasNativeTopicPopup } from "./TopicPickerPopup";
 export interface TopicContextPickerProps {
   project: Project;
   board: DisplayCatalog | null;
+  catalogError?: string;
+  onRetryCatalog?: () => void;
   selected: WorktreeRecord | null;
   knownContexts?: WorktreeRecord[];
   runs?: RunWithContext[];
@@ -102,6 +104,8 @@ const timeoutMessage =
 export function TopicContextPicker({
   project,
   board,
+  catalogError,
+  onRetryCatalog,
   selected,
   knownContexts = [],
   runs = [],
@@ -664,6 +668,16 @@ export function TopicContextPicker({
             aria-label="Выбор топика"
             onKeyDown={keyDown}
           >
+            {catalogError && (
+              <div className="context-board-error">
+                <p role="alert">{catalogError}</p>
+                {onRetryCatalog && (
+                  <button type="button" onClick={onRetryCatalog}>
+                    Повторить загрузку топиков
+                  </button>
+                )}
+              </div>
+            )}
             <label htmlFor={`${id}-search`}>Найти топик</label>
             <input
               id={`${id}-search`}

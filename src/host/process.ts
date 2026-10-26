@@ -15,6 +15,14 @@ export interface Runner {
     stdout: string;
     stderr: string;
   }>;
+  /** Host-only two-phase ref publication; absence must fail closed. */
+  gitRefTransaction?(
+    args: string[],
+    cwd: string,
+    env: NodeJS.ProcessEnv | undefined,
+    prepareInput: string,
+    verifyPrepared: (assertPreparedActive: () => void) => Promise<void>,
+  ): Promise<{ stdout: string; stderr: string }>;
   start(
     exe: string,
     args: string[],
@@ -46,6 +54,19 @@ export class CommandExitError extends Error {
     readonly stderr = "",
   ) {
     super(message);
+  }
+}
+/** A ref update is uncertain after commit was sent, even without an ACK. */
+export class GitRefTransactionError extends Error {
+  constructor(
+    message: string,
+    readonly commitSent: boolean,
+    readonly stdout = "",
+    readonly stderr = "",
+    readonly cause?: unknown,
+  ) {
+    super(message);
+    this.name = "GitRefTransactionError";
   }
 }
 export class NodeRunner implements Runner {
@@ -147,6 +168,167 @@ export class NodeRunner implements Runner {
       },
     );
     return attempt;
+  }
+
+  gitRefTransaction(
+    args: string[],
+    cwd: string,
+    env: NodeJS.ProcessEnv | undefined,
+    prepareInput: string,
+    verifyPrepared: (assertPreparedActive: () => void) => Promise<void>,
+  ): Promise<{ stdout: string; stderr: string }> {
+    assertReadActive();
+    if (this.closing) throw new RunnerShutdownError("closing");
+    // This capability cannot send an arbitrary interactive program or commands.
+    const input =
+      /^start\n(update HEAD ([a-f0-9]{40}|[a-f0-9]{64}) ([a-f0-9]{40}|[a-f0-9]{64})|verify HEAD ([a-f0-9]{40}|[a-f0-9]{64}))\nprepare\n$/.exec(
+        prepareInput,
+      );
+    if (
+      !input ||
+      (input[2] && input[2].length !== input[3].length) ||
+      args.at(-1) !== "--stdin" ||
+      !args.includes("update-ref")
+    )
+      throw Error("Недопустимая транзакция ссылок Git.");
+    const signal = readSignal(),
+      deadline = Date.now() + this.timeoutMs;
+    return new Promise((resolve, reject) => {
+      let stdout = "",
+        stderr = "",
+        done = false,
+        verifying = false,
+        commitSent = false,
+        interrupted = false,
+        verificationError: unknown;
+      const child = spawn("git", args, {
+        cwd,
+        shell: false,
+        detached: true,
+        stdio: ["pipe", "pipe", "pipe"],
+        env: childEnvironment(process.env, this.env, { ...env, NO_COLOR: "1" }),
+      });
+      this.children.add(child);
+      child.once("close", () => {
+        if (!this.groupExists(child.pid)) this.children.delete(child);
+      });
+      const detach = () => {
+        this.pendingCommands.delete(child);
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+      };
+      const failure = (cause: unknown) =>
+        new GitRefTransactionError(
+          cause instanceof Error ? cause.message : String(cause),
+          commitSent,
+          stdout,
+          stderr,
+          cause,
+        );
+      const fail = (cause: unknown) => {
+        if (done) return;
+        done = true;
+        detach();
+        const error = failure(
+          interrupted ? new RunnerShutdownError("interrupted") : cause,
+        );
+        void this.kill(child).then(
+          () => reject(error),
+          (stopError) => reject(failure(stopError)),
+        );
+      };
+      const abort = () => fail(Error("Транзакция Git отменена."));
+      const timer = setTimeout(
+        () => fail(Error("Транзакция Git не ответила вовремя.")),
+        this.timeoutMs,
+      );
+      this.pendingCommands.set(child, () => {
+        if (!done) interrupted = true;
+      });
+      signal?.addEventListener("abort", abort, { once: true });
+      child.stdin.on("error", (error) => fail(error));
+      child.stdout.setEncoding("utf8");
+      child.stderr.setEncoding("utf8");
+      child.stdout.on("data", (chunk) => {
+        stdout += chunk;
+        if (stdout.length > 8 * 1024 * 1024) {
+          fail(Error("Ответ транзакции Git слишком большой."));
+          return;
+        }
+        if (!verifying && stdout.includes("prepare: ok\n")) {
+          verifying = true;
+          if (stdout !== "start: ok\nprepare: ok\n") {
+            fail(Error("Неожиданный протокол транзакции Git."));
+            return;
+          }
+          void Promise.resolve()
+            .then(() =>
+              verifyPrepared(() => {
+                if (
+                  done ||
+                  interrupted ||
+                  signal?.aborted ||
+                  Date.now() >= deadline
+                )
+                  throw Error("Подготовленная транзакция Git уже не активна.");
+              }),
+            )
+            .then(
+              () => {
+                if (done || interrupted) return;
+                if (Date.now() >= deadline || signal?.aborted) {
+                  fail(Error("Транзакция Git не ответила вовремя."));
+                  return;
+                }
+                // Mark before writing: a lost acknowledgement is never proof that
+                // refs stayed unchanged. Host journal is durable before this point.
+                commitSent = true;
+                child.stdin.end("commit\n");
+              },
+              (error) => {
+                if (done || interrupted) return;
+                verificationError = error;
+                child.stdin.end("abort\n");
+              },
+            );
+        }
+      });
+      child.stderr.on("data", (chunk) => {
+        stderr += chunk;
+        if (stderr.length > 1024 * 1024)
+          fail(Error("Ошибка транзакции Git слишком большая."));
+      });
+      child.on("error", (error) => fail(error));
+      child.on("close", (code) => {
+        if (done) return;
+        done = true;
+        detach();
+        if (interrupted)
+          reject(failure(new RunnerShutdownError("interrupted")));
+        else if (verificationError) reject(failure(verificationError));
+        else if (code !== 0)
+          reject(
+            failure(
+              new CommandExitError(
+                "Транзакция Git завершилась с ошибкой.",
+                code,
+                stdout,
+                stderr,
+              ),
+            ),
+          );
+        else if (
+          !commitSent ||
+          stdout !== "start: ok\nprepare: ok\ncommit: ok\n"
+        )
+          reject(
+            failure(Error("Git не подтвердил завершение транзакции ссылок.")),
+          );
+        else resolve({ stdout, stderr });
+      });
+      if (signal?.aborted) abort();
+      if (!done) child.stdin.write(prepareInput);
+    });
   }
 
   command(

@@ -294,10 +294,15 @@ it("contextual build history cannot repeat through the legacy primary-cwd API", 
   expect(api.launchBuild).not.toHaveBeenCalled();
 });
 
-it("a board error is visible in the new header and can be retried", async () => {
+it("a catalog error stays in topic selection and can be retried without blocking Without topic", async () => {
   api.readTopicBoard.mockRejectedValueOnce(Error("Доска временно недоступна"));
   await mountContexts();
-  expect(await screen.findByText("Доска временно недоступна")).toBeTruthy();
+  expect(screen.queryByText("Доска временно недоступна")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
+  const picker = screen.getByRole("region", { name: "Выбор топика" });
+  expect(
+    await within(picker).findByText("Доска временно недоступна"),
+  ).toBeTruthy();
   fireEvent.click(
     screen.getByRole("button", { name: "Повторить загрузку топиков" }),
   );
@@ -324,7 +329,7 @@ it("closing a background contextual tab preserves the current project page", asy
   ).toBeNull();
 });
 
-it("keeps completed pipeline output while a readable catalog error and retry sit outside the fixed header", async () => {
+it("keeps completed pipeline output and exposes catalog retry only inside topic selection", async () => {
   const pipeline = {
     ...run,
     kind: "pipeline",
@@ -347,9 +352,12 @@ it("keeps completed pipeline output while a readable catalog error and retry sit
     ),
   );
   await act(async () => emitRuns([{ ...pipeline, status: "exited" }]));
-  const alert = await screen.findByRole("alert");
+  expect(screen.queryByText(reason)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
+  const alert = await within(
+    screen.getByRole("region", { name: "Выбор топика" }),
+  ).findByRole("alert");
   expect(alert.textContent).toBe(reason);
-  expect(alert.closest(".project-bar")).toBeNull();
   expect(
     screen.getByRole("heading", { name: "Процесс завершён" }),
   ).toBeTruthy();
@@ -362,7 +370,7 @@ it("keeps completed pipeline output while a readable catalog error and retry sit
   expect(api.launchBuild).not.toHaveBeenCalled();
 });
 
-it("keeps catalog errors outside the native dashboard column while a pipeline is visible", async () => {
+it("does not leak catalog errors into the dashboard or sidebar while a pipeline is visible", async () => {
   const pipeline = {
     ...run,
     kind: "pipeline",
@@ -381,8 +389,10 @@ it("keeps catalog errors outside the native dashboard column while a pipeline is
   await waitFor(() =>
     expect(api.selectRun).toHaveBeenLastCalledWith(pipeline.id),
   );
-  const alert = await screen.findByRole("alert");
-  expect(alert.closest(".sidebar")).not.toBeNull();
+  expect(screen.queryByText("Catalog unavailable")).toBeNull();
+  expect(
+    screen.queryByRole("button", { name: "Повторить загрузку топиков" }),
+  ).toBeNull();
   expect(document.querySelector(".main-area .context-board-error")).toBeNull();
 });
 
@@ -480,3 +490,94 @@ it("dismisses a dashboard presentation failure without reopening it in a loop", 
   fireEvent.click(screen.getByRole("button", { name: "Проект" }));
   expect(await screen.findByRole("heading", { name: "Проект" })).toBeTruthy();
 });
+it.each([false, true])(
+  "opens Changes for verified handoff only in the still-current project (switched=%s)",
+  async (switched) => {
+    const handoff = {
+      candidateId: "a".repeat(64),
+      scope: "p",
+      root: "/fixture/a",
+      targetBranch: "main",
+      targetHead: "b".repeat(40),
+      sourceRef: "refs/source",
+      sourceOid: "c".repeat(40),
+      baseRef: "base",
+      strategy: "merge",
+      algorithm: "merge",
+      conflicts: ["file.txt"],
+      expiresAt: Date.now() + 300000,
+    };
+    let finish!: (value: any) => void;
+    api.runRepositoryAction = vi.fn(async (request: any) => ({
+      ...request,
+      status: "error",
+      log: "original conflict log",
+      handoff,
+    }));
+    api.readGitWorkspace = vi.fn(async (scope: string) => ({
+      scope,
+      root: scope === "p" ? "/fixture/a" : "/fixture/b",
+      branch: "main",
+      head: "b".repeat(40),
+      revision: "e".repeat(64),
+      operation: "none",
+      files: [],
+      upstream: null,
+      ahead: 0,
+      behind: 0,
+    }));
+    api.prepareGitUpdateHandoff = vi.fn(async () => ({
+      candidate: handoff,
+      token: "d".repeat(64),
+      expiresAt: handoff.expiresAt,
+      hooks: "disabled",
+      publishes: false,
+      effects: "Changes files",
+    }));
+    api.executeGitUpdateHandoff = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    render(<App />);
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Синхронизировать текущую ветку",
+      }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: "Разрешить конфликт вручную…",
+      }),
+    );
+    const confirmation = await screen.findByRole("button", {
+      name: "Подтвердить переход к конфликту",
+    });
+    expect(confirmation.ownerDocument).toBe(document);
+    expect(api.executeGitUpdateHandoff).not.toHaveBeenCalled();
+    fireEvent.click(confirmation);
+    if (switched) {
+      fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+      await screen.findByRole("heading", { name: "Beta" });
+    }
+    await act(async () =>
+      finish({
+        scope: "p",
+        root: "/fixture/a",
+        algorithm: "merge",
+        status: "conflict",
+        changed: true,
+        conflicts: ["file.txt"],
+        message: "ready",
+        log: "verified",
+      }),
+    );
+    if (switched)
+      expect(screen.queryByRole("heading", { name: "Изменения" })).toBeNull();
+    else
+      expect(
+        await screen.findByRole("heading", { name: "Изменения" }),
+      ).toBeTruthy();
+  },
+);

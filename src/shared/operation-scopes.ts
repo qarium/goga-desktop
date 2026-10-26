@@ -1,5 +1,6 @@
 /** New IPC entrypoints must declare an explicit scope. A selector is never authority. */
 export type OperationScope =
+  | "primary-admin"
   | "transport"
   | "topic-or-primary-admin"
   | "catalog"
@@ -10,6 +11,27 @@ export type OperationScope =
   | "home"
   | "desktop-project";
 export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
+  "read-git-branches": "primary-admin",
+  "prepare-git-branch": "primary-admin",
+  "execute-git-branch": "owner-ticket",
+  "read-git-summary": "topic-or-primary-admin",
+  "read-git-workspace": "topic-or-primary-admin",
+  "read-git-conflict": "topic-or-primary-admin",
+  "prepare-git-conflict-save": "topic-or-primary-admin",
+  "execute-git-conflict-save": "owner-ticket",
+  "read-git-diff": "topic-or-primary-admin",
+  "prepare-git-update-handoff": "topic-or-primary-admin",
+  "execute-git-update-handoff": "owner-ticket",
+  "prepare-git-sequencer-operation": "topic-or-primary-admin",
+  "execute-git-sequencer-operation": "owner-ticket",
+  "prepare-git-rebase-operation": "topic-or-primary-admin",
+  "execute-git-rebase-operation": "owner-ticket",
+  "prepare-git-merge-operation": "topic-or-primary-admin",
+  "execute-git-merge-operation": "owner-ticket",
+  "prepare-git-discard": "topic-or-primary-admin",
+  "execute-git-discard": "owner-ticket",
+  "prepare-git-commit": "topic-or-primary-admin",
+  "execute-git-commit": "owner-ticket",
   "prepare-history-prune": "desktop-project",
   "prune-history": "owner-ticket",
   "list-history-years": "topic-or-primary-admin",

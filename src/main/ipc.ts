@@ -1,4 +1,39 @@
 import {
+  gitDiscardRequestSchema,
+  gitDiscardTokenSchema,
+} from "../shared/git-discard";
+import {
+  gitUpdateHandoffRequestSchema,
+  gitUpdateHandoffTokenSchema,
+} from "../shared/git-update-handoff";
+import {
+  gitSequencerOperationRequestSchema,
+  gitSequencerOperationTokenSchema,
+} from "../shared/git-sequencer-operations";
+import {
+  gitRebaseOperationRequestSchema,
+  gitRebaseOperationTokenSchema,
+} from "../shared/git-rebase-operations";
+import {
+  gitMergeOperationRequestSchema,
+  gitMergeOperationTokenSchema,
+} from "../shared/git-operations";
+import {
+  gitConflictSaveRequestSchema,
+  gitConflictSaveTokenSchema,
+} from "../shared/git-conflict-save";
+import { gitConflictReadRequestSchema } from "../shared/git-conflicts";
+import {
+  gitBranchProjectSchema,
+  gitBranchRequestSchema,
+  gitBranchTokenSchema,
+} from "../shared/git-branches";
+import { gitDiffRequestSchema } from "../shared/git-workspace";
+import {
+  gitCommitRequestSchema,
+  gitCommitTokenSchema,
+} from "../shared/git-commit";
+import {
   historyYearSchema,
   historyEntrySchema,
   historyPathSchema,
@@ -276,6 +311,85 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   );
   handle("select-topic-context", (ref) =>
     d.service.selectTopicContext(topicContextRefSchema.nullable().parse(ref)),
+  );
+  handle("read-git-branches", (projectId) =>
+    d.service.readGitBranches(gitBranchProjectSchema.parse(projectId)),
+  );
+  handle("prepare-git-branch", (request) =>
+    d.service.prepareGitBranch(gitBranchRequestSchema.parse(request)),
+  );
+  handle("execute-git-branch", (token) =>
+    d.service.executeGitBranch(gitBranchTokenSchema.parse(token)),
+  );
+  handle("read-git-summary", (scope) =>
+    d.service.readGitSummary(scopeRefSchema.parse(scope)),
+  );
+  handle("read-git-workspace", (scope) =>
+    d.service.readGitWorkspace(scopeRefSchema.parse(scope)),
+  );
+  handle("read-git-conflict", (request: unknown) =>
+    d.service.readGitConflict(gitConflictReadRequestSchema.parse(request)),
+  );
+  handle("read-git-diff", (request) =>
+    d.service.readGitDiff(gitDiffRequestSchema.parse(request)),
+  );
+  handle("prepare-git-conflict-save", (request) =>
+    d.service.prepareGitConflictSave(
+      gitConflictSaveRequestSchema.parse(request),
+    ),
+  );
+  handle("execute-git-conflict-save", (token) =>
+    d.service.executeGitConflictSave(gitConflictSaveTokenSchema.parse(token)),
+  );
+  handle("prepare-git-rebase-operation", (request) =>
+    d.service.prepareGitRebaseOperation(
+      gitRebaseOperationRequestSchema.parse(request),
+    ),
+  );
+  handle("execute-git-rebase-operation", (token) =>
+    d.service.executeGitRebaseOperation(
+      gitRebaseOperationTokenSchema.parse(token),
+    ),
+  );
+  handle("prepare-git-update-handoff", (request) =>
+    d.service.prepareGitUpdateHandoff(
+      gitUpdateHandoffRequestSchema.parse(request),
+    ),
+  );
+  handle("execute-git-update-handoff", (token) =>
+    d.service.executeGitUpdateHandoff(gitUpdateHandoffTokenSchema.parse(token)),
+  );
+  handle("prepare-git-sequencer-operation", (request) =>
+    d.service.prepareGitSequencerOperation(
+      gitSequencerOperationRequestSchema.parse(request),
+    ),
+  );
+  handle("execute-git-sequencer-operation", (token) =>
+    d.service.executeGitSequencerOperation(
+      gitSequencerOperationTokenSchema.parse(token),
+    ),
+  );
+  handle("prepare-git-merge-operation", (request) =>
+    d.service.prepareGitMergeOperation(
+      gitMergeOperationRequestSchema.parse(request),
+    ),
+  );
+  handle("execute-git-merge-operation", (token) =>
+    d.service.executeGitMergeOperation(
+      gitMergeOperationTokenSchema.parse(token),
+    ),
+  );
+  handle("prepare-git-discard", (request) =>
+    d.service.prepareGitDiscard(gitDiscardRequestSchema.parse(request)),
+  );
+  handle("execute-git-discard", (token) =>
+    d.service.executeGitDiscard(gitDiscardTokenSchema.parse(token)),
+  );
+  handle("prepare-git-commit", (request) =>
+    d.service.prepareGitCommit(gitCommitRequestSchema.parse(request)),
+  );
+  handle("execute-git-commit", (token) =>
+    d.service.executeGitCommit(gitCommitTokenSchema.parse(token)),
   );
   handle("run-repository-action", (request) =>
     d.service.runRepositoryAction(repositoryActionRequestSchema.parse(request)),

@@ -1,3 +1,8 @@
+import { GitUpdateHandoff } from "./GitUpdateHandoff";
+import { useGitUpdateHandoff } from "./useGitUpdateHandoff";
+import type { GitUpdateHandoffCandidate } from "../shared/git-update-handoff";
+import { GitWorkspace } from "./GitWorkspace";
+import { scopeProjectId } from "../shared/context";
 import { flushSync } from "react-dom";
 import {
   ContextDeletionProvider,
@@ -125,6 +130,21 @@ function initialOwnerFor(
 const ambiguousContextReason =
   "Несколько рабочих копий соответствуют этому топику. Выберите конкретную проверенную копию в шапке; запуск не будет назначен автоматически.";
 
+/** Independent retained contexts may report pending work for one project. */
+function gitOwnerFlag(
+  previous: ReadonlyMap<string, string>,
+  projectId: string,
+  owner: string,
+  enabled: boolean,
+): ReadonlyMap<string, string> {
+  const key = JSON.stringify([projectId, owner]);
+  if (previous.has(key) === enabled) return previous;
+  const next = new Map(previous);
+  if (enabled) next.set(key, projectId);
+  else next.delete(key);
+  return next;
+}
+
 export function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
@@ -144,6 +164,13 @@ export function App() {
     });
   const repositoryPopupAnchor = useRef<HTMLDivElement>(null);
   const repositoryActions = useRepositoryActionController();
+  const [gitRevision, setGitRevision] = useState<Record<string, number>>({});
+  const [gitModals, setGitModals] = useState<ReadonlyMap<string, string>>(
+    new Map(),
+  );
+  const [gitBranchBusy, setGitBranchBusy] = useState<
+    ReadonlyMap<string, string>
+  >(new Map());
   useEffect(() => {
     if (repositoryActions.revision) topicsChanged();
   }, [repositoryActions.revision]);
@@ -176,9 +203,12 @@ export function App() {
       | "build"
       | "context-runs"
       | "context-preparation"
+      | "changes"
     >("project-settings"),
     [error, setError] = useState(""),
     [viewErrors, setViewErrors] = useState<Record<string, string>>({});
+  const [gitStage, setGitStage] = useState<HTMLDivElement | null>(null);
+  const gitReturnPages = useRef(new Map<string, typeof page>());
   const contextsEnabled = typeof window.goga.ensureTopicContext === "function";
   const [contextSelections, setContextSelections] = useState<
     Record<string, WorktreeRecord | null>
@@ -475,7 +505,7 @@ export function App() {
     (() => void) | null
   >(null);
   const navigateRef = useRef<(action: () => void) => void>(() => {});
-  function navigate(action: () => void) {
+  function navigate(action: () => void, preserveProjectDraft = false) {
     if (
       topicsBusy ||
       deletion.busy ||
@@ -487,7 +517,8 @@ export function App() {
       pendingNavigation
     )
       return;
-    if (settingsGuard.current?.dirty) setPendingNavigation(() => action);
+    if (settingsGuard.current?.dirty && !preserveProjectDraft)
+      setPendingNavigation(() => action);
     else action();
   }
   navigateRef.current = navigate;
@@ -591,6 +622,35 @@ export function App() {
       (r) =>
         r.id === selected && runMatchesWorkspace(r, projectId, selectedContext),
     );
+  const handoff = useGitUpdateHandoff({
+    scope: project
+      ? selectedContext
+        ? contextRef(selectedContext)
+        : project.id
+      : null,
+    onError: setError,
+    onChanged: (scope) => {
+      const owner = documentScopeId(scope);
+      setGitRevision((previous) => ({
+        ...previous,
+        [owner]: (previous[owner] ?? 0) + 1,
+      }));
+      topicsChanged();
+      void settingsDocuments.refreshProject(scope);
+      navigate(() => {
+        const current = selectedContextRef.current
+          ? contextRef(selectedContextRef.current)
+          : projectIdRef.current;
+        if (documentScopeId(current) !== owner) return;
+        setPage("changes");
+      }, true);
+    },
+  });
+  const openHandoff = (candidate: GitUpdateHandoffCandidate) => {
+    setTopicCard(null);
+    void handoff.open(candidate);
+  };
+
   const displayedPath = workspacePath(project, selectedContext);
   useEffect(() => {
     let alive = true;
@@ -705,6 +765,8 @@ export function App() {
   const canShowDashboard =
     !!run && dashboardReady(run) && !run.error && !viewErrors[run.id];
   const visibleRun =
+    !handoff.candidate &&
+    !gitModals.size &&
     !error &&
     !topicCard &&
     page === "project" &&
@@ -942,6 +1004,7 @@ export function App() {
   }, [read, projectId, topicsRevision, contextsEnabled]);
   // Only an explicit selection owns clone actions. Null is the original folder.
   const displayOwner = selectedContext;
+
   const headerTopic = selectedContext?.topic ?? "Без топика";
   const primaryRuns = runs.filter(
     (value) =>
@@ -1082,17 +1145,6 @@ export function App() {
       throw Error("Не удалось сохранить выбор: проект недоступен.");
     persistDeletedWorkspaceSelection(deletingProject, owner);
   }, topicsChanged);
-  const catalogError = page !== "settings" && currentTopicsError && (
-    <div className="context-board-error">
-      <p role="alert">{currentTopicsError}</p>
-      <button
-        type="button"
-        onClick={() => setTopicsRevision((value) => value + 1)}
-      >
-        Повторить загрузку топиков
-      </button>
-    </div>
-  );
   const content = (
     <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
       <header className="titlebar">
@@ -1164,7 +1216,6 @@ export function App() {
         >
           ⚙ <span>Настройки</span>
         </button>
-        {visibleRun && catalogError}
         <small className="sidebar-footer">
           <span>© Goga 2026</span>
           <span className="app-version">v{version}</span>
@@ -1207,6 +1258,8 @@ export function App() {
                 requestedSelection={tableTopicSelection}
                 onSelectionRequestHandled={() => setTableTopicSelection(null)}
                 board={currentTopics}
+                catalogError={currentTopicsError}
+                onRetryCatalog={() => setTopicsRevision((value) => value + 1)}
                 selected={selectedContext}
                 knownContexts={knownContexts}
                 runs={runs as RunWithContext[]}
@@ -1252,11 +1305,13 @@ export function App() {
                     selectedContextRef.current = record;
                     setSelected(null);
                     setPage(
-                      pageRef.current === "terminal"
-                        ? "terminal"
-                        : pageRef.current === "project-settings"
-                          ? "project-settings"
-                          : "context-runs",
+                      pageRef.current === "changes"
+                        ? "changes"
+                        : pageRef.current === "terminal"
+                          ? "terminal"
+                          : pageRef.current === "project-settings"
+                            ? "project-settings"
+                            : "context-runs",
                     );
                     setError("");
                   })
@@ -1271,9 +1326,11 @@ export function App() {
                     selectedContextRef.current = null;
                     setSelected(null);
                     setPage(
-                      pageRef.current === "terminal"
-                        ? "terminal"
-                        : "project-settings",
+                      pageRef.current === "changes"
+                        ? "changes"
+                        : pageRef.current === "terminal"
+                          ? "terminal"
+                          : "project-settings",
                     );
                   })
                 }
@@ -1295,7 +1352,10 @@ export function App() {
               <RepositoryActions
                 project={project}
                 selected={selectedContext}
-                disabled={settingsBusy}
+                disabled={
+                  settingsBusy ||
+                  [...gitBranchBusy.values()].includes(project.id)
+                }
               />
             )}
           </div>
@@ -1333,8 +1393,19 @@ export function App() {
               />
             </div>
           )}
-          <RepositoryOperationPopup anchor={repositoryPopupAnchor} />
+          <RepositoryOperationPopup
+            anchor={repositoryPopupAnchor}
+            onHandoff={openHandoff}
+          />
         </div>
+        {handoff.candidate && (
+          <GitUpdateHandoff
+            candidate={handoff.candidate}
+            autoPrepare
+            onClose={handoff.close}
+            onChanged={handoff.changed}
+          />
+        )}
         {error && (
           <TopicModal
             title="Не удалось выполнить операцию"
@@ -1345,7 +1416,6 @@ export function App() {
             <pre role="alert">{error}</pre>
           </TopicModal>
         )}
-        {!visibleRun && catalogError}
         <RetainedViews activeKey={page === "settings" ? "settings" : null}>
           <div className="scroll-area">
             <Settings
@@ -1685,8 +1755,86 @@ export function App() {
                 {displayOwner.state === "ready" ? "готова" : "недоступна"}
               </span>
             ) : null}
+            {project && typeof window.goga.readGitWorkspace === "function" && (
+              <div className="git-workspace-controls-host">
+                <RetainedViews
+                  activeKey={page !== "settings" ? sectionKey("git") : null}
+                  retain={retainProjectView}
+                >
+                  <GitWorkspace
+                    scope={displayOwner ? contextRef(displayOwner) : project.id}
+                    open={page === "changes"}
+                    bodyContainer={gitStage}
+                    revision={
+                      repositoryActions.revision +
+                      (gitRevision[
+                        documentScopeId(
+                          displayOwner ? contextRef(displayOwner) : project.id,
+                        )
+                      ] ?? 0)
+                    }
+                    onBranchBusyChange={(
+                      id,
+                      busy,
+                      owner = documentScopeId(id),
+                    ) =>
+                      setGitBranchBusy((previous) =>
+                        gitOwnerFlag(previous, id, owner, busy),
+                      )
+                    }
+                    onOverlayChange={(
+                      id,
+                      visible,
+                      owner = documentScopeId(id),
+                    ) =>
+                      setGitModals((previous) =>
+                        gitOwnerFlag(previous, id, owner, visible),
+                      )
+                    }
+                    onChanged={(id, issuedScope = id) => {
+                      if (scopeProjectId(issuedScope) !== id) return;
+                      const owner = documentScopeId(issuedScope);
+                      setGitRevision((previous) => ({
+                        ...previous,
+                        [owner]: (previous[owner] ?? 0) + 1,
+                      }));
+                      topicsChanged();
+                      void settingsDocuments.refreshProject(issuedScope);
+                    }}
+                    disabled={
+                      !!contextUnavailable || contextsLoading || settingsBusy
+                    }
+                    onOpen={() =>
+                      navigate(() => {
+                        const key = sectionKey("git");
+                        if (key && page !== "changes")
+                          gitReturnPages.current.set(key, page);
+                        setPage("changes");
+                      }, true)
+                    }
+                    onClose={() =>
+                      navigate(() => {
+                        const previous =
+                          gitReturnPages.current.get(sectionKey("git") ?? "") ??
+                          "project-settings";
+                        setPage(
+                          previous === "project" && !run
+                            ? "project-settings"
+                            : previous,
+                        );
+                      }, true)
+                    }
+                  />
+                </RetainedViews>
+              </div>
+            )}
           </div>
-          <div className="scroll-area">
+          <div
+            className="git-workspace-stage"
+            ref={setGitStage}
+            hidden={page !== "changes"}
+          />
+          <div className="scroll-area" hidden={page === "changes"}>
             {page === "project" && run?.recoveryMessage && (
               <p className="hint" role="status">
                 {run.recoveryMessage}
@@ -2063,10 +2211,12 @@ export function App() {
                   blocked={contextUnavailable || undefined}
                   obscured={Boolean(
                     error ||
+                    handoff.candidate ||
                     topicCard ||
                     pendingNavigation ||
                     repeatPending ||
                     repositoryActions.failures.length ||
+                    gitModals.size ||
                     deletion.operation,
                   )}
                 />
@@ -2220,6 +2370,7 @@ export function App() {
           onClose={() => setTopicCard(null)}
           onBusy={setTopicsBusy}
           onChanged={topicsChanged}
+          onHandoff={openHandoff}
           onPrepare={(target, year, text) => {
             if (year !== String(new Date().getFullYear()) || target.remote)
               return;

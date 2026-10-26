@@ -151,12 +151,16 @@ export class CloneStore {
     string,
     { dev: number; ino: number }
   >();
-  constructor(private readonly home: string) {
+  constructor(
+    private readonly home: string,
+    private readonly access: "manage" | "read-only" = "manage",
+  ) {
     if (!boundedPath(home)) throw invalid();
     this.root = path.join(home, ".goga", "desktop", "clones");
     this.file = path.join(this.root, "registry.json");
   }
   private async directory(dir: string, privateDirectory = true, create = true) {
+    if (this.access === "read-only") create = false;
     await noSymlinks(dir);
     const trusted = this.directories.get(dir);
     if (trusted || !create) {
@@ -189,7 +193,11 @@ export class CloneStore {
       if (trusted && (trusted.dev !== info.dev || trusted.ino !== info.ino))
         throw invalid();
       this.directories.set(dir, { dev: info.dev, ino: info.ino });
-      if (privateDirectory) await handle.chmod(0o700);
+      if (privateDirectory) {
+        if (this.access === "read-only") {
+          if ((info.mode & 0o777) !== 0o700) throw invalid();
+        } else await handle.chmod(0o700);
+      }
     } finally {
       await handle.close();
     }
@@ -201,6 +209,7 @@ export class CloneStore {
       await this.directory(dir);
   }
   async prepareParent(record: WorktreeRecord) {
+    this.assertWritable();
     this.validate([record]);
     if (record.ownership !== "managed") throw invalid();
     await this.assertRoot();
@@ -300,6 +309,7 @@ export class CloneStore {
     }
   }
   private async install(value: WorktreeRegistry, expected: string | undefined) {
+    this.assertWritable();
     const text = JSON.stringify({ schemaVersion: 1, ...value }, null, 2) + "\n";
     if (Buffer.byteLength(text) > 16 * 1024 * 1024) throw invalid();
     const temp = `${this.file}.${randomUUID()}.tmp`;
@@ -346,8 +356,16 @@ export class CloneStore {
       await unlink(temp).catch(() => {});
     }
   }
-  private async locked<T>(name: string, action: () => Promise<T>): Promise<T> {
-    await this.assertRoot();
+  private async locked<T>(
+    name: string,
+    action: () => Promise<T>,
+    existingOnly = false,
+  ): Promise<T> {
+    this.assertWritable();
+    // Conflict-save is not a lifecycle repair operation. Its lock may only use
+    // existing, correctly permissioned roots; preserve management defaults.
+    const roots = existingOnly ? new CloneStore(this.home, "read-only") : this;
+    await roots.assertRoot();
     const key = path.join(
       name === ".registry.lock" ? await realpath(this.root) : this.root,
       name,
@@ -355,7 +373,7 @@ export class CloneStore {
     const acquire = async () => {
       const lock = await acquireOwnedLock(key);
       try {
-        await this.assertRoot();
+        await roots.assertRoot();
         return await action();
       } finally {
         await lock.release();
@@ -380,6 +398,7 @@ export class CloneStore {
   withRepositoryLock<T>(
     repositoryKey: string,
     action: () => Promise<T>,
+    options: { existingOnly?: true } = {},
   ): Promise<T> {
     if (!/^[a-f0-9]{64}$/.test(repositoryKey)) throw invalid();
     const name = `.repository-${repositoryKey}.lock`;
@@ -387,7 +406,9 @@ export class CloneStore {
     // In-process requests can wait for a long Git checkout without treating a
     // live lock as stale. The on-disk lock still protects independent processes.
     const previous = repositoryTails.get(key) ?? Promise.resolve();
-    const work = previous.then(() => this.locked(name, action));
+    const work = previous.then(() =>
+      this.locked(name, action, options.existingOnly),
+    );
     const tail = work.then(
       () => {},
       () => {},
@@ -410,7 +431,22 @@ export class CloneStore {
       raw,
     };
   }
-  read(): Promise<WorktreeRegistry> {
+  private assertWritable() {
+    if (this.access === "read-only")
+      throw Error(
+        "Реестр открыт только для чтения; изменение и блокировки запрещены.",
+      );
+  }
+  async read(): Promise<WorktreeRegistry> {
+    if (this.access === "read-only") {
+      await this.assertRoot();
+      const raw = await this.readText();
+      if (raw === undefined) throw invalid();
+      const result = this.parse(raw);
+      await this.assertRoot();
+      if (raw !== (await this.readText())) throw conflict();
+      return result;
+    }
     return this.locked(".registry.lock", async () => {
       const { value, raw } = await this.current();
       if (raw === undefined) await this.install(value, undefined);
@@ -587,6 +623,7 @@ export class CloneStore {
   }
   /** Called only immediately after init, before transport/checkout. */
   async claimGit(record: WorktreeRecord) {
+    this.assertWritable();
     await this.assertOwned(record, false);
     const owner = await this.owner(record);
     if (owner.git) throw invalid();

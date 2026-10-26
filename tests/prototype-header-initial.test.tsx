@@ -1524,13 +1524,19 @@ it("retains the cached selector after refresh failure and loads only the display
   });
   render(<App />);
   await screen.findByRole("heading", { name: "Fixture" });
-  await screen.findByText(/catalog unavailable/);
+  await waitFor(() => expect(api.readTopicCatalog).toHaveBeenCalled());
+  expect(screen.queryByText(/catalog unavailable/)).toBeNull();
   expect(api.readTopicBoard).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
+  await screen.findByText(/catalog unavailable/);
+  expect(
+    screen.getByRole("button", { name: "Повторить загрузку топиков" }),
+  ).toBeTruthy();
   expect(screen.getByText("cached-only", { selector: "strong" })).toBeTruthy();
   fireEvent.keyDown(screen.getByRole("combobox", { name: "Найти топик" }), {
     key: "Escape",
   });
+  expect(screen.queryByText(/catalog unavailable/)).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Топики" }));
   await waitFor(() =>
     expect(api.readTopicTable).toHaveBeenCalledWith("p", "2026"),

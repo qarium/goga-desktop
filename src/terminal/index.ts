@@ -70,7 +70,12 @@ export function mountTerminalRenderer(
       });
       const fit = new libraries.FitAddon();
       term.loadAddon(fit);
-      term.open(container);
+      // FitAddon measures its parent's full computed size, not its content box.
+      // Keep spacing outside that parent so it cannot allocate a clipped last row.
+      const content = document.createElement("div");
+      content.className = "terminal-screen-content";
+      container.append(content);
+      term.open(content);
       const inputStatus = document.createElement("div");
       inputStatus.setAttribute("role", "status");
       inputStatus.textContent = "Только просмотр — ввод недоступен";

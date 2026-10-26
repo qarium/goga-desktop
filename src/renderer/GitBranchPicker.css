@@ -1,0 +1,262 @@
+.git-branch-picker {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.git-branch-trigger {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 220px;
+}
+.git-branch-trigger > span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-branch-running {
+  font-size: 11px;
+  color: var(--muted);
+}
+.git-branch-menu {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 8px);
+  z-index: 100;
+  width: min(360px, calc(100vw - 32px));
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 14px;
+  background: #10192a;
+  box-shadow: 0 18px 48px #0008;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: min(600px, calc(100vh - 180px));
+  overflow: auto;
+  color: var(--text);
+  font-size: 13px;
+}
+.topic-context-native-root .git-branch-menu {
+  position: relative;
+  top: auto;
+  right: auto;
+  width: 100%;
+  max-height: var(--topic-popup-max-height);
+}
+.git-branch-menu input {
+  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+}
+.git-branch-groups {
+  display: flex;
+  border-bottom: 1px solid var(--line);
+}
+.git-branch-groups button {
+  flex: 1;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: none;
+  border-radius: 0;
+  color: var(--muted);
+  padding: 10px;
+}
+.git-branch-groups button[aria-selected="true"] {
+  color: var(--teal);
+  border-color: var(--teal);
+}
+.git-branch-list {
+  min-height: 48px;
+  max-height: 280px;
+  overflow: auto;
+  flex-shrink: 1;
+}
+.git-branch-list button {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 6px;
+  padding: 10px;
+  gap: 4px;
+  word-break: break-word;
+}
+.git-branch-list button:not(:disabled):hover {
+  background: #1c2b40;
+}
+.git-branch-list small,
+.git-branch-menu-actions small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.git-branch-menu .hint {
+  margin: 0;
+  white-space: normal;
+  font-size: 12px;
+}
+.git-branch-menu-actions {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  white-space: normal;
+}
+.git-branch-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+.git-branch-form p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.git-branch-form label:not(.git-branch-check) {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.git-branch-form .git-branch-check {
+  flex-direction: row;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.git-branch-check input {
+  width: auto;
+}
+.git-branch-summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 12px 20px;
+  margin: 0;
+}
+.git-branch-summary dt {
+  color: var(--muted);
+}
+.git-branch-summary dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.git-branch-dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.git-branch-log {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overflow: auto;
+  max-height: 55vh;
+}
+.git-merge-source .searchable-picker {
+  width: 100%;
+}
+.git-merge-target {
+  display: flex;
+  gap: 12px;
+  align-items: baseline;
+  flex-wrap: wrap;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line);
+}
+.git-workspace-merge-actions {
+  margin-top: 12px;
+}
+@media (max-width: 720px) {
+  .git-branch-summary {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+  .git-branch-trigger {
+    max-width: 140px;
+  }
+}
+
+.topic-dialog[open].git-merge-source-dialog {
+  display: flex;
+  flex-direction: column;
+  width: min(760px, calc(100vw - 40px));
+  height: min(760px, calc(100dvh - 48px));
+  max-height: calc(100dvh - 48px);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+.git-merge-source-dialog > header {
+  flex: 0 0 auto;
+}
+.git-merge-source-dialog .git-merge-source {
+  flex: 1;
+  min-height: 0;
+  gap: 10px;
+}
+.git-merge-source > * {
+  flex-shrink: 0;
+}
+.git-merge-source .git-merge-branch-list {
+  flex: 1 1 180px;
+  min-height: 80px;
+  overflow-y: scroll;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 4px;
+}
+.git-merge-branch-list::-webkit-scrollbar {
+  width: 10px;
+}
+.git-merge-branch-list::-webkit-scrollbar-track {
+  background: var(--surface);
+}
+.git-merge-branch-list::-webkit-scrollbar-thumb {
+  background: #63758e;
+  border-radius: 6px;
+}
+.git-merge-branch-list [role="option"] {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 10px 12px;
+  border: 0;
+  background: transparent;
+  overflow-wrap: anywhere;
+}
+.git-merge-branch-list [aria-selected="true"] {
+  background: rgba(26, 206, 192, 0.13);
+  color: var(--teal);
+}
+.git-merge-selection {
+  display: flex;
+  gap: 12px;
+  min-width: 0;
+}
+.git-merge-selection strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-merge-source-dialog .git-merge-target {
+  padding: 4px 0 8px;
+}
+
+.git-merge-conditions {
+  max-height: 120px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+.git-merge-conditions summary {
+  cursor: pointer;
+}
+.git-merge-conditions p {
+  margin-top: 8px;
+}

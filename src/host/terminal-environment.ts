@@ -69,8 +69,13 @@ export async function prepareTerminalEnvironment(
       "Оболочка аккаунта недоступна или не поддерживается. Требуется zsh или bash.",
     );
   }
+  // Desktop may be launched by non-interactive tooling with colors disabled.
+  // The terminal is interactive: drop that ambient flag before applying explicit
+  // project settings. Shell startup files may still choose their own color policy.
+  const inherited = { ...(system.inherited ?? process.env) };
+  delete inherited.NO_COLOR;
   const merged = childEnvironment(
-    system.inherited ?? process.env,
+    inherited,
     {},
     Object.fromEntries(initial.env.map((row) => [row.key, row.value])),
   );

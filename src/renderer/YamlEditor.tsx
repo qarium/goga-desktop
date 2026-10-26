@@ -1,6 +1,9 @@
 import { useEffect, useRef } from "react";
 import {
   Annotation,
+  StateEffect,
+  type Extension,
+  type ChangeSet,
   Compartment,
   EditorState,
   EditorSelection,
@@ -20,6 +23,7 @@ import {
 } from "@codemirror/view";
 import {
   standardKeymap,
+  isolateHistory,
   history,
   historyKeymap,
   insertNewline,
@@ -247,6 +251,17 @@ const theme = EditorView.theme(
   { dark: true },
 );
 
+export interface YamlEditorMemory {
+  state?: EditorState;
+  scrollTop?: number;
+  scrollLeft?: number;
+}
+
+export interface YamlEditorExternalChange {
+  before: string;
+  changes: ChangeSet;
+}
+
 export interface YamlEditorProps {
   value: string;
   onChange: (text: string) => void;
@@ -254,6 +269,15 @@ export interface YamlEditorProps {
   plainText?: boolean;
   language?: "yaml" | "dockerfile";
   label?: string;
+  /** Exact local transaction mapping, excluding controlled external replacement. */
+  onUpdate?: (update: ViewUpdate) => void;
+  onView?: (view: EditorView | null) => void;
+  extensions?: Extension;
+  /** In-memory owner storage; reconfiguration replaces obsolete callbacks. */
+  memory?: YamlEditorMemory;
+  /** Optional verified local replacement; default controlled updates are unchanged. */
+  externalChange?: YamlEditorExternalChange;
+  onExternalChangeRejected?: (actual: string) => void;
 }
 
 export function YamlEditor({
@@ -263,11 +287,20 @@ export function YamlEditor({
   plainText = false,
   language = "yaml",
   label = "YAML",
+  onUpdate,
+  onView,
+  extensions = [],
+  memory,
+  externalChange,
+  onExternalChangeRejected,
 }: YamlEditorProps) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const callback = useRef(onChange);
+  const hooks = useRef({ onUpdate, onView, onExternalChangeRejected });
+  hooks.current = { onUpdate, onView, onExternalChangeRejected };
   const initial = useRef({ value, readOnly });
+  const extra = useRef(new Compartment());
   const editable = useRef(new Compartment());
   callback.current = onChange;
 
@@ -277,63 +310,76 @@ export function YamlEditor({
     // or a hand-maintained copy of CodeMirror's base layout rules.
     const root =
       host.current!.shadowRoot ?? host.current!.attachShadow({ mode: "open" });
-    const editor = new EditorView({
-      parent: root,
-      root,
-      state: EditorState.create({
-        doc: initial.current.value,
-        extensions: [
-          // An explicit LF separator retains literal CRs, including mixed CRLF/LF
-          // input. Never serialize/format YAML or silently normalize its bytes.
-          EditorState.lineSeparator.of("\n"),
-          lineNumbers(),
-          crlf,
-          crlfSelection,
-          ...(plainText
-            ? []
-            : language === "dockerfile"
-              ? [dockerfileLanguage, syntaxHighlighting(dockerfileHighlighting)]
-              : [yaml(), syntaxHighlighting(highlighting), scalars]),
-          theme,
-          history(),
-          keymap.of([
-            { key: "Enter", run: insertNewline, shift: insertNewline },
-            // Transposition is not part of this focused editor. The state-only
-            // command cannot respect atomic CRLF boundaries; consume it rather
-            // than allowing native contenteditable transposition as a fallback.
-            { mac: "Ctrl-t", run: () => true },
-            // Keep platform-standard editing only, not advanced line-moving,
-            // copying, deletion or formatting commands that bypass atoms.
-            ...standardKeymap
-              .filter((binding) => binding.run !== transposeChars)
-              .map((binding) =>
-                binding.run === deleteToLineEnd ||
-                binding.run === deleteLineBoundaryForward
-                  ? { ...binding, run: deleteToYamlLineEnd }
-                  : binding,
-              ),
-            ...historyKeymap,
-          ]),
-          EditorView.contentAttributes.of({
-            "aria-label": label,
-            spellcheck: "false",
-          }),
-          editable.current.of([
-            EditorState.readOnly.of(initial.current.readOnly),
-            EditorView.editable.of(!initial.current.readOnly),
-          ]),
-          EditorView.updateListener.of((update) => {
-            if (
-              update.docChanged &&
-              !update.transactions.some((tr) => tr.annotation(externalValue))
-            )
-              callback.current(update.state.doc.toString());
-          }),
-        ],
+    const configured: Extension = [
+      // An explicit LF separator retains literal CRs, including mixed CRLF/LF
+      // input. Never serialize/format YAML or silently normalize its bytes.
+      EditorState.lineSeparator.of("\n"),
+      lineNumbers(),
+      crlf,
+      crlfSelection,
+      ...(plainText
+        ? []
+        : language === "dockerfile"
+          ? [dockerfileLanguage, syntaxHighlighting(dockerfileHighlighting)]
+          : [yaml(), syntaxHighlighting(highlighting), scalars]),
+      theme,
+      extra.current.of(extensions),
+      history(),
+      keymap.of([
+        { key: "Enter", run: insertNewline, shift: insertNewline },
+        // Transposition is not part of this focused editor. The state-only
+        // command cannot respect atomic CRLF boundaries; consume it rather
+        // than allowing native contenteditable transposition as a fallback.
+        { mac: "Ctrl-t", run: () => true },
+        // Keep platform-standard editing only, not advanced line-moving,
+        // copying, deletion or formatting commands that bypass atoms.
+        ...standardKeymap
+          .filter((binding) => binding.run !== transposeChars)
+          .map((binding) =>
+            binding.run === deleteToLineEnd ||
+            binding.run === deleteLineBoundaryForward
+              ? { ...binding, run: deleteToYamlLineEnd }
+              : binding,
+          ),
+        ...historyKeymap,
+      ]),
+      EditorView.contentAttributes.of({
+        "aria-label": label,
+        spellcheck: "false",
       }),
-    });
+      editable.current.of([
+        EditorState.readOnly.of(initial.current.readOnly),
+        EditorView.editable.of(!initial.current.readOnly),
+      ]),
+      EditorView.updateListener.of((update) => {
+        if (
+          update.docChanged &&
+          !update.transactions.some((tr) => tr.annotation(externalValue))
+        ) {
+          hooks.current.onUpdate?.(update);
+          callback.current(update.state.doc.toString());
+        }
+      }),
+    ];
+    const state =
+      memory?.state?.update({ effects: StateEffect.reconfigure.of(configured) })
+        .state ??
+      EditorState.create({
+        doc: initial.current.value,
+        extensions: configured,
+      });
+    const editor = new EditorView({ parent: root, root, state });
     view.current = editor;
+    editor.scrollDOM.scrollTop = memory?.scrollTop ?? 0;
+    editor.scrollDOM.scrollLeft = memory?.scrollLeft ?? 0;
+    hooks.current.onView?.(editor);
     return () => {
+      if (memory) {
+        memory.state = editor.state;
+        memory.scrollTop = editor.scrollDOM.scrollTop;
+        memory.scrollLeft = editor.scrollDOM.scrollLeft;
+      }
+      hooks.current.onView?.(null);
       editor.destroy();
       view.current = null;
     };
@@ -342,6 +388,25 @@ export function YamlEditor({
   useEffect(() => {
     const editor = view.current;
     if (editor && value !== editor.state.doc.toString()) {
+      if (externalChange) {
+        const actual = editor.state.doc.toString();
+        if (
+          externalChange.before !== actual ||
+          externalChange.changes.length !== editor.state.doc.length ||
+          externalChange.changes.apply(editor.state.doc).toString() !== value
+        ) {
+          // Never fall back to a destructive whole-document replacement on a
+          // stale precise edit. The caller retains the actual text and reports it.
+          hooks.current.onExternalChangeRejected?.(actual);
+          return;
+        }
+        editor.dispatch({
+          changes: externalChange.changes,
+          userEvent: "input.conflict",
+          annotations: [externalValue.of(true), isolateHistory.of("full")],
+        });
+        return;
+      }
       editor.dispatch({
         changes: { from: 0, to: editor.state.doc.length, insert: value },
         annotations: [
@@ -350,7 +415,7 @@ export function YamlEditor({
         ],
       });
     }
-  }, [value]);
+  }, [value, externalChange]);
 
   useEffect(() => {
     view.current?.dispatch({
@@ -360,6 +425,10 @@ export function YamlEditor({
       ]),
     });
   }, [readOnly]);
+
+  useEffect(() => {
+    view.current?.dispatch({ effects: extra.current.reconfigure(extensions) });
+  }, [extensions]);
 
   return <div ref={host} className="yaml-code-editor" />;
 }

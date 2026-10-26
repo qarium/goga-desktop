@@ -5,6 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   act,
   cleanup,
+  fireEvent,
   render,
   screen,
   waitFor,
@@ -243,4 +244,146 @@ it("fails with a dismissible error if font/layout readiness never resolves", asy
   } finally {
     vi.useRealTimers();
   }
+});
+
+it("waits for the old native close acknowledgement before opening its replacement", async () => {
+  let acknowledge!: () => void;
+  api.closeTopicPopup.mockImplementationOnce(
+    () => new Promise<void>((resolve) => (acknowledge = resolve)),
+  );
+  const first = mount();
+  await waitFor(() => expect(api.setTopicPopupBounds).toHaveBeenCalled());
+  first.unmount();
+  // Mirrors TopicPopup's real one-current-layer admission guard.
+  vi.mocked(window.open).mockReturnValue(null);
+  mount();
+  expect(window.open).toHaveBeenCalledTimes(1);
+  expect(screen.queryByRole("alert")).toBeNull();
+  vi.mocked(window.open).mockReturnValue(child.window);
+  await act(async () => acknowledge());
+  expect(window.open).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("retains the oldest release barrier when an intermediate replacement unmounts", async () => {
+  let acknowledge!: () => void;
+  api.closeTopicPopup.mockImplementationOnce(
+    () => new Promise<void>((resolve) => (acknowledge = resolve)),
+  );
+  const first = mount();
+  first.unmount();
+  const intermediate = mount();
+  intermediate.unmount();
+  mount();
+  expect(window.open).toHaveBeenCalledTimes(1);
+  await act(async () => acknowledge());
+  expect(window.open).toHaveBeenCalledTimes(2);
+  const openedIds = vi
+    .mocked(window.open)
+    .mock.calls.map((call) => call[1]!.replace("goga-topic-picker:", ""));
+  expect(api.closeTopicPopup).not.toHaveBeenCalledWith(openedIds[1]);
+});
+
+it("closes the previous selector when another selector claims the native layer", async () => {
+  const closeFirst = vi.fn();
+  mount(closeFirst);
+  await waitFor(() => expect(api.setTopicPopupBounds).toHaveBeenCalled());
+  const firstId = api.setTopicPopupBounds.mock.calls[0][0];
+  mount();
+  expect(closeFirst).toHaveBeenCalledOnce();
+  await act(async () => {});
+  expect(api.closeTopicPopup).toHaveBeenCalledWith(firstId);
+  expect(window.open).toHaveBeenCalledTimes(2);
+});
+
+it("bounds a stalled replacement wait and never opens it after dismissal", async () => {
+  vi.useFakeTimers();
+  let acknowledge!: () => void;
+  try {
+    api.closeTopicPopup.mockImplementationOnce(
+      () => new Promise<void>((resolve) => (acknowledge = resolve)),
+    );
+    const first = mount();
+    first.unmount();
+    const onClose = vi.fn();
+    const replacement = mount(onClose);
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+    expect(screen.getByRole("alert")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Закрыть меню" }));
+    expect(onClose).toHaveBeenCalledOnce();
+    replacement.unmount();
+    await act(async () => acknowledge());
+    expect(window.open).toHaveBeenCalledTimes(1);
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("releases a hidden layer if its first placement acknowledgement never arrives", async () => {
+  vi.useFakeTimers();
+  try {
+    api.setTopicPopupBounds.mockImplementation(() => new Promise(() => {}));
+    mount();
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+    expect(api.setTopicPopupBounds).toHaveBeenCalledOnce();
+    expect(screen.getByRole("alert")).toBeTruthy();
+    expect(api.closeTopicPopup).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("reopens cleanly after StrictMode's setup/cleanup cycle", async () => {
+  const view = render(
+    <React.StrictMode>
+      <TopicPickerPopup anchor={anchor} onClose={vi.fn()}>
+        {content}
+      </TopicPickerPopup>
+    </React.StrictMode>,
+  );
+  await waitFor(() => expect(api.setTopicPopupBounds).toHaveBeenCalled());
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(window.open).toHaveBeenCalledTimes(2);
+  const latestId = vi
+    .mocked(window.open)
+    .mock.calls.at(-1)![1]!
+    .replace("goga-topic-picker:", "");
+  expect(
+    api.setTopicPopupBounds.mock.calls.every(
+      ([id]: [string]) => id === latestId,
+    ),
+  ).toBe(true);
+  expect(api.closeTopicPopup).not.toHaveBeenCalledWith(latestId);
+  view.unmount();
+  await act(async () => {});
+  expect(api.closeTopicPopup).toHaveBeenCalledWith(latestId);
+});
+
+it("does not reveal or dismiss a replacement on late callbacks from the released owner", async () => {
+  const firstClose = vi.fn();
+  const first = mount(firstClose);
+  await waitFor(() => expect(api.setTopicPopupBounds).toHaveBeenCalled());
+  const firstId = api.setTopicPopupBounds.mock.calls[0][0];
+  const oldClosed = closed;
+  const oldMeasure = observer.callback;
+  first.unmount();
+  const nextClose = vi.fn();
+  mount(nextClose);
+  await waitFor(() => expect(api.setTopicPopupBounds).toHaveBeenCalledTimes(2));
+  act(() => {
+    oldClosed(firstId);
+    oldMeasure();
+    closed(firstId);
+  });
+  expect(nextClose).not.toHaveBeenCalled();
+  expect(api.setTopicPopupBounds).toHaveBeenCalledTimes(2);
+});
+
+it("reports refused predecessor cleanup without opening another native layer", async () => {
+  api.closeTopicPopup.mockRejectedValueOnce(Error("host unavailable"));
+  const first = mount();
+  first.unmount();
+  mount();
+  expect(await screen.findByRole("alert")).toBeTruthy();
+  expect(window.open).toHaveBeenCalledTimes(1);
 });

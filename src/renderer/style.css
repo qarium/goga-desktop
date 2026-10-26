@@ -396,7 +396,7 @@ small {
   background: #152135;
 }
 .run-context {
-  height: 36px;
+  height: 44px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
