@@ -11,6 +11,7 @@ const correct = {
   shortVersion: "1.2.3-rc.1",
   bundleVersion: "1.2.3-rc.1",
   rendererVersion: true,
+  terminalNativeLoaded: true,
   signature: "Signature=adhoc\n",
   macho: "arm64",
 };
@@ -22,6 +23,7 @@ for (const [field, value] of Object.entries({
   shortVersion: "0.0.0",
   bundleVersion: "0.0.0",
   rendererVersion: false,
+  terminalNativeLoaded: false,
   signature: "Authority=Developer ID Application\n",
   macho: "arm64 x86_64",
 }))
@@ -139,4 +141,15 @@ test("disposable verification root canonicalizes symlinked temp ancestors", asyn
   ) {
     assert.equal((await lstat(current)).isSymbolicLink(), false, current);
   }
+});
+
+test("packaged runtime smoke loads the native terminal addon without launching a shell", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const script = await readFile(
+    new URL("../verify-dmg.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(script, /require\(p.join\(root,'node_modules','node-pty'\)\)/);
+  assert.match(script, /terminalNativeLoaded/);
+  assert.doesNotMatch(script, /pty\.spawn\(/);
 });

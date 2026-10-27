@@ -10,64 +10,33 @@ concurrency:
 env:
   RELEASE_TAG: ${{ github.ref_name }}
 jobs:
-  tests:
-    strategy:
-      fail-fast: false
-      matrix:
-        arch: [arm64, x64]
-        shard: [1, 2, 3, 4]
-        include:
-          - arch: arm64
-            runner: macos-15
-            testProfile: default
-          - arch: x64
-            runner: macos-15-intel
-            testProfile: slow-git
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
-    env:
-      TEST_SHARD: ${{ matrix.shard }}/4
-      EXPECTED_ARCH: ${{ matrix.arch }}
-      GOGA_TEST_PROFILE: ${{ matrix.testProfile }}
-      GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
-      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+  verify-ci:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.ref }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Validate tag and main ancestry before installing dependencies
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - name: Validate tag and main ancestry
         run: |
           node scripts/release-version.mjs --check
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-parse "$RELEASE_TAG^{commit}")" = "$GITHUB_SHA"
           git merge-base --is-ancestor "$GITHUB_SHA" origin/main
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version: "24"
-      - name: Assert native runner and Node architecture
-        run: |
-          case "$EXPECTED_ARCH" in
-            arm64) test "$(uname -m)" = arm64 ;;
-            x64) test "$(uname -m)" = x86_64 ;;
-            *) exit 1 ;;
-          esac
-          node -e 'if(process.platform !== "darwin" || process.arch !== process.env.EXPECTED_ARCH) process.exit(1)'
-      - run: npm ci
-      - run: npm run release:version
-      - name: Tests (native Goga CLI deliberately unavailable)
-        id: tests
-        run: |
-          mkdir -p work
-          npm test -- --maxWorkers=1 --testTimeout=15000 --shard="$TEST_SHARD" --reporter=verbose --reporter=json --outputFile=work/vitest.json
-      - name: Exact skipped test report
-        if: always()
+      - name: Require successful full CI for the exact release commit
         env:
-          TEST_OUTCOME: ${{ steps.tests.outcome }}
-        run: node scripts/test-summary.mjs work/vitest.json
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/verify-release-ci.mjs
   build:
-    needs: tests
+    needs: verify-ci
     strategy:
       fail-fast: false
       matrix:
@@ -134,6 +103,7 @@ jobs:
     timeout-minutes: 20
     permissions:
       contents: write
+      actions: read
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
@@ -150,6 +120,10 @@ jobs:
         with:
           name: dmg-x64
           path: work/release-artifact
+      - name: Recheck exact-commit CI before publishing
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: node scripts/verify-release-ci.mjs
       - name: Create exact checksum manifest
         run: node scripts/publish-release.mjs manifest work/release-artifact
       - name: Draft, upload, verify server digests, then publish (never overwrite)

@@ -29,22 +29,29 @@ test("CI and release use pinned actions, read-only builds and explicit native-te
         }
       if (id !== "publish") {
         assert.notEqual(j.permissions?.contents, "write");
-        assert.equal(j.env.GOGA_TOPIC_READONLY_CLI, "/nonexistent/disabled");
+        if (id !== "verify-ci")
+          assert.equal(j.env.GOGA_TOPIC_READONLY_CLI, "/nonexistent/disabled");
         const commands = j.steps.map((s) => s.run ?? "").join("\n");
         const required =
-          id === "tests"
+          id === "verify-ci"
             ? [
-                "npm ci",
-                "--testTimeout=15000",
-                "--maxWorkers=1",
-                "scripts/test-summary.mjs",
+                "scripts/verify-release-ci.mjs",
+                "scripts/release-version.mjs --check",
+                "git merge-base --is-ancestor",
               ]
-            : [
-                "npm ci",
-                "npm run test:release",
-                "npm run typecheck",
-                "npm run build",
-              ];
+            : id === "tests"
+              ? [
+                  "npm ci",
+                  "--testTimeout=15000",
+                  "--maxWorkers=1",
+                  "scripts/test-summary.mjs",
+                ]
+              : [
+                  "npm ci",
+                  "npm run test:release",
+                  "npm run typecheck",
+                  "npm run build",
+                ];
         for (const command of required)
           assert.ok(commands.includes(command), `${name}: ${command}`);
       }
@@ -60,7 +67,10 @@ test("release gates native two-architecture builds and narrowly scoped publisher
     { arch: "x64", runner: "macos-15-intel", testProfile: "slow-git" },
   ]);
   assert.equal(w.jobs.publish.needs, "build");
-  assert.deepEqual(w.jobs.publish.permissions, { contents: "write" });
+  assert.deepEqual(w.jobs.publish.permissions, {
+    contents: "write",
+    actions: "read",
+  });
   const commands = w.jobs.build.steps.map((s) => s.run ?? "").join("\n");
   assert.ok(commands.includes("git merge-base --is-ancestor"));
   assert.ok(commands.includes("origin/main"));
@@ -110,12 +120,12 @@ test("packaging keeps adhoc-only settings and architecture-qualified names", asy
 });
 
 // Intel must be exercised on main/PR before choosing another release tag.
-test("CI and release exercise both native architectures with scoped Intel test budgets", async () => {
+test("CI exercises both native architectures with scoped Intel test budgets", async () => {
   const expected = [
     { arch: "arm64", runner: "macos-15", testProfile: "default" },
     { arch: "x64", runner: "macos-15-intel", testProfile: "slow-git" },
   ];
-  for (const name of ["ci", "release"]) {
+  for (const name of ["ci"]) {
     const workflow = await load(name);
     const job = workflow.jobs.tests;
     assert.ok(job.strategy?.matrix?.include, "Native test matrix is required");
@@ -141,8 +151,8 @@ test("CI and release exercise both native architectures with scoped Intel test b
   }
 });
 
-test("every native architecture runs all four independent shards and release waits for them", async () => {
-  for (const name of ["ci", "release"]) {
+test("every native architecture runs all four independent CI shards", async () => {
+  for (const name of ["ci"]) {
     const w = await load(name);
     const j = w.jobs.tests;
     assert.ok(j, `${name}: independent test job required`);
@@ -215,4 +225,34 @@ test("Vitest shards partition every discovered test file exactly once", async ()
     all.sort(),
     "No omitted test files, including future additions",
   );
+});
+
+test("release reuses successful exact-commit CI and never reruns the full suite", async () => {
+  const w = await load("release");
+  assert.equal(w.jobs.tests, undefined);
+  const gate = w.jobs["verify-ci"];
+  assert.ok(gate);
+  assert.deepEqual(gate.permissions, { contents: "read", actions: "read" });
+  const gateCommands = gate.steps.map((s) => s.run ?? "").join("\n");
+  assert.ok(gateCommands.includes("node scripts/verify-release-ci.mjs"));
+  assert.ok(gateCommands.includes("git merge-base --is-ancestor"));
+  assert.equal(w.jobs.build.needs, "verify-ci");
+  const all = Object.values(w.jobs)
+    .flatMap((j) => j.steps.map((s) => s.run ?? ""))
+    .join("\n");
+  assert.doesNotMatch(all, /npm test|vitest run|--shard/);
+  assert.match(all, /npm run test:release/);
+  assert.match(all, /verify-dmg\.mjs.*--ui/);
+  const steps = w.jobs.publish.steps;
+  const check = steps.findIndex((s) =>
+    (s.run ?? "").includes("verify-release-ci.mjs"),
+  );
+  const publish = steps.findIndex((s) =>
+    (s.run ?? "").includes("publish-release.mjs publish"),
+  );
+  assert.ok(
+    check >= 0 && check < publish,
+    "Recheck CI before creating the release",
+  );
+  assert.equal(w.jobs.publish.permissions.actions, "read");
 });

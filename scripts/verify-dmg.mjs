@@ -39,6 +39,11 @@ export function validateMetadata(data, tag, arch) {
     true,
     "Built renderer must contain the release version",
   );
+  assert.equal(
+    data.terminalNativeLoaded,
+    true,
+    "Packaged terminal native addon must load",
+  );
   assert.match(data.signature, /^Signature=adhoc$/m);
   assert.doesNotMatch(
     data.signature,
@@ -136,7 +141,7 @@ export async function verifyDmg(dmg, arch, tag, { ui = false } = {}) {
             `Print :${key}`,
             path.join(contents, "Info.plist"),
           ]);
-        const runtimeScript = `const fs=require('node:fs'),p=require('node:path');const root=process.env.GOGA_VERIFY_ASAR;const pkg=require(p.join(root,'package.json'));const assets=p.join(root,'dist','assets');const texts=fs.readdirSync(assets).filter(n=>n.endsWith('.js')).map(n=>fs.readFileSync(p.join(assets,n),'utf8'));console.log(JSON.stringify({arch:process.arch,electron:process.versions.electron,version:pkg.version,rendererVersion:texts.some(t=>t.includes(JSON.stringify(pkg.version)))}));`;
+        const runtimeScript = `const fs=require('node:fs'),p=require('node:path');const root=process.env.GOGA_VERIFY_ASAR;const pkg=require(p.join(root,'package.json'));const pty=require(p.join(root,'node_modules','node-pty'));if(typeof pty.spawn!=='function')throw Error('Packaged terminal addon unavailable');const assets=p.join(root,'dist','assets');const texts=fs.readdirSync(assets).filter(n=>n.endsWith('.js')).map(n=>fs.readFileSync(p.join(assets,n),'utf8'));console.log(JSON.stringify({terminalNativeLoaded:true,arch:process.arch,electron:process.versions.electron,version:pkg.version,rendererVersion:texts.some(t=>t.includes(JSON.stringify(pkg.version)))}));`;
         const runtime = await run(executable, ["-e", runtimeScript], {
           env: { ...env, ELECTRON_RUN_AS_NODE: "1", GOGA_VERIFY_ASAR: asar },
           cwd: root,
