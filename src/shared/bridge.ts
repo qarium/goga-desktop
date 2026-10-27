@@ -1,4 +1,13 @@
 import type {
+  GitHistoryRefs,
+  GitHistoryRequest,
+  GitHistoryPage,
+  GitCommitReadRequest,
+  GitCommitDetails,
+  GitCommitDiffRequest,
+  GitCommitDiff,
+} from "./git-history";
+import type {
   GitDiscardRequest,
   GitDiscardPreview,
   GitDiscardResult,
@@ -161,6 +170,10 @@ export interface DesktopAPI {
   readGitConflict(
     request: GitConflictReadRequest,
   ): Promise<GitConflictDocument>;
+  readGitHistoryRefs(scope: ScopeRef): Promise<GitHistoryRefs>;
+  readGitHistory(request: GitHistoryRequest): Promise<GitHistoryPage>;
+  readGitCommit(request: GitCommitReadRequest): Promise<GitCommitDetails>;
+  readGitCommitDiff(request: GitCommitDiffRequest): Promise<GitCommitDiff>;
   readGitSummary(scope: ScopeRef): Promise<GitWorkspaceSummary>;
   readGitWorkspace(scope: ScopeRef): Promise<GitWorkspaceSnapshot>;
   readGitDiff(request: GitDiffRequest): Promise<GitWorkspaceDiff>;

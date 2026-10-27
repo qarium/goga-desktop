@@ -123,6 +123,8 @@ it("exposes scoped History methods through preload", async () => {
       ...operations.map(([method]) => method),
       "prepareHistoryPrune",
       "pruneHistory",
+      "readGitHistory",
+      "readGitHistoryRefs",
     ].sort(),
   );
   await api.prepareHistoryPrune("p", "2026");

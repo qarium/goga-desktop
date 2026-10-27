@@ -538,3 +538,69 @@ it("keeps an explicitly empty selection after refreshing", async () => {
   for (const box of screen.getAllByRole<HTMLInputElement>("checkbox"))
     expect(box.checked).toBe(false);
 });
+
+it("selects changes appearing after the first empty visit", async () => {
+  api.readGitWorkspace.mockResolvedValueOnce({ ...snapshot(), files: [] });
+  const v = render(view());
+  await screen.findByText("Нет изменений для просмотра");
+  v.rerender(view("p", false));
+  v.rerender(view());
+  expect(
+    await screen.findByRole("checkbox", { name: "Выбрать файл: one.txt" }),
+  ).toHaveProperty("checked", true);
+  expect(
+    screen.getByRole("checkbox", { name: "Выбрать файл: other.txt" }),
+  ).toHaveProperty("checked", true);
+});
+
+it("selects newly discovered files while preserving explicit deselection of existing files", async () => {
+  const v = render(view());
+  fireEvent.click(
+    await screen.findByRole("checkbox", { name: "Выбрать файл: one.txt" }),
+  );
+  const next = snapshot();
+  next.files.push({ ...next.files[0], path: "new.txt" });
+  api.readGitWorkspace.mockResolvedValue(next);
+  v.rerender(view("p", false));
+  v.rerender(view());
+  expect(
+    await screen.findByRole("checkbox", { name: "Выбрать файл: new.txt" }),
+  ).toHaveProperty("checked", true);
+  expect(
+    screen.getByRole("checkbox", { name: "Выбрать файл: one.txt" }),
+  ).toHaveProperty("checked", false);
+});
+
+it("selects a new set of changes after a clean snapshot, including the same filenames", async () => {
+  const v = render(view());
+  fireEvent.click(
+    await screen.findByRole("checkbox", { name: "Выбрать файл: one.txt" }),
+  );
+  api.readGitWorkspace.mockResolvedValueOnce({ ...snapshot(), files: [] });
+  fireEvent.click(screen.getByRole("button", { name: "Обновить изменения" }));
+  await waitFor(() =>
+    expect(
+      screen.queryByRole("checkbox", { name: "Выбрать файл: one.txt" }),
+    ).toBeNull(),
+  );
+  v.rerender(view("p", false));
+  v.rerender(view());
+  expect(
+    await screen.findByRole("checkbox", { name: "Выбрать файл: one.txt" }),
+  ).toHaveProperty("checked", true);
+});
+
+it("does not carry deselection of a pathname into another branch", async () => {
+  const v = render(view());
+  fireEvent.click(
+    await screen.findByRole("checkbox", { name: "Выбрать файл: one.txt" }),
+  );
+  api.readGitWorkspace.mockResolvedValue({ ...snapshot(), branch: "next" });
+  v.rerender(view("p", false));
+  v.rerender(view());
+  await waitFor(() =>
+    expect(
+      screen.getByRole("checkbox", { name: "Выбрать файл: one.txt" }),
+    ).toHaveProperty("checked", true),
+  );
+});

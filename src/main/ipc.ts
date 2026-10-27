@@ -1,4 +1,9 @@
 import {
+  gitHistoryRequestSchema,
+  gitCommitReadRequestSchema,
+  gitCommitDiffRequestSchema,
+} from "../shared/git-history";
+import {
   gitDiscardRequestSchema,
   gitDiscardTokenSchema,
 } from "../shared/git-discard";
@@ -320,6 +325,18 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   );
   handle("execute-git-branch", (token) =>
     d.service.executeGitBranch(gitBranchTokenSchema.parse(token)),
+  );
+  handle("read-git-history-refs", (scope) =>
+    d.service.readGitHistoryRefs(scopeRefSchema.parse(scope)),
+  );
+  handle("read-git-history", (request) =>
+    d.service.readGitHistory(gitHistoryRequestSchema.parse(request)),
+  );
+  handle("read-git-commit", (request) =>
+    d.service.readGitCommit(gitCommitReadRequestSchema.parse(request)),
+  );
+  handle("read-git-commit-diff", (request) =>
+    d.service.readGitCommitDiff(gitCommitDiffRequestSchema.parse(request)),
   );
   handle("read-git-summary", (scope) =>
     d.service.readGitSummary(scopeRefSchema.parse(scope)),

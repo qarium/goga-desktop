@@ -6,10 +6,10 @@
 .history-controls {
   margin-bottom: 24px;
 }
-.history-controls label:first-child {
+.history-controls .history-year-picker {
   width: 140px;
 }
-.history-controls label:nth-child(2) {
+.history-controls .history-entry-picker {
   width: min(380px, 100%);
 }
 .history-readonly {

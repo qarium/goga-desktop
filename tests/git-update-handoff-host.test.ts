@@ -59,11 +59,16 @@ async function fixture(kind: "primary" | "managed", strategy = "merge") {
     ),
     updates = 0;
   let onUpdate: ((cwd: string, args: string[]) => Promise<void>) | undefined;
+  const postFailureStatus: string[][] = [];
   const runner: Runner = {
     start: node.start.bind(node),
     kill: node.kill.bind(node),
     command: async (exe, args, cwd, e, input) => {
-      if (exe === "git") return node.command(exe, args, cwd, e, input);
+      if (exe === "git") {
+        if (updates && args.includes("--porcelain=v1"))
+          postFailureStatus.push([...args]);
+        return node.command(exe, args, cwd, e, input);
+      }
       if (args[0] === "config")
         return {
           stdout: `base_ref: main\nupdate:\n  strategy: ${strategy}\n`,
@@ -148,6 +153,7 @@ async function fixture(kind: "primary" | "managed", strategy = "merge") {
     setUpdate: (fn: typeof onUpdate) => (onUpdate = fn),
     setRefusal: (e: Error) => (refusal = e),
     updates: () => updates,
+    postFailureStatus,
   };
 }
 it.each([
@@ -278,4 +284,13 @@ it("a real operation already left by Goga is not offered a second START", async 
   expect(result.handoff).toBeUndefined();
   expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("merge");
   expect(f.updates()).toBe(1);
+});
+
+it("failure diagnostics cannot refresh the index after a handoff candidate has been pinned", async () => {
+  const f = await fixture("primary");
+  const result = await f.update();
+  expect(result.handoff).toBeDefined();
+  expect(f.postFailureStatus.length).toBeGreaterThan(0);
+  for (const args of f.postFailureStatus)
+    expect(args).toContain("--no-optional-locks");
 });

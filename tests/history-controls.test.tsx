@@ -197,7 +197,8 @@ it("uses the explicitly selected year and closes selector on outside click", asy
   await selector();
   fireEvent.pointerDown(document.body);
   expect(screen.queryByRole("searchbox")).toBeNull();
-  fireEvent.change(screen.getByLabelText("Год"), { target: { value: "2025" } });
+  fireEvent.click(screen.getByRole("combobox", { name: "Год" }));
+  fireEvent.click(screen.getByRole("option", { name: "2025" }));
   api.prepareHistoryPrune.mockResolvedValue({
     status: "ready",
     projectId: "p",
@@ -314,4 +315,31 @@ it("ignores an abandoned preview effect when React replays effects", async () =>
   fireEvent.click(screen.getByRole("button", { name: "Очистить историю…" }));
   await screen.findByRole("button", { name: "Удалить записи" });
   expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("uses the shared searchable year picker, preserving entry selection per year", async () => {
+  render(<ProjectHistory project={project} />);
+  await selector();
+  fireEvent.click(screen.getByRole("option", { name: "alpha" }));
+  const year = screen.getByRole("combobox", { name: "Год" });
+  expect(year.tagName).toBe("BUTTON");
+  expect(year.closest(".searchable-picker")).not.toBeNull();
+  fireEvent.click(year);
+  const search = screen.getByRole("searchbox", { name: "Найти год" });
+  fireEvent.change(search, { target: { value: "25" } });
+  expect(screen.queryByRole("option", { name: "2026" })).toBeNull();
+  fireEvent.keyDown(search, { key: "Enter" });
+  await waitFor(() =>
+    expect(api.listHistoryEntries).toHaveBeenLastCalledWith("p", "2025"),
+  );
+  expect(
+    screen.getByRole("combobox", { name: "Запись истории" }).textContent,
+  ).not.toContain("alpha");
+  fireEvent.click(screen.getByRole("combobox", { name: "Год" }));
+  fireEvent.click(screen.getByRole("option", { name: "2026" }));
+  await waitFor(() =>
+    expect(
+      screen.getByRole("combobox", { name: "Запись истории" }).textContent,
+    ).toContain("alpha"),
+  );
 });

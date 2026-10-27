@@ -1,3 +1,4 @@
+import { GitHistory } from "./GitHistory";
 import { GitUpdateHandoff } from "./GitUpdateHandoff";
 import { useGitUpdateHandoff } from "./useGitUpdateHandoff";
 import type { GitUpdateHandoffCandidate } from "../shared/git-update-handoff";
@@ -204,6 +205,7 @@ export function App() {
       | "context-runs"
       | "context-preparation"
       | "changes"
+      | "commits"
     >("project-settings"),
     [error, setError] = useState(""),
     [viewErrors, setViewErrors] = useState<Record<string, string>>({});
@@ -1074,6 +1076,20 @@ export function App() {
           owner ? contextKey(owner) : "primary",
         ])
       : null;
+  const openGitView = (target: "changes" | "commits") =>
+    navigate(() => {
+      const key = sectionKey("git");
+      if (key && page !== "changes" && page !== "commits")
+        gitReturnPages.current.set(key, page);
+      setPage(target);
+    }, true);
+  const closeGitView = () =>
+    navigate(() => {
+      const previous =
+        gitReturnPages.current.get(sectionKey("git") ?? "") ??
+        "project-settings";
+      setPage(previous === "project" && !run ? "project-settings" : previous);
+    }, true);
   const retainProjectView = (key: string) => {
     const [id, path] = JSON.parse(key);
     return projects.some(
@@ -1305,8 +1321,9 @@ export function App() {
                     selectedContextRef.current = record;
                     setSelected(null);
                     setPage(
-                      pageRef.current === "changes"
-                        ? "changes"
+                      pageRef.current === "changes" ||
+                        pageRef.current === "commits"
+                        ? pageRef.current
                         : pageRef.current === "terminal"
                           ? "terminal"
                           : pageRef.current === "project-settings"
@@ -1326,8 +1343,9 @@ export function App() {
                     selectedContextRef.current = null;
                     setSelected(null);
                     setPage(
-                      pageRef.current === "changes"
-                        ? "changes"
+                      pageRef.current === "changes" ||
+                        pageRef.current === "commits"
+                        ? pageRef.current
                         : pageRef.current === "terminal"
                           ? "terminal"
                           : "project-settings",
@@ -1761,70 +1779,99 @@ export function App() {
                   activeKey={page !== "settings" ? sectionKey("git") : null}
                   retain={retainProjectView}
                 >
-                  <GitWorkspace
-                    scope={displayOwner ? contextRef(displayOwner) : project.id}
-                    open={page === "changes"}
-                    bodyContainer={gitStage}
-                    revision={
-                      repositoryActions.revision +
-                      (gitRevision[
-                        documentScopeId(
-                          displayOwner ? contextRef(displayOwner) : project.id,
+                  <>
+                    <GitWorkspace
+                      scope={
+                        displayOwner ? contextRef(displayOwner) : project.id
+                      }
+                      open={page === "changes"}
+                      historyOpen={page === "commits"}
+                      onHistoryOpen={() => openGitView("commits")}
+                      onHistoryClose={closeGitView}
+                      bodyContainer={gitStage}
+                      revision={
+                        repositoryActions.revision +
+                        (gitRevision[
+                          documentScopeId(
+                            displayOwner
+                              ? contextRef(displayOwner)
+                              : project.id,
+                          )
+                        ] ?? 0)
+                      }
+                      onBranchBusyChange={(
+                        id,
+                        busy,
+                        owner = documentScopeId(id),
+                      ) =>
+                        setGitBranchBusy((previous) =>
+                          gitOwnerFlag(previous, id, owner, busy),
                         )
-                      ] ?? 0)
-                    }
-                    onBranchBusyChange={(
-                      id,
-                      busy,
-                      owner = documentScopeId(id),
-                    ) =>
-                      setGitBranchBusy((previous) =>
-                        gitOwnerFlag(previous, id, owner, busy),
-                      )
-                    }
-                    onOverlayChange={(
-                      id,
-                      visible,
-                      owner = documentScopeId(id),
-                    ) =>
-                      setGitModals((previous) =>
-                        gitOwnerFlag(previous, id, owner, visible),
-                      )
-                    }
-                    onChanged={(id, issuedScope = id) => {
-                      if (scopeProjectId(issuedScope) !== id) return;
-                      const owner = documentScopeId(issuedScope);
-                      setGitRevision((previous) => ({
-                        ...previous,
-                        [owner]: (previous[owner] ?? 0) + 1,
-                      }));
-                      topicsChanged();
-                      void settingsDocuments.refreshProject(issuedScope);
-                    }}
-                    disabled={
-                      !!contextUnavailable || contextsLoading || settingsBusy
-                    }
-                    onOpen={() =>
-                      navigate(() => {
-                        const key = sectionKey("git");
-                        if (key && page !== "changes")
-                          gitReturnPages.current.set(key, page);
-                        setPage("changes");
-                      }, true)
-                    }
-                    onClose={() =>
-                      navigate(() => {
-                        const previous =
-                          gitReturnPages.current.get(sectionKey("git") ?? "") ??
-                          "project-settings";
-                        setPage(
-                          previous === "project" && !run
-                            ? "project-settings"
-                            : previous,
-                        );
-                      }, true)
-                    }
-                  />
+                      }
+                      onOverlayChange={(
+                        id,
+                        visible,
+                        owner = documentScopeId(id),
+                      ) =>
+                        setGitModals((previous) =>
+                          gitOwnerFlag(previous, id, owner, visible),
+                        )
+                      }
+                      onCurrentBranchChanged={(issuedScope) => {
+                        const owner = documentScopeId(issuedScope);
+                        setGitRevision((previous) => ({
+                          ...previous,
+                          [owner]: (previous[owner] ?? 0) + 1,
+                        }));
+                      }}
+                      onChanged={(id, issuedScope = id) => {
+                        if (scopeProjectId(issuedScope) !== id) return;
+                        const owner = documentScopeId(issuedScope);
+                        setGitRevision((previous) => ({
+                          ...previous,
+                          [owner]: (previous[owner] ?? 0) + 1,
+                        }));
+                        topicsChanged();
+                        void settingsDocuments.refreshProject(issuedScope);
+                      }}
+                      disabled={
+                        !!contextUnavailable || contextsLoading || settingsBusy
+                      }
+                      onOpen={() => openGitView("changes")}
+                      onClose={closeGitView}
+                    />
+                    <GitHistory
+                      scope={
+                        displayOwner ? contextRef(displayOwner) : project.id
+                      }
+                      open={page === "commits"}
+                      bodyContainer={gitStage}
+                      revision={
+                        repositoryActions.revision +
+                        (gitRevision[
+                          documentScopeId(
+                            displayOwner
+                              ? contextRef(displayOwner)
+                              : project.id,
+                          )
+                        ] ?? 0)
+                      }
+                      disabled={
+                        !!contextUnavailable || contextsLoading || settingsBusy
+                      }
+                      onClose={closeGitView}
+                      onOverlayChange={(visible) =>
+                        setGitModals((previous) =>
+                          gitOwnerFlag(
+                            previous,
+                            project.id,
+                            `${documentScopeId(displayOwner ? contextRef(displayOwner) : project.id)}:history`,
+                            visible,
+                          ),
+                        )
+                      }
+                    />
+                  </>
                 </RetainedViews>
               </div>
             )}
@@ -1832,9 +1879,12 @@ export function App() {
           <div
             className="git-workspace-stage"
             ref={setGitStage}
-            hidden={page !== "changes"}
+            hidden={page !== "changes" && page !== "commits"}
           />
-          <div className="scroll-area" hidden={page === "changes"}>
+          <div
+            className="scroll-area"
+            hidden={page === "changes" || page === "commits"}
+          >
             {page === "project" && run?.recoveryMessage && (
               <p className="hint" role="status">
                 {run.recoveryMessage}

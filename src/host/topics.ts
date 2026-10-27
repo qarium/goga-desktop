@@ -871,8 +871,14 @@ export class TopicsDomain {
         ticket.request.publish === true;
       let changed = completed > 0 || remoteUncertain;
       try {
+        // Diagnostics must not refresh the real index after the failed command:
+        // a handoff may already pin its physical identity for confirmation.
+        const diagnostic = {
+          ...d,
+          git: (args: string[]) => d.git(["--no-optional-locks", ...args]),
+        };
         changed ||=
-          (await state(d, ticket.request.year)).revision !==
+          (await state(diagnostic, ticket.request.year)).revision !==
           ticket.request.expectedRevision;
       } catch {
         changed = true;

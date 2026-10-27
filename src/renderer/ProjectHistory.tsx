@@ -1,3 +1,4 @@
+import { SearchablePicker } from "./SearchablePicker";
 import { HistoryEntryPicker } from "./HistoryEntryPicker";
 import { HistoryPrune } from "./HistoryPrune";
 import { useCallback, useEffect, useRef, useState } from "react";
@@ -139,22 +140,22 @@ export function ProjectHistory({
         ) : (
           <>
             <div className="tool-controls history-controls">
-              <label>
-                Год
-                <select
-                  value={year}
-                  onChange={(event) =>
-                    setChoices((old) => ({
-                      ...old,
-                      [scopeKey]: event.target.value,
-                    }))
-                  }
-                >
-                  {availableYears.map((value) => (
-                    <option key={value}>{value}</option>
-                  ))}
-                </select>
-              </label>
+              <SearchablePicker
+                key={JSON.stringify([scopeKey, active])}
+                className="history-year-picker"
+                label="Год"
+                entries={availableYears}
+                value={year}
+                disabled={!active}
+                placeholder="Выберите год"
+                emptyLabel="Нет годов"
+                searchLabel="Найти год"
+                searchPlaceholder="Год"
+                listLabel="Годы истории"
+                onChange={(value) =>
+                  setChoices((old) => ({ ...old, [scopeKey]: value }))
+                }
+              />
               <HistoryEntryPicker
                 key={JSON.stringify([entryKey, active])}
                 entries={availableEntries}

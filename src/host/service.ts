@@ -1,3 +1,12 @@
+import { GitHistoryReader } from "./git-history-reader";
+import {
+  gitHistoryRequestSchema,
+  gitCommitReadRequestSchema,
+  gitCommitDiffRequestSchema,
+  type GitHistoryRequest,
+  type GitCommitReadRequest,
+  type GitCommitDiffRequest,
+} from "../shared/git-history";
 import { GitDiscardActions } from "./git-discard-actions";
 import {
   gitDiscardRequestSchema,
@@ -1843,6 +1852,38 @@ export class HostService extends EventEmitter {
         }
       }),
     );
+  }
+  private gitHistoryRead<T>(
+    scope: ScopeRef,
+    read: (reader: GitHistoryReader) => Promise<T>,
+  ): Promise<T> {
+    return this.gitWorkspaceRead(scope, (_workspace, context) =>
+      read(
+        new GitHistoryReader({
+          scope: context.scope,
+          root: context.root,
+          verify: context.verify,
+          git: async (args) => (await context.git(args)).stdout,
+        }),
+      ),
+    );
+  }
+  async readGitHistoryRefs(scope: ScopeRef) {
+    return this.gitHistoryRead(scope, (reader) => reader.refs());
+  }
+  async readGitHistory(input: GitHistoryRequest) {
+    const request = gitHistoryRequestSchema.parse(input);
+    return this.gitHistoryRead(request.scope, (reader) => reader.page(request));
+  }
+  async readGitCommit(input: GitCommitReadRequest) {
+    const request = gitCommitReadRequestSchema.parse(input);
+    return this.gitHistoryRead(request.scope, (reader) =>
+      reader.commit(request),
+    );
+  }
+  async readGitCommitDiff(input: GitCommitDiffRequest) {
+    const request = gitCommitDiffRequestSchema.parse(input);
+    return this.gitHistoryRead(request.scope, (reader) => reader.diff(request));
   }
   async readGitSummary(scope: ScopeRef): Promise<GitWorkspaceSummary> {
     return this.gitWorkspaceRead(scope, (reader) => reader.summary());

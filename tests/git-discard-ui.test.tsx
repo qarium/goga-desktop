@@ -355,3 +355,14 @@ it("treats a fully published discard with a recovery backup as success and shows
     screen.getByText(/Материалы восстановления: \/synthetic\/recovery\/backup/),
   ).toBeTruthy();
 });
+
+it("separates the destructive confirmation action from the explanation", async () => {
+  render(<View />);
+  await prepare();
+  const button = screen.getByRole("button", {
+    name: "Отменить выбранные изменения",
+  });
+  expect(
+    button.parentElement?.classList.contains("git-discard-confirm-actions"),
+  ).toBe(true);
+});

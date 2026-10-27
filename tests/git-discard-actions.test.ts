@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
+import * as nativeFs from "node:fs";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { NodeRunner } from "../src/host/process";
@@ -7,9 +8,14 @@ import { GitWorkspaceReader } from "../src/host/git-workspace-reader";
 import { GitDiscardActions } from "../src/host/git-discard-actions";
 import type { GitCommitContext } from "../src/host/git-workspace-actions";
 import { withTrustedGitIndex } from "../src/host/git-index-scope";
+vi.mock("node:fs", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs")>();
+  return { ...actual, rmSync: vi.fn(actual.rmSync) };
+});
 vi.setConfig({ testTimeout: 20000 });
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const fn of cleanup.splice(0).reverse()) await fn();
 });
 async function fixture(
@@ -458,4 +464,45 @@ describe("selected whole-file discard", () => {
       "edit",
     );
   });
+});
+
+it("cleans only this operation's recovery after verified success and keeps Trash", async () => {
+  const f = await fixture();
+  const old = path.join(f.root, ".git", "goga-commit-old");
+  await fs.mkdir(old);
+  await fs.writeFile(path.join(old, "keep"), "prior backup");
+  await f.write("selected", "discarded edits");
+  await f.write("new", "new file");
+  const result = await f.actions.execute(
+    (await f.prepare(["selected", "new"])).token,
+  );
+  expect(result.status).toBe("discarded");
+  expect(result.recoveryPath).toBeUndefined();
+  expect(
+    (await fs.readdir(path.join(f.root, ".git"))).filter((n) =>
+      n.startsWith("goga-commit-"),
+    ),
+  ).toEqual(["goga-commit-old"]);
+  expect(await fs.readFile(path.join(old, "keep"), "utf8")).toBe(
+    "prior backup",
+  );
+  expect(await fs.readFile(path.join(f.trash, "new"), "utf8")).toBe("new file");
+});
+it("reports cleanup failure separately from a verified discard and keeps its recovery path", async () => {
+  const f = await fixture();
+  await f.write("selected", "saved edits");
+  const remove = vi.spyOn(nativeFs, "rmSync").mockImplementation(() => {
+    throw Error("cleanup denied");
+  });
+  const result = await f.actions.execute((await f.prepare()).token);
+  expect(remove).toHaveBeenCalled();
+  expect(result.status).toBe("discarded");
+  expect(result.log).toContain("cleanup denied");
+  expect(result.recoveryPath).toBeTruthy();
+  expect(
+    await fs.readFile(
+      path.join(result.recoveryPath!, "originals", "selected"),
+      "utf8",
+    ),
+  ).toBe("saved edits");
 });

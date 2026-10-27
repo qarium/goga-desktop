@@ -78,9 +78,11 @@ it("navigates year → entry → read-only Markdown / text, and explains unsuppo
   fireEvent.click(screen.getByLabelText("Запись истории"));
   fireEvent.click(screen.getByRole("option", { name: "beta" }));
   await openEntry("beta");
-  fireEvent.change(screen.getByLabelText("Год"), { target: { value: "2025" } });
+  fireEvent.click(screen.getByRole("combobox", { name: "Год" }));
+  fireEvent.click(screen.getByRole("option", { name: "2025" }));
   await openEntry("old");
-  fireEvent.change(screen.getByLabelText("Год"), { target: { value: "2024" } });
+  fireEvent.click(screen.getByRole("combobox", { name: "Год" }));
+  fireEvent.click(screen.getByRole("option", { name: "2024" }));
   await screen.findByText("За 2024 год записей нет");
 });
 it("settles errors and allows retry instead of an infinite loader", async () => {

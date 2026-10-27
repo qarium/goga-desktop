@@ -358,6 +358,11 @@ export class GitWorkspaceReader {
       },
     );
   }
+  /** Trusted host readers may inspect objects through the same audited private
+   * Git context, without computing worktree status or a mutation revision. */
+  readObjects<T>(read: (context: PrivateGitRead) => Promise<T>): Promise<T> {
+    return this.withRead(read);
+  }
   private async fileStat(name: string) {
     const parts = gitFilePathSchema.parse(name).split("/");
     let current = this.root;

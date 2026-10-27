@@ -140,8 +140,7 @@ async function nativeFixture() {
       await click(".git-file-row button");
       await until('!!document.querySelector(".git-diff-code")');
       const callsBefore = await ev("fixture.calls.length");
-      await click(".git-file-row:nth-child(1) input");
-      await click(".git-file-row:nth-child(3) input");
+      await click(".git-file-row:nth-child(2) input");
       assert.equal(
         await ev('document.querySelector(".git-commit-form textarea").value'),
         "",
@@ -176,6 +175,21 @@ async function nativeFixture() {
         false,
       );
       await checkButton(".git-commit-preview button");
+      const actions = await ev(
+        `(()=>{const a=document.querySelector('.git-discard-confirm-actions'),b=a.querySelector('button'),p=a.previousElementSibling;const ar=a.getBoundingClientRect(),br=b.getBoundingClientRect(),pr=p.getBoundingClientRect();return {rightGap:ar.right-br.right,textGap:br.top-pr.bottom,bottomGap:a.closest("dialog").getBoundingClientRect().bottom-br.bottom,bottomPadding:parseFloat(getComputedStyle(a.closest("dialog")).paddingBottom)};})()`,
+      );
+      assert.ok(
+        Math.abs(actions.rightGap) < 2,
+        "Confirmation must align right: " + JSON.stringify(actions),
+      );
+      assert.ok(
+        actions.textGap >= 20,
+        "Confirmation needs space from text: " + JSON.stringify(actions),
+      );
+      assert.ok(
+        Math.abs(actions.bottomGap - actions.bottomPadding - 1) < 2,
+        "Bottom padding must not stack: " + JSON.stringify(actions),
+      );
       await screenshot("discard-confirmation-" + name);
       await click(".git-commit-modal header button");
       await until('!document.querySelector(".git-commit-modal")');
@@ -220,6 +234,7 @@ async function nativeFixture() {
         width,
         height,
         layout,
+        actions,
         selectedOnly: true,
         stagedWarning: true,
         trashPreview: true,

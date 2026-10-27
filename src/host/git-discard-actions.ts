@@ -11,6 +11,7 @@ import {
   unlinkSync,
   linkSync,
   readdirSync,
+  rmSync,
 } from "node:fs";
 import path from "node:path";
 import type { ScopeRef } from "../shared/context";
@@ -196,7 +197,7 @@ function assertRawRestore(p: Policy) {
 
 /** Whole selected files only. The host supplies owner validation, exclusive
  * lifecycle locking and offline Git. Not an atomic multi-file transaction: every
- * moved original and the old index survive in a durable, explicit recovery area. */
+ * moved original and old index remain recoverable until final success verification. */
 export class GitDiscardActions {
   private readonly tickets = new Map<string, Ticket>();
   constructor(
@@ -505,17 +506,38 @@ export class GitDiscardActions {
     if (!ticket || ticket.preview.expiresAt <= this.now())
       throw Error("Подтверждение истекло или уже использовано.");
     let completed: GitDiscardResult | undefined;
+    let cleanupRecovery: (() => void) | undefined;
     try {
-      return await this.options.context(ticket.preview.scope, async (c) => {
-        const s = await this.capture(c, ticket.preview.paths);
-        if (
-          ticket.fingerprint !== fingerprint(s) ||
-          ticket.preview.expiresAt <= this.now()
-        )
-          throw stale();
-        completed = await this.transact(c, ticket, s);
-        return completed;
-      });
+      const result = await this.options.context(
+        ticket.preview.scope,
+        async (c) => {
+          const s = await this.capture(c, ticket.preview.paths);
+          if (
+            ticket.fingerprint !== fingerprint(s) ||
+            ticket.preview.expiresAt <= this.now()
+          )
+            throw stale();
+          completed = await this.transact(c, ticket, s, (cleanup) => {
+            cleanupRecovery = cleanup;
+          });
+          return completed;
+        },
+      );
+      // Keep recovery if even the outer lifecycle lock failed to release.
+      if (result.status === "discarded" && cleanupRecovery) {
+        try {
+          cleanupRecovery();
+          delete result.recoveryPath;
+        } catch (error) {
+          return {
+            ...result,
+            message:
+              "Отмена изменений завершена и проверена, но очистка служебных материалов не завершена. Повторять отмену не нужно.",
+            log: `${result.log}\n${String(error)}`,
+          };
+        }
+      }
+      return result;
     } catch (error) {
       if (!completed) throw error;
       return {
@@ -534,6 +556,7 @@ export class GitDiscardActions {
     c: GitCommitContext,
     t: Ticket,
     s: State,
+    onVerified: (cleanup: () => void) => void,
   ): Promise<GitDiscardResult> {
     const root = s.root,
       gd = path.join(root, ".git"),
@@ -825,8 +848,12 @@ export class GitDiscardActions {
       await c.verify();
       guard(preparedIndex);
       journal();
-      // Keep originals and journal even on success: explicit recovery, never an
-      // automatic rollback that could overwrite edits made after this operation.
+      // Register cleanup only after final verification; execute after context release.
+      onVerified(() => {
+        assertParents(s.parents.slice(0, 2));
+        if (directory(recovery) !== recoveryId) throw stale();
+        rmSync(recovery, { recursive: true });
+      });
       return result(
         "discarded",
         "Выбранные файлы возвращены к HEAD, новые файлы перемещены в Корзину. Остальные изменения сохранены.",

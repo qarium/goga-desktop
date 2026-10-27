@@ -1,3 +1,4 @@
+import { GitDiffView as DiffPart, PageControls } from "./GitDiffView";
 import { useGitSummary } from "./useGitSummary";
 import {
   useGitSequencerOperation,
@@ -17,7 +18,7 @@ import {
 } from "./GitMergeOperation";
 import { GitBranchPicker } from "./GitBranchPicker";
 import { createPortal } from "react-dom";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { scopeProjectId, type ScopeRef } from "../shared/context";
 import { useGitConflicts } from "./useGitConflicts";
 import {
@@ -28,7 +29,6 @@ import {
 import type {
   GitWorkspaceSnapshot,
   GitWorkspaceDiff,
-  GitDiffPart,
 } from "../shared/git-workspace";
 import { documentScopeId } from "./settings-documents";
 import { readWithSignal } from "./read-request";
@@ -45,6 +45,10 @@ export interface GitWorkspaceProps {
   bodyContainer: HTMLElement | null;
   onOpen(): void;
   onClose(): void;
+  historyOpen?: boolean;
+  onHistoryOpen?(): void;
+  onHistoryClose?(): void;
+  onCurrentBranchChanged?(scope: ScopeRef): void;
   onChanged?(projectId: string, scope?: ScopeRef): void;
   onOverlayChange?(projectId: string, visible: boolean, owner?: string): void;
   onBranchBusyChange?(projectId: string, busy: boolean, owner?: string): void;
@@ -76,15 +80,18 @@ const operations: Record<GitWorkspaceSnapshot["operation"], string> = {
   unknown: "Незавершённая операция Git",
 };
 const FILE_PAGE_SIZE = 200;
-const DIFF_PAGE_SIZE = 500;
 function GitWorkspaceOwner({
   scope,
   open,
   bodyContainer,
   onOpen,
   onClose,
+  historyOpen = false,
+  onHistoryOpen,
+  onHistoryClose,
   revision,
   onChanged,
+  onCurrentBranchChanged,
   onOverlayChange,
   onBranchBusyChange,
   disabled = false,
@@ -110,7 +117,10 @@ function GitWorkspaceOwner({
   // Synchronous start ordering is independent of React's batched renders.
   const issuedReadVersion = useRef(0);
   const [readVersion, setReadVersion] = useState(0);
-  const commit = useGitCommit(scope, () => setRefresh((n) => n + 1));
+  const commit = useGitCommit(scope, () => {
+    setRefresh((n) => n + 1);
+    onChanged?.(scopeProjectId(scope), scope);
+  });
   const discardRefreshRequested = useRef<number | null>(null);
   const discard = useGitDiscard(scope, (paths) => {
     commit.removePaths(paths);
@@ -286,6 +296,17 @@ function GitWorkspaceOwner({
     summarySupported && active && !disabled && !busy,
     revision + refresh,
   );
+  const observedBranch = useRef<{ branch: string | null } | null>(null);
+  const currentBranch = summarySupported
+    ? summary.value?.branch
+    : snapshot?.branch;
+  useEffect(() => {
+    if (currentBranch === undefined) return;
+    const previous = observedBranch.current;
+    observedBranch.current = { branch: currentBranch };
+    if (previous && previous.branch !== currentBranch)
+      onCurrentBranchChanged?.(scope);
+  }, [currentBranch, scope, onCurrentBranchChanged]);
   const isConflict =
     snapshotConflict || (!!conflictState.entry && !conflictState.entry.saved);
   const requested = useRef<{ revision: number; refresh: number } | null>(null);
@@ -548,6 +569,32 @@ function GitWorkspaceOwner({
             </span>
           )}
         </TooltipButton>
+        {onHistoryOpen && (
+          <TooltipButton
+            buttonClassName="git-workspace-trigger"
+            disabled={disabled}
+            busy={false}
+            tabProps={{ "aria-pressed": historyOpen }}
+            label="Коммиты"
+            tooltipLabel="История коммитов"
+            description="Посмотреть коммиты, файлы и различия. Без переключения рабочей ветки."
+            tooltipEnabled={active}
+            onClick={() => (historyOpen ? onHistoryClose?.() : onHistoryOpen())}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              aria-hidden="true"
+            >
+              <path d="M3 12a9 9 0 1 0 3-6.7M3 3v6h6M12 7v5l3 2" />
+            </svg>
+            <span>Коммиты</span>
+          </TooltipButton>
+        )}
       </div>
       {bodyContainer &&
         active &&
@@ -931,124 +978,6 @@ function GitWorkspaceOwner({
           </section>,
           bodyContainer,
         )}
-    </>
-  );
-}
-function PageControls({
-  total,
-  page,
-  size,
-  label,
-  previous,
-  next,
-  onPage,
-}: {
-  total: number;
-  page: number;
-  size: number;
-  label: string;
-  previous: string;
-  next: string;
-  onPage(page: number): void;
-}) {
-  if (total <= size) return null;
-  return (
-    <div className="git-page-controls">
-      <span>
-        {label} {page * size + 1}–{Math.min((page + 1) * size, total)} из{" "}
-        {total}
-      </span>
-      <div>
-        <button
-          type="button"
-          aria-label={previous}
-          disabled={page === 0}
-          onClick={() => onPage(page - 1)}
-        >
-          ←
-        </button>
-        <button
-          type="button"
-          aria-label={next}
-          disabled={(page + 1) * size >= total}
-          onClick={() => onPage(page + 1)}
-        >
-          →
-        </button>
-      </div>
-    </div>
-  );
-}
-function DiffPart({
-  part,
-  page,
-  onPage,
-}: {
-  part: GitDiffPart;
-  page: number;
-  onPage(page: number): void;
-}) {
-  // The host byte limit alone doesn't bound DOM size: 1 MiB may contain a
-  // million empty lines. Page the complete content; never silently truncate.
-  const lines = useMemo(
-    () =>
-      part.kind === "patch" || part.kind === "text"
-        ? part.text.split("\n")
-        : [],
-    [part],
-  );
-  const visiblePage = Math.min(
-    page,
-    Math.max(0, Math.ceil(lines.length / DIFF_PAGE_SIZE) - 1),
-  );
-  const start = visiblePage * DIFF_PAGE_SIZE;
-  if (part.kind === "empty")
-    return (
-      <div className="git-workspace-empty">В этой версии изменений нет.</div>
-    );
-  if (part.kind === "binary" || part.kind === "unavailable")
-    return (
-      <div className="git-workspace-empty">
-        {part.text ||
-          (part.kind === "binary"
-            ? "Двоичный файл. Текстовое сравнение недоступно."
-            : "Просмотр содержимого недоступен.")}
-      </div>
-    );
-  return (
-    <>
-      <PageControls
-        total={lines.length}
-        page={visiblePage}
-        size={DIFF_PAGE_SIZE}
-        label="Строки"
-        previous="Предыдущие строки"
-        next="Следующие строки"
-        onPage={onPage}
-      />
-      <pre
-        className="git-diff-code"
-        aria-label={part.kind === "patch" ? "Различия файла" : "Новый файл"}
-      >
-        {lines.slice(start, start + DIFF_PAGE_SIZE).map((line, i) => (
-          <span
-            key={start + i}
-            className={
-              part.kind === "patch"
-                ? line.startsWith("+")
-                  ? "added"
-                  : line.startsWith("-")
-                    ? "removed"
-                    : line.startsWith("@@")
-                      ? "hunk"
-                      : ""
-                : ""
-            }
-          >
-            {line || "\u00a0"}
-          </span>
-        ))}
-      </pre>
     </>
   );
 }

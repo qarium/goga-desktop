@@ -243,7 +243,7 @@ export function GitDiscardFooter({
         <TopicModal
           title="Подтвердить отмену изменений"
           closeLabel="Закрыть подтверждение отмены"
-          className="git-commit-modal"
+          className="git-commit-modal git-discard-confirmation"
           onClose={discard.closePreview}
         >
           <div className="git-commit-preview">
@@ -289,22 +289,29 @@ export function GitDiscardFooter({
               Коммит не создаётся, публикация и синхронизация не выполняются.
               При изменении состояния Git потребуется новое подтверждение.
             </p>
+            <p>
+              После успешной проверки резервная копия удаляется. Отменённые
+              изменения отслеживаемых файлов из неё восстановить будет нельзя.
+              При ошибке материалы восстановления сохраняются.
+            </p>
             {stale && (
               <p role="alert">
                 Подтверждение устарело. Закройте его и проверьте выбранные файлы
                 заново.
               </p>
             )}
-            <button
-              type="button"
-              className="danger"
-              disabled={
-                unsafe || stale || !!discard.pending || discard.uncertain
-              }
-              onClick={() => void discard.execute()}
-            >
-              Отменить выбранные изменения
-            </button>
+            <div className="git-discard-confirm-actions">
+              <button
+                type="button"
+                className="danger"
+                disabled={
+                  unsafe || stale || !!discard.pending || discard.uncertain
+                }
+                onClick={() => void discard.execute()}
+              >
+                Отменить выбранные изменения
+              </button>
+            </div>
           </div>
         </TopicModal>
       )}

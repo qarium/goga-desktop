@@ -9,7 +9,10 @@ import { TopicModal, topicError } from "./TopicsCommon";
 /** Lives in the retained owner, not in the visibility-bound portal. */
 export function useGitCommit(scope: ScopeRef, onCommitted: () => void) {
   const [paths, setPaths] = useState<string[]>([]);
-  const selectionInitialized = useRef(false);
+  const selectionSnapshot = useRef<{
+    branch: string;
+    paths: Set<string>;
+  } | null>(null);
   const [message, setMessage] = useState("");
   const [pending, setPending] = useState<"prepare" | "execute" | null>(null);
   const [preview, setPreview] = useState<GitCommitPreview | null>(null);
@@ -132,7 +135,6 @@ export function useGitCommit(scope: ScopeRef, onCommitted: () => void) {
     toggle,
     initializeSelection: (snapshot: GitWorkspaceSnapshot) => {
       if (
-        selectionInitialized.current ||
         flight.current ||
         preview ||
         documentScopeId(snapshot.scope) !== owner ||
@@ -140,12 +142,22 @@ export function useGitCommit(scope: ScopeRef, onCommitted: () => void) {
         snapshot.files.some((file) => file.kind === "conflict")
       )
         return;
-      selectionInitialized.current = true;
-      setPaths(
-        snapshot.files
-          .filter((file) => !file.submodule)
-          .map((file) => file.path),
-      );
+      const branch = snapshot.branch ?? `HEAD:${snapshot.head ?? "unborn"}`;
+      const eligible = snapshot.files
+        .filter((file) => !file.submodule)
+        .map((file) => file.path);
+      const previous = selectionSnapshot.current;
+      const sameBranch = previous?.branch === branch;
+      selectionSnapshot.current = { branch, paths: new Set(eligible) };
+      // Defaults apply to newly observed changes, not just the first visit.
+      // Keep deliberate deselection until a path disappears or the branch changes.
+      setPaths((current) => {
+        const selected = new Set(current);
+        return eligible.filter(
+          (path) =>
+            !sameBranch || !previous.paths.has(path) || selected.has(path),
+        );
+      });
     },
     prepare,
     execute,

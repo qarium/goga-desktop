@@ -19,3 +19,15 @@
   font-size: 11px;
   line-height: 1.5;
 }
+.git-discard-confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 20px;
+}
+
+/* The dialog already supplies its bottom inset; do not add preview padding. */
+.git-discard-confirmation .git-commit-preview {
+  padding-bottom: 0;
+}
