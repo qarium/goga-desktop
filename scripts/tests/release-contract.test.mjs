@@ -31,15 +31,21 @@ test("CI and release use pinned actions, read-only builds and explicit native-te
         assert.notEqual(j.permissions?.contents, "write");
         assert.equal(j.env.GOGA_TOPIC_READONLY_CLI, "/nonexistent/disabled");
         const commands = j.steps.map((s) => s.run ?? "").join("\n");
-        for (const command of [
-          "npm ci",
-          "npm run test:release",
-          "--testTimeout=15000",
-          "--maxWorkers=1",
-          "scripts/test-summary.mjs",
-          "npm run typecheck",
-          "npm run build",
-        ])
+        const required =
+          id === "tests"
+            ? [
+                "npm ci",
+                "--testTimeout=15000",
+                "--maxWorkers=1",
+                "scripts/test-summary.mjs",
+              ]
+            : [
+                "npm ci",
+                "npm run test:release",
+                "npm run typecheck",
+                "npm run build",
+              ];
+        for (const command of required)
           assert.ok(commands.includes(command), `${name}: ${command}`);
       }
     }
@@ -111,7 +117,7 @@ test("CI and release exercise both native architectures with scoped Intel test b
   ];
   for (const name of ["ci", "release"]) {
     const workflow = await load(name);
-    const job = workflow.jobs[name === "ci" ? "check" : "build"];
+    const job = workflow.jobs.tests;
     assert.ok(job.strategy?.matrix?.include, "Native test matrix is required");
     assert.deepEqual(job.strategy.matrix.include, expected);
     assert.equal(job.strategy["fail-fast"], false);
@@ -133,4 +139,80 @@ test("CI and release exercise both native architectures with scoped Intel test b
     for (const step of job.steps)
       assert.notEqual(step["continue-on-error"], true);
   }
+});
+
+test("every native architecture runs all four independent shards and release waits for them", async () => {
+  for (const name of ["ci", "release"]) {
+    const w = await load(name);
+    const j = w.jobs.tests;
+    assert.ok(j, `${name}: independent test job required`);
+    assert.deepEqual(j.strategy.matrix.arch, ["arm64", "x64"]);
+    assert.deepEqual(j.strategy.matrix.shard, [1, 2, 3, 4]);
+    assert.equal(j.strategy["fail-fast"], false);
+    assert.equal(j.env.TEST_SHARD, "${{ matrix.shard }}/4");
+    const step = j.steps.find((s) => s.id === "tests");
+    assert.ok(step);
+    assert.match(step.run, /--shard="\$TEST_SHARD"/);
+    assert.match(step.run, /--maxWorkers=1/);
+    assert.doesNotMatch(step.run, /--(?:exclude|retry|bail|passWithNoTests)/);
+    const report = j.steps.find((s) => s.name === "Exact skipped test report");
+    assert.equal(report.if, "always()");
+    assert.equal(report.env.TEST_OUTCOME, "${{ steps.tests.outcome }}");
+    const build = w.jobs[name === "ci" ? "check" : "build"];
+    assert.ok(!build.steps.some((s) => (s.run ?? "").includes("npm test --")));
+    assert.equal(build.needs, "tests");
+    if (name === "ci") {
+      assert.equal(build.if, "always()");
+      const gate = build.steps[0];
+      assert.equal(gate.env.TEST_RESULT, "${{ needs.tests.result }}");
+      assert.match(gate.run, /"\$TEST_RESULT" != success/);
+      assert.match(gate.run, /exit 1/);
+    }
+  }
+});
+
+test("Vitest shards partition every discovered test file exactly once", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const cwd = fileURLToPath(new URL("../../", import.meta.url));
+  // `vitest list --filesOnly` intentionally bypasses sharding. Exercise the
+  // configured sequencer used by the real runner against discovered specs.
+  const p = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `
+    import { createVitest } from 'vitest/node';
+    const groups = [];
+    let all;
+    for (let index = 1; index <= 4; index++) {
+      const ctx = await createVitest({ watch: false, shard: index + '/4' });
+      try {
+        const specs = await ctx.globTestSpecifications();
+        all = specs.map(s => s.moduleId);
+        const sequencer = new ctx.config.sequence.sequencer(ctx);
+        groups.push((await sequencer.shard(specs)).map(s => s.moduleId));
+      } finally { await ctx.close(); }
+    }
+    console.log(JSON.stringify({ all, shards: groups }));
+  `,
+    ],
+    { cwd, encoding: "utf8", timeout: 30000 },
+  );
+  assert.equal(p.status, 0, p.stderr);
+  const { all, shards } = JSON.parse(p.stdout);
+  assert.ok(all.length > 0);
+  assert.ok(shards.every((files) => files.length > 0));
+  const combined = shards.flat();
+  assert.equal(
+    new Set(combined).size,
+    combined.length,
+    "No duplicates between shards",
+  );
+  assert.deepEqual(
+    combined.sort(),
+    all.sort(),
+    "No omitted test files, including future additions",
+  );
 });
