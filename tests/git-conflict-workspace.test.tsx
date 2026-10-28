@@ -427,7 +427,15 @@ it("keeps exact stable topic owner draft on freshness revision change without re
   expect(
     await screen.findByText(/Черновик относится к предыдущему состоянию/),
   ).toBeTruthy();
-  expect(pane("Результат разрешения")!.state.doc.toString()).toContain("local");
+  // Model the observed CI boundary: the warning can precede editor readiness.
+  const findEditor = vi.spyOn(EditorView, "findFromDOM").mockReturnValueOnce(null);
+  try {
+    await waitFor(() =>
+      expect(pane("Результат разрешения")?.state.doc.toString()).toContain("local"),
+    );
+  } finally {
+    findEditor.mockRestore();
+  }
   fireEvent.click(
     screen.getByRole("checkbox", { name: "Результат проверен вручную" }),
   );
