@@ -1,0 +1,50 @@
+name: Native CI diagnostics (manual, not a release gate)
+on:
+  workflow_dispatch: null
+permissions:
+  contents: read
+concurrency:
+  group: native-ci-diagnostics
+  cancel-in-progress: false
+jobs:
+  measure:
+    name: Native scenarios — ${{ matrix.workers }} workers
+    runs-on: macos-15
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        workers: [1, 2, 3]
+    env:
+      GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
+      GOGA_TEST_PROFILE: slow-git
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+          cache: npm
+      - run: npm ci
+      - name: Record native runner resources
+        run: |
+          node -e 'const os=require("node:os"); if(process.platform!=="darwin"||process.arch!=="arm64")process.exit(1); console.log(JSON.stringify({platform:process.platform,arch:process.arch,cpus:os.availableParallelism(),memory:os.totalmem(),load:os.loadavg(),node:process.version}))'
+          git --version
+      - name: Measure the same four scenarios without retries
+        id: tests
+        run: |
+          mkdir -p work
+          /usr/bin/time -p node node_modules/vitest/vitest.mjs run tests/git-native-commit.test.ts tests/git-native-sequence-host.test.ts tests/git-rebase-conflict-save.test.ts tests/terminal-prompt.test.ts --maxWorkers=${{ matrix.workers }} --testTimeout=15000 --testNamePattern='retains independent staged bytes and flags in recovery after lost settlement|native Host/API clone rebase/merge continue after restart|saves one conflict during a native multi-commit merge rebase without advancing the operation|real interactive zsh distinguishes its prompt, builtin read and exec without relying on child jobs' --reporter=verbose --reporter=json --outputFile=work/vitest-diagnostic.json
+      - name: Require exactly the four diagnostic scenarios
+        if: always()
+        run: |
+          node --input-type=module -e 'import fs from "node:fs";const j=JSON.parse(fs.readFileSync("work/vitest-diagnostic.json"));console.log(JSON.stringify({passed:j.numPassedTests,failed:j.numFailedTests,results:j.testResults.flatMap(r=>r.assertionResults.filter(t=>t.status!=="pending").map(t=>({name:t.fullName,status:t.status,duration:t.duration})))}));if(j.numPassedTests !== 4 || j.numFailedTests !== 0) process.exit(1)'
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: native-diagnostic-${{ matrix.workers }}-workers
+          path: work/vitest-diagnostic.json
+          if-no-files-found: error

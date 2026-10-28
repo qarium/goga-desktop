@@ -50,7 +50,7 @@ test("CI and release use pinned actions, read-only builds and explicit native-te
                 ? [
                     "npm ci",
                     "--testTimeout=15000",
-                    name === "ci" ? "--maxWorkers=4" : "--maxWorkers=1",
+                    name === "ci" ? "--maxWorkers=3" : "--maxWorkers=1",
                     "scripts/test-summary.mjs",
                   ]
                 : ["npm ci", "npm run build"];
@@ -188,7 +188,7 @@ test("domain matrix covers eight areas and complete numbered subgroups", async (
     ),
     {
       "git-workspace": 1,
-      "git-conflicts": 3,
+      "git-conflicts": 4,
       "git-safety": 1,
       topics: 1,
       terminal: 1,
@@ -223,7 +223,7 @@ test("domain matrix covers eight areas and complete numbered subgroups", async (
     assert.notEqual(job["continue-on-error"], true);
     const commands = job.steps.map((s) => s.run ?? "").join("\n");
     for (const expected of [
-      name === "ci" ? "--maxWorkers=4" : "--maxWorkers=1",
+      name === "ci" ? "--maxWorkers=3" : "--maxWorkers=1",
       "--testTimeout=15000",
       "--reporter=verbose",
       "--reporter=json",
@@ -361,14 +361,20 @@ test("Intel release tests are bounded viability smoke, not duplicate regression/
   assert.match(smoke.run, /--ui/);
 });
 
-test("five macOS slots start expensive work before short domains, without skipping them on a failed dependency", async () => {
+test("expensive domains start before short domains without skipping checks on a failed dependency", async () => {
   const w = await load("ci"),
     priority = w.jobs.tests,
     remaining = w.jobs["remaining-tests"];
   assert.equal(priority.needs, undefined);
   assert.deepEqual(
     priority.strategy.matrix.include.map((row) => row.domain),
-    ["git-conflicts", "git-conflicts", "git-conflicts", "topics"],
+    [
+      "git-conflicts",
+      "git-conflicts",
+      "git-conflicts",
+      "git-conflicts",
+      "topics",
+    ],
   );
   assert.equal(priority.env.GOGA_TEST_PROFILE, "slow-git");
   assert.equal(w.jobs["git-compatibility"].needs, undefined);

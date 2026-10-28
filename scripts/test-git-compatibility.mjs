@@ -40,7 +40,7 @@ export function runGitCompatibility({ run = spawnSync, shard } = {}) {
       "node_modules/vitest/vitest.mjs",
       "run",
       ...files,
-      "--maxWorkers=4",
+      "--maxWorkers=3",
       "--testTimeout=15000",
       "--reporter=verbose",
       "--reporter=json",

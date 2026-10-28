@@ -92,8 +92,20 @@ it.skipIf(process.platform !== "darwin")(
   "real interactive zsh distinguishes its prompt, builtin read and exec without relying on child jobs",
   async () => {
     const f = await fixture();
-    const child = spawn(
+    // Apple's launcher can initialize developer tools before running any Python.
+    // Resolve the real interpreter first, outside the shell-state deadline.
+    const python = execFileSync(
       "/usr/bin/python3",
+      ["-c", "import sys; print(sys.executable)"],
+      {
+        cwd: f.root,
+        env: { ...f.env, TMPDIR: f.dir },
+        encoding: "utf8",
+        timeout: 5000,
+      },
+    ).trim();
+    const child = spawn(
+      python,
       [
         "-u",
         "-c",

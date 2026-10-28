@@ -601,6 +601,7 @@ describe("native selected commit", () => {
           .sort(),
       ).toEqual(["other working\n", "selected working\n"]);
     }),
+    gitIntegrationBudget(15000),
   );
   it(
     "retains foreign index edits instead of overwriting them after commit",
@@ -668,6 +669,7 @@ describe("native selected commit", () => {
         0o700,
       );
     }),
+    gitIntegrationBudget(15000),
   );
   it(
     "preserves staged executable mode when core.filemode is disabled",
