@@ -1,4 +1,7 @@
-import { afterEach, expect, it } from "vitest";
+import { gitIntegrationBudget } from "./helpers/git-integration";
+import { installGitFixtureScope } from "./helpers/git-test-scope";
+const fixtureScope = installGitFixtureScope();
+import { expect, it } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { createOperationFixture } from "./helpers/git-operation-fixtures";
@@ -9,11 +12,7 @@ import { createNativeGitCapability } from "../src/host/git-native-context";
 import { NativeGitUpdateHandoff } from "../src/host/git-native-update-handoff";
 import { NativeGitSequence } from "../src/host/git-native-sequence";
 import { NativeGitMergeOperations } from "../src/host/git-native-merge";
-const cleanup: (() => Promise<unknown>)[] = [];
 const artifact = ".goga/history/2026/topic/task.md";
-afterEach(async () => {
-  for (const f of cleanup.splice(0).reverse()) await f();
-});
 async function setup(
   strategy: "merge" | "rebase",
   topicArtifact = false,
@@ -24,7 +23,7 @@ async function setup(
     commits: 1,
     conflictAt: [1],
   });
-  cleanup.push(f.dispose);
+  fixtureScope().cleanup(f.dispose);
   await f.git(["rebase", "--abort"]);
   await fs.rm(path.join(f.root, "untracked"));
   if (topicArtifact) {
@@ -46,8 +45,8 @@ async function setup(
   const original = (await f.git(["rev-parse", "HEAD"])).trim();
   const originalIndex = await f.git(["ls-files", "--stage", "-z"]);
   const env = { ...f.env, GIT_ATTR_NOSYSTEM: undefined };
-  const runner = new NodeRunner(10000, env);
-  cleanup.push(() => runner.dispose());
+  const runner = fixtureScope.runner(new NodeRunner(10000, env));
+  fixtureScope().cleanup(() => runner.dispose());
   const git = (a: string[], stdin?: string) =>
     runner.command("git", a, f.root, env, stdin);
   const reader = new GitWorkspaceReader({
@@ -126,41 +125,47 @@ async function setup(
 for (const strategy of ["merge", "rebase"] as const)
   for (const topicArtifact of [false, true])
     for (const action of ["continue", "abort"] as const)
-      it(`native Goga ${strategy} START → staged resolution → ${action}; topic-only artifact=${topicArtifact}`, async () => {
-        const f = await setup(strategy, topicArtifact);
-        await f.resolve();
-        const result = await f.execute((await f.prepare(action)).token);
-        expect(result).toMatchObject(
-          strategy === "rebase"
-            ? { outcome: "completed", recovery: "removed" }
-            : { status: "success" },
-        );
-        expect((await f.reader.snapshot()).operation).toBe("none");
-        expect(await f.conflicts()).toEqual([]);
-        expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe(
-          "topic\n",
-        );
-        if (action === "abort") {
-          expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(f.original);
-          expect(await f.git(["ls-files", "--stage", "-z"])).toBe(
-            f.originalIndex,
+      it(
+        `native Goga ${strategy} START → staged resolution → ${action}; topic-only artifact=${topicArtifact}`,
+        fixtureScope.run(async () => {
+          const f = await setup(strategy, topicArtifact);
+          await f.resolve();
+          const result = await f.execute((await f.prepare(action)).token);
+          expect(result).toMatchObject(
+            strategy === "rebase"
+              ? { outcome: "completed", recovery: "removed" }
+              : { status: "success" },
           );
-        }
-        if (topicArtifact) {
-          expect(await f.read(artifact)).toBe("# Topic-only task\n");
-          expect(await f.git(["show", `HEAD:${artifact}`])).toBe(
-            "# Topic-only task\n",
+          expect((await f.reader.snapshot()).operation).toBe("none");
+          expect(await f.conflicts()).toEqual([]);
+          expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe(
+            "topic\n",
           );
-        }
-        expect(await f.read("ignored")).toBe("preserve ignored\n");
-      });
+          if (action === "abort") {
+            expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(
+              f.original,
+            );
+            expect(await f.git(["ls-files", "--stage", "-z"])).toBe(
+              f.originalIndex,
+            );
+          }
+          if (topicArtifact) {
+            expect(await f.read(artifact)).toBe("# Topic-only task\n");
+            expect(await f.git(["show", `HEAD:${artifact}`])).toBe(
+              "# Topic-only task\n",
+            );
+          }
+          expect(await f.read("ignored")).toBe("preserve ignored\n");
+        }),
+        gitIntegrationBudget(15000),
+      );
 it.each([
   "staged-addition-edit",
   "unstaged-addition-edit",
   "foreign-staged-addition",
 ])(
   "native Goga rebase continue rejects %s without changing the operation",
-  async (mutation) => {
+  fixtureScope.run(async (mutation) => {
     const f = await setup("rebase", true);
     await f.resolve();
     const name = mutation === "foreign-staged-addition" ? "foreign" : artifact;
@@ -173,39 +178,54 @@ it.each([
     expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
     expect(await f.read(name)).toBe("unapproved content\n");
     expect((await f.reader.snapshot()).operation).toBe("rebase");
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
-it("native Goga rebase supports later-pick topic additions through a separately confirmed continuation", async () => {
-  const f = await setup("rebase", true, true);
-  await f.resolve();
-  expect(await f.execute((await f.prepare("continue")).token)).toMatchObject({
-    outcome: "completed",
-  });
-  expect(await f.read(artifact)).toBe("# Topic-only task\n");
-  expect(await f.git(["show", `HEAD:${artifact}`])).toBe("# Topic-only task\n");
-  expect((await f.reader.snapshot()).operation).toBe("none");
-});
-it("native Goga rebase preserves a supported later text edit to the materialized topic artifact", async () => {
-  const f = await setup("rebase", true, false, true);
-  await f.resolve();
-  expect(await f.execute((await f.prepare("continue")).token)).toMatchObject({
-    outcome: "completed",
-  });
-  expect(await f.read(artifact)).toBe("# Follow-up topic task\n");
-  expect(await f.git(["show", `HEAD:${artifact}`])).toBe(
-    "# Follow-up topic task\n",
-  );
-  expect((await f.reader.snapshot()).operation).toBe("none");
-});
-it("native Goga changed materialized topic addition invalidates continuation confirmation", async () => {
-  const f = await setup("rebase", true);
-  await f.resolve();
-  const preview = await f.prepare("continue");
-  await f.write(artifact, "late user edit\n");
-  const index = await fs.readFile(path.join(f.root, ".git/index")),
-    head = await f.git(["rev-parse", "HEAD"]);
-  await expect(f.execute(preview.token)).rejects.toThrow();
-  expect(await f.read(artifact)).toBe("late user edit\n");
-  expect(await fs.readFile(path.join(f.root, ".git/index"))).toEqual(index);
-  expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
-});
+it(
+  "native Goga rebase supports later-pick topic additions through a separately confirmed continuation",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase", true, true);
+    await f.resolve();
+    expect(await f.execute((await f.prepare("continue")).token)).toMatchObject({
+      outcome: "completed",
+    });
+    expect(await f.read(artifact)).toBe("# Topic-only task\n");
+    expect(await f.git(["show", `HEAD:${artifact}`])).toBe(
+      "# Topic-only task\n",
+    );
+    expect((await f.reader.snapshot()).operation).toBe("none");
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native Goga rebase preserves a supported later text edit to the materialized topic artifact",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase", true, false, true);
+    await f.resolve();
+    expect(await f.execute((await f.prepare("continue")).token)).toMatchObject({
+      outcome: "completed",
+    });
+    expect(await f.read(artifact)).toBe("# Follow-up topic task\n");
+    expect(await f.git(["show", `HEAD:${artifact}`])).toBe(
+      "# Follow-up topic task\n",
+    );
+    expect((await f.reader.snapshot()).operation).toBe("none");
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native Goga changed materialized topic addition invalidates continuation confirmation",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase", true);
+    await f.resolve();
+    const preview = await f.prepare("continue");
+    await f.write(artifact, "late user edit\n");
+    const index = await fs.readFile(path.join(f.root, ".git/index")),
+      head = await f.git(["rev-parse", "HEAD"]);
+    await expect(f.execute(preview.token)).rejects.toThrow();
+    expect(await f.read(artifact)).toBe("late user edit\n");
+    expect(await fs.readFile(path.join(f.root, ".git/index"))).toEqual(index);
+    expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
+  }),
+  gitIntegrationBudget(15000),
+);

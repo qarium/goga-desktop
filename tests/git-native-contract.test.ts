@@ -1,11 +1,14 @@
+import { gitIntegrationBudget } from "./helpers/git-integration";
+import { installGitFixtureScope } from "./helpers/git-test-scope";
+const fixtureScope = installGitFixtureScope();
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach,expect,it } from "vitest";
+import { expect, it } from "vitest";
 import { GitBranchActions } from "../src/host/git-branches";
 import { withTrustedGitIndex } from "../src/host/git-index-scope";
 import {
-createNativeGitCapability,
-nativeIntent,
+  createNativeGitCapability,
+  nativeIntent,
 } from "../src/host/git-native-context";
 import { NativeGitJournal } from "../src/host/git-native-journal";
 import { NativeGitMergeOperations } from "../src/host/git-native-merge";
@@ -13,28 +16,24 @@ import { NativeGitSequenceAPI } from "../src/host/git-native-sequence-api";
 import { NativeGitUpdateHandoff } from "../src/host/git-native-update-handoff";
 import type { GitCommitContext } from "../src/host/git-workspace-actions";
 import { GitWorkspaceReader } from "../src/host/git-workspace-reader";
-import { CommandExitError,NodeRunner } from "../src/host/process";
+import { CommandExitError, NodeRunner } from "../src/host/process";
 import {
-createOperationFixture,
-type OperationFixture,
+  createOperationFixture,
+  type OperationFixture,
 } from "./helpers/git-operation-fixtures";
 
-const cleanup: (() => Promise<unknown>)[] = [];
-afterEach(async () => {
-  for (const fn of cleanup.splice(0).reverse()) await fn();
-});
 async function fixture() {
   const f = await createOperationFixture("merge-rebase", {
     commits: 1,
     conflictAt: [1],
   });
-  cleanup.push(() => f.dispose());
+  fixtureScope().cleanup(() => f.dispose());
   return f;
 }
 function desktop(f: OperationFixture, strategy: "merge" | "rebase") {
   const env = { ...f.env, GIT_ATTR_NOSYSTEM: undefined };
-  const runner = new NodeRunner(10000, env);
-  cleanup.push(() => runner.dispose());
+  const runner = fixtureScope.runner(new NodeRunner(10000, env));
+  fixtureScope().cleanup(() => runner.dispose());
   const native = (args: string[], stdin?: string) =>
     runner.command("git", args, f.root, env, stdin);
   const git: GitCommitContext["git"] = (args, options) =>
@@ -76,7 +75,6 @@ function desktop(f: OperationFixture, strategy: "merge" | "rebase") {
     snapshot: () => reader.snapshot(),
     topicsConfig: async () =>
       `base_ref: main\nupdate:\n  strategy: ${strategy}\n`,
-
   };
   const handoff = new NativeGitUpdateHandoff({
     context: async (_scope, fn) => fn(context),
@@ -182,95 +180,121 @@ async function observable(f: OperationFixture) {
 
 for (const strategy of ["merge", "rebase"] as const) {
   for (const action of ["continue", "abort"] as const) {
-    it(`managed ${strategy} ${action} matches native Git and preserves unrelated bytes`, async () => {
-      const f = await fixture(),
-        control = await fixture();
-      for (const repo of [f, control]) {
-        await repo.git(["rebase", "--abort"]);
-        // START policy requires no untracked files. Reintroduce them after stop.
-        await fs.unlink(path.join(repo.root, "untracked"));
-      }
-      const app = desktop(f, strategy);
-      await app.start();
-      await expect(
-        control.git(
-          strategy === "merge"
-            ? ["merge", "--no-edit", control.onto]
-            : ["rebase", "--merge", control.onto],
-        ),
-      ).rejects.toMatchObject({ exitCode: 1 });
-      for (const repo of [f, control]) {
-        await repo.write("untracked", "preserve untracked\n");
-        await repo.resolve();
-      }
-      const preview = await app.prepare(action);
-      const result = await app.operation.execute(preview.token);
-      expect(result, result.log).toMatchObject({ status: "success" });
-      await control.git([strategy, `--${action}`]);
-      expect(await observable(f)).toEqual(await observable(control));
-      await expect(app.operation.execute(preview.token)).rejects.toThrow();
-    });
+    it(
+      `managed ${strategy} ${action} matches native Git and preserves unrelated bytes`,
+      fixtureScope.run(async () => {
+        const f = await fixture(),
+          control = await fixture();
+        for (const repo of [f, control]) {
+          await repo.git(["rebase", "--abort"]);
+          // START policy requires no untracked files. Reintroduce them after stop.
+          await fs.unlink(path.join(repo.root, "untracked"));
+        }
+        const app = desktop(f, strategy);
+        await app.start();
+        await expect(
+          control.git(
+            strategy === "merge"
+              ? ["merge", "--no-edit", control.onto]
+              : ["rebase", "--merge", control.onto],
+          ),
+        ).rejects.toMatchObject({ exitCode: 1 });
+        for (const repo of [f, control]) {
+          await repo.write("untracked", "preserve untracked\n");
+          await repo.resolve();
+        }
+        const preview = await app.prepare(action);
+        const result = await app.operation.execute(preview.token);
+        expect(result, result.log).toMatchObject({ status: "success" });
+        await control.git([strategy, `--${action}`]);
+        expect(await observable(f)).toEqual(await observable(control));
+        await expect(app.operation.execute(preview.token)).rejects.toThrow();
+      }),
+      gitIntegrationBudget(15000),
+    );
   }
 }
 
-it("rejects a changed physical owner before continuing a managed operation", async () => {
-  const f = await fixture();
-  await f.git(["rebase", "--abort"]);
-  await fs.unlink(path.join(f.root, "untracked"));
-  const app = desktop(f, "rebase");
-  await app.start();
-  await f.resolve();
-  const preview = await app.prepare("continue");
-  const head = await f.git(["rev-parse", "HEAD"]),
-    index = await f.git(["ls-files", "--stage", "-z"]);
-  app.changeOwner();
-  await expect(app.operation.execute(preview.token)).rejects.toThrow();
-  expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
-  expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
-});
+it(
+  "rejects a changed physical owner before continuing a managed operation",
+  fixtureScope.run(async () => {
+    const f = await fixture();
+    await f.git(["rebase", "--abort"]);
+    await fs.unlink(path.join(f.root, "untracked"));
+    const app = desktop(f, "rebase");
+    await app.start();
+    await f.resolve();
+    const preview = await app.prepare("continue");
+    const head = await f.git(["rev-parse", "HEAD"]),
+      index = await f.git(["ls-files", "--stage", "-z"]);
+    app.changeOwner();
+    await expect(app.operation.execute(preview.token)).rejects.toThrow();
+    expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
+    expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
+  }),
+  gitIntegrationBudget(15000),
+);
 
-it("does not grant continuation to an external operation just because its files look familiar", async () => {
-  const f = await fixture(),
-    app = desktop(f, "rebase");
-  await f.resolve();
-  const head = await f.git(["rev-parse", "HEAD"]),
-    index = await f.git(["ls-files", "--stage", "-z"]);
-  await expect(app.prepare("continue")).rejects.toThrow(
-    /происхождени|внешн|терминал/i,
-  );
-  expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
-  expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
-});
+it(
+  "does not grant continuation to an external operation just because its files look familiar",
+  fixtureScope.run(async () => {
+    const f = await fixture(),
+      app = desktop(f, "rebase");
+    await f.resolve();
+    const head = await f.git(["rev-parse", "HEAD"]),
+      index = await f.git(["ls-files", "--stage", "-z"]);
+    await expect(app.prepare("continue")).rejects.toThrow(
+      /происхождени|внешн|терминал/i,
+    );
+    expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
+    expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
+  }),
+  gitIntegrationBudget(15000),
+);
 
-it("native merge/abort preserves pre-existing unrelated unstaged, ignored and untracked files", async () => {
-  const f = await fixture();
-  await f.git(["rebase", "--abort"]);
-  await f.write("untouched", "local edit before merge\n");
-  await expect(f.git(["merge", "--no-edit", f.onto])).rejects.toMatchObject({
-    exitCode: 1,
-  });
-  await f.resolve();
-  await f.git(["merge", "--abort"]);
-  expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(f.original);
-  expect(await f.read("untouched")).toBe("local edit before merge\n");
-  expect(await f.read("ignored")).toBe("preserve ignored\n");
-  expect(await f.read("untracked")).toBe("preserve untracked\n");
-  expect(await f.git(["diff", "--cached"])).toBe("");
-});
+it(
+  "native merge/abort preserves pre-existing unrelated unstaged, ignored and untracked files",
+  fixtureScope.run(async () => {
+    const f = await fixture();
+    await f.git(["rebase", "--abort"]);
+    await f.write("untouched", "local edit before merge\n");
+    await expect(f.git(["merge", "--no-edit", f.onto])).rejects.toMatchObject({
+      exitCode: 1,
+    });
+    await f.resolve();
+    await f.git(["merge", "--abort"]);
+    expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(f.original);
+    expect(await f.read("untouched")).toBe("local edit before merge\n");
+    expect(await f.read("ignored")).toBe("preserve ignored\n");
+    expect(await f.read("untracked")).toBe("preserve untracked\n");
+    expect(await f.git(["diff", "--cached"])).toBe("");
+  }),
+  gitIntegrationBudget(15000),
+);
 
-it("does not continue external exec: disabling hooks alone does not make it safe", async () => {
-  const f = await fixture();
-  await f.git(["rebase", "--abort"]);
-  await fs.unlink(path.join(f.root, "untracked"));
-  const marker = path.join(f.home, "exec-was-run");
-  await expect(
-    f.git(["rebase", "--merge", "--exec", `printf test > '${marker}'`, "main"]),
-  ).rejects.toMatchObject({ exitCode: 1 });
-  await f.resolve();
-  const app = desktop(f, "rebase");
-  await expect(app.prepare("continue")).rejects.toThrow();
-  await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
-  // Positive control in the synthetic HOME: native continuation really executes it.
-  await f.git(["rebase", "--continue"]);
-  expect(await fs.readFile(marker, "utf8")).toBe("test");
-});
+it(
+  "does not continue external exec: disabling hooks alone does not make it safe",
+  fixtureScope.run(async () => {
+    const f = await fixture();
+    await f.git(["rebase", "--abort"]);
+    await fs.unlink(path.join(f.root, "untracked"));
+    const marker = path.join(f.home, "exec-was-run");
+    await expect(
+      f.git([
+        "rebase",
+        "--merge",
+        "--exec",
+        `printf test > '${marker}'`,
+        "main",
+      ]),
+    ).rejects.toMatchObject({ exitCode: 1 });
+    await f.resolve();
+    const app = desktop(f, "rebase");
+    await expect(app.prepare("continue")).rejects.toThrow();
+    await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+    // Positive control in the synthetic HOME: native continuation really executes it.
+    await f.git(["rebase", "--continue"]);
+    expect(await fs.readFile(marker, "utf8")).toBe("test");
+  }),
+  gitIntegrationBudget(15000),
+);

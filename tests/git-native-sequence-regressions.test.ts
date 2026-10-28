@@ -1,3 +1,5 @@
+import { nativeSequenceScope as fixtureScope } from "./helpers/native-sequence-regression";
+import { gitIntegrationBudget } from "./helpers/git-integration";
 import { expect, it } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -12,64 +14,78 @@ const scenarios = [
   "revert",
 ] as const;
 for (const scenario of scenarios) {
-  it(`${scenario}: abort at the second native stop restores the original pre-sequence baseline after restart`, async () => {
-    const f = await nativeSequenceFixture(scenario);
-    const index = await f.git(["ls-files", "--stage", "-z"]);
-    expect(await f.start()).toMatchObject({ outcome: "conflicts" });
-    await f.resolve();
-    expect(
-      await f.engine.execute((await f.prepare("continue")).token),
-    ).toMatchObject({ outcome: "conflicts" });
-    expect((await f.git(["rev-parse", "HEAD"])).trim()).not.toBe(f.original);
-    await f.resolve();
-    const resumed = f.restart(),
-      preview = await f.prepare("abort", resumed);
-    expect(preview.original).toBe(f.original);
-    expect(await resumed.execute(preview.token)).toMatchObject({
-      outcome: "completed",
-      recovery: "removed",
-    });
-    expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(f.original);
-    expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
-    expect(await f.git(["diff", "HEAD"])).toBe("");
-    expect((await f.git(["symbolic-ref", "--short", "HEAD"])).trim()).toBe(
-      f.branch,
-    );
-    expect(await f.read("untracked")).toBe("preserve untracked\n");
-    expect(await f.read("ignored")).toBe("preserve ignored\n");
-  });
+  it(
+    `${scenario}: abort at the second native stop restores the original pre-sequence baseline after restart`,
+    fixtureScope.run(async () => {
+      const f = await nativeSequenceFixture(scenario);
+      const index = await f.git(["ls-files", "--stage", "-z"]);
+      expect(await f.start()).toMatchObject({ outcome: "conflicts" });
+      await f.resolve();
+      expect(
+        await f.engine.execute((await f.prepare("continue")).token),
+      ).toMatchObject({ outcome: "conflicts" });
+      expect((await f.git(["rev-parse", "HEAD"])).trim()).not.toBe(f.original);
+      await f.resolve();
+      const resumed = f.restart(),
+        preview = await f.prepare("abort", resumed);
+      expect(preview.original).toBe(f.original);
+      expect(await resumed.execute(preview.token)).toMatchObject({
+        outcome: "completed",
+        recovery: "removed",
+      });
+      expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(f.original);
+      expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
+      expect(await f.git(["diff", "HEAD"])).toBe("");
+      expect((await f.git(["symbolic-ref", "--short", "HEAD"])).trim()).toBe(
+        f.branch,
+      );
+      expect(await f.read("untracked")).toBe("preserve untracked\n");
+      expect(await f.read("ignored")).toBe("preserve ignored\n");
+    }),
+    gitIntegrationBudget(15000),
+  );
 
-  it(`${scenario}: abort refuses a permission change disguised as a resolved conflict without discarding it`, async () => {
-    const f = await nativeSequenceFixture(scenario, 1, [1]);
-    expect(await f.start()).toMatchObject({ outcome: "conflicts" });
-    const [name] = await f.resolve();
-    const full = path.join(f.root, name);
-    const content = await f.read(name);
-    await fs.chmod(full, 0o640);
-    const head = await f.git(["rev-parse", "HEAD"]);
-    await expect(f.prepare("abort")).rejects.toThrow();
-    expect((await fs.stat(full)).mode & 0o777).toBe(0o640);
-    expect(await f.read(name)).toBe(content);
-    expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
-    expect(f.calls).toHaveLength(1);
-  });
+  it(
+    `${scenario}: abort refuses a permission change disguised as a resolved conflict without discarding it`,
+    fixtureScope.run(async () => {
+      const f = await nativeSequenceFixture(scenario, 1, [1]);
+      expect(await f.start()).toMatchObject({ outcome: "conflicts" });
+      const [name] = await f.resolve();
+      const full = path.join(f.root, name);
+      const content = await f.read(name);
+      await fs.chmod(full, 0o640);
+      const head = await f.git(["rev-parse", "HEAD"]);
+      await expect(f.prepare("abort")).rejects.toThrow();
+      expect((await fs.stat(full)).mode & 0o777).toBe(0o640);
+      expect(await f.read(name)).toBe(content);
+      expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
+      expect(f.calls).toHaveLength(1);
+    }),
+    gitIntegrationBudget(15000),
+  );
 }
 
 for (const scenario of ["cherry-pick", "revert"] as const)
-  it(`${scenario}: changed identity and signing policy revoke abort authority without invoking a signer`, async () => {
-    const f = await nativeSequenceFixture(scenario, 1, [1]);
-    expect(await f.start()).toMatchObject({ outcome: "conflicts" });
-    await f.git(["config", "--unset", "user.name"]);
-    await f.git(["config", "--unset", "user.email"]);
-    await f.git(["config", "commit.gpgsign", "true"]);
-    await f.git(["config", "gpg.program", "/usr/bin/false"]);
-    const head = await f.git(["rev-parse", "HEAD"]);
-    await expect(f.prepare("abort")).rejects.toThrow();
-    expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
-    expect((await f.git(["config", "commit.gpgsign"])).trim()).toBe("true");
-    expect(f.calls).toHaveLength(1);
-    expect(f.calls.filter((args) => args.includes("--abort"))).toHaveLength(0);
-  });
+  it(
+    `${scenario}: changed identity and signing policy revoke abort authority without invoking a signer`,
+    fixtureScope.run(async () => {
+      const f = await nativeSequenceFixture(scenario, 1, [1]);
+      expect(await f.start()).toMatchObject({ outcome: "conflicts" });
+      await f.git(["config", "--unset", "user.name"]);
+      await f.git(["config", "--unset", "user.email"]);
+      await f.git(["config", "commit.gpgsign", "true"]);
+      await f.git(["config", "gpg.program", "/usr/bin/false"]);
+      const head = await f.git(["rev-parse", "HEAD"]);
+      await expect(f.prepare("abort")).rejects.toThrow();
+      expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
+      expect((await f.git(["config", "commit.gpgsign"])).trim()).toBe("true");
+      expect(f.calls).toHaveLength(1);
+      expect(f.calls.filter((args) => args.includes("--abort"))).toHaveLength(
+        0,
+      );
+    }),
+    gitIntegrationBudget(15000),
+  );
 
 async function multiline(
   scenario: Scenario,
@@ -138,41 +154,53 @@ for (const scenario of scenarios)
         { nested: true, fallback: true },
       ]
     : [{ nested: false, fallback: false }])
-    it(`${scenario}: repeated multiline picks preserve resolution, author, message and current committer (nested=${variant.nested}, fallback=${variant.fallback})`, async () => {
-      const a = await multiline(scenario, variant.nested, variant.fallback);
-      const b = await multiline(scenario, variant.nested, variant.fallback);
-      expect(await a.f.start(a.start)).toMatchObject({ outcome: "conflicts" });
-      await expect(b.f.git(b.rawStart)).rejects.toMatchObject({ exitCode: 1 });
-      await a.resolve();
-      await b.resolve();
-      const preview = await a.f.prepare("continue");
-      expect(await a.f.engine.execute(preview.token)).toMatchObject({
-        outcome: "completed",
-        recovery: "removed",
-      });
-      await b.f.git([b.f.command, "--continue"]);
-      expect(await a.f.read(a.name)).toBe(await b.f.read(b.name));
-      expect(await a.f.git(["rev-parse", "HEAD^{tree}"])).toBe(
-        await b.f.git(["rev-parse", "HEAD^{tree}"]),
-      );
-      const fields = [
-        "log",
-        "-3",
-        "--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%B%x00",
-      ];
-      expect(await a.f.git(fields)).toBe(await b.f.git(fields));
-      expect(
-        (await a.f.git(["log", "-3", "--format=%cn <%ce>"])).trim().split("\n"),
-      ).toEqual(Array(3).fill("Current Committer <committer@example.invalid>"));
-      expect(await a.f.read(a.name)).toContain("resolved\n");
-      expect(await a.f.read(a.name)).toContain("preserved upstream tail\n");
-      expect(await a.f.read("untracked")).toBe("preserve untracked\n");
-      expect(await a.f.read("ignored")).toBe("preserve ignored\n");
-    });
+    it(
+      `${scenario}: repeated multiline picks preserve resolution, author, message and current committer (nested=${variant.nested}, fallback=${variant.fallback})`,
+      fixtureScope.run(async () => {
+        const a = await multiline(scenario, variant.nested, variant.fallback);
+        const b = await multiline(scenario, variant.nested, variant.fallback);
+        expect(await a.f.start(a.start)).toMatchObject({
+          outcome: "conflicts",
+        });
+        await expect(b.f.git(b.rawStart)).rejects.toMatchObject({
+          exitCode: 1,
+        });
+        await a.resolve();
+        await b.resolve();
+        const preview = await a.f.prepare("continue");
+        expect(await a.f.engine.execute(preview.token)).toMatchObject({
+          outcome: "completed",
+          recovery: "removed",
+        });
+        await b.f.git([b.f.command, "--continue"]);
+        expect(await a.f.read(a.name)).toBe(await b.f.read(b.name));
+        expect(await a.f.git(["rev-parse", "HEAD^{tree}"])).toBe(
+          await b.f.git(["rev-parse", "HEAD^{tree}"]),
+        );
+        const fields = [
+          "log",
+          "-3",
+          "--format=%an%x00%ae%x00%aI%x00%cn%x00%ce%x00%B%x00",
+        ];
+        expect(await a.f.git(fields)).toBe(await b.f.git(fields));
+        expect(
+          (await a.f.git(["log", "-3", "--format=%cn <%ce>"]))
+            .trim()
+            .split("\n"),
+        ).toEqual(
+          Array(3).fill("Current Committer <committer@example.invalid>"),
+        );
+        expect(await a.f.read(a.name)).toContain("resolved\n");
+        expect(await a.f.read(a.name)).toContain("preserved upstream tail\n");
+        expect(await a.f.read("untracked")).toBe("preserve untracked\n");
+        expect(await a.f.read("ignored")).toBe("preserve ignored\n");
+      }),
+      gitIntegrationBudget(15000),
+    );
 
 it.each(["foreign-marker", "unrelated-ref", "policy"] as const)(
   "real native completion followed by %s drift is uncertain and is never replayed",
-  async (change) => {
+  fixtureScope.run(async (change) => {
     const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
     expect(await f.start()).toMatchObject({ outcome: "conflicts" });
     await f.resolve();
@@ -208,26 +236,33 @@ it.each(["foreign-marker", "unrelated-ref", "policy"] as const)(
     expect(f.calls.filter((args) => args.includes("--continue"))).toHaveLength(
       1,
     );
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
-it("real next conflict with a foreign operation marker is not granted fresh native authority", async () => {
-  const f = await nativeSequenceFixture("apply-rebase");
-  expect(await f.start()).toMatchObject({ outcome: "conflicts" });
-  await f.resolve();
-  const p = await f.prepare("continue");
-  f.afterNative(() => f.write(".git/CHERRY_PICK_HEAD", f.sources[0] + "\n"));
-  expect(await f.engine.execute(p.token)).toMatchObject({
-    outcome: "uncertain",
-    recovery: "retained",
-  });
-  expect(await f.read(".git/CHERRY_PICK_HEAD")).toBe(f.sources[0] + "\n");
-  await expect(f.prepare("continue")).rejects.toThrow();
-  expect(f.calls.filter((args) => args.includes("--continue"))).toHaveLength(1);
-});
+it(
+  "real next conflict with a foreign operation marker is not granted fresh native authority",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("apply-rebase");
+    expect(await f.start()).toMatchObject({ outcome: "conflicts" });
+    await f.resolve();
+    const p = await f.prepare("continue");
+    f.afterNative(() => f.write(".git/CHERRY_PICK_HEAD", f.sources[0] + "\n"));
+    expect(await f.engine.execute(p.token)).toMatchObject({
+      outcome: "uncertain",
+      recovery: "retained",
+    });
+    expect(await f.read(".git/CHERRY_PICK_HEAD")).toBe(f.sources[0] + "\n");
+    await expect(f.prepare("continue")).rejects.toThrow();
+    expect(f.calls.filter((args) => args.includes("--continue"))).toHaveLength(
+      1,
+    );
+  }),
+  gitIntegrationBudget(15000),
+);
 
 it.each(["0002", "author-script", "patch", "next", "last"])(
   "managed apply rejects changed opaque %s after confirmation without a native attempt",
-  async (control) => {
+  fixtureScope.run(async (control) => {
     const f = await nativeSequenceFixture("apply-rebase");
     expect(await f.start()).toMatchObject({ outcome: "conflicts" });
     await f.resolve();
@@ -241,7 +276,8 @@ it.each(["0002", "author-script", "patch", "next", "last"])(
     await expect(f.engine.execute(p.token)).rejects.toThrow();
     expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
     expect(f.calls).toHaveLength(1);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 for (const scenario of ["cherry-pick", "revert"] as const)
   it.each([
@@ -252,7 +288,7 @@ for (const scenario of ["cherry-pick", "revert"] as const)
     "MERGE_MSG",
   ])(
     `${scenario}: changed opaque %s revokes managed continuation`,
-    async (control) => {
+    fixtureScope.run(async (control) => {
       const f = await nativeSequenceFixture(scenario);
       expect(await f.start()).toMatchObject({ outcome: "conflicts" });
       await f.resolve();
@@ -265,18 +301,23 @@ for (const scenario of ["cherry-pick", "revert"] as const)
       await expect(f.engine.execute(p.token)).rejects.toThrow();
       expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
       expect(f.calls).toHaveLength(1);
-    },
+    }),
+    gitIntegrationBudget(15000),
   );
 for (const scenario of scenarios)
-  it(`${scenario}: continue refuses both unresolved and unstaged manual resolutions`, async () => {
-    const f = await nativeSequenceFixture(scenario, 1, [1]);
-    expect(await f.start()).toMatchObject({ outcome: "conflicts" });
-    await expect(f.prepare("continue")).rejects.toThrow();
-    for (const name of await f.conflicts())
-      await f.write(name, "manual unstaged\n");
-    await expect(f.prepare("continue")).rejects.toThrow();
-    expect(f.calls).toHaveLength(1);
-  });
+  it(
+    `${scenario}: continue refuses both unresolved and unstaged manual resolutions`,
+    fixtureScope.run(async () => {
+      const f = await nativeSequenceFixture(scenario, 1, [1]);
+      expect(await f.start()).toMatchObject({ outcome: "conflicts" });
+      await expect(f.prepare("continue")).rejects.toThrow();
+      for (const name of await f.conflicts())
+        await f.write(name, "manual unstaged\n");
+      await expect(f.prepare("continue")).rejects.toThrow();
+      expect(f.calls).toHaveLength(1);
+    }),
+    gitIntegrationBudget(15000),
+  );
 for (const scenario of ["merge-rebase", "apply-rebase"] as const)
   it.each([
     { stops: [1] },
@@ -285,7 +326,7 @@ for (const scenario of ["merge-rebase", "apply-rebase"] as const)
     { stops: [4] },
   ])(
     `${scenario}: four native picks match control at every stop $stops`,
-    async ({ stops }) => {
+    fixtureScope.run(async ({ stops }) => {
       const f = await nativeSequenceFixture(scenario, 4, stops),
         control = await nativeSequenceFixture(scenario, 4, stops);
       expect(await f.start()).toMatchObject({ outcome: "conflicts" });
@@ -361,7 +402,8 @@ for (const scenario of ["merge-rebase", "apply-rebase"] as const)
         (await f.git(["rev-list", "--count", `${f.onto}..HEAD`])).trim(),
       ).toBe("4");
       expect((await f.reader.snapshot()).operation).toBe("none");
-    },
+    }),
+    gitIntegrationBudget(30000),
   );
 
 const literalNames = [
@@ -406,32 +448,38 @@ async function literalFixture(scenario: Scenario) {
 }
 for (const scenario of scenarios)
   for (const action of ["continue", "abort"] as const)
-    it(`${scenario}: ${action} preserves literal, prototype, numeric, Unicode and nested paths`, async () => {
-      const { f, start, original } = await literalFixture(scenario);
-      const originalIndex = await f.git(["ls-files", "--stage", "-z"]);
-      expect(await f.start(start)).toMatchObject({ outcome: "conflicts" });
-      expect((await f.conflicts()).sort()).toEqual([...literalNames].sort());
-      for (const name of literalNames)
-        await f.write(name, "resolved literal\n");
-      await f.git(["add", "--", ...literalNames]);
-      expect(
-        await f.engine.execute((await f.prepare(action)).token),
-      ).toMatchObject({ outcome: "completed", recovery: "removed" });
-      const expected =
-        action === "continue"
-          ? "resolved literal\n"
-          : scenario.endsWith("rebase")
-            ? "incoming literal\n"
-            : "local literal\n";
-      for (const name of literalNames)
-        expect(await f.read(name)).toBe(expected);
-      if (action === "abort") {
-        expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(original);
-        expect(await f.git(["ls-files", "--stage", "-z"])).toBe(originalIndex);
-      }
-      expect(await f.read("untracked")).toBe("preserve untracked\n");
-      expect(await f.read("ignored")).toBe("preserve ignored\n");
-    });
+    it(
+      `${scenario}: ${action} preserves literal, prototype, numeric, Unicode and nested paths`,
+      fixtureScope.run(async () => {
+        const { f, start, original } = await literalFixture(scenario);
+        const originalIndex = await f.git(["ls-files", "--stage", "-z"]);
+        expect(await f.start(start)).toMatchObject({ outcome: "conflicts" });
+        expect((await f.conflicts()).sort()).toEqual([...literalNames].sort());
+        for (const name of literalNames)
+          await f.write(name, "resolved literal\n");
+        await f.git(["add", "--", ...literalNames]);
+        expect(
+          await f.engine.execute((await f.prepare(action)).token),
+        ).toMatchObject({ outcome: "completed", recovery: "removed" });
+        const expected =
+          action === "continue"
+            ? "resolved literal\n"
+            : scenario.endsWith("rebase")
+              ? "incoming literal\n"
+              : "local literal\n";
+        for (const name of literalNames)
+          expect(await f.read(name)).toBe(expected);
+        if (action === "abort") {
+          expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(original);
+          expect(await f.git(["ls-files", "--stage", "-z"])).toBe(
+            originalIndex,
+          );
+        }
+        expect(await f.read("untracked")).toBe("preserve untracked\n");
+        expect(await f.read("ignored")).toBe("preserve ignored\n");
+      }),
+      gitIntegrationBudget(15000),
+    );
 
 it.each([
   ["apply.whitespace", "fix"],
@@ -439,7 +487,7 @@ it.each([
   ["am.threeway", "true"],
 ])(
   "initial apply policy %s is forwarded intact and matches real native continuation",
-  async (key, value) => {
+  fixtureScope.run(async (key, value) => {
     const a = await multiline("apply-rebase", true, true),
       b = await multiline("apply-rebase", true, true);
     await a.f.git(["config", key, value]);
@@ -461,83 +509,96 @@ it.each([
     expect(
       a.f.calls.every((args) => args.includes(`${key.toLowerCase()}=${value}`)),
     ).toBe(true);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
-it("initial inherited apply policy is captured rather than silently dropped by native child isolation", async () => {
-  const a = await multiline("apply-rebase", false, true),
-    b = await multiline("apply-rebase", false, true);
-  const config = path.join(a.f.home, "global-config");
-  await fs.writeFile(config, "[apply]\nwhitespace = fix\n");
-  a.f.env.GIT_CONFIG_GLOBAL = config;
-  await b.f.git(["config", "apply.whitespace", "fix"]);
-  expect(await a.f.start(a.start)).toMatchObject({ outcome: "conflicts" });
-  await expect(b.f.git(b.rawStart)).rejects.toMatchObject({ exitCode: 1 });
-  await a.resolve();
-  await b.resolve();
-  expect(
-    await a.f.engine.execute((await a.f.prepare("continue")).token),
-  ).toMatchObject({ outcome: "completed" });
-  await b.f.git(["rebase", "--continue"]);
-  expect(await a.f.git(["rev-parse", "HEAD^{tree}"])).toBe(
-    await b.f.git(["rev-parse", "HEAD^{tree}"]),
-  );
-  expect(a.f.calls.every((args) => args.includes("apply.whitespace=fix"))).toBe(
-    true,
-  );
-});
-it("initial revert.reference preserves the configured native message rather than replacing it", async () => {
-  const a = await multiline("revert", false, false),
-    b = await multiline("revert", false, false);
-  await a.f.git(["config", "revert.reference", "true"]);
-  await b.f.git(["config", "revert.reference", "true"]);
-  expect(await a.f.start(a.start)).toMatchObject({ outcome: "conflicts" });
-  await expect(b.f.git(b.rawStart)).rejects.toMatchObject({ exitCode: 1 });
-  await a.resolve();
-  await b.resolve();
-  expect(
-    await a.f.engine.execute((await a.f.prepare("continue")).token),
-  ).toMatchObject({ outcome: "completed" });
-  await b.f.git(["revert", "--continue"]);
-  expect(await a.f.git(["log", "-3", "--format=%B"])).toBe(
-    await b.f.git(["log", "-3", "--format=%B"]),
-  );
-  expect(await a.f.git(["rev-parse", "HEAD^{tree}"])).toBe(
-    await b.f.git(["rev-parse", "HEAD^{tree}"]),
-  );
-  expect(
-    a.f.calls.every((args) => args.includes("revert.reference=true")),
-  ).toBe(true);
-});
-it("a real external git am never becomes a Desktop rebase continuation", async () => {
-  const f = await nativeSequenceFixture("apply-rebase", 1, [1]);
-  const patch = await f.git([
-    "format-patch",
-    "-k",
-    "--stdout",
-    "--full-index",
-    "-1",
-    f.sources[0],
-  ]);
-  const mailbox = path.join(f.home, "incoming.patch");
-  await fs.writeFile(mailbox, patch);
-  await f.git(["checkout", "main"]);
-  await expect(f.git(["am", "--3way", mailbox])).rejects.toThrow();
-  expect((await f.conflicts()).length).toBeGreaterThan(0);
-  expect(
-    (await fs.stat(path.join(f.root, ".git/rebase-apply/applying"))).isFile(),
-  ).toBe(true);
-  const head = await f.git(["rev-parse", "HEAD"]),
-    index = await f.git(["ls-files", "--stage", "-z"]);
-  for (const action of ["continue", "abort"] as const)
-    await expect(f.prepare(action)).rejects.toThrow();
-  expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
-  expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
-  expect(f.calls).toHaveLength(0);
-});
+it(
+  "initial inherited apply policy is captured rather than silently dropped by native child isolation",
+  fixtureScope.run(async () => {
+    const a = await multiline("apply-rebase", false, true),
+      b = await multiline("apply-rebase", false, true);
+    const config = path.join(a.f.home, "global-config");
+    await fs.writeFile(config, "[apply]\nwhitespace = fix\n");
+    a.f.env.GIT_CONFIG_GLOBAL = config;
+    await b.f.git(["config", "apply.whitespace", "fix"]);
+    expect(await a.f.start(a.start)).toMatchObject({ outcome: "conflicts" });
+    await expect(b.f.git(b.rawStart)).rejects.toMatchObject({ exitCode: 1 });
+    await a.resolve();
+    await b.resolve();
+    expect(
+      await a.f.engine.execute((await a.f.prepare("continue")).token),
+    ).toMatchObject({ outcome: "completed" });
+    await b.f.git(["rebase", "--continue"]);
+    expect(await a.f.git(["rev-parse", "HEAD^{tree}"])).toBe(
+      await b.f.git(["rev-parse", "HEAD^{tree}"]),
+    );
+    expect(
+      a.f.calls.every((args) => args.includes("apply.whitespace=fix")),
+    ).toBe(true);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "initial revert.reference preserves the configured native message rather than replacing it",
+  fixtureScope.run(async () => {
+    const a = await multiline("revert", false, false),
+      b = await multiline("revert", false, false);
+    await a.f.git(["config", "revert.reference", "true"]);
+    await b.f.git(["config", "revert.reference", "true"]);
+    expect(await a.f.start(a.start)).toMatchObject({ outcome: "conflicts" });
+    await expect(b.f.git(b.rawStart)).rejects.toMatchObject({ exitCode: 1 });
+    await a.resolve();
+    await b.resolve();
+    expect(
+      await a.f.engine.execute((await a.f.prepare("continue")).token),
+    ).toMatchObject({ outcome: "completed" });
+    await b.f.git(["revert", "--continue"]);
+    expect(await a.f.git(["log", "-3", "--format=%B"])).toBe(
+      await b.f.git(["log", "-3", "--format=%B"]),
+    );
+    expect(await a.f.git(["rev-parse", "HEAD^{tree}"])).toBe(
+      await b.f.git(["rev-parse", "HEAD^{tree}"]),
+    );
+    expect(
+      a.f.calls.every((args) => args.includes("revert.reference=true")),
+    ).toBe(true);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "a real external git am never becomes a Desktop rebase continuation",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("apply-rebase", 1, [1]);
+    const patch = await f.git([
+      "format-patch",
+      "-k",
+      "--stdout",
+      "--full-index",
+      "-1",
+      f.sources[0],
+    ]);
+    const mailbox = path.join(f.home, "incoming.patch");
+    await fs.writeFile(mailbox, patch);
+    await f.git(["checkout", "main"]);
+    await expect(f.git(["am", "--3way", mailbox])).rejects.toThrow();
+    expect((await f.conflicts()).length).toBeGreaterThan(0);
+    expect(
+      (await fs.stat(path.join(f.root, ".git/rebase-apply/applying"))).isFile(),
+    ).toBe(true);
+    const head = await f.git(["rev-parse", "HEAD"]),
+      index = await f.git(["ls-files", "--stage", "-z"]);
+    for (const action of ["continue", "abort"] as const)
+      await expect(f.prepare(action)).rejects.toThrow();
+    expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
+    expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
+    expect(f.calls).toHaveLength(0);
+  }),
+  gitIntegrationBudget(15000),
+);
 for (const scenario of ["cherry-pick", "revert"] as const)
   it.each([1, 3])(
     `${scenario}: external --no-commit with %i source commits has no Desktop authority`,
-    async (count) => {
+    fixtureScope.run(async (count) => {
       const f = await nativeSequenceFixture(scenario, count, [1]);
       await expect(
         f.git([scenario, "--no-commit", ...f.sources]),
@@ -549,54 +610,59 @@ for (const scenario of ["cherry-pick", "revert"] as const)
       expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
       expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
       expect(f.calls).toHaveLength(0);
-    },
+    }),
+    gitIntegrationBudget(15000),
   );
-it("empty remaining apply follows native Git tree and commit count, preserves drop diagnostics and never invokes skip", async () => {
-  const a = await multiline("apply-rebase", false, false),
-    b = await multiline("apply-rebase", false, false);
-  expect(await a.f.start(a.start)).toMatchObject({ outcome: "conflicts" });
-  await expect(b.f.git(b.rawStart)).rejects.toMatchObject({ exitCode: 1 });
-  await a.resolve();
-  await b.resolve();
-  for (const x of [a, b]) {
-    const lines = (await x.f.read(x.name)).split("\n");
-    lines[70] = "incoming 70";
-    lines[140] = "incoming 140";
-    await x.f.write(x.name, lines.join("\n"));
-    await x.f.git(["add", "--", x.name]);
-  }
-  const result = await a.f.engine.execute(
-    (await a.f.prepare("continue")).token,
-  );
-  const nativeLog = await b.f.git(["rebase", "--continue"]);
-  expect(result).toMatchObject({ outcome: "completed", recovery: "removed" });
-  expect(await a.f.git(["rev-parse", "HEAD^{tree}"])).toBe(
-    await b.f.git(["rev-parse", "HEAD^{tree}"]),
-  );
-  expect(
-    await a.f.git([
-      "rev-list",
-      "--count",
-      `${"source" in a.start ? a.start.source : ""}..HEAD`,
-    ]),
-  ).toBe(
-    await b.f.git([
-      "rev-list",
-      "--count",
-      `${"source" in b.start ? b.start.source : ""}..HEAD`,
-    ]),
-  );
-  expect(nativeLog).toMatch(/already applied|No changes|Patch is empty/i);
-  expect(result.log).toMatch(/already applied|No changes|Patch is empty/i);
-  expect(a.f.calls.some((args) => args.includes("--skip"))).toBe(false);
-  expect(a.f.calls.filter((args) => args.includes("--continue"))).toHaveLength(
-    1,
-  );
-});
+it(
+  "empty remaining apply follows native Git tree and commit count, preserves drop diagnostics and never invokes skip",
+  fixtureScope.run(async () => {
+    const a = await multiline("apply-rebase", false, false),
+      b = await multiline("apply-rebase", false, false);
+    expect(await a.f.start(a.start)).toMatchObject({ outcome: "conflicts" });
+    await expect(b.f.git(b.rawStart)).rejects.toMatchObject({ exitCode: 1 });
+    await a.resolve();
+    await b.resolve();
+    for (const x of [a, b]) {
+      const lines = (await x.f.read(x.name)).split("\n");
+      lines[70] = "incoming 70";
+      lines[140] = "incoming 140";
+      await x.f.write(x.name, lines.join("\n"));
+      await x.f.git(["add", "--", x.name]);
+    }
+    const result = await a.f.engine.execute(
+      (await a.f.prepare("continue")).token,
+    );
+    const nativeLog = await b.f.git(["rebase", "--continue"]);
+    expect(result).toMatchObject({ outcome: "completed", recovery: "removed" });
+    expect(await a.f.git(["rev-parse", "HEAD^{tree}"])).toBe(
+      await b.f.git(["rev-parse", "HEAD^{tree}"]),
+    );
+    expect(
+      await a.f.git([
+        "rev-list",
+        "--count",
+        `${"source" in a.start ? a.start.source : ""}..HEAD`,
+      ]),
+    ).toBe(
+      await b.f.git([
+        "rev-list",
+        "--count",
+        `${"source" in b.start ? b.start.source : ""}..HEAD`,
+      ]),
+    );
+    expect(nativeLog).toMatch(/already applied|No changes|Patch is empty/i);
+    expect(result.log).toMatch(/already applied|No changes|Patch is empty/i);
+    expect(a.f.calls.some((args) => args.includes("--skip"))).toBe(false);
+    expect(
+      a.f.calls.filter((args) => args.includes("--continue")),
+    ).toHaveLength(1);
+  }),
+  gitIntegrationBudget(15000),
+);
 
 it.each(["add", "delete", "mode", "binary"] as const)(
   "native rebase supports future %s through real Git instead of a private replay restriction",
-  async (kind) => {
+  fixtureScope.run(async (kind) => {
     async function seed() {
       const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
       if (kind === "add") {
@@ -638,43 +704,48 @@ it.each(["add", "delete", "mode", "binary"] as const)(
     );
     expect(await f.read("untracked")).toBe("preserve untracked\n");
     expect(await f.read("ignored")).toBe("preserve ignored\n");
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
-it("native abort restores an original nested hierarchy without overwriting unrelated data", async () => {
-  const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
-  await fs.mkdir(path.join(f.root, "original/nested"), { recursive: true });
-  await f.write("original/nested/value", "original content\n");
-  await f.git(["add", "original/nested/value"]);
-  await f.git(["commit", "-m", "common nested base"]);
-  const branch = (await f.git(["symbolic-ref", "--short", "HEAD"])).trim();
-  await f.git(["checkout", "-b", "nested-source"]);
-  await f.write("file-1", "source conflict\n");
-  await f.git(["commit", "-am", "source"]);
-  const original = (await f.git(["rev-parse", "HEAD"])).trim();
-  await f.git(["checkout", branch]);
-  await f.git(["rm", "original/nested/value"]);
-  await f.write("file-1", "upstream conflict\n");
-  await f.git(["commit", "-am", "upstream removes nested"]);
-  const source = (await f.git(["rev-parse", "HEAD"])).trim();
-  await f.git(["checkout", "nested-source"]);
-  expect(
-    await f.start({ operation: "rebase", source, backend: "merge" }),
-  ).toMatchObject({ outcome: "conflicts" });
-  await expect(
-    fs.stat(path.join(f.root, "original/nested/value")),
-  ).rejects.toMatchObject({ code: "ENOENT" });
-  expect(
-    await f.engine.execute((await f.prepare("abort")).token),
-  ).toMatchObject({ outcome: "completed", recovery: "removed" });
-  expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(original);
-  expect(await f.read("original/nested/value")).toBe("original content\n");
-  expect(await f.read("untracked")).toBe("preserve untracked\n");
-  expect(await f.read("ignored")).toBe("preserve ignored\n");
-});
+it(
+  "native abort restores an original nested hierarchy without overwriting unrelated data",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
+    await fs.mkdir(path.join(f.root, "original/nested"), { recursive: true });
+    await f.write("original/nested/value", "original content\n");
+    await f.git(["add", "original/nested/value"]);
+    await f.git(["commit", "-m", "common nested base"]);
+    const branch = (await f.git(["symbolic-ref", "--short", "HEAD"])).trim();
+    await f.git(["checkout", "-b", "nested-source"]);
+    await f.write("file-1", "source conflict\n");
+    await f.git(["commit", "-am", "source"]);
+    const original = (await f.git(["rev-parse", "HEAD"])).trim();
+    await f.git(["checkout", branch]);
+    await f.git(["rm", "original/nested/value"]);
+    await f.write("file-1", "upstream conflict\n");
+    await f.git(["commit", "-am", "upstream removes nested"]);
+    const source = (await f.git(["rev-parse", "HEAD"])).trim();
+    await f.git(["checkout", "nested-source"]);
+    expect(
+      await f.start({ operation: "rebase", source, backend: "merge" }),
+    ).toMatchObject({ outcome: "conflicts" });
+    await expect(
+      fs.stat(path.join(f.root, "original/nested/value")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(
+      await f.engine.execute((await f.prepare("abort")).token),
+    ).toMatchObject({ outcome: "completed", recovery: "removed" });
+    expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(original);
+    expect(await f.read("original/nested/value")).toBe("original content\n");
+    expect(await f.read("untracked")).toBe("preserve untracked\n");
+    expect(await f.read("ignored")).toBe("preserve ignored\n");
+  }),
+  gitIntegrationBudget(15000),
+);
 
 it.each(["diff.external", "format.signaturefile"])(
   "initial apply %s does not execute a configured file and preserves native replay semantics",
-  async (key) => {
+  fixtureScope.run(async (key) => {
     const a = await multiline("apply-rebase", false, false),
       b = await multiline("apply-rebase", false, false);
     const marker = path.join(a.f.home, "helper-ran"),
@@ -704,55 +775,76 @@ it.each(["diff.external", "format.signaturefile"])(
     expect(
       a.f.calls.every((args) => args.includes(`${key}=${configured}`)),
     ).toBe(true);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
-it("a removed unrelated baseline path cannot be disguised as a managed conflict resolution", async () => {
-  const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
-  expect(await f.start()).toMatchObject({ outcome: "conflicts" });
-  await f.resolve();
-  await f.git(["rm", "untouched"]);
-  const head = await f.git(["rev-parse", "HEAD"]),
-    index = await f.git(["ls-files", "--stage", "-z"]);
-  for (const action of ["continue", "abort"] as const)
-    await expect(f.prepare(action)).rejects.toThrow();
-  expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
-  expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
-  await expect(fs.stat(path.join(f.root, "untouched"))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-  expect(f.calls).toHaveLength(1);
-});
-it("native abort preserves the old inclusive one MiB and twenty-four-parent restoration boundary", async () => {
-  const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
-  const parent = Array.from({ length: 24 }, (_, i) => `d${i}`).join("/"),
-    name = parent + "/file";
-  await fs.mkdir(path.join(f.root, parent), { recursive: true });
-  await f.write(name, "x".repeat(1024 * 1024));
-  await f.git(["add", "--", name]);
-  await f.git(["commit", "-m", "inclusive restoration boundary"]);
-  const original = (await f.git(["rev-parse", "HEAD"])).trim();
-  expect(await f.start()).toMatchObject({ outcome: "conflicts" });
-  await expect(fs.stat(path.join(f.root, name))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-  expect(
-    await f.engine.execute((await f.prepare("abort")).token),
-  ).toMatchObject({ outcome: "completed", recovery: "removed" });
-  expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(original);
-  expect(await f.read(name)).toBe("x".repeat(1024 * 1024));
-  expect(await f.read("untracked")).toBe("preserve untracked\n");
-});
+it(
+  "a removed unrelated baseline path cannot be disguised as a managed conflict resolution",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
+    expect(await f.start()).toMatchObject({ outcome: "conflicts" });
+    await f.resolve();
+    await f.git(["rm", "untouched"]);
+    const head = await f.git(["rev-parse", "HEAD"]),
+      index = await f.git(["ls-files", "--stage", "-z"]);
+    for (const action of ["continue", "abort"] as const)
+      await expect(f.prepare(action)).rejects.toThrow();
+    expect(await f.git(["rev-parse", "HEAD"])).toBe(head);
+    expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
+    await expect(fs.stat(path.join(f.root, "untouched"))).rejects.toMatchObject(
+      {
+        code: "ENOENT",
+      },
+    );
+    expect(f.calls).toHaveLength(1);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native abort preserves the old inclusive one MiB and twenty-four-parent restoration boundary",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
+    const parent = Array.from({ length: 24 }, (_, i) => `d${i}`).join("/"),
+      name = parent + "/file";
+    await fs.mkdir(path.join(f.root, parent), { recursive: true });
+    await f.write(name, "x".repeat(1024 * 1024));
+    await f.git(["add", "--", name]);
+    await f.git(["commit", "-m", "inclusive restoration boundary"]);
+    const original = (await f.git(["rev-parse", "HEAD"])).trim();
+    expect(await f.start()).toMatchObject({ outcome: "conflicts" });
+    await expect(fs.stat(path.join(f.root, name))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(
+      await f.engine.execute((await f.prepare("abort")).token),
+    ).toMatchObject({ outcome: "completed", recovery: "removed" });
+    expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(original);
+    expect(await f.read(name)).toBe("x".repeat(1024 * 1024));
+    expect(await f.read("untracked")).toBe("preserve untracked\n");
+  }),
+  gitIntegrationBudget(15000),
+);
 
-it("apply whitespace fix keeps native conflict bytes and Desktop continuation", async () => {
-  const f = await nativeSequenceFixture("apply-rebase", 1, [1]);
-  await f.write("file-1", "topic with spaces   \n");
-  await f.git(["commit", "-am", "trailing whitespace", "--amend", "--no-edit"]);
-  await f.git(["config", "apply.whitespace", "fix"]);
-  expect(await f.start()).toMatchObject({ outcome: "conflicts" });
-  const stage3 = await f.git(["show", ":3:file-1"]);
-  expect(stage3).toBe("topic with spaces\n");
-  await f.resolve();
-  expect(
-    await f.engine.execute((await f.prepare("continue")).token),
-  ).toMatchObject({ outcome: "completed" });
-});
+it(
+  "apply whitespace fix keeps native conflict bytes and Desktop continuation",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("apply-rebase", 1, [1]);
+    await f.write("file-1", "topic with spaces   \n");
+    await f.git([
+      "commit",
+      "-am",
+      "trailing whitespace",
+      "--amend",
+      "--no-edit",
+    ]);
+    await f.git(["config", "apply.whitespace", "fix"]);
+    expect(await f.start()).toMatchObject({ outcome: "conflicts" });
+    const stage3 = await f.git(["show", ":3:file-1"]);
+    expect(stage3).toBe("topic with spaces\n");
+    await f.resolve();
+    expect(
+      await f.engine.execute((await f.prepare("continue")).token),
+    ).toMatchObject({ outcome: "completed" });
+  }),
+  gitIntegrationBudget(15000),
+);

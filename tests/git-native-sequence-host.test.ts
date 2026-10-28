@@ -1,4 +1,7 @@
-import { afterEach, expect, it } from "vitest";
+import { gitIntegrationBudget } from "./helpers/git-integration";
+import { installGitFixtureScope } from "./helpers/git-test-scope";
+const fixtureScope = installGitFixtureScope();
+import { expect, it } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { verifiedNativeSequenceResult } from "../src/renderer/git-native-sequence-result";
@@ -9,10 +12,6 @@ import { worktreeContextRef } from "../src/shared/worktrees";
 import { NativeGitSequence } from "../src/host/git-native-sequence";
 import type { GitMergeContext } from "../src/host/git-merge-safety";
 import type { ScopeRef } from "../src/shared/context";
-const cleanup: (() => Promise<unknown>)[] = [];
-afterEach(async () => {
-  for (const f of cleanup.splice(0).reverse()) await f();
-});
 async function fixture(
   kind: "primary" | "clone",
   op: "rebase" | "cherry-pick" | "revert",
@@ -20,7 +19,7 @@ async function fixture(
   external = false,
 ) {
   const base = await fs.mkdtemp("/private/tmp/goga-native-sequence-host-");
-  cleanup.push(() => fs.rm(base, { recursive: true, force: true }));
+  fixtureScope().cleanup(() => fs.rm(base, { recursive: true, force: true }));
   const home = path.join(base, "home"),
     source = path.join(base, "source");
   await fs.mkdir(home);
@@ -36,13 +35,21 @@ async function fixture(
     GIT_COMMITTER_EMAIL: "fixture@example.invalid",
     GIT_ALLOW_PROTOCOL: "file",
   };
-  let runner = new NodeRunner(10000, env);
-  cleanup.push(() => runner.dispose());
+  let runner = fixtureScope.runner(new NodeRunner(10000, env));
+  fixtureScope().cleanup(() => runner.dispose());
   const gitAt = async (cwd: string, args: string[]) =>
     (
       await runner.command(
         "git",
-        ["-c", "core.hooksPath=/dev/null", ...args],
+        [
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "gc.auto=0",
+          "-c",
+          "maintenance.auto=false",
+          ...args,
+        ],
         cwd,
         env,
       )
@@ -58,8 +65,8 @@ async function fixture(
     runner,
     goga: "/nonexistent/disabled",
   };
-  let host = new HostService(options);
-  cleanup.push(() => host.dispose());
+  let host = fixtureScope().own(new HostService(options));
+  fixtureScope().cleanup(() => host.dispose());
   const project = await host.addProject(source);
   const record =
     kind === "clone"
@@ -146,8 +153,8 @@ async function fixture(
     },
     async restart() {
       await host.dispose();
-      runner = new NodeRunner(10000, env);
-      host = new HostService({ ...options, runner });
+      runner = fixtureScope.runner(new NodeRunner(10000, env));
+      host = fixtureScope().own(new HostService({ ...options, runner }));
     },
   };
 }
@@ -161,7 +168,7 @@ for (const kind of ["primary", "clone"] as const)
     for (const action of ["continue", "abort"] as const) {
       it(
         `native Host/API ${kind} ${op}/${backend} ${action} after restart`,
-        async () => {
+        fixtureScope.run(async () => {
           const started = Date.now();
           const mark = (phase: string) => {
             if (process.env.GOGA_N7_TIMINGS)
@@ -240,111 +247,134 @@ for (const kind of ["primary", "clone"] as const)
           // Includes a full read + preview + save + continuation roundtrip now.
           // Measured 13–14 s through saved, before continuation; individual process
           // deadlines remain unchanged. Only these two composed clone cases grow.
-        },
-        kind === "clone" && op === "rebase" && action === "continue"
-          ? 30000
-          : undefined,
+        }),
+        gitIntegrationBudget(45000),
       );
     }
 it.each(["primary", "clone"] as const)(
   "external %s rebase remains readable but has no continuation authority",
-  async (kind) => {
+  fixtureScope.run(async (kind) => {
     const f = await fixture(kind, "rebase", "merge", true);
     expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("rebase");
     await expect(f.prepare("abort")).rejects.toThrow(/журнал|происхождение/i);
-  },
+  }),
+  gitIntegrationBudget(45000),
 );
-it("clone owner drift revokes a prepared native operation without fallback", async () => {
-  const f = await fixture("clone", "rebase");
-  const p = await f.prepare("abort");
-  const settings = await f.host.readProjectSettings(f.project.id);
-  await f.host.saveProjectSettings(
-    f.project.id,
-    {
-      ...settings.value,
-      env: [{ key: "CHANGED", value: "yes", secret: false, runtime: false }],
-    },
-    settings.version,
-  );
-  await expect(f.execute(p.token)).rejects.toThrow();
-  expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("rebase");
-});
-it("opaque rebase controls affect authority, not physical clone display admission", async () => {
-  const f = await fixture("clone", "rebase");
-  await fs.writeFile(
-    path.join(f.root, ".git/rebase-merge/head-name"),
-    "opaque-future-format\n",
-  );
-  expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("rebase");
-  await expect(f.prepare("abort")).rejects.toThrow(/журнал|происхождение/i);
-});
-it("lifecycle cleanup failure preserves completed native facts but not a success claim", async () => {
-  const f = await fixture("clone", "rebase");
-  const p = await f.prepare("abort");
-  const { vi } = await import("vitest"),
-    locks = await import("../src/host/owned-lock");
-  const acquire = locks.acquireOwnedLock;
-  const spy = vi
-    .spyOn(locks, "acquireOwnedLock")
-    .mockImplementation(async (file, options) => {
-      const lock = await acquire(file, options);
-      return {
-        ...lock,
-        release: async () => {
-          await lock.release();
-          if (file.includes(".repository-"))
-            throw Error("fixture cleanup failure");
-        },
-      };
-    });
-  try {
-    const r = await f.execute(p.token);
-    expect(r).toMatchObject({
-      status: "uncertain",
-      native: { processSettled: true, afterHead: f.original },
-    });
-    expect(r.log).toContain("fixture cleanup failure");
-  } finally {
-    spy.mockRestore();
-  }
-});
-it("a coherent clone credential replacement cannot reuse native provenance", async () => {
-  const f = await fixture("clone", "rebase");
-  const p = await f.prepare("abort");
-  const manager = new CloneManager(f.home, f.runner);
-  const ownerFile = path.join(
-    manager.store.root,
-    `.owner-${f.record!.contextId}.json`,
-  );
-  const owner = JSON.parse(await fs.readFile(ownerFile, "utf8"));
-  const { randomUUID } = await import("node:crypto");
-  const nonce = randomUUID();
-  await fs.writeFile(ownerFile, JSON.stringify({ ...owner, nonce }));
-  await fs.writeFile(
-    path.join(f.root, ".git/desktop-owner.json"),
-    JSON.stringify({ contextId: f.record!.contextId, nonce }),
-  );
-  await expect(f.execute(p.token)).rejects.toThrow();
-  expect(await f.git(["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
-});
-it("replacement of the physical source Git directory revokes clone provenance", async () => {
-  const f = await fixture("clone", "rebase");
-  const p = await f.prepare("abort");
-  const gd = path.join(f.source, ".git"),
-    saved = path.join(f.base, "saved-source-git");
-  await fs.rename(gd, saved);
-  await fs.cp(saved, gd, { recursive: true });
-  await expect(f.execute(p.token)).rejects.toThrow();
-  expect(await f.git(["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
-});
-it("ordinary clone resolution during a stopped native rebase does not rewrite its durable owner", async () => {
-  const f = await fixture("clone", "rebase");
-  const manager = new CloneManager(f.home, f.runner);
-  const before = await manager.store.read();
-  await expect(
-    manager.resolve(f.scope as Exclude<ScopeRef, string>),
-  ).rejects.toThrow();
-  expect(await manager.store.read()).toEqual(before);
-  const p = await f.prepare("abort");
-  expect(await f.execute(p.token)).toMatchObject({ status: "success" });
-});
+it(
+  "clone owner drift revokes a prepared native operation without fallback",
+  fixtureScope.run(async () => {
+    const f = await fixture("clone", "rebase");
+    const p = await f.prepare("abort");
+    const settings = await f.host.readProjectSettings(f.project.id);
+    await f.host.saveProjectSettings(
+      f.project.id,
+      {
+        ...settings.value,
+        env: [{ key: "CHANGED", value: "yes", secret: false, runtime: false }],
+      },
+      settings.version,
+    );
+    await expect(f.execute(p.token)).rejects.toThrow();
+    expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("rebase");
+  }),
+  gitIntegrationBudget(45000),
+);
+it(
+  "opaque rebase controls affect authority, not physical clone display admission",
+  fixtureScope.run(async () => {
+    const f = await fixture("clone", "rebase");
+    await fs.writeFile(
+      path.join(f.root, ".git/rebase-merge/head-name"),
+      "opaque-future-format\n",
+    );
+    expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("rebase");
+    await expect(f.prepare("abort")).rejects.toThrow(/журнал|происхождение/i);
+  }),
+  gitIntegrationBudget(45000),
+);
+it(
+  "lifecycle cleanup failure preserves completed native facts but not a success claim",
+  fixtureScope.run(async () => {
+    const f = await fixture("clone", "rebase");
+    const p = await f.prepare("abort");
+    const { vi } = await import("vitest"),
+      locks = await import("../src/host/owned-lock");
+    const acquire = locks.acquireOwnedLock;
+    const spy = vi
+      .spyOn(locks, "acquireOwnedLock")
+      .mockImplementation(async (file, options) => {
+        const lock = await acquire(file, options);
+        return {
+          ...lock,
+          release: async () => {
+            await lock.release();
+            if (file.includes(".repository-"))
+              throw Error("fixture cleanup failure");
+          },
+        };
+      });
+    try {
+      const r = await f.execute(p.token);
+      expect(r).toMatchObject({
+        status: "uncertain",
+        native: { processSettled: true, afterHead: f.original },
+      });
+      expect(r.log).toContain("fixture cleanup failure");
+    } finally {
+      spy.mockRestore();
+    }
+  }),
+  gitIntegrationBudget(45000),
+);
+it(
+  "a coherent clone credential replacement cannot reuse native provenance",
+  fixtureScope.run(async () => {
+    const f = await fixture("clone", "rebase");
+    const p = await f.prepare("abort");
+    const manager = new CloneManager(f.home, f.runner);
+    const ownerFile = path.join(
+      manager.store.root,
+      `.owner-${f.record!.contextId}.json`,
+    );
+    const owner = JSON.parse(await fs.readFile(ownerFile, "utf8"));
+    const { randomUUID } = await import("node:crypto");
+    const nonce = randomUUID();
+    await fs.writeFile(ownerFile, JSON.stringify({ ...owner, nonce }));
+    await fs.writeFile(
+      path.join(f.root, ".git/desktop-owner.json"),
+      JSON.stringify({ contextId: f.record!.contextId, nonce }),
+    );
+    await expect(f.execute(p.token)).rejects.toThrow();
+    expect(await f.git(["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
+  }),
+  gitIntegrationBudget(45000),
+);
+it(
+  "replacement of the physical source Git directory revokes clone provenance",
+  fixtureScope.run(async () => {
+    const f = await fixture("clone", "rebase");
+    const p = await f.prepare("abort");
+    const gd = path.join(f.source, ".git"),
+      saved = path.join(f.base, "saved-source-git");
+    await fs.rename(gd, saved);
+    await fs.cp(saved, gd, { recursive: true });
+    await expect(f.execute(p.token)).rejects.toThrow();
+    expect(await f.git(["rev-parse", "--abbrev-ref", "HEAD"])).toBe("HEAD");
+  }),
+  gitIntegrationBudget(45000),
+);
+it(
+  "ordinary clone resolution during a stopped native rebase does not rewrite its durable owner",
+  fixtureScope.run(async () => {
+    const f = await fixture("clone", "rebase");
+    const manager = new CloneManager(f.home, f.runner);
+    const before = await manager.store.read();
+    await expect(
+      manager.resolve(f.scope as Exclude<ScopeRef, string>),
+    ).rejects.toThrow();
+    expect(await manager.store.read()).toEqual(before);
+    const p = await f.prepare("abort");
+    expect(await f.execute(p.token)).toMatchObject({ status: "success" });
+  }),
+  gitIntegrationBudget(45000),
+);

@@ -1,5 +1,8 @@
+import { installGitFixtureScope } from "./helpers/git-test-scope";
+import { gitIntegrationBudget } from "./helpers/git-integration";
+const fixtureScope = installGitFixtureScope();
 import { startNativeHostOperation } from "./helpers/native-host-operation";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { HostService } from "../src/host/service";
@@ -30,25 +33,38 @@ async function fixture(
     GIT_NO_LAZY_FETCH: "1",
     GIT_EDITOR: ":",
   };
-  const runner = new NodeRunner(10000, env),
+  const runner = fixtureScope.runner(new NodeRunner(10000, env)),
     git = (cwd: string, a: string[]) =>
       runner.command(
         "git",
-        ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...a],
+        [
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "gc.auto=0",
+          "-c",
+          "maintenance.auto=false",
+          "-c",
+          "commit.gpgsign=false",
+          ...a,
+        ],
         cwd,
         env,
       );
-  const host = new HostService({
-    home,
-    dataDir: path.join(base, "data"),
-    runner,
-    goga: "/nonexistent/disabled",
-  });
+  const host = fixtureScope().own(
+    new HostService({
+      home,
+      dataDir: path.join(base, "data"),
+      runner,
+      goga: "/nonexistent/disabled",
+    }),
+  );
   const dispose = async () => {
     await host.dispose();
     await runner.dispose();
     await fs.rm(base, { recursive: true, force: true });
   };
+  fixtureScope().cleanup(dispose);
   try {
     await git(source, ["init", "-b", "main"]);
     for (const n of ["first", "second"])
@@ -120,13 +136,14 @@ for (const operation of ["cherry-pick", "revert"] as const)
     `${operation} %s owner lifecycle`,
     (kind) => {
       let f: Awaited<ReturnType<typeof fixture>>;
-      beforeAll(async () => {
-        f = await fixture(kind, operation);
-      });
-      afterAll(async () => {
-        await f?.dispose();
-      });
-      it("continues into next conflict under the original owner", async () => {
+      beforeEach(
+        fixtureScope.run(async () => {
+          f = await fixture(kind, operation);
+        }),
+        gitIntegrationBudget(30000),
+      );
+
+      async function phase0() {
         expect((f.host as any).prepareGitSequencerOperation).toBeTypeOf(
           "function",
         );
@@ -152,8 +169,8 @@ for (const operation of ["cherry-pick", "revert"] as const)
         expect((await f.host.readGitWorkspace(f.scope)).operation).toBe(
           operation,
         );
-      });
-      it("saves the next conflict using the existing three-pane resolver", async () => {
+      }
+      async function phase1() {
         const snapshot = await f.host.readGitWorkspace(f.scope),
           request = {
             scope: f.scope,
@@ -168,8 +185,8 @@ for (const operation of ["cherry-pick", "revert"] as const)
         });
         const r = await f.host.executeGitConflictSave(p.token);
         expect(r.status).toBe("saved");
-      });
-      it("finishes without changing source project or clone identity", async () => {
+      }
+      async function phase2() {
         const snapshot = await f.host.readGitWorkspace(f.scope),
           p = await f.host.prepareGitSequencerOperation({
             scope: f.scope,
@@ -200,13 +217,37 @@ for (const operation of ["cherry-pick", "revert"] as const)
           );
           expect(await fs.readFile(f.registryPath)).toEqual(f.registry);
         }
-      });
+      }
+      it(
+        "continues into next conflict under the original owner",
+        fixtureScope.run(async () => {
+          await phase0();
+        }),
+        gitIntegrationBudget(30000),
+      );
+      it(
+        "saves the next conflict using the existing three-pane resolver",
+        fixtureScope.run(async () => {
+          await phase0();
+          await phase1();
+        }),
+        gitIntegrationBudget(60000),
+      );
+      it(
+        "finishes without changing source project or clone identity",
+        fixtureScope.run(async () => {
+          await phase0();
+          await phase1();
+          await phase2();
+        }),
+        gitIntegrationBudget(90000),
+      );
     },
   );
 for (const operation of ["cherry-pick", "revert"] as const)
   it.each(["primary", "managed"] as const)(
     `${operation} %s host abort restores the owned branch`,
-    async (kind) => {
+    fixtureScope.run(async (kind) => {
       const f = await fixture(kind, operation);
       try {
         const p = await f.host.prepareGitSequencerOperation({
@@ -250,5 +291,6 @@ for (const operation of ["cherry-pick", "revert"] as const)
       } finally {
         await f.dispose();
       }
-    },
+    }),
+    gitIntegrationBudget(30000),
   );

@@ -1,32 +1,20 @@
+import { installGitFixtureScope } from "./helpers/git-test-scope";
+import { gitIntegrationBudget } from "./helpers/git-integration";
+const fixtureScope = installGitFixtureScope();
 import {
   startNativeHostOperation,
   afterNativeHostCommand,
 } from "./helpers/native-host-operation";
-import {
-  afterEach,
-  afterAll,
-  beforeAll,
-  describe,
-  expect,
-  it,
-  vi,
-} from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { HostService } from "../src/host/service";
 import { NodeRunner } from "../src/host/process";
 import { CloneManager } from "../src/host/clones";
 import { worktreeContextRef } from "../src/shared/worktrees";
-const cleanup: (() => Promise<unknown>)[] = [];
-let retainFixture = false;
-afterEach(async () => {
-  if (retainFixture) return;
-  vi.restoreAllMocks();
-  for (const fn of cleanup.splice(0).reverse()) await fn();
-});
 async function fixture(kind: "primary" | "managed", long = false) {
   const base = await fs.mkdtemp("/private/tmp/goga-rebase-continue-host-");
-  cleanup.push(() => fs.rm(base, { recursive: true, force: true }));
+  fixtureScope().cleanup(() => fs.rm(base, { recursive: true, force: true }));
   const home = path.join(base, "home"),
     source = path.join(base, "source");
   await fs.mkdir(home);
@@ -45,12 +33,22 @@ async function fixture(kind: "primary" | "managed", long = false) {
     GIT_ALLOW_PROTOCOL: "file",
     GIT_NO_LAZY_FETCH: "1",
   };
-  const runner = new NodeRunner(10000, env);
-  cleanup.push(() => runner.dispose());
+  const runner = fixtureScope.runner(new NodeRunner(10000, env));
+  fixtureScope().cleanup(() => runner.dispose());
   const git = (cwd: string, a: string[]) =>
     runner.command(
       "git",
-      ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", ...a],
+      [
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "gc.auto=0",
+        "-c",
+        "maintenance.auto=false",
+        "-c",
+        "commit.gpgsign=false",
+        ...a,
+      ],
       cwd,
       env,
     );
@@ -64,13 +62,15 @@ async function fixture(kind: "primary" | "managed", long = false) {
   await git(source, ["add", "."]);
   await git(source, ["commit", "-m", "base"]);
   await git(source, ["branch", "feature"]);
-  const host = new HostService({
-    home,
-    dataDir: path.join(base, "data"),
-    runner,
-    goga: "/nonexistent/disabled",
-  });
-  cleanup.push(() => host.dispose());
+  const host = fixtureScope().own(
+    new HostService({
+      home,
+      dataDir: path.join(base, "data"),
+      runner,
+      goga: "/nonexistent/disabled",
+    }),
+  );
+  fixtureScope().cleanup(() => host.dispose());
   const project = await host.addProject(source);
   const record =
     kind === "managed"
@@ -144,20 +144,18 @@ describe.each(["primary", "managed"] as const)(
       registry: string,
       beforeRegistry: Buffer | null,
       sourceHead: string;
-    beforeAll(async () => {
-      retainFixture = true;
-      f = await fixture(kind);
-      manager = new CloneManager(f.home, f.runner);
-      registry = path.join(manager.store.root, "registry.json");
-      beforeRegistry = f.record ? await fs.readFile(registry) : null;
-      sourceHead = (await f.git(f.source, ["rev-parse", "HEAD"])).stdout;
-    });
-    afterAll(async () => {
-      retainFixture = false;
-      vi.restoreAllMocks();
-      for (const fn of cleanup.splice(0).reverse()) await fn();
-    });
-    it("publishes the next stopped conflict on the exact original owner", async () => {
+    beforeEach(
+      fixtureScope.run(async () => {
+        f = await fixture(kind);
+        manager = new CloneManager(f.home, f.runner);
+        registry = path.join(manager.store.root, "registry.json");
+        beforeRegistry = f.record ? await fs.readFile(registry) : null;
+        sourceHead = (await f.git(f.source, ["rev-parse", "HEAD"])).stdout;
+      }),
+      gitIntegrationBudget(30000),
+    );
+
+    async function phase0() {
       const r = await f.host.executeGitRebaseOperation(
         (await f.prepare()).token,
       );
@@ -185,8 +183,8 @@ describe.each(["primary", "managed"] as const)(
           sourceHead,
         );
       }
-    });
-    it("reads the same stopped owner and saves a single-file resolution", async () => {
+    }
+    async function phase1() {
       const snapshot = await f.host.readGitWorkspace(f.scope);
       expect(snapshot.operation).toBe("rebase");
       expect(snapshot.branch).toBe(null);
@@ -205,8 +203,8 @@ describe.each(["primary", "managed"] as const)(
       const r = await f.host.executeGitConflictSave(p.token);
       expect(r, r.log).toMatchObject({ status: "saved" });
       if (f.record) expect(await fs.readFile(registry)).toEqual(beforeRegistry);
-    });
-    it("finishes with a second native continuation without repairing registry or source", async () => {
+    }
+    async function phase2() {
       const r = await f.host.executeGitRebaseOperation(
         (await f.prepare()).token,
       );
@@ -228,24 +226,46 @@ describe.each(["primary", "managed"] as const)(
           sourceHead,
         );
       }
-    });
+    }
+    it(
+      "publishes the next stopped conflict on the exact original owner",
+      fixtureScope.run(async () => {
+        await phase0();
+      }),
+      gitIntegrationBudget(30000),
+    );
+    it(
+      "reads the same stopped owner and saves a single-file resolution",
+      fixtureScope.run(async () => {
+        await phase0();
+        await phase1();
+      }),
+      gitIntegrationBudget(60000),
+    );
+    it(
+      "finishes with a second native continuation without repairing registry or source",
+      fixtureScope.run(async () => {
+        await phase0();
+        await phase1();
+        await phase2();
+      }),
+      gitIntegrationBudget(90000),
+    );
   },
 );
 describe.each(["primary", "managed"] as const)(
   "%s four-pick continuation",
   (kind) => {
     let f: Awaited<ReturnType<typeof fixture>>, sourceHead: string;
-    beforeAll(async () => {
-      retainFixture = true;
-      f = await fixture(kind, true);
-      sourceHead = (await f.git(f.source, ["rev-parse", "HEAD"])).stdout;
-    });
-    afterAll(async () => {
-      retainFixture = false;
-      vi.restoreAllMocks();
-      for (const fn of cleanup.splice(0).reverse()) await fn();
-    });
-    it("publishes the entire clean prefix before the next conflict", async () => {
+    beforeEach(
+      fixtureScope.run(async () => {
+        f = await fixture(kind, true);
+        sourceHead = (await f.git(f.source, ["rev-parse", "HEAD"])).stdout;
+      }),
+      gitIntegrationBudget(30000),
+    );
+
+    async function phase0() {
       const first = await f.host.executeGitRebaseOperation(
         (await f.prepare()).token,
       );
@@ -267,8 +287,8 @@ describe.each(["primary", "managed"] as const)(
       expect((await f.git(f.root, ["show", "HEAD:clean-before"])).stdout).toBe(
         "clean before\n",
       );
-    });
-    it("reads and saves the next conflict for the same owner", async () => {
+    }
+    async function phase1() {
       const snapshot = await f.host.readGitWorkspace(f.scope);
       const req = {
         scope: f.scope,
@@ -284,8 +304,8 @@ describe.each(["primary", "managed"] as const)(
       expect(await f.host.executeGitConflictSave(save.token)).toMatchObject({
         status: "saved",
       });
-    });
-    it("finishes all remaining picks without modifying the source project", async () => {
+    }
+    async function phase2() {
       const last = await f.host.executeGitRebaseOperation(
         (await f.prepare()).token,
       );
@@ -307,12 +327,36 @@ describe.each(["primary", "managed"] as const)(
         expect((await f.git(f.source, ["rev-parse", "HEAD"])).stdout).toBe(
           sourceHead,
         );
-    });
+    }
+    it(
+      "publishes the entire clean prefix before the next conflict",
+      fixtureScope.run(async () => {
+        await phase0();
+      }),
+      gitIntegrationBudget(30000),
+    );
+    it(
+      "reads and saves the next conflict for the same owner",
+      fixtureScope.run(async () => {
+        await phase0();
+        await phase1();
+      }),
+      gitIntegrationBudget(60000),
+    );
+    it(
+      "finishes all remaining picks without modifying the source project",
+      fixtureScope.run(async () => {
+        await phase0();
+        await phase1();
+        await phase2();
+      }),
+      gitIntegrationBudget(90000),
+    );
   },
 );
 it.each(["primary", "managed"] as const)(
   "%s aborts a long rebase after saved resolution and returns to its original branch",
-  async (kind) => {
+  fixtureScope.run(async (kind) => {
     const f = await fixture(kind, true);
     const p = await f.host.prepareGitRebaseOperation({
       scope: f.scope,
@@ -340,31 +384,36 @@ it.each(["primary", "managed"] as const)(
       "second topic\n",
     );
     expect((await f.host.readGitWorkspace(f.scope)).branch).toBe(f.branch);
-  },
+  }),
+  gitIntegrationBudget(30000),
 );
-it("managed continuation refuses settings drift before execute without primary fallback", async () => {
-  const f = await fixture("managed"),
-    p = await f.prepare(),
-    before = await fs.readFile(path.join(f.root, ".git/index")),
-    settings = await f.host.readProjectSettings(f.project.id);
-  await f.host.saveProjectSettings(
-    f.project.id,
-    {
-      ...settings.value,
-      env: [
-        ...settings.value.env,
-        { key: "FIXTURE", value: "changed", secret: false, runtime: false },
-      ],
-    },
-    settings.version,
-  );
-  await expect(f.host.executeGitRebaseOperation(p.token)).rejects.toThrow();
-  expect(await fs.readFile(path.join(f.root, ".git/index"))).toEqual(before);
-});
+it(
+  "managed continuation refuses settings drift before execute without primary fallback",
+  fixtureScope.run(async () => {
+    const f = await fixture("managed"),
+      p = await f.prepare(),
+      before = await fs.readFile(path.join(f.root, ".git/index")),
+      settings = await f.host.readProjectSettings(f.project.id);
+    await f.host.saveProjectSettings(
+      f.project.id,
+      {
+        ...settings.value,
+        env: [
+          ...settings.value.env,
+          { key: "FIXTURE", value: "changed", secret: false, runtime: false },
+        ],
+      },
+      settings.version,
+    );
+    await expect(f.host.executeGitRebaseOperation(p.token)).rejects.toThrow();
+    expect(await fs.readFile(path.join(f.root, ".git/index"))).toEqual(before);
+  }),
+  gitIntegrationBudget(30000),
+);
 
 it.each(["primary", "managed"] as const)(
   "reports %s post-native settings mismatch as uncertain without adopting a new owner",
-  async (kind) => {
+  fixtureScope.run(async (kind) => {
     const f = await fixture(kind),
       p = await f.prepare(),
       settingsDir = path.join(f.home, ".goga/desktop/settings"),
@@ -399,5 +448,6 @@ it.each(["primary", "managed"] as const)(
     ).toBe(f.original);
     await expect(f.host.executeGitRebaseOperation(p.token)).rejects.toThrow();
     await expect(f.prepare()).rejects.toThrow();
-  },
+  }),
+  gitIntegrationBudget(30000),
 );

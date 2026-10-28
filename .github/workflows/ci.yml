@@ -14,18 +14,25 @@ jobs:
       fail-fast: false
       matrix:
         arch: [arm64, x64]
-        shard: [1, 2, 3, 4]
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
+        exclude:
+          - { arch: arm64, shard: 5 }
+          - { arch: arm64, shard: 6 }
+          - { arch: arm64, shard: 7 }
+          - { arch: arm64, shard: 8 }
         include:
           - arch: arm64
             runner: macos-15
             testProfile: default
+            shardCount: 4
           - arch: x64
             runner: macos-15-intel
             testProfile: slow-git
+            shardCount: 8
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
-      TEST_SHARD: ${{ matrix.shard }}/4
+      TEST_SHARD: ${{ matrix.shard }}/${{ matrix.shardCount }}
       EXPECTED_ARCH: ${{ matrix.arch }}
       GOGA_TEST_PROFILE: ${{ matrix.testProfile }}
       GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled

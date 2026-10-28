@@ -1,4 +1,4 @@
-import { afterEach } from "vitest";
+import { installGitFixtureScope } from "./git-test-scope";
 import path from "node:path";
 import {
   createOperationFixture,
@@ -16,10 +16,7 @@ import {
 import { NodeRunner, type ByteCommandResult } from "../../src/host/process";
 import { GitWorkspaceReader } from "../../src/host/git-workspace-reader";
 
-const cleanup: (() => Promise<unknown>)[] = [];
-afterEach(async () => {
-  for (const dispose of cleanup.splice(0).reverse()) await dispose();
-});
+export const nativeSequenceScope = installGitFixtureScope();
 
 /** All writes/commands target disposable synthetic repositories and HOME. */
 export async function nativeSequenceFixture(
@@ -28,11 +25,11 @@ export async function nativeSequenceFixture(
   conflictAt = [1, 3],
 ) {
   const f = await createOperationFixture(scenario, { commits, conflictAt });
-  cleanup.push(f.dispose);
+  nativeSequenceScope().cleanup(f.dispose);
   await f.git([f.command, "--abort"]);
   const env: NodeJS.ProcessEnv = { ...f.env, GIT_ATTR_NOSYSTEM: undefined };
-  const runner = new NodeRunner(10000, env);
-  cleanup.push(() => runner.dispose());
+  const runner = nativeSequenceScope.runner(new NodeRunner(10000, env));
+  nativeSequenceScope().cleanup(() => runner.dispose());
   const directory = path.join(f.home, "regression-journal");
   const calls: string[][] = [];
   let afterCommand: (() => Promise<void>) | undefined;

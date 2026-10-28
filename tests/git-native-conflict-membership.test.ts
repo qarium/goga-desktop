@@ -1,3 +1,5 @@
+import { gitIntegrationBudget } from "./helpers/git-integration";
+import { nativeSequenceScope as fixtureScope } from "./helpers/native-sequence-regression";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
@@ -9,26 +11,30 @@ for (const scenario of [
   "cherry-pick",
   "revert",
 ] as const) {
-  it(`${scenario}: a forged conflict cannot exempt unrelated data from the first seal`, async () => {
-    const f = await nativeSequenceFixture(scenario, 1, [1]);
-    const oid = (await f.git(["rev-parse", "HEAD:untouched"])).trim();
-    f.afterNative(async () => {
-      await f.gitInput(
-        ["update-index", "--index-info"],
-        `0 ${"0".repeat(40)}\tuntouched\n` +
-          [1, 2, 3]
-            .map((stage) => `100644 ${oid} ${stage}\tuntouched\n`)
-            .join(""),
-      );
-    });
-    expect(await f.start()).toMatchObject({
-      outcome: "uncertain",
-      recovery: "retained",
-    });
-    expect(f.calls).toHaveLength(1);
-    expect(await f.read("untouched")).toBe("keep\n");
-    await expect(f.prepare("continue")).rejects.toThrow();
-  });
+  it(
+    `${scenario}: a forged conflict cannot exempt unrelated data from the first seal`,
+    fixtureScope.run(async () => {
+      const f = await nativeSequenceFixture(scenario, 1, [1]);
+      const oid = (await f.git(["rev-parse", "HEAD:untouched"])).trim();
+      f.afterNative(async () => {
+        await f.gitInput(
+          ["update-index", "--index-info"],
+          `0 ${"0".repeat(40)}\tuntouched\n` +
+            [1, 2, 3]
+              .map((stage) => `100644 ${oid} ${stage}\tuntouched\n`)
+              .join(""),
+        );
+      });
+      expect(await f.start()).toMatchObject({
+        outcome: "uncertain",
+        recovery: "retained",
+      });
+      expect(f.calls).toHaveLength(1);
+      expect(await f.read("untouched")).toBe("keep\n");
+      await expect(f.prepare("continue")).rejects.toThrow();
+    }),
+    gitIntegrationBudget(15000),
+  );
 }
 
 async function renameFixture(backend: "merge" | "apply") {
@@ -63,7 +69,7 @@ async function renameFixture(backend: "merge" | "apply") {
 }
 it.each(["merge", "apply"] as const)(
   "%s rename/rename keeps synthesized stages and can continue in Desktop",
-  async (backend) => {
+  fixtureScope.run(async (backend) => {
     const { f, start } = await renameFixture(backend);
     expect(await start()).toMatchObject({ outcome: "conflicts" });
     await f.git(["rm", "--", "rename-source"]);
@@ -73,11 +79,12 @@ it.each(["merge", "apply"] as const)(
     expect(
       await f.engine.execute((await f.prepare("continue")).token),
     ).toMatchObject({ outcome: "completed" });
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 it.each(["merge", "apply"] as const)(
   "%s rejects coordinated stage, worktree and AUTO_MERGE substitution",
-  async (backend) => {
+  fixtureScope.run(async (backend) => {
     const { f, start } = await renameFixture(backend);
     f.afterNative(async () => {
       const row = (await f.git(["ls-files", "--unmerged", "-z"]))
@@ -118,21 +125,26 @@ it.each(["merge", "apply"] as const)(
       recovery: "retained",
     });
     expect(f.calls).toHaveLength(1);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 
-it("root cherry-pick uses a native empty tree witness and retains continuation", async () => {
-  const f = await nativeSequenceFixture("cherry-pick", 1, [1]);
-  const root = (await f.git(["rev-list", "--max-parents=0", "HEAD"])).trim();
-  const result = await f.start({ operation: "cherry-pick", commits: [root] });
-  expect(result, JSON.stringify(result)).toMatchObject({
-    outcome: "conflicts",
-  });
-  await f.resolve();
-  expect(
-    await f.engine.execute((await f.prepare("continue")).token),
-  ).toMatchObject({ outcome: "completed" });
-});
+it(
+  "root cherry-pick uses a native empty tree witness and retains continuation",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("cherry-pick", 1, [1]);
+    const root = (await f.git(["rev-list", "--max-parents=0", "HEAD"])).trim();
+    const result = await f.start({ operation: "cherry-pick", commits: [root] });
+    expect(result, JSON.stringify(result)).toMatchObject({
+      outcome: "conflicts",
+    });
+    await f.resolve();
+    expect(
+      await f.engine.execute((await f.prepare("continue")).token),
+    ).toMatchObject({ outcome: "completed" });
+  }),
+  gitIntegrationBudget(15000),
+);
 
 it.each([
   "untracked-attributes",
@@ -143,7 +155,7 @@ it.each([
   "baseline-executable",
 ] as const)(
   "independent witness preserves admitted %s representation",
-  async (kind) => {
+  fixtureScope.run(async (kind) => {
     const f = await nativeSequenceFixture("cherry-pick", 1, [1]);
     if (kind === "untracked-attributes")
       await f.write(".gitattributes", "file-1 conflict-marker-size=20\n");
@@ -179,50 +191,65 @@ it.each([
         await f.engine.execute((await f.prepare("abort")).token),
       ).toMatchObject({ outcome: "completed" });
     }
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 
-it("apply rejects a conflict executable-bit substitution before the first seal", async () => {
-  const f = await nativeSequenceFixture("apply-rebase", 1, [1]);
-  f.afterNative(async () => {
-    await fs.chmod(path.join(f.root, "file-1"), 0o755);
-  });
-  expect(await f.start()).toMatchObject({
-    outcome: "uncertain",
-    recovery: "retained",
-  });
-  expect((await fs.stat(path.join(f.root, "file-1"))).mode & 0o100).toBe(0o100);
-  expect(f.calls).toHaveLength(1);
-});
+it(
+  "apply rejects a conflict executable-bit substitution before the first seal",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("apply-rebase", 1, [1]);
+    f.afterNative(async () => {
+      await fs.chmod(path.join(f.root, "file-1"), 0o755);
+    });
+    expect(await f.start()).toMatchObject({
+      outcome: "uncertain",
+      recovery: "retained",
+    });
+    expect((await fs.stat(path.join(f.root, "file-1"))).mode & 0o100).toBe(
+      0o100,
+    );
+    expect(f.calls).toHaveLength(1);
+  }),
+  gitIntegrationBudget(15000),
+);
 
-it("native abort retains recovery instead of certifying rewritten original LF bytes", async () => {
-  const f = await nativeSequenceFixture("cherry-pick", 1, [1]);
-  await f.git(["config", "core.autocrlf", "true"]);
-  expect(await f.start()).toMatchObject({ outcome: "conflicts" });
-  expect(
-    await f.engine.execute((await f.prepare("abort")).token),
-  ).toMatchObject({ outcome: "uncertain", recovery: "retained" });
-});
+it(
+  "native abort retains recovery instead of certifying rewritten original LF bytes",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("cherry-pick", 1, [1]);
+    await f.git(["config", "core.autocrlf", "true"]);
+    expect(await f.start()).toMatchObject({ outcome: "conflicts" });
+    expect(
+      await f.engine.execute((await f.prepare("abort")).token),
+    ).toMatchObject({ outcome: "uncertain", recovery: "retained" });
+  }),
+  gitIntegrationBudget(15000),
+);
 
-it("apply rejects post-stop chmod even with core.fileMode=false", async () => {
-  const f = await nativeSequenceFixture("apply-rebase", 1, [1]);
-  await f.git(["config", "core.fileMode", "false"]);
-  f.afterNative(async () => {
-    await fs.chmod(path.join(f.root, "untouched"), 0o755);
-  });
-  expect(await f.start()).toMatchObject({
-    outcome: "uncertain",
-    recovery: "retained",
-  });
-  expect((await fs.stat(path.join(f.root, "untouched"))).mode & 0o100).toBe(
-    0o100,
-  );
-  expect(f.calls).toHaveLength(1);
-});
+it(
+  "apply rejects post-stop chmod even with core.fileMode=false",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("apply-rebase", 1, [1]);
+    await f.git(["config", "core.fileMode", "false"]);
+    f.afterNative(async () => {
+      await fs.chmod(path.join(f.root, "untouched"), 0o755);
+    });
+    expect(await f.start()).toMatchObject({
+      outcome: "uncertain",
+      recovery: "retained",
+    });
+    expect((await fs.stat(path.join(f.root, "untouched"))).mode & 0o100).toBe(
+      0o100,
+    );
+    expect(f.calls).toHaveLength(1);
+  }),
+  gitIntegrationBudget(15000),
+);
 
 it.each([0o640, 0o654])(
   "apply rejects new non-owner-executable permission bits %s before first seal",
-  async (mode) => {
+  fixtureScope.run(async (mode) => {
     const f = await nativeSequenceFixture("apply-rebase", 1, [1]);
     f.afterNative(async () => {
       await fs.chmod(path.join(f.root, "file-1"), mode);
@@ -234,31 +261,43 @@ it.each([0o640, 0o654])(
     expect((await fs.stat(path.join(f.root, "file-1"))).mode & 0o777).toBe(
       mode,
     );
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
-it("native apply permission normalization retains Desktop continuation", async () => {
-  const f = await nativeSequenceFixture("apply-rebase", 1, [1]);
-  await fs.chmod(path.join(f.root, "file-1"), 0o640);
+it(
+  "native apply permission normalization retains Desktop continuation",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("apply-rebase", 1, [1]);
+    await fs.chmod(path.join(f.root, "file-1"), 0o640);
 
-  expect(await f.start()).toMatchObject({ outcome: "conflicts" });
-  await f.resolve();
-  expect(
-    await f.engine.execute((await f.prepare("continue")).token),
-  ).toMatchObject({ outcome: "completed" });
-});
+    expect(await f.start()).toMatchObject({ outcome: "conflicts" });
+    await f.resolve();
+    expect(
+      await f.engine.execute((await f.prepare("continue")).token),
+    ).toMatchObject({ outcome: "completed" });
+  }),
+  gitIntegrationBudget(15000),
+);
 
-it("apply rejects chmod of an unchanged file even when it matches fresh checkout permissions", async () => {
-  const f = await nativeSequenceFixture("apply-rebase", 1, [1]);
-  await fs.chmod(path.join(f.root, "untouched"), 0o640);
-  let nativeMode = 0;
-  f.afterNative(async () => {
-    nativeMode = (await fs.stat(path.join(f.root, "untouched"))).mode & 0o777;
-    await fs.chmod(path.join(f.root, "untouched"), 0o644);
-  });
-  const result = await f.start();
-  expect(nativeMode).toBe(0o640);
-  expect(result).toMatchObject({ outcome: "uncertain", recovery: "retained" });
-  expect((await fs.stat(path.join(f.root, "untouched"))).mode & 0o777).toBe(
-    0o644,
-  );
-});
+it(
+  "apply rejects chmod of an unchanged file even when it matches fresh checkout permissions",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("apply-rebase", 1, [1]);
+    await fs.chmod(path.join(f.root, "untouched"), 0o640);
+    let nativeMode = 0;
+    f.afterNative(async () => {
+      nativeMode = (await fs.stat(path.join(f.root, "untouched"))).mode & 0o777;
+      await fs.chmod(path.join(f.root, "untouched"), 0o644);
+    });
+    const result = await f.start();
+    expect(nativeMode).toBe(0o640);
+    expect(result).toMatchObject({
+      outcome: "uncertain",
+      recovery: "retained",
+    });
+    expect((await fs.stat(path.join(f.root, "untouched"))).mode & 0o777).toBe(
+      0o644,
+    );
+  }),
+  gitIntegrationBudget(15000),
+);

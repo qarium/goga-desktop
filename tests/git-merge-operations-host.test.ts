@@ -1,10 +1,13 @@
+import { gitIntegrationBudget } from "./helpers/git-integration";
+import { installGitFixtureScope } from "./helpers/git-test-scope";
+const fixtureScope = installGitFixtureScope();
 import {
   GitMergeSafety,
   type GitMergeContext,
   GitMetadataLockCleanupError,
   preserveGitMergeCleanupError,
 } from "../src/host/git-merge-safety";
-import { afterEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import {
   mkdtemp,
   mkdir,
@@ -22,10 +25,6 @@ import { CloneManager } from "../src/host/clones";
 import { worktreeContextRef } from "../src/shared/worktrees";
 import { nativeIntent } from "../src/host/git-native-context";
 import { isOfflineGitRead } from "../src/host/read-scope";
-const cleanup: (() => Promise<unknown>)[] = [];
-afterEach(async () => {
-  for (const action of cleanup.splice(0).reverse()) await action();
-});
 it.each([
   ["primary", "continue", false],
   ["clone", "continue", false],
@@ -34,7 +33,7 @@ it.each([
   ["primary", "abort", true],
 ] as const)(
   "preserves typed cleanup outcome and redacts host diagnostics: %s %s legacy=%s",
-  async (kind, action, legacy) => {
+  fixtureScope.run(async (kind, action, legacy) => {
     const f = await pending(kind);
     const secret = "configured-sensitive-fixture-728491";
 
@@ -90,13 +89,14 @@ it.each([
     expect(out.log).toContain("outer cleanup fault");
     expect(out.recoveryPath).toBeTruthy();
     expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("none");
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 async function fixture(namespace = "") {
   const base = await mkdtemp(
     "/private/tmp/goga-git-workspace-host-" + namespace,
   );
-  cleanup.push(() => rm(base, { recursive: true, force: true }));
+  fixtureScope().cleanup(() => rm(base, { recursive: true, force: true }));
   const home = path.join(base, "home"),
     root = path.join(base, "repo");
   await mkdir(home);
@@ -112,13 +112,21 @@ async function fixture(namespace = "") {
     GIT_COMMITTER_NAME: "Fixture",
     GIT_COMMITTER_EMAIL: "fixture@example.invalid",
   };
-  const runner = new NodeRunner(10000, env);
-  cleanup.push(() => runner.dispose());
+  const runner = fixtureScope.runner(new NodeRunner(10000, env));
+  fixtureScope().cleanup(() => runner.dispose());
   const git = async (args: string[]) =>
     (
       await runner.command(
         "git",
-        ["-c", "core.hooksPath=/dev/null", ...args],
+        [
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "gc.auto=0",
+          "-c",
+          "maintenance.auto=false",
+          ...args,
+        ],
         root,
         env,
       )
@@ -128,13 +136,15 @@ async function fixture(namespace = "") {
   await git(["add", "."]);
   await git(["-c", "commit.gpgSign=false", "commit", "-m", "fixture"]);
   await git(["branch", "feature"]);
-  const host = new HostService({
-    home,
-    dataDir: path.join(base, "data"),
-    runner,
-    goga: "/nonexistent-fixture-goga",
-  });
-  cleanup.push(() => host.dispose());
+  const host = fixtureScope().own(
+    new HostService({
+      home,
+      dataDir: path.join(base, "data"),
+      runner,
+      goga: "/nonexistent-fixture-goga",
+    }),
+  );
+  fixtureScope().cleanup(() => host.dispose());
   const project = await host.addProject(root);
   return { base, home, root, runner, host, project, git, env };
 }
@@ -177,7 +187,15 @@ async function pending(
     (
       await f.runner.command(
         "git",
-        ["-c", "core.hooksPath=/dev/null", ...args],
+        [
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "gc.auto=0",
+          "-c",
+          "maintenance.auto=false",
+          ...args,
+        ],
         root,
         f.env,
       )
@@ -226,7 +244,7 @@ async function pending(
 }
 it.each(["primary", "clone"] as const)(
   "completes pending merge only in exact %s owner with offline admission",
-  async (kind) => {
+  fixtureScope.run(async (kind) => {
     const f = await pending(kind);
     expect((f.host as any).prepareGitMergeOperation).toBeTypeOf("function");
     await writeFile(path.join(f.executionRoot, "file.txt"), "resolved\n");
@@ -287,29 +305,36 @@ it.each(["primary", "clone"] as const)(
     await expect(
       (f.host as any).executeGitMergeOperation(preview.token),
     ).rejects.toThrow();
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
-it("aborts an attached clone merge without touching primary or unrelated work", async () => {
-  const f = await pending("clone");
-  expect((f.host as any).prepareGitMergeOperation).toBeTypeOf("function");
-  await writeFile(path.join(f.executionRoot, "unrelated"), "draft\n");
-  const snapshot = await f.host.readGitWorkspace(f.scope);
-  const p = await (f.host as any).prepareGitMergeOperation({
-    scope: f.scope,
-    revision: snapshot.revision,
-    action: "abort",
-  });
-  expect(await (f.host as any).executeGitMergeOperation(p.token)).toMatchObject(
-    { status: "success", scope: f.scope },
-  );
-  expect(await readFile(path.join(f.executionRoot, "unrelated"), "utf8")).toBe(
-    "draft\n",
-  );
-  expect(await readFile(path.join(f.root, "file.txt"), "utf8")).toBe("base\n");
-});
+it(
+  "aborts an attached clone merge without touching primary or unrelated work",
+  fixtureScope.run(async () => {
+    const f = await pending("clone");
+    expect((f.host as any).prepareGitMergeOperation).toBeTypeOf("function");
+    await writeFile(path.join(f.executionRoot, "unrelated"), "draft\n");
+    const snapshot = await f.host.readGitWorkspace(f.scope);
+    const p = await (f.host as any).prepareGitMergeOperation({
+      scope: f.scope,
+      revision: snapshot.revision,
+      action: "abort",
+    });
+    expect(
+      await (f.host as any).executeGitMergeOperation(p.token),
+    ).toMatchObject({ status: "success", scope: f.scope });
+    expect(
+      await readFile(path.join(f.executionRoot, "unrelated"), "utf8"),
+    ).toBe("draft\n");
+    expect(await readFile(path.join(f.root, "file.txt"), "utf8")).toBe(
+      "base\n",
+    );
+  }),
+  gitIntegrationBudget(15000),
+);
 it.each(["missing", "branch", "revision"])(
   "rejects %s clone owner after confirmation and never falls back to primary",
-  async (kind) => {
+  fixtureScope.run(async (kind) => {
     const f = await pending("clone");
     expect((f.host as any).prepareGitMergeOperation).toBeTypeOf("function");
     const snap = await f.host.readGitWorkspace(f.scope),
@@ -344,36 +369,41 @@ it.each(["missing", "branch", "revision"])(
     expect(await readFile(path.join(f.root, "file.txt"), "utf8")).toBe(
       "base\n",
     );
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 
-it("preserves only typed cleanup metadata without copying raw error causes", () => {
-  const secret = "private-cause-fixture";
-  const typed = preserveGitMergeCleanupError(
-    new GitMetadataLockCleanupError("config.lock", true, Error(secret), true),
-    "safe diagnostic",
-  );
-  expect(typed).toBeInstanceOf(GitMetadataLockCleanupError);
-  expect(typed).toMatchObject({
-    lock: "config.lock",
-    retained: true,
-    message: "safe diagnostic",
-    cause: "safe diagnostic",
-    unchecked: true,
-  });
-  expect(JSON.stringify(typed)).not.toContain(secret);
-  const forged = preserveGitMergeCleanupError(
-    Object.assign(Error(secret), { lock: "config.lock", retained: true }),
-    "safe diagnostic",
-  );
-  expect(forged).not.toBeInstanceOf(GitMetadataLockCleanupError);
-  expect(forged).not.toHaveProperty("lock");
-  expect(forged).not.toHaveProperty("retained");
-  expect(forged).not.toHaveProperty("cause");
-});
+it(
+  "preserves only typed cleanup metadata without copying raw error causes",
+  fixtureScope.run(() => {
+    const secret = "private-cause-fixture";
+    const typed = preserveGitMergeCleanupError(
+      new GitMetadataLockCleanupError("config.lock", true, Error(secret), true),
+      "safe diagnostic",
+    );
+    expect(typed).toBeInstanceOf(GitMetadataLockCleanupError);
+    expect(typed).toMatchObject({
+      lock: "config.lock",
+      retained: true,
+      message: "safe diagnostic",
+      cause: "safe diagnostic",
+      unchecked: true,
+    });
+    expect(JSON.stringify(typed)).not.toContain(secret);
+    const forged = preserveGitMergeCleanupError(
+      Object.assign(Error(secret), { lock: "config.lock", retained: true }),
+      "safe diagnostic",
+    );
+    expect(forged).not.toBeInstanceOf(GitMetadataLockCleanupError);
+    expect(forged).not.toHaveProperty("lock");
+    expect(forged).not.toHaveProperty("retained");
+    expect(forged).not.toHaveProperty("cause");
+  }),
+  gitIntegrationBudget(15000),
+);
 it.each(["primary", "clone"] as const)(
   "redacts abort cleanup root pathname without manufacturing native HEAD warnings (%s)",
-  async (kind) => {
+  fixtureScope.run(async (kind) => {
     const secret = "sensitive-native-root-728491";
     const f = await pending(kind, secret);
 
@@ -404,7 +434,8 @@ it.each(["primary", "clone"] as const)(
     expect(out.log).not.toContain(secret);
     expect(out.message).not.toContain(secret);
     expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("none");
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 
 class ManagedMergeFixture extends GitMergeSafety {
@@ -466,7 +497,7 @@ class ManagedMergeFixture extends GitMergeSafety {
 }
 it.each(["primary", "clone"] as const)(
   "does not adopt an external %s merge through Host API",
-  async (kind) => {
+  fixtureScope.run(async (kind) => {
     const f = await pending(kind, "", false);
     const head = await f.git(["rev-parse", "HEAD"]);
     const index = await readFile(path.join(f.executionRoot, ".git/index"));
@@ -484,60 +515,76 @@ it.each(["primary", "clone"] as const)(
       index,
     );
     expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("merge");
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
-it("restores merge provenance from the durable journal after Host restart, not a renderer token", async () => {
-  const f = await pending("primary");
-  const preview = await f.host.prepareGitMergeOperation({
-    scope: f.scope,
-    action: "abort",
-    revision: (await f.host.readGitWorkspace(f.scope)).revision,
-  });
-  await f.host.dispose();
-  const runner = new NodeRunner(10000, f.env);
-  cleanup.push(() => runner.dispose());
-  const restarted = new HostService({
-    home: f.home,
-    dataDir: path.join(f.base, "data"),
-    runner,
-    goga: "/nonexistent-fixture-goga",
-  });
-  cleanup.push(() => restarted.dispose());
-  await expect(
-    restarted.executeGitMergeOperation(preview.token),
-  ).rejects.toThrow();
-  const p = await restarted.prepareGitMergeOperation({
-    scope: f.scope,
-    action: "abort",
-    revision: (await restarted.readGitWorkspace(f.scope)).revision,
-  });
-  expect(await restarted.executeGitMergeOperation(p.token)).toMatchObject({
-    status: "success",
-  });
-  expect(
-    (
-      await runner.command("git", ["rev-parse", "HEAD"], f.executionRoot, f.env)
-    ).stdout.trim(),
-  ).toBe(f.old);
-});
-it("does not reuse the merge receipt after Host settings owner changes", async () => {
-  const f = await pending("primary");
-  const settings = await f.host.readProjectSettings(f.project.id);
-  await f.host.saveProjectSettings(
-    f.project.id,
-    { ...settings.value, env: [] },
-    settings.version,
-  );
-  const index = await readFile(path.join(f.executionRoot, ".git/index"));
-  await expect(
-    f.host.prepareGitMergeOperation({
+it(
+  "restores merge provenance from the durable journal after Host restart, not a renderer token",
+  fixtureScope.run(async () => {
+    const f = await pending("primary");
+    const preview = await f.host.prepareGitMergeOperation({
       scope: f.scope,
       action: "abort",
       revision: (await f.host.readGitWorkspace(f.scope)).revision,
-    }),
-  ).rejects.toThrow();
-  expect(await readFile(path.join(f.executionRoot, ".git/index"))).toEqual(
-    index,
-  );
-  expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(f.old);
-});
+    });
+    await f.host.dispose();
+    const runner = fixtureScope.runner(new NodeRunner(10000, f.env));
+    fixtureScope().cleanup(() => runner.dispose());
+    const restarted = fixtureScope().own(
+      new HostService({
+        home: f.home,
+        dataDir: path.join(f.base, "data"),
+        runner,
+        goga: "/nonexistent-fixture-goga",
+      }),
+    );
+    fixtureScope().cleanup(() => restarted.dispose());
+    await expect(
+      restarted.executeGitMergeOperation(preview.token),
+    ).rejects.toThrow();
+    const p = await restarted.prepareGitMergeOperation({
+      scope: f.scope,
+      action: "abort",
+      revision: (await restarted.readGitWorkspace(f.scope)).revision,
+    });
+    expect(await restarted.executeGitMergeOperation(p.token)).toMatchObject({
+      status: "success",
+    });
+    expect(
+      (
+        await runner.command(
+          "git",
+          ["rev-parse", "HEAD"],
+          f.executionRoot,
+          f.env,
+        )
+      ).stdout.trim(),
+    ).toBe(f.old);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "does not reuse the merge receipt after Host settings owner changes",
+  fixtureScope.run(async () => {
+    const f = await pending("primary");
+    const settings = await f.host.readProjectSettings(f.project.id);
+    await f.host.saveProjectSettings(
+      f.project.id,
+      { ...settings.value, env: [] },
+      settings.version,
+    );
+    const index = await readFile(path.join(f.executionRoot, ".git/index"));
+    await expect(
+      f.host.prepareGitMergeOperation({
+        scope: f.scope,
+        action: "abort",
+        revision: (await f.host.readGitWorkspace(f.scope)).revision,
+      }),
+    ).rejects.toThrow();
+    expect(await readFile(path.join(f.executionRoot, ".git/index"))).toEqual(
+      index,
+    );
+    expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(f.old);
+  }),
+  gitIntegrationBudget(15000),
+);

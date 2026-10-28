@@ -1,4 +1,7 @@
-import { afterEach, expect, it } from "vitest";
+import { installGitFixtureScope } from "./helpers/git-test-scope";
+const fixtureScope = installGitFixtureScope();
+import { gitIntegrationBudget } from "./helpers/git-integration";
+import { expect, it } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { createOperationFixture } from "./helpers/git-operation-fixtures";
@@ -19,23 +22,21 @@ import {
 } from "../src/host/git-native-update-handoff";
 import { NativeGitSequence } from "../src/host/git-native-sequence";
 import { NativeGitMergeOperations } from "../src/host/git-native-merge";
-const cleanup: (() => Promise<unknown>)[] = [];
-afterEach(async () => {
-  for (const f of cleanup.splice(0).reverse()) await f();
-});
 async function setup(strategy: string, commits = 1, conflictAt = [1]) {
   const f = await createOperationFixture("merge-rebase", {
     commits,
     conflictAt,
   });
-  cleanup.push(f.dispose);
+  fixtureScope().cleanup(f.dispose);
   await f.git(["rebase", "--abort"]);
   await fs.rm(path.join(f.root, "untracked"));
-  const runner = new NodeRunner(10000, {
-    ...f.env,
-    GIT_ATTR_NOSYSTEM: undefined,
-  });
-  cleanup.push(() => runner.dispose());
+  const runner = fixtureScope.runner(
+    new NodeRunner(10000, {
+      ...f.env,
+      GIT_ATTR_NOSYSTEM: undefined,
+    }),
+  );
+  fixtureScope().cleanup(() => runner.dispose());
   const git = (args: string[], stdin?: string) =>
     runner.command(
       "git",
@@ -171,87 +172,99 @@ async function setup(strategy: string, commits = 1, conflictAt = [1]) {
 }
 for (const strategy of ["merge", "rebase"] as const)
   for (const action of ["continue", "abort"] as const)
-    it(`native handoff ${strategy} → ${action} preserves original recovery`, async () => {
-      const f = await setup(strategy);
-      const attempt = await f.handoff.captureAttempt(f.c, f.input);
-      expect((await f.reader.snapshot()).operation).toBe("none");
-      const candidate = await f.handoff.afterFailure(
+    it(
+      `native handoff ${strategy} → ${action} preserves original recovery`,
+      fixtureScope.run(async () => {
+        const f = await setup(strategy);
+        const attempt = await f.handoff.captureAttempt(f.c, f.input);
+        expect((await f.reader.snapshot()).operation).toBe("none");
+        const candidate = await f.handoff.afterFailure(
+          f.c,
+          attempt,
+          new CommandExitError("opaque", 1),
+        );
+        expect(candidate).toMatchObject({ algorithm: strategy, conflicts: [] });
+        const p = await f.handoff.prepare({
+          scope: "p",
+          candidateId: candidate!.candidateId,
+          revision: (await f.reader.snapshot()).revision,
+        });
+        expect(await f.handoff.execute(p.token)).toMatchObject({
+          status: "conflict",
+          native: {
+            outcome: "conflicts",
+            processSettled: true,
+            recovery: "retained",
+          },
+        });
+        if (action === "continue") {
+          await f.write("file-1", "resolved\n");
+          await f.git(["add", "file-1"]);
+        }
+        const request = {
+          scope: "p",
+          action,
+          revision: (await f.reader.snapshot()).revision,
+        };
+        const next = await (f.engine instanceof NativeGitSequence
+          ? f.engine.prepare({ ...request, operation: "rebase" })
+          : f.engine.prepare(request));
+        const result = await f.engine.execute(next.token);
+        expect(strategy === "rebase" ? result : result).toMatchObject(
+          strategy === "rebase"
+            ? { outcome: "completed" }
+            : { status: "success" },
+        );
+        await expect(f.handoff.execute(p.token)).rejects.toThrow();
+      }),
+      gitIntegrationBudget(15000),
+    );
+it(
+  "plain error and already-started external Goga rebase never grant manual start",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase");
+    expect(
+      await f.handoff.afterFailure(
+        f.c,
+        await f.handoff.captureAttempt(f.c, f.input),
+        new Error("conflict"),
+      ),
+    ).toBeNull();
+    const attempt = await f.handoff.captureAttempt(f.c, f.input);
+    await expect(f.git(["rebase", "main"])).rejects.toThrow();
+    expect(
+      await f.handoff.afterFailure(
         f.c,
         attempt,
-        new CommandExitError("opaque", 1),
-      );
-      expect(candidate).toMatchObject({ algorithm: strategy, conflicts: [] });
-      const p = await f.handoff.prepare({
-        scope: "p",
-        candidateId: candidate!.candidateId,
-        revision: (await f.reader.snapshot()).revision,
-      });
-      expect(await f.handoff.execute(p.token)).toMatchObject({
-        status: "conflict",
-        native: {
-          outcome: "conflicts",
-          processSettled: true,
-          recovery: "retained",
-        },
-      });
-      if (action === "continue") {
-        await f.write("file-1", "resolved\n");
-        await f.git(["add", "file-1"]);
-      }
-      const request = {
-        scope: "p",
-        action,
-        revision: (await f.reader.snapshot()).revision,
-      };
-      const next = await (f.engine instanceof NativeGitSequence
-        ? f.engine.prepare({ ...request, operation: "rebase" })
-        : f.engine.prepare(request));
-      const result = await f.engine.execute(next.token);
-      expect(strategy === "rebase" ? result : result).toMatchObject(
-        strategy === "rebase"
-          ? { outcome: "completed" }
-          : { status: "success" },
-      );
-      await expect(f.handoff.execute(p.token)).rejects.toThrow();
-    });
-it("plain error and already-started external Goga rebase never grant manual start", async () => {
-  const f = await setup("rebase");
-  expect(
-    await f.handoff.afterFailure(
+        new CommandExitError("conflict", 1),
+      ),
+    ).toBeNull();
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "source/config drift revokes a separately confirmed handoff",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase");
+    const c = await f.handoff.afterFailure(
       f.c,
       await f.handoff.captureAttempt(f.c, f.input),
-      new Error("conflict"),
-    ),
-  ).toBeNull();
-  const attempt = await f.handoff.captureAttempt(f.c, f.input);
-  await expect(f.git(["rebase", "main"])).rejects.toThrow();
-  expect(
-    await f.handoff.afterFailure(
-      f.c,
-      attempt,
-      new CommandExitError("conflict", 1),
-    ),
-  ).toBeNull();
-});
-it("source/config drift revokes a separately confirmed handoff", async () => {
-  const f = await setup("rebase");
-  const c = await f.handoff.afterFailure(
-    f.c,
-    await f.handoff.captureAttempt(f.c, f.input),
-    new CommandExitError("opaque", 1),
-  );
-  const p = await f.handoff.prepare({
-    scope: "p",
-    candidateId: c!.candidateId,
-    revision: (await f.reader.snapshot()).revision,
-  });
-  await f.git(["config", "merge.conflictStyle", "diff3"]);
-  await expect(f.handoff.execute(p.token)).rejects.toThrow();
-  expect((await f.reader.snapshot()).operation).toBe("none");
-});
+      new CommandExitError("opaque", 1),
+    );
+    const p = await f.handoff.prepare({
+      scope: "p",
+      candidateId: c!.candidateId,
+      revision: (await f.reader.snapshot()).revision,
+    });
+    await f.git(["config", "merge.conflictStyle", "diff3"]);
+    await expect(f.handoff.execute(p.token)).rejects.toThrow();
+    expect((await f.reader.snapshot()).operation).toBe("none");
+  }),
+  gitIntegrationBudget(15000),
+);
 it.each(["merge", "rebase"] as const)(
   "%s handoff may complete cleanly; a refusal is not a prediction of conflict",
-  async (strategy) => {
+  fixtureScope.run(async (strategy) => {
     const f = await setup(strategy);
     await f.write("file-1", "base\n");
     await f.write("separate", "topic-only\n");
@@ -277,42 +290,51 @@ it.each(["merge", "rebase"] as const)(
       },
     });
     expect((await f.reader.snapshot()).operation).toBe("none");
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
-it("a failed Goga invocation that changes ignored bytes cannot offer an unchanged handoff", async () => {
-  const f = await setup("rebase");
-  const attempt = await f.handoff.captureAttempt(f.c, f.input);
-  await f.write("ignored", "changed during Goga\n");
-  expect(
-    await f.handoff.afterFailure(
+it(
+  "a failed Goga invocation that changes ignored bytes cannot offer an unchanged handoff",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase");
+    const attempt = await f.handoff.captureAttempt(f.c, f.input);
+    await f.write("ignored", "changed during Goga\n");
+    expect(
+      await f.handoff.afterFailure(
+        f.c,
+        attempt,
+        new CommandExitError("opaque", 1),
+      ),
+    ).toBeNull();
+    expect(await f.read("ignored")).toBe("changed during Goga\n");
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "manual rebase binds the configured apply backend rather than silently choosing merge",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase");
+    await f.git(["config", "rebase.backend", "apply"]);
+    const c = await f.handoff.afterFailure(
       f.c,
-      attempt,
+      await f.handoff.captureAttempt(f.c, f.input),
       new CommandExitError("opaque", 1),
-    ),
-  ).toBeNull();
-  expect(await f.read("ignored")).toBe("changed during Goga\n");
-});
-it("manual rebase binds the configured apply backend rather than silently choosing merge", async () => {
-  const f = await setup("rebase");
-  await f.git(["config", "rebase.backend", "apply"]);
-  const c = await f.handoff.afterFailure(
-    f.c,
-    await f.handoff.captureAttempt(f.c, f.input),
-    new CommandExitError("opaque", 1),
-  );
-  expect(c).toMatchObject({ backend: "apply" });
-  const p = await f.handoff.prepare({
-    scope: "p",
-    candidateId: c!.candidateId,
-    revision: (await f.reader.snapshot()).revision,
-  });
-  expect(await f.handoff.execute(p.token)).toMatchObject({
-    status: "conflict",
-  });
-  expect(
-    (await fs.stat(path.join(f.root, ".git/rebase-apply"))).isDirectory(),
-  ).toBe(true);
-});
+    );
+    expect(c).toMatchObject({ backend: "apply" });
+    const p = await f.handoff.prepare({
+      scope: "p",
+      candidateId: c!.candidateId,
+      revision: (await f.reader.snapshot()).revision,
+    });
+    expect(await f.handoff.execute(p.token)).toMatchObject({
+      status: "conflict",
+    });
+    expect(
+      (await fs.stat(path.join(f.root, ".git/rebase-apply"))).isDirectory(),
+    ).toBe(true);
+  }),
+  gitIntegrationBudget(15000),
+);
 
 async function disk(root: string): Promise<Record<string, string>> {
   const result: Record<string, string> = {};
@@ -351,26 +373,31 @@ async function preview(f: Awaited<ReturnType<typeof setup>>) {
   });
 }
 
-it("native candidate requests cannot smuggle source, root, strategy or commands", () => {
-  const request = {
-    scope: "p",
-    revision: "a".repeat(64),
-    candidateId: "b".repeat(64),
-  };
-  expect(gitUpdateHandoffRequestSchema.parse(request)).toEqual(request);
-  for (const extra of [
-    { root: "/tmp" },
-    { source: "HEAD" },
-    { strategy: "merge" },
-    { command: "pull" },
-  ])
-    expect(
-      gitUpdateHandoffRequestSchema.safeParse({ ...request, ...extra }).success,
-    ).toBe(false);
-});
+it(
+  "native candidate requests cannot smuggle source, root, strategy or commands",
+  fixtureScope.run(() => {
+    const request = {
+      scope: "p",
+      revision: "a".repeat(64),
+      candidateId: "b".repeat(64),
+    };
+    expect(gitUpdateHandoffRequestSchema.parse(request)).toEqual(request);
+    for (const extra of [
+      { root: "/tmp" },
+      { source: "HEAD" },
+      { strategy: "merge" },
+      { command: "pull" },
+    ])
+      expect(
+        gitUpdateHandoffRequestSchema.safeParse({ ...request, ...extra })
+          .success,
+      ).toBe(false);
+  }),
+  gitIntegrationBudget(15000),
+);
 it.each(["merge", "rebase", "ff-else-merge", "ff-else-rebase"])(
   "%s handoff capture and prepare are byte-read-only; confirmation starts exact source once",
-  async (strategy) => {
+  fixtureScope.run(async (strategy) => {
     const f = await setup(strategy),
       before = await disk(f.root);
     const p = await preview(f);
@@ -392,7 +419,8 @@ it.each(["merge", "rebase", "ff-else-merge", "ff-else-rebase"])(
     await expect(f.handoff.execute(p.token)).rejects.toThrow();
     expect(await disk(f.root)).toEqual(after);
     expect(f.calls).toHaveLength(1);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 it.each([
   ["unstructured", new Error("conflict")],
@@ -401,7 +429,7 @@ it.each([
   ["fatal-exit-128", new CommandExitError("conflict", 128)],
 ] as const)(
   "native handoff rejects non-ordinary refusal %s",
-  async (_label, failure) => {
+  fixtureScope.run(async (_label, failure) => {
     const f = await setup("merge"),
       before = await disk(f.root);
     const attempt = await f.handoff.captureAttempt(f.c, f.input);
@@ -415,7 +443,8 @@ it.each([
     ).toBeNull();
     expect(await disk(f.root)).toEqual(before);
     expect(f.calls).toEqual([]);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 const mutations = [
   "owner",
@@ -450,7 +479,7 @@ async function mutate(
 }
 it.each(mutations)(
   "native refusal after %s drift cannot reuse the captured attempt",
-  async (mutation) => {
+  fixtureScope.run(async (mutation) => {
     const f = await setup("merge"),
       attempt = await f.handoff.captureAttempt(f.c, f.input);
     await mutate(f, mutation);
@@ -464,11 +493,12 @@ it.each(mutations)(
     ).toBeNull();
     expect(await disk(f.root)).toEqual(before);
     expect(f.calls).toEqual([]);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 it.each(["owner", "source", "strategy", "expired"] as const)(
   "native candidate validation rejects %s drift",
-  async (mutation) => {
+  fixtureScope.run(async (mutation) => {
     const f = await setup("merge"),
       candidate = await offer(f);
     await mutate(f, mutation);
@@ -482,11 +512,12 @@ it.each(["owner", "source", "strategy", "expired"] as const)(
     ).rejects.toThrow();
     expect(await disk(f.root)).toEqual(before);
     expect(f.calls).toEqual([]);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 it.each(mutations)(
   "native manual start rejects %s drift and consumes its token",
-  async (mutation) => {
+  fixtureScope.run(async (mutation) => {
     const f = await setup("merge"),
       p = await preview(f);
     await mutate(f, mutation);
@@ -496,157 +527,186 @@ it.each(mutations)(
     await expect(f.handoff.execute(p.token)).rejects.toThrow();
     if (mutation !== "worktree") expect(await disk(f.root)).toEqual(before);
     expect(f.calls).toEqual([]);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
-it("native attempt is single-use, rejects forged handles, and two previews cannot replay one candidate", async () => {
-  const f = await setup("merge"),
-    attempt = await f.handoff.captureAttempt(f.c, f.input);
-  const candidate = await f.handoff.afterFailure(
-    f.c,
-    attempt,
-    new CommandExitError("opaque", 1),
-  );
-  expect(candidate).not.toBeNull();
-  expect(
-    await f.handoff.afterFailure(
+it(
+  "native attempt is single-use, rejects forged handles, and two previews cannot replay one candidate",
+  fixtureScope.run(async () => {
+    const f = await setup("merge"),
+      attempt = await f.handoff.captureAttempt(f.c, f.input);
+    const candidate = await f.handoff.afterFailure(
       f.c,
       attempt,
       new CommandExitError("opaque", 1),
-    ),
-  ).toBeNull();
-  expect(
-    await f.handoff.afterFailure(f.c, {}, new CommandExitError("opaque", 1)),
-  ).toBeNull();
-  const request = {
-    scope: "p",
-    candidateId: candidate!.candidateId,
-    revision: (await f.c.snapshot()).revision,
-  };
-  const a = await f.handoff.prepare(request),
-    b = await f.handoff.prepare(request);
-  expect(await f.handoff.execute(a.token)).toMatchObject({
-    status: "conflict",
-  });
-  const before = await disk(f.root);
-  await expect(f.handoff.execute(b.token)).rejects.toThrow();
-  expect(await disk(f.root)).toEqual(before);
-  expect(f.calls).toHaveLength(1);
-});
-it("native handoff rejects non-current target, dirty worktree and bisect without checkout", async () => {
-  const f = await setup("merge");
-  await f.git(["checkout", "main"]);
-  let before = await disk(f.root);
-  await expect(f.handoff.captureAttempt(f.c, f.input)).rejects.toThrow();
-  expect(await disk(f.root)).toEqual(before);
-  await f.git(["checkout", "topic"]);
-  await f.write("untouched", "dirty\n");
-  await expect(f.handoff.captureAttempt(f.c, f.input)).rejects.toThrow();
-  await f.git(["restore", "untouched"]);
-  await fs.writeFile(path.join(f.root, ".git/BISECT_START"), "topic\n");
-  before = await disk(f.root);
-  await expect(f.handoff.captureAttempt(f.c, f.input)).rejects.toThrow();
-  expect(await disk(f.root)).toEqual(before);
-  expect(f.calls).toEqual([]);
-});
-it("native handoff defaults to merge and rejects unknown or malformed effective configuration", async () => {
-  const f = await setup("merge");
-  f.config("base_ref: main\n");
-  expect((await offer(f)).algorithm).toBe("merge");
-  for (const config of [
-    "base_ref: main\nbase_ref: other\n",
-    "[",
-    "base_ref: main\nupdate:\n  strategy: custom\n",
-  ]) {
-    f.config(config);
-    await expect(f.handoff.captureAttempt(f.c, f.input)).rejects.toThrow();
-  }
-  expect(f.calls).toEqual([]);
-});
-it("native handoff requires a direct ref rather than a revision expression or symbolic ref", async () => {
-  const f = await setup("merge");
-  for (const sourceRef of [
-    "HEAD",
-    "main",
-    "refs/heads/main~1",
-    "--upload-pack=other",
-  ])
-    await expect(
-      f.handoff.captureAttempt(f.c, { ...f.input, sourceRef }),
-    ).rejects.toThrow();
-  await f.git(["symbolic-ref", "refs/desktop/alias", "refs/heads/main"]);
-  await expect(
-    f.handoff.captureAttempt(f.c, {
-      ...f.input,
-      sourceRef: "refs/desktop/alias",
-    }),
-  ).rejects.toThrow();
-  expect(f.calls).toEqual([]);
-});
-it("native full topic identity and detached display copies do not grant another owner authority", async () => {
-  const f = await setup("merge");
-  const scope = {
-    projectId: "p",
-    year: "2026",
-    topic: "topic",
-    branch: "topic",
-    contextId: `ctx-${"a".repeat(64)}`,
-    revision: "12345678-1234-4234-8234-123456789abc",
-  };
-  f.c.scope = scope;
-  const candidate = await offer(f);
-  candidate.conflicts.push("forged");
-  if (typeof candidate.scope !== "string") candidate.scope.year = "2025";
-  const p = await f.handoff.prepare({
-    scope,
-    candidateId: candidate.candidateId,
-    revision: (await f.c.snapshot()).revision,
-  });
-  expect(p.candidate.scope).toEqual(scope);
-  expect(p.candidate.conflicts).toEqual([]);
-  f.c.scope = { ...scope, year: "2025" };
-  await expect(f.handoff.execute(p.token)).rejects.toThrow();
-  expect(f.calls).toEqual([]);
-});
-it("native candidate eviction never makes an evicted id valid again", async () => {
-  const f = await setup("merge"),
-    first = await offer(f);
-  for (let i = 0; i < 8; i++) await offer(f);
-  await expect(
-    f.handoff.prepare({
+    );
+    expect(candidate).not.toBeNull();
+    expect(
+      await f.handoff.afterFailure(
+        f.c,
+        attempt,
+        new CommandExitError("opaque", 1),
+      ),
+    ).toBeNull();
+    expect(
+      await f.handoff.afterFailure(f.c, {}, new CommandExitError("opaque", 1)),
+    ).toBeNull();
+    const request = {
       scope: "p",
-      candidateId: first.candidateId,
+      candidateId: candidate!.candidateId,
       revision: (await f.c.snapshot()).revision,
-    }),
-  ).rejects.toThrow();
-  expect(f.calls).toEqual([]);
-});
-it("native Goga refusal accepts a byte-identical atomic index rewrite but rejects changed staged data", async () => {
-  const f = await setup("merge"),
-    attempt = await f.handoff.captureAttempt(f.c, f.input);
-  const index = path.join(f.root, ".git/index");
-  await fs.copyFile(index, `${index}.fixture`);
-  await fs.rename(`${index}.fixture`, index);
-  const candidate = await f.handoff.afterFailure(
-    f.c,
-    attempt,
-    new CommandExitError("opaque", 1),
-  );
-  expect(candidate).not.toBeNull();
-  const p = await f.handoff.prepare({
-    scope: "p",
-    candidateId: candidate!.candidateId,
-    revision: (await f.c.snapshot()).revision,
-  });
-  await f.write("untouched", "staged change\n");
-  await f.git(["add", "untouched"]);
-  const before = await disk(f.root);
-  await expect(f.handoff.execute(p.token)).rejects.toThrow();
-  expect(await disk(f.root)).toEqual(before);
-  expect(f.calls).toEqual([]);
-});
+    };
+    const a = await f.handoff.prepare(request),
+      b = await f.handoff.prepare(request);
+    expect(await f.handoff.execute(a.token)).toMatchObject({
+      status: "conflict",
+    });
+    const before = await disk(f.root);
+    await expect(f.handoff.execute(b.token)).rejects.toThrow();
+    expect(await disk(f.root)).toEqual(before);
+    expect(f.calls).toHaveLength(1);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native handoff rejects non-current target, dirty worktree and bisect without checkout",
+  fixtureScope.run(async () => {
+    const f = await setup("merge");
+    await f.git(["checkout", "main"]);
+    let before = await disk(f.root);
+    await expect(f.handoff.captureAttempt(f.c, f.input)).rejects.toThrow();
+    expect(await disk(f.root)).toEqual(before);
+    await f.git(["checkout", "topic"]);
+    await f.write("untouched", "dirty\n");
+    await expect(f.handoff.captureAttempt(f.c, f.input)).rejects.toThrow();
+    await f.git(["restore", "untouched"]);
+    await fs.writeFile(path.join(f.root, ".git/BISECT_START"), "topic\n");
+    before = await disk(f.root);
+    await expect(f.handoff.captureAttempt(f.c, f.input)).rejects.toThrow();
+    expect(await disk(f.root)).toEqual(before);
+    expect(f.calls).toEqual([]);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native handoff defaults to merge and rejects unknown or malformed effective configuration",
+  fixtureScope.run(async () => {
+    const f = await setup("merge");
+    f.config("base_ref: main\n");
+    expect((await offer(f)).algorithm).toBe("merge");
+    for (const config of [
+      "base_ref: main\nbase_ref: other\n",
+      "[",
+      "base_ref: main\nupdate:\n  strategy: custom\n",
+    ]) {
+      f.config(config);
+      await expect(f.handoff.captureAttempt(f.c, f.input)).rejects.toThrow();
+    }
+    expect(f.calls).toEqual([]);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native handoff requires a direct ref rather than a revision expression or symbolic ref",
+  fixtureScope.run(async () => {
+    const f = await setup("merge");
+    for (const sourceRef of [
+      "HEAD",
+      "main",
+      "refs/heads/main~1",
+      "--upload-pack=other",
+    ])
+      await expect(
+        f.handoff.captureAttempt(f.c, { ...f.input, sourceRef }),
+      ).rejects.toThrow();
+    await f.git(["symbolic-ref", "refs/desktop/alias", "refs/heads/main"]);
+    await expect(
+      f.handoff.captureAttempt(f.c, {
+        ...f.input,
+        sourceRef: "refs/desktop/alias",
+      }),
+    ).rejects.toThrow();
+    expect(f.calls).toEqual([]);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native full topic identity and detached display copies do not grant another owner authority",
+  fixtureScope.run(async () => {
+    const f = await setup("merge");
+    const scope = {
+      projectId: "p",
+      year: "2026",
+      topic: "topic",
+      branch: "topic",
+      contextId: `ctx-${"a".repeat(64)}`,
+      revision: "12345678-1234-4234-8234-123456789abc",
+    };
+    f.c.scope = scope;
+    const candidate = await offer(f);
+    candidate.conflicts.push("forged");
+    if (typeof candidate.scope !== "string") candidate.scope.year = "2025";
+    const p = await f.handoff.prepare({
+      scope,
+      candidateId: candidate.candidateId,
+      revision: (await f.c.snapshot()).revision,
+    });
+    expect(p.candidate.scope).toEqual(scope);
+    expect(p.candidate.conflicts).toEqual([]);
+    f.c.scope = { ...scope, year: "2025" };
+    await expect(f.handoff.execute(p.token)).rejects.toThrow();
+    expect(f.calls).toEqual([]);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native candidate eviction never makes an evicted id valid again",
+  fixtureScope.run(async () => {
+    const f = await setup("merge"),
+      first = await offer(f);
+    for (let i = 0; i < 8; i++) await offer(f);
+    await expect(
+      f.handoff.prepare({
+        scope: "p",
+        candidateId: first.candidateId,
+        revision: (await f.c.snapshot()).revision,
+      }),
+    ).rejects.toThrow();
+    expect(f.calls).toEqual([]);
+  }),
+  gitIntegrationBudget(30000),
+);
+it(
+  "native Goga refusal accepts a byte-identical atomic index rewrite but rejects changed staged data",
+  fixtureScope.run(async () => {
+    const f = await setup("merge"),
+      attempt = await f.handoff.captureAttempt(f.c, f.input);
+    const index = path.join(f.root, ".git/index");
+    await fs.copyFile(index, `${index}.fixture`);
+    await fs.rename(`${index}.fixture`, index);
+    const candidate = await f.handoff.afterFailure(
+      f.c,
+      attempt,
+      new CommandExitError("opaque", 1),
+    );
+    expect(candidate).not.toBeNull();
+    const p = await f.handoff.prepare({
+      scope: "p",
+      candidateId: candidate!.candidateId,
+      revision: (await f.c.snapshot()).revision,
+    });
+    await f.write("untouched", "staged change\n");
+    await f.git(["add", "untouched"]);
+    const before = await disk(f.root);
+    await expect(f.handoff.execute(p.token)).rejects.toThrow();
+    expect(await disk(f.root)).toEqual(before);
+    expect(f.calls).toEqual([]);
+  }),
+  gitIntegrationBudget(15000),
+);
 it.each(["owner", "file", "expiry"] as const)(
   "native offer rechecks %s after the last asynchronous eligibility probe",
-  async (race) => {
+  fixtureScope.run(async (race) => {
     const f = await setup("merge"),
       attempt = await f.handoff.captureAttempt(f.c, f.input);
     const git = f.c.git;
@@ -670,105 +730,126 @@ it.each(["owner", "file", "expiry"] as const)(
     ).toBeNull();
     expect(changed).toBe(true);
     expect(f.calls).toEqual([]);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
-it("native rebase START suppresses executable hooks without rewriting them", async () => {
-  const f = await setup("rebase"),
-    hook = path.join(f.root, ".git/hooks/pre-rebase"),
-    marker = path.join(f.home, "hook-ran");
-  const content = `#!/bin/sh\nprintf bad > '${marker}'\nexit 1\n`;
-  await fs.writeFile(hook, content, { mode: 0o755 });
-  expect(await f.handoff.execute((await preview(f)).token)).toMatchObject({
-    status: "conflict",
-  });
-  await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
-  expect(await fs.readFile(hook, "utf8")).toBe(content);
-});
+it(
+  "native rebase START suppresses executable hooks without rewriting them",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase"),
+      hook = path.join(f.root, ".git/hooks/pre-rebase"),
+      marker = path.join(f.home, "hook-ran");
+    const content = `#!/bin/sh\nprintf bad > '${marker}'\nexit 1\n`;
+    await fs.writeFile(hook, content, { mode: 0o755 });
+    expect(await f.handoff.execute((await preview(f)).token)).toMatchObject({
+      status: "conflict",
+    });
+    await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readFile(hook, "utf8")).toBe(content);
+  }),
+  gitIntegrationBudget(15000),
+);
 
-it("native handoff does not offer a needless operation when source and target coincide", async () => {
-  const f = await setup("merge");
-  await f.git(["update-ref", "refs/heads/main", f.original]);
-  const before = await disk(f.root);
-  expect(
-    await f.handoff.afterFailure(
-      f.c,
-      await f.handoff.captureAttempt(f.c, f.input),
-      new CommandExitError("opaque", 1),
-    ),
-  ).toBeNull();
-  expect(await disk(f.root)).toEqual(before);
-  expect(f.calls).toEqual([]);
-});
-it("native rebase encounters an earlier conflicting pick even when a later topic revert makes tip merge clean", async () => {
-  const f = await setup("rebase");
-  await f.write("file-1", "base\n");
-  await f.git(["commit", "-am", "undo topic change"]);
-  const p = await preview(f);
-  expect(p.candidate.conflicts).toEqual([]);
-  expect(await f.handoff.execute(p.token)).toMatchObject({
-    status: "conflict",
-    conflicts: ["file-1"],
-  });
-  expect(f.calls).toHaveLength(1);
-  await f.write("file-1", "change 1\n");
-  await f.git(["add", "file-1"]);
-  if (!(f.engine instanceof NativeGitSequence))
-    throw Error("expected native rebase engine");
-  const next = await f.engine.prepare({
-    scope: "p",
-    operation: "rebase",
-    action: "continue",
-    revision: (await f.reader.snapshot()).revision,
-  });
-  expect(await f.engine.execute(next.token)).toMatchObject({
-    outcome: "completed",
-  });
-  expect(await f.read("file-1")).toBe("base\n");
-});
-it("native rebase skips an already-upstream patch without inventing a conflict", async () => {
-  const f = await setup("rebase");
-  const base = (await f.git(["rev-parse", `${f.original}^`])).trim();
-  await f.git(["update-ref", "refs/heads/main", base]);
-  await f.git(["checkout", "main"]);
-  await f.write("untouched", "upstream prefix\n");
-  await f.git(["commit", "-am", "upstream prefix"]);
-  await f.git(["cherry-pick", f.original]);
-  await f.write("file-1", "later upstream change\n");
-  await f.git(["commit", "-am", "later upstream"]);
-  await f.git(["checkout", "topic"]);
-  expect(await f.git(["cherry", "main", "topic"])).toMatch(/^-/);
-  const p = await preview(f);
-  expect(await f.handoff.execute(p.token)).toMatchObject({
-    status: "success",
-    conflicts: [],
-  });
-  expect(await f.git(["rev-parse", "HEAD"])).toBe(
-    await f.git(["rev-parse", "main"]),
-  );
-  expect(f.calls).toHaveLength(1);
-});
-it("native Goga rebase does not overwrite ignored bytes occupying an earlier clean replay destination", async () => {
-  const f = await setup("rebase", 3, [3]);
-  await f.git(["switch", "main"]);
-  await f.write("incoming.txt", "base payload\n");
-  await f.git(["add", "incoming.txt"]);
-  await f.git(["commit", "-m", "base addition"]);
-  await f.git(["switch", "topic"]);
-  await fs.appendFile(
-    path.join(f.root, ".git/info/exclude"),
-    "\nincoming.txt\n",
-  );
-  await f.write("incoming.txt", "local ignored payload\n");
-  const p = await preview(f),
-    before = await disk(f.root);
-  await expect(f.handoff.execute(p.token)).rejects.toThrow();
-  expect(await disk(f.root)).toEqual(before);
-  expect(await f.read("incoming.txt")).toBe("local ignored payload\n");
-  expect(f.calls).toEqual([]);
-});
+it(
+  "native handoff does not offer a needless operation when source and target coincide",
+  fixtureScope.run(async () => {
+    const f = await setup("merge");
+    await f.git(["update-ref", "refs/heads/main", f.original]);
+    const before = await disk(f.root);
+    expect(
+      await f.handoff.afterFailure(
+        f.c,
+        await f.handoff.captureAttempt(f.c, f.input),
+        new CommandExitError("opaque", 1),
+      ),
+    ).toBeNull();
+    expect(await disk(f.root)).toEqual(before);
+    expect(f.calls).toEqual([]);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native rebase encounters an earlier conflicting pick even when a later topic revert makes tip merge clean",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase");
+    await f.write("file-1", "base\n");
+    await f.git(["commit", "-am", "undo topic change"]);
+    const p = await preview(f);
+    expect(p.candidate.conflicts).toEqual([]);
+    expect(await f.handoff.execute(p.token)).toMatchObject({
+      status: "conflict",
+      conflicts: ["file-1"],
+    });
+    expect(f.calls).toHaveLength(1);
+    await f.write("file-1", "change 1\n");
+    await f.git(["add", "file-1"]);
+    if (!(f.engine instanceof NativeGitSequence))
+      throw Error("expected native rebase engine");
+    const next = await f.engine.prepare({
+      scope: "p",
+      operation: "rebase",
+      action: "continue",
+      revision: (await f.reader.snapshot()).revision,
+    });
+    expect(await f.engine.execute(next.token)).toMatchObject({
+      outcome: "completed",
+    });
+    expect(await f.read("file-1")).toBe("base\n");
+  }),
+  gitIntegrationBudget(30000),
+);
+it(
+  "native rebase skips an already-upstream patch without inventing a conflict",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase");
+    const base = (await f.git(["rev-parse", `${f.original}^`])).trim();
+    await f.git(["update-ref", "refs/heads/main", base]);
+    await f.git(["checkout", "main"]);
+    await f.write("untouched", "upstream prefix\n");
+    await f.git(["commit", "-am", "upstream prefix"]);
+    await f.git(["cherry-pick", f.original]);
+    await f.write("file-1", "later upstream change\n");
+    await f.git(["commit", "-am", "later upstream"]);
+    await f.git(["checkout", "topic"]);
+    expect(await f.git(["cherry", "main", "topic"])).toMatch(/^-/);
+    const p = await preview(f);
+    expect(await f.handoff.execute(p.token)).toMatchObject({
+      status: "success",
+      conflicts: [],
+    });
+    expect(await f.git(["rev-parse", "HEAD"])).toBe(
+      await f.git(["rev-parse", "main"]),
+    );
+    expect(f.calls).toHaveLength(1);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native Goga rebase does not overwrite ignored bytes occupying an earlier clean replay destination",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase", 3, [3]);
+    await f.git(["switch", "main"]);
+    await f.write("incoming.txt", "base payload\n");
+    await f.git(["add", "incoming.txt"]);
+    await f.git(["commit", "-m", "base addition"]);
+    await f.git(["switch", "topic"]);
+    await fs.appendFile(
+      path.join(f.root, ".git/info/exclude"),
+      "\nincoming.txt\n",
+    );
+    await f.write("incoming.txt", "local ignored payload\n");
+    const p = await preview(f),
+      before = await disk(f.root);
+    await expect(f.handoff.execute(p.token)).rejects.toThrow();
+    expect(await disk(f.root)).toEqual(before);
+    expect(await f.read("incoming.txt")).toBe("local ignored payload\n");
+    expect(f.calls).toEqual([]);
+  }),
+  gitIntegrationBudget(15000),
+);
 it.each(["merge", "rebase"])(
   "native Goga %s unsettled failure is uncertain and never retried",
-  async (strategy) => {
+  fixtureScope.run(async (strategy) => {
     const f = await setup(strategy),
       p = await preview(f);
     f.fault(async () => {
@@ -791,87 +872,104 @@ it.each(["merge", "rebase"])(
     });
     await expect(f.handoff.execute(p.token)).rejects.toThrow();
     expect(f.calls).toHaveLength(1);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
-it("native handoff rechecks ownership after the final effective configuration read", async () => {
-  const f = await setup("merge"),
-    read = f.c.topicsConfig;
-  let invalid = false;
-  f.c.verify = async () => {
-    if (invalid) throw Error("owner changed");
-  };
-  f.c.topicsConfig = async () => {
-    const value = await read();
-    invalid = true;
-    return value;
-  };
-  await expect(f.handoff.captureAttempt(f.c, f.input)).rejects.toThrow();
-  expect(f.calls).toEqual([]);
-});
-it("native handoff refuses physical edits during the final effective configuration read", async () => {
-  const f = await setup("merge"),
-    read = f.c.topicsConfig;
-  f.c.topicsConfig = async () => {
-    const value = await read();
-    await f.write("untouched", "changed-late\n");
-    return value;
-  };
-  await expect(f.handoff.captureAttempt(f.c, f.input)).rejects.toThrow();
-  expect(await f.read("untouched")).toBe("changed-late\n");
-  expect(f.calls).toEqual([]);
-});
+it(
+  "native handoff rechecks ownership after the final effective configuration read",
+  fixtureScope.run(async () => {
+    const f = await setup("merge"),
+      read = f.c.topicsConfig;
+    let invalid = false;
+    f.c.verify = async () => {
+      if (invalid) throw Error("owner changed");
+    };
+    f.c.topicsConfig = async () => {
+      const value = await read();
+      invalid = true;
+      return value;
+    };
+    await expect(f.handoff.captureAttempt(f.c, f.input)).rejects.toThrow();
+    expect(f.calls).toEqual([]);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native handoff refuses physical edits during the final effective configuration read",
+  fixtureScope.run(async () => {
+    const f = await setup("merge"),
+      read = f.c.topicsConfig;
+    f.c.topicsConfig = async () => {
+      const value = await read();
+      await f.write("untouched", "changed-late\n");
+      return value;
+    };
+    await expect(f.handoff.captureAttempt(f.c, f.input)).rejects.toThrow();
+    expect(await f.read("untouched")).toBe("changed-late\n");
+    expect(f.calls).toEqual([]);
+  }),
+  gitIntegrationBudget(15000),
+);
 
-it("native Goga START never seals an injected exec as trusted continuation provenance", async () => {
-  const f = await setup("rebase", 2, [1]),
-    p = await preview(f);
-  const marker = path.join(f.home, "injected-exec-ran");
-  f.afterNative(async () => {
-    await fs.appendFile(
-      path.join(f.root, ".git/rebase-merge/git-rebase-todo"),
-      `exec printf compromised > '${marker}'\n`,
-    );
-  });
-  const started = await f.handoff.execute(p.token);
-  await f.resolve();
-  if (!(f.engine instanceof NativeGitSequence))
-    throw Error("expected native rebase engine");
-  let continuation: string | undefined;
-  try {
-    const next = await f.engine.prepare({
-      scope: "p",
-      operation: "rebase",
-      action: "continue",
-      revision: (await f.reader.snapshot()).revision,
+it(
+  "native Goga START never seals an injected exec as trusted continuation provenance",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase", 2, [1]),
+      p = await preview(f);
+    const marker = path.join(f.home, "injected-exec-ran");
+    f.afterNative(async () => {
+      await fs.appendFile(
+        path.join(f.root, ".git/rebase-merge/git-rebase-todo"),
+        `exec printf compromised > '${marker}'\n`,
+      );
     });
-    continuation = (await f.engine.execute(next.token)).outcome;
-  } catch {
-    /* A denied provenance check must not run the injected exec. */
-  }
-  const markerExists = await fs.stat(marker).then(
-    () => true,
-    () => false,
-  );
-  expect({ start: started.status, continuation, markerExists }).toEqual({
-    start: "uncertain",
-    continuation: undefined,
-    markerExists: false,
-  });
-});
-it("native Goga START preserves concurrent conflict bytes without certifying a verified conflict", async () => {
-  const f = await setup("rebase"),
-    p = await preview(f);
-  f.afterNative(() => f.write("file-1", "external unsaved edit\n"));
-  const result = await f.handoff.execute(p.token);
-  expect(await f.read("file-1")).toBe("external unsaved edit\n");
-  expect(result).toMatchObject({
-    status: "uncertain",
-    changed: true,
-    native: { recovery: "retained" },
-  });
-});
+    const started = await f.handoff.execute(p.token);
+    await f.resolve();
+    if (!(f.engine instanceof NativeGitSequence))
+      throw Error("expected native rebase engine");
+    let continuation: string | undefined;
+    try {
+      const next = await f.engine.prepare({
+        scope: "p",
+        operation: "rebase",
+        action: "continue",
+        revision: (await f.reader.snapshot()).revision,
+      });
+      continuation = (await f.engine.execute(next.token)).outcome;
+    } catch {
+      /* A denied provenance check must not run the injected exec. */
+    }
+    const markerExists = await fs.stat(marker).then(
+      () => true,
+      () => false,
+    );
+    expect({ start: started.status, continuation, markerExists }).toEqual({
+      start: "uncertain",
+      continuation: undefined,
+      markerExists: false,
+    });
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native Goga START preserves concurrent conflict bytes without certifying a verified conflict",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase"),
+      p = await preview(f);
+    f.afterNative(() => f.write("file-1", "external unsaved edit\n"));
+    const result = await f.handoff.execute(p.token);
+    expect(await f.read("file-1")).toBe("external unsaved edit\n");
+    expect(result).toMatchObject({
+      status: "uncertain",
+      changed: true,
+      native: { recovery: "retained" },
+    });
+  }),
+  gitIntegrationBudget(15000),
+);
 it.each(["merge", "rebase"])(
   "native Goga %s does not certify unrelated index tampering after Git stops",
-  async (strategy) => {
+  fixtureScope.run(async (strategy) => {
     const f = await setup(strategy),
       p = await preview(f);
     f.afterNative(async () => {
@@ -886,121 +984,150 @@ it.each(["merge", "rebase"])(
       native: { recovery: "retained" },
     });
     expect(f.calls).toHaveLength(1);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
-it("native Goga START preserves concurrent non-conflicting tracked edits without certifying them", async () => {
-  const f = await setup("rebase", 3, [3]),
-    p = await preview(f);
-  f.afterNative(() => f.write("file-1", "external unsaved edit\n"));
-  const result = await f.handoff.execute(p.token);
-  expect(await f.read("file-1")).toBe("external unsaved edit\n");
-  expect(result).toMatchObject({
-    status: "uncertain",
-    changed: true,
-    native: { recovery: "retained" },
-  });
-});
-it("native Goga attributes use actual Git behavior without a fabricated conflict prediction", async () => {
-  const f = await setup("merge");
-  await fs.writeFile(
-    path.join(f.root, ".git/info/attributes"),
-    "file-1 merge=union\n",
-  );
-  const p = await preview(f);
-  expect(p.candidate.conflicts).toEqual([]);
-  expect(await f.handoff.execute(p.token)).toMatchObject({
-    status: "success",
-    conflicts: [],
-  });
-  expect(await f.read("file-1")).toContain("change 1");
-  expect(await f.read("file-1")).toContain("upstream 1");
-});
-it("native Goga refuses executable merge policy without running or rewriting its files", async () => {
-  const f = await setup("merge"),
-    marker = path.join(f.home, "merge-driver-ran");
-  await f.git(["config", "merge.custom.driver", `printf bad > '${marker}'`]);
-  await fs.writeFile(
-    path.join(f.root, ".git/info/attributes"),
-    "file-1 merge=custom\n",
-  );
-  const before = await disk(f.root);
-  await expect(
-    (async () => f.handoff.execute((await preview(f)).token))(),
-  ).rejects.toThrow();
-  await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
-  expect(await disk(f.root)).toEqual(before);
-  expect(f.calls).toEqual([]);
-});
-it("native Goga confirmation expiring during final state validation cannot start Git", async () => {
-  const f = await setup("merge"),
-    p = await preview(f);
-  const read = f.c.topicsConfig;
-  let reads = 0;
-  f.c.topicsConfig = async () => {
-    const value = await read();
-    if (++reads === 2) f.advance();
-    return value;
-  };
-  const before = await disk(f.root);
-  await expect(f.handoff.execute(p.token)).rejects.toThrow();
-  expect(reads).toBe(2);
-  expect(f.calls).toEqual([]);
-  expect(await disk(f.root)).toEqual(before);
-});
+it(
+  "native Goga START preserves concurrent non-conflicting tracked edits without certifying them",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase", 3, [3]),
+      p = await preview(f);
+    f.afterNative(() => f.write("file-1", "external unsaved edit\n"));
+    const result = await f.handoff.execute(p.token);
+    expect(await f.read("file-1")).toBe("external unsaved edit\n");
+    expect(result).toMatchObject({
+      status: "uncertain",
+      changed: true,
+      native: { recovery: "retained" },
+    });
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native Goga attributes use actual Git behavior without a fabricated conflict prediction",
+  fixtureScope.run(async () => {
+    const f = await setup("merge");
+    await fs.writeFile(
+      path.join(f.root, ".git/info/attributes"),
+      "file-1 merge=union\n",
+    );
+    const p = await preview(f);
+    expect(p.candidate.conflicts).toEqual([]);
+    expect(await f.handoff.execute(p.token)).toMatchObject({
+      status: "success",
+      conflicts: [],
+    });
+    expect(await f.read("file-1")).toContain("change 1");
+    expect(await f.read("file-1")).toContain("upstream 1");
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native Goga refuses executable merge policy without running or rewriting its files",
+  fixtureScope.run(async () => {
+    const f = await setup("merge"),
+      marker = path.join(f.home, "merge-driver-ran");
+    await f.git(["config", "merge.custom.driver", `printf bad > '${marker}'`]);
+    await fs.writeFile(
+      path.join(f.root, ".git/info/attributes"),
+      "file-1 merge=custom\n",
+    );
+    const before = await disk(f.root);
+    await expect(
+      (async () => f.handoff.execute((await preview(f)).token))(),
+    ).rejects.toThrow();
+    await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await disk(f.root)).toEqual(before);
+    expect(f.calls).toEqual([]);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native Goga confirmation expiring during final state validation cannot start Git",
+  fixtureScope.run(async () => {
+    const f = await setup("merge"),
+      p = await preview(f);
+    const read = f.c.topicsConfig;
+    let reads = 0;
+    f.c.topicsConfig = async () => {
+      const value = await read();
+      if (++reads === 2) f.advance();
+      return value;
+    };
+    const before = await disk(f.root);
+    await expect(f.handoff.execute(p.token)).rejects.toThrow();
+    expect(reads).toBe(2);
+    expect(f.calls).toEqual([]);
+    expect(await disk(f.root)).toEqual(before);
+  }),
+  gitIntegrationBudget(15000),
+);
 
-it("native result witness refuses worktree drift after the final public diff", async () => {
-  const f = await setup("rebase"),
-    p = await preview(f);
-  let injected = false;
-  f.observeRead(async (args) => {
-    if (
-      !injected &&
-      args.includes("diff") &&
-      args.includes("--name-only") &&
-      args.includes("--no-textconv")
-    ) {
-      injected = true;
-      await f.write("file-1", "late external edit\n");
-    }
-  });
-  const result = await f.handoff.execute(p.token);
-  expect(injected).toBe(true);
-  expect(await f.read("file-1")).toBe("late external edit\n");
-  expect(result).toMatchObject({
-    status: "uncertain",
-    native: { recovery: "retained" },
-  });
-  expect(f.calls).toHaveLength(1);
-  expect(f.planInspections).toHaveLength(2);
-});
-it("native public plan inspection refuses a todo changed after its second read", async () => {
-  const f = await setup("rebase"),
-    p = await preview(f);
-  let inspections = 0;
-  f.observeRead(async (args) => {
-    if (args.includes("--edit-todo") && ++inspections === 2)
-      await fs.appendFile(
-        path.join(f.root, ".git/rebase-merge/git-rebase-todo"),
-        "exec false\n",
-      );
-  });
-  expect(await f.handoff.execute(p.token)).toMatchObject({
-    status: "uncertain",
-    native: { recovery: "retained" },
-  });
-  expect(f.calls).toHaveLength(1);
-  expect(f.planInspections).toHaveLength(2);
-});
-it("native merge requires its result witness rather than treating absence as proof", async () => {
-  const f = await setup("merge"),
-    p = await preview(f);
-  f.afterNative(() => fs.unlink(path.join(f.root, ".git/AUTO_MERGE")));
-  expect(await f.handoff.execute(p.token)).toMatchObject({
-    status: "uncertain",
-    native: { recovery: "retained" },
-  });
-  expect(f.calls).toHaveLength(1);
-});
+it(
+  "native result witness refuses worktree drift after the final public diff",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase"),
+      p = await preview(f);
+    let injected = false;
+    f.observeRead(async (args) => {
+      if (
+        !injected &&
+        args.includes("diff") &&
+        args.includes("--name-only") &&
+        args.includes("--no-textconv")
+      ) {
+        injected = true;
+        await f.write("file-1", "late external edit\n");
+      }
+    });
+    const result = await f.handoff.execute(p.token);
+    expect(injected).toBe(true);
+    expect(await f.read("file-1")).toBe("late external edit\n");
+    expect(result).toMatchObject({
+      status: "uncertain",
+      native: { recovery: "retained" },
+    });
+    expect(f.calls).toHaveLength(1);
+    expect(f.planInspections).toHaveLength(2);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native public plan inspection refuses a todo changed after its second read",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase"),
+      p = await preview(f);
+    let inspections = 0;
+    f.observeRead(async (args) => {
+      if (args.includes("--edit-todo") && ++inspections === 2)
+        await fs.appendFile(
+          path.join(f.root, ".git/rebase-merge/git-rebase-todo"),
+          "exec false\n",
+        );
+    });
+    expect(await f.handoff.execute(p.token)).toMatchObject({
+      status: "uncertain",
+      native: { recovery: "retained" },
+    });
+    expect(f.calls).toHaveLength(1);
+    expect(f.planInspections).toHaveLength(2);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "native merge requires its result witness rather than treating absence as proof",
+  fixtureScope.run(async () => {
+    const f = await setup("merge"),
+      p = await preview(f);
+    f.afterNative(() => fs.unlink(path.join(f.root, ".git/AUTO_MERGE")));
+    expect(await f.handoff.execute(p.token)).toMatchObject({
+      status: "uncertain",
+      native: { recovery: "retained" },
+    });
+    expect(f.calls).toHaveLength(1);
+  }),
+  gitIntegrationBudget(15000),
+);
 
 it.each([
   ["merge", "--assume-unchanged"],
@@ -1009,7 +1136,7 @@ it.each([
   ["rebase", "--skip-worktree"],
 ])(
   "native %s witness rejects post-stop %s hiding changed bytes",
-  async (strategy, flag) => {
+  fixtureScope.run(async (strategy, flag) => {
     const f = await setup(strategy),
       p = await preview(f);
     f.afterNative(async () => {
@@ -1022,32 +1149,37 @@ it.each([
     });
     expect(await f.read("untouched")).toBe("hidden external edit\n");
     expect(f.calls).toHaveLength(1);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 
-it("native witness rejects an unrelated path forged as unmerged after Git stops", async () => {
-  const f = await setup("rebase"),
-    p = await preview(f);
-  const oid = (await f.git(["rev-parse", "HEAD:untouched"])).trim();
-  f.afterNative(async () => {
-    await f.c.git(["update-index", "--index-info"], {
-      stdin:
-        `0 ${"0".repeat(40)}\tuntouched\n` +
-        [1, 2, 3]
-          .map((stage) => `100644 ${oid} ${stage}\tuntouched\n`)
-          .join(""),
+it(
+  "native witness rejects an unrelated path forged as unmerged after Git stops",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase"),
+      p = await preview(f);
+    const oid = (await f.git(["rev-parse", "HEAD:untouched"])).trim();
+    f.afterNative(async () => {
+      await f.c.git(["update-index", "--index-info"], {
+        stdin:
+          `0 ${"0".repeat(40)}\tuntouched\n` +
+          [1, 2, 3]
+            .map((stage) => `100644 ${oid} ${stage}\tuntouched\n`)
+            .join(""),
+      });
     });
-  });
-  expect(await f.handoff.execute(p.token)).toMatchObject({
-    status: "uncertain",
-    native: { recovery: "retained" },
-  });
-  expect(f.calls).toHaveLength(1);
-});
+    expect(await f.handoff.execute(p.token)).toMatchObject({
+      status: "uncertain",
+      native: { recovery: "retained" },
+    });
+    expect(f.calls).toHaveLength(1);
+  }),
+  gitIntegrationBudget(15000),
+);
 
 it.each(["merge", "rebase"])(
   "%s: native witness rejects substituted stages on an existing conflict path",
-  async (strategy) => {
+  fixtureScope.run(async (strategy) => {
     const f = await setup(strategy),
       p = await preview(f);
     const oid = (await f.git(["rev-parse", "HEAD:untouched"])).trim();
@@ -1066,12 +1198,13 @@ it.each(["merge", "rebase"])(
       native: { recovery: "retained" },
     });
     expect(f.calls).toHaveLength(1);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 
 it.each(["merge", "rebase"])(
   "%s: native witness rejects a conflict silently staged before its first seal",
-  async (strategy) => {
+  fixtureScope.run(async (strategy) => {
     const f = await setup(strategy, 2, [1, 2]),
       p = await preview(f);
     f.afterNative(async () => {
@@ -1086,65 +1219,74 @@ it.each(["merge", "rebase"])(
       native: { recovery: "retained" },
     });
     expect(f.calls).toHaveLength(1);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 
-it("conflict membership witness refuses index drift during its native probe", async () => {
-  const f = await setup("rebase"),
-    p = await preview(f);
-  let injected = false;
-  f.observeRead(async (args) => {
-    if (
-      !injected &&
-      f.calls.length === 1 &&
-      args.includes("--show-object-format")
-    ) {
-      injected = true;
-      const oid = (await f.git(["rev-parse", "HEAD:untouched"])).trim();
-      await f.c.git(["update-index", "--index-info"], {
-        stdin: `100755 ${oid} 0\tuntouched\n`,
-      });
-    }
-  });
-  expect(await f.handoff.execute(p.token)).toMatchObject({
-    status: "uncertain",
-    native: { recovery: "retained" },
-  });
-  expect(injected).toBe(true);
-  expect(f.calls).toHaveLength(1);
-});
+it(
+  "conflict membership witness refuses index drift during its native probe",
+  fixtureScope.run(async () => {
+    const f = await setup("rebase"),
+      p = await preview(f);
+    let injected = false;
+    f.observeRead(async (args) => {
+      if (
+        !injected &&
+        f.calls.length === 1 &&
+        args.includes("--show-object-format")
+      ) {
+        injected = true;
+        const oid = (await f.git(["rev-parse", "HEAD:untouched"])).trim();
+        await f.c.git(["update-index", "--index-info"], {
+          stdin: `100755 ${oid} 0\tuntouched\n`,
+        });
+      }
+    });
+    expect(await f.handoff.execute(p.token)).toMatchObject({
+      status: "uncertain",
+      native: { recovery: "retained" },
+    });
+    expect(injected).toBe(true);
+    expect(f.calls).toHaveLength(1);
+  }),
+  gitIntegrationBudget(15000),
+);
 
-it("N8 clean handoff preserves recovery until its outer context has released", async () => {
-  const f = await setup("merge");
-  await f.git([
-    "restore",
-    "--source=main",
-    "--staged",
-    "--worktree",
-    "--",
-    "file-1",
-  ]);
-  await f.git(["commit", "-m", "same content as source"]);
-  const attempt = await f.handoff.captureAttempt(f.c, f.input);
-  const candidate = await f.handoff.afterFailure(
-    f.c,
-    attempt,
-    new CommandExitError("opaque", 1),
-  );
-  const p = await f.handoff.prepare({
-    scope: "p",
-    candidateId: candidate!.candidateId,
-    revision: (await f.reader.snapshot()).revision,
-  });
-  f.afterContext(() => {
-    throw Error("outer-owner-release");
-  });
-  await expect(f.handoff.execute(p.token)).rejects.toThrow();
-  const dir = path.join(f.home, "journal");
-  const name = (await fs.readdir(dir)).find((n) => n.endsWith(".json"))!;
-  const record = JSON.parse(await fs.readFile(path.join(dir, name), "utf8"));
-  expect(record.recovery).not.toBeNull();
-  await expect(
-    f.c.native!.journal.assertAdmission(f.root, record.recovery.owner),
-  ).rejects.toThrow();
-});
+it(
+  "N8 clean handoff preserves recovery until its outer context has released",
+  fixtureScope.run(async () => {
+    const f = await setup("merge");
+    await f.git([
+      "restore",
+      "--source=main",
+      "--staged",
+      "--worktree",
+      "--",
+      "file-1",
+    ]);
+    await f.git(["commit", "-m", "same content as source"]);
+    const attempt = await f.handoff.captureAttempt(f.c, f.input);
+    const candidate = await f.handoff.afterFailure(
+      f.c,
+      attempt,
+      new CommandExitError("opaque", 1),
+    );
+    const p = await f.handoff.prepare({
+      scope: "p",
+      candidateId: candidate!.candidateId,
+      revision: (await f.reader.snapshot()).revision,
+    });
+    f.afterContext(() => {
+      throw Error("outer-owner-release");
+    });
+    await expect(f.handoff.execute(p.token)).rejects.toThrow();
+    const dir = path.join(f.home, "journal");
+    const name = (await fs.readdir(dir)).find((n) => n.endsWith(".json"))!;
+    const record = JSON.parse(await fs.readFile(path.join(dir, name), "utf8"));
+    expect(record.recovery).not.toBeNull();
+    await expect(
+      f.c.native!.journal.assertAdmission(f.root, record.recovery.owner),
+    ).rejects.toThrow();
+  }),
+  gitIntegrationBudget(15000),
+);

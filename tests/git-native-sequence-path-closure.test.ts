@@ -1,3 +1,5 @@
+import { gitIntegrationBudget } from "./helpers/git-integration";
+import { nativeSequenceScope as fixtureScope } from "./helpers/native-sequence-regression";
 import { expect, it } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -74,7 +76,7 @@ async function future(
 
 it.each([".gitattributes", ".GITATTRIBUTES"])(
   "managed start refuses source-only %s without changing bytes, index or refs",
-  async (name) => {
+  fixtureScope.run(async (name) => {
     const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
     await f.write(name, "* text eol=crlf\n");
     await f.git(["add", "--", name]);
@@ -88,12 +90,13 @@ it.each([".gitattributes", ".GITATTRIBUTES"])(
     ).rejects.toThrow();
     expect(await preserved(f)).toEqual(before);
     expect(f.calls).toHaveLength(0);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 
 it.each(["smudge", "process"] as const)(
   "repository %s filter never executes during managed admission",
-  async (kind) => {
+  fixtureScope.run(async (kind) => {
     const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
     if (kind === "process")
       expect(await f.start()).toMatchObject({ outcome: "conflicts" });
@@ -113,125 +116,144 @@ it.each(["smudge", "process"] as const)(
     expect(await preserved(f)).toEqual(before);
     await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
     expect(f.calls).toHaveLength(kind === "smudge" ? 0 : 1);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 
-it("managed abort isolates a default global helper and restores exact baseline bytes", async () => {
-  const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
-  const marker = path.join(f.home, "global-filter-executed");
-  const attributes = path.join(f.home, "git", "attributes");
-  await fs.mkdir(path.dirname(attributes), { recursive: true });
-  await fs.writeFile(attributes, "* filter=hostile\n");
-  await fs.writeFile(
-    path.join(f.home, ".gitconfig"),
-    `[filter "hostile"]\nsmudge = "printf unsafe > '${marker}'; cat"\n`,
-  );
-  // Initial policy is admitted and remains unchanged through start and abort.
-  // Injecting this source after the managed seal would instead test policy drift.
-  const baseline = await contents(f.root);
-  const index = await f.git(["ls-files", "--stage", "-z"]);
-  expect(await f.start()).toMatchObject({ outcome: "conflicts" });
-  expect(
-    await f.engine.execute((await f.prepare("abort")).token),
-  ).toMatchObject({
-    outcome: "completed",
-    recovery: "removed",
-  });
-  expect(await contents(f.root)).toEqual(baseline);
-  expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
-  expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(f.original);
-  expect((await f.git(["symbolic-ref", "--short", "HEAD"])).trim()).toBe(
-    f.branch,
-  );
-  expect(await fs.readFile(attributes, "utf8")).toBe("* filter=hostile\n");
-  await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
-  expect(f.calls).toHaveLength(2);
-});
-
-it("changed default global attributes after a managed seal revoke abort authority without native writes", async () => {
-  const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
-  const attributes = path.join(f.home, "git", "attributes");
-  await fs.mkdir(path.dirname(attributes), { recursive: true });
-  await fs.writeFile(attributes, "* text eol=lf\n");
-  expect(await f.start()).toMatchObject({ outcome: "conflicts" });
-  const preview = await f.prepare("abort");
-  await fs.writeFile(attributes, "* text eol=crlf\n");
-  const before = await preserved(f);
-  await expect(f.engine.execute(preview.token)).rejects.toThrow();
-  await expect(f.engine.execute(preview.token)).rejects.toThrow();
-  expect(await preserved(f)).toEqual(before);
-  expect(await fs.readFile(attributes, "utf8")).toBe("* text eol=crlf\n");
-  expect(f.calls).toHaveLength(1);
-});
-
-it("commit.cleanup drift after a managed seal refuses abort without losing user data", async () => {
-  const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
-  expect(await f.start()).toMatchObject({ outcome: "conflicts" });
-  const preview = await f.prepare("abort");
-  await f.git(["config", "commit.cleanup", "verbatim"]);
-  const before = await preserved(f);
-  await expect(f.engine.execute(preview.token)).rejects.toThrow();
-  await expect(f.engine.execute(preview.token)).rejects.toThrow();
-  expect(await preserved(f)).toEqual(before);
-  expect((await f.git(["config", "commit.cleanup"])).trim()).toBe("verbatim");
-  expect(f.calls).toHaveLength(1);
-});
-
-it("managed abort does not remove an originally empty pinned directory", async () => {
-  const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
-  await f.git(["checkout", "main"]);
-  await fs.mkdir(path.join(f.root, "pinned"));
-  await f.write("pinned/upstream", "upstream only\n");
-  await f.git(["add", "pinned/upstream"]);
-  await f.git(["commit", "-m", "upstream directory"]);
-  const source = (await f.git(["rev-parse", "HEAD"])).trim();
-  await f.git(["checkout", "topic"]);
-  await fs.mkdir(path.join(f.root, "pinned"), { recursive: true });
-  const baseline = await contents(f.root);
-  const index = await f.git(["ls-files", "--stage", "-z"]);
-  // Either conservative admission or supported directory retention is safe;
-  // success without the original directory is never accepted.
-  const start = await f.engine
-    .prepareStart("regression", {
-      operation: "rebase",
-      source,
-      backend: "merge",
-    })
-    .then(
-      (preview) => ({ preview }),
-      (error: unknown) => ({ error }),
+it(
+  "managed abort isolates a default global helper and restores exact baseline bytes",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
+    const marker = path.join(f.home, "global-filter-executed");
+    const attributes = path.join(f.home, "git", "attributes");
+    await fs.mkdir(path.dirname(attributes), { recursive: true });
+    await fs.writeFile(attributes, "* filter=hostile\n");
+    await fs.writeFile(
+      path.join(f.home, ".gitconfig"),
+      `[filter "hostile"]\nsmudge = "printf unsafe > '${marker}'; cat"\n`,
     );
-  if (!("preview" in start)) {
-    expect(start.error).toBeInstanceOf(Error);
-    expect(await contents(f.root)).toEqual(baseline);
-    expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
-    expect(f.calls).toHaveLength(0);
-    return;
-  }
-  expect(await f.engine.execute(start.preview.token)).toMatchObject({
-    outcome: "conflicts",
-  });
-  const before = await preserved(f);
-  const abort = await f.prepare("abort").then(
-    (preview) => ({ preview }),
-    (error: unknown) => ({ error }),
-  );
-  if (!("preview" in abort)) {
-    expect(abort.error).toBeInstanceOf(Error);
-    expect(await preserved(f)).toEqual(before);
-    expect(f.calls).toHaveLength(1);
-  } else {
-    expect(await f.engine.execute(abort.preview.token)).toMatchObject({
+    // Initial policy is admitted and remains unchanged through start and abort.
+    // Injecting this source after the managed seal would instead test policy drift.
+    const baseline = await contents(f.root);
+    const index = await f.git(["ls-files", "--stage", "-z"]);
+    expect(await f.start()).toMatchObject({ outcome: "conflicts" });
+    expect(
+      await f.engine.execute((await f.prepare("abort")).token),
+    ).toMatchObject({
       outcome: "completed",
       recovery: "removed",
     });
     expect(await contents(f.root)).toEqual(baseline);
     expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
     expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(f.original);
+    expect((await f.git(["symbolic-ref", "--short", "HEAD"])).trim()).toBe(
+      f.branch,
+    );
+    expect(await fs.readFile(attributes, "utf8")).toBe("* filter=hostile\n");
+    await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
     expect(f.calls).toHaveLength(2);
-  }
-  expect((await fs.stat(path.join(f.root, "pinned"))).isDirectory()).toBe(true);
-});
+  }),
+  gitIntegrationBudget(15000),
+);
+
+it(
+  "changed default global attributes after a managed seal revoke abort authority without native writes",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
+    const attributes = path.join(f.home, "git", "attributes");
+    await fs.mkdir(path.dirname(attributes), { recursive: true });
+    await fs.writeFile(attributes, "* text eol=lf\n");
+    expect(await f.start()).toMatchObject({ outcome: "conflicts" });
+    const preview = await f.prepare("abort");
+    await fs.writeFile(attributes, "* text eol=crlf\n");
+    const before = await preserved(f);
+    await expect(f.engine.execute(preview.token)).rejects.toThrow();
+    await expect(f.engine.execute(preview.token)).rejects.toThrow();
+    expect(await preserved(f)).toEqual(before);
+    expect(await fs.readFile(attributes, "utf8")).toBe("* text eol=crlf\n");
+    expect(f.calls).toHaveLength(1);
+  }),
+  gitIntegrationBudget(15000),
+);
+
+it(
+  "commit.cleanup drift after a managed seal refuses abort without losing user data",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
+    expect(await f.start()).toMatchObject({ outcome: "conflicts" });
+    const preview = await f.prepare("abort");
+    await f.git(["config", "commit.cleanup", "verbatim"]);
+    const before = await preserved(f);
+    await expect(f.engine.execute(preview.token)).rejects.toThrow();
+    await expect(f.engine.execute(preview.token)).rejects.toThrow();
+    expect(await preserved(f)).toEqual(before);
+    expect((await f.git(["config", "commit.cleanup"])).trim()).toBe("verbatim");
+    expect(f.calls).toHaveLength(1);
+  }),
+  gitIntegrationBudget(15000),
+);
+
+it(
+  "managed abort does not remove an originally empty pinned directory",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
+    await f.git(["checkout", "main"]);
+    await fs.mkdir(path.join(f.root, "pinned"));
+    await f.write("pinned/upstream", "upstream only\n");
+    await f.git(["add", "pinned/upstream"]);
+    await f.git(["commit", "-m", "upstream directory"]);
+    const source = (await f.git(["rev-parse", "HEAD"])).trim();
+    await f.git(["checkout", "topic"]);
+    await fs.mkdir(path.join(f.root, "pinned"), { recursive: true });
+    const baseline = await contents(f.root);
+    const index = await f.git(["ls-files", "--stage", "-z"]);
+    // Either conservative admission or supported directory retention is safe;
+    // success without the original directory is never accepted.
+    const start = await f.engine
+      .prepareStart("regression", {
+        operation: "rebase",
+        source,
+        backend: "merge",
+      })
+      .then(
+        (preview) => ({ preview }),
+        (error: unknown) => ({ error }),
+      );
+    if (!("preview" in start)) {
+      expect(start.error).toBeInstanceOf(Error);
+      expect(await contents(f.root)).toEqual(baseline);
+      expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
+      expect(f.calls).toHaveLength(0);
+      return;
+    }
+    expect(await f.engine.execute(start.preview.token)).toMatchObject({
+      outcome: "conflicts",
+    });
+    const before = await preserved(f);
+    const abort = await f.prepare("abort").then(
+      (preview) => ({ preview }),
+      (error: unknown) => ({ error }),
+    );
+    if (!("preview" in abort)) {
+      expect(abort.error).toBeInstanceOf(Error);
+      expect(await preserved(f)).toEqual(before);
+      expect(f.calls).toHaveLength(1);
+    } else {
+      expect(await f.engine.execute(abort.preview.token)).toMatchObject({
+        outcome: "completed",
+        recovery: "removed",
+      });
+      expect(await contents(f.root)).toEqual(baseline);
+      expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
+      expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(f.original);
+      expect(f.calls).toHaveLength(2);
+    }
+    expect((await fs.stat(path.join(f.root, "pinned"))).isDirectory()).toBe(
+      true,
+    );
+  }),
+  gitIntegrationBudget(15000),
+);
 
 it.each([
   ["future/NewFile", "future/newfile"],
@@ -240,7 +262,7 @@ it.each([
   ["future/Caf\u00e9/file", "future/Cafe\u0301/file"],
 ])(
   "future ignored alias %s / %s never overwrites physical user bytes",
-  async (target, alias) => {
+  fixtureScope.run(async (target, alias) => {
     const f = await nativeSequenceFixture("cherry-pick", 1, [1]);
     const start = await future(f, [target]);
     await f.write(".git/info/exclude", "future/\n");
@@ -279,7 +301,8 @@ it.each([
     expect(await f.read(alias)).toBe("private alias draft\n");
     expect(await f.read("ignored")).toBe("preserve ignored\n");
     expect(await f.read("untracked")).toBe("preserve untracked\n");
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 
 it.each([
@@ -293,52 +316,64 @@ it.each([
   },
 ])(
   "future-only coherent $kind aliases are rejected before native writes",
-  async ({ names }) => {
+  fixtureScope.run(async ({ names }) => {
     const f = await nativeSequenceFixture("cherry-pick", 1, [1]);
     const start = await future(f, names);
     const before = await preserved(f);
     await expect(f.engine.prepareStart("regression", start)).rejects.toThrow();
     expect(await preserved(f)).toEqual(before);
     expect(f.calls).toHaveLength(0);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 
-it("a non-ASCII future path without aliases is restored by managed native abort", async () => {
-  const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
-  const name = "будущее/данные";
-  await fs.mkdir(path.dirname(path.join(f.root, name)), { recursive: true });
-  await f.write(name, "future data\n");
-  await f.git(["add", "--", name]);
-  await f.git(["commit", "-m", "future Unicode restoration"]);
-  const original = (await f.git(["rev-parse", "HEAD"])).trim();
-  const index = await f.git(["ls-files", "--stage", "-z"]);
-  const baseline = await contents(f.root);
-  expect(await f.start()).toMatchObject({ outcome: "conflicts" });
-  await expect(fs.stat(path.join(f.root, name))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
-  expect(
-    await f.engine.execute((await f.prepare("abort")).token),
-  ).toMatchObject({ outcome: "completed", recovery: "removed" });
-  expect(await contents(f.root)).toEqual(baseline);
-  expect(await f.read(name)).toBe("future data\n");
-  expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
-  expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(original);
-  expect((await f.git(["symbolic-ref", "--short", "HEAD"])).trim()).toBe(
-    f.branch,
-  );
-  expect(f.calls).toHaveLength(2);
-});
+it(
+  "a non-ASCII future path without aliases is restored by managed native abort",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("merge-rebase", 1, [1]);
+    const name = "будущее/данные";
+    await fs.mkdir(path.dirname(path.join(f.root, name)), { recursive: true });
+    await f.write(name, "future data\n");
+    await f.git(["add", "--", name]);
+    await f.git(["commit", "-m", "future Unicode restoration"]);
+    const original = (await f.git(["rev-parse", "HEAD"])).trim();
+    const index = await f.git(["ls-files", "--stage", "-z"]);
+    const baseline = await contents(f.root);
+    expect(await f.start()).toMatchObject({ outcome: "conflicts" });
+    await expect(fs.stat(path.join(f.root, name))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    expect(
+      await f.engine.execute((await f.prepare("abort")).token),
+    ).toMatchObject({ outcome: "completed", recovery: "removed" });
+    expect(await contents(f.root)).toEqual(baseline);
+    expect(await f.read(name)).toBe("future data\n");
+    expect(await f.git(["ls-files", "--stage", "-z"])).toBe(index);
+    expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(original);
+    expect((await f.git(["symbolic-ref", "--short", "HEAD"])).trim()).toBe(
+      f.branch,
+    );
+    expect(f.calls).toHaveLength(2);
+  }),
+  gitIntegrationBudget(15000),
+);
 
-it("a new empty future parent after preview cannot be consumed by native start", async () => {
-  const f = await nativeSequenceFixture("cherry-pick", 1, [1]);
-  const start = await future(f, ["late-empty/value"]);
-  const preview = await f.engine.prepareStart("regression", start);
-  await fs.mkdir(path.join(f.root, "late-empty"));
-  const before = await preserved(f);
-  const result = await f.engine.execute(preview.token);
-  expect(result).toMatchObject({ outcome: "uncertain", recovery: "retained" });
-  expect(f.calls).toHaveLength(0);
-  expect(await preserved(f)).toEqual(before);
-  await expect(f.engine.execute(preview.token)).rejects.toThrow();
-});
+it(
+  "a new empty future parent after preview cannot be consumed by native start",
+  fixtureScope.run(async () => {
+    const f = await nativeSequenceFixture("cherry-pick", 1, [1]);
+    const start = await future(f, ["late-empty/value"]);
+    const preview = await f.engine.prepareStart("regression", start);
+    await fs.mkdir(path.join(f.root, "late-empty"));
+    const before = await preserved(f);
+    const result = await f.engine.execute(preview.token);
+    expect(result).toMatchObject({
+      outcome: "uncertain",
+      recovery: "retained",
+    });
+    expect(f.calls).toHaveLength(0);
+    expect(await preserved(f)).toEqual(before);
+    await expect(f.engine.execute(preview.token)).rejects.toThrow();
+  }),
+  gitIntegrationBudget(15000),
+);

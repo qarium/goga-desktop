@@ -1,4 +1,7 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { gitIntegrationBudget } from "./helpers/git-integration";
+import { installGitFixtureScope } from "./helpers/git-test-scope";
+const fixtureScope = installGitFixtureScope();
+import { expect, it, vi } from "vitest";
 import {
   mkdtemp,
   mkdir,
@@ -15,13 +18,9 @@ import { NodeRunner } from "../src/host/process";
 import { CloneManager } from "../src/host/clones";
 import { worktreeContextRef } from "../src/shared/worktrees";
 import { isOfflineGitRead } from "../src/host/read-scope";
-const cleanup: (() => Promise<unknown>)[] = [];
-afterEach(async () => {
-  for (const action of cleanup.splice(0).reverse()) await action();
-});
 async function fixture() {
   const base = await mkdtemp("/private/tmp/goga-git-workspace-host-");
-  cleanup.push(() => rm(base, { recursive: true, force: true }));
+  fixtureScope().cleanup(() => rm(base, { recursive: true, force: true }));
   const home = path.join(base, "home"),
     root = path.join(base, "repo");
   await mkdir(home);
@@ -37,13 +36,21 @@ async function fixture() {
     GIT_COMMITTER_NAME: "Fixture",
     GIT_COMMITTER_EMAIL: "fixture@example.invalid",
   };
-  const runner = new NodeRunner(10000, env);
-  cleanup.push(() => runner.dispose());
+  const runner = fixtureScope.runner(new NodeRunner(10000, env));
+  fixtureScope().cleanup(() => runner.dispose());
   const git = async (args: string[]) =>
     (
       await runner.command(
         "git",
-        ["-c", "core.hooksPath=/dev/null", ...args],
+        [
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "gc.auto=0",
+          "-c",
+          "maintenance.auto=false",
+          ...args,
+        ],
         root,
         env,
       )
@@ -53,229 +60,271 @@ async function fixture() {
   await git(["add", "."]);
   await git(["-c", "commit.gpgSign=false", "commit", "-m", "fixture"]);
   await git(["branch", "feature"]);
-  const host = new HostService({
-    home,
-    dataDir: path.join(base, "data"),
-    runner,
-    goga: "/nonexistent-fixture-goga",
-  });
-  cleanup.push(() => host.dispose());
+  const host = fixtureScope().own(
+    new HostService({
+      home,
+      dataDir: path.join(base, "data"),
+      runner,
+      goga: "/nonexistent-fixture-goga",
+    }),
+  );
+  fixtureScope().cleanup(() => host.dispose());
   const project = await host.addProject(root);
   return { base, home, root, runner, host, project, git };
 }
-it("commits only selected primary files through a one-use ticket without publishing", async () => {
-  const f = await fixture();
-  await writeFile(path.join(f.root, "file.txt"), "chosen\n");
-  await writeFile(path.join(f.root, "other.txt"), "staged other\n");
-  await f.git(["add", "other.txt"]);
-  const snapshot = await f.host.readGitWorkspace(f.project.id);
-  const preview = await (f.host as any).prepareGitCommit({
-    scope: f.project.id,
-    revision: snapshot.revision,
-    paths: ["file.txt"],
-    message: "selected",
-  });
-  expect(preview.root).toBe(f.root);
-  const result = await (f.host as any).executeGitCommit(preview.token);
-  expect(result.status).toBe("committed");
-  expect(result.indexPublished).toBe(true);
-  expect(await f.git(["show", "HEAD:file.txt"])).toBe("chosen\n");
-  expect((await f.git(["diff", "--cached", "--name-only"])).trim()).toBe(
-    "other.txt",
-  );
-  await expect(
-    (f.host as any).executeGitCommit(preview.token),
-  ).rejects.toThrow();
-});
-it("commits in the exact managed clone and refuses disappeared or forged owners", async () => {
-  const f = await fixture();
-  const clone = await new CloneManager(f.home, f.runner).ensure(f.project, {
-    projectId: f.project.id,
-    year: "2026",
-    topic: "feature",
-    branch: "feature",
-  });
-  const scope = worktreeContextRef(clone);
-  await writeFile(path.join(clone.path, "file.txt"), "only clone\n");
-  const snapshot = await f.host.readGitWorkspace(scope);
-  const request = {
-    scope,
-    revision: snapshot.revision,
-    paths: ["file.txt"],
-    message: "clone selected",
-  };
-  const preview = await (f.host as any).prepareGitCommit(request);
-  const result = await (f.host as any).executeGitCommit(preview.token);
-  expect(result.status).toBe("committed");
-  expect(result.scope).toEqual(scope);
-  expect(await f.git(["show", "HEAD:file.txt"])).toBe("base\n");
-  expect(
-    (await f.runner.command("git", ["show", "HEAD:file.txt"], clone.path))
-      .stdout,
-  ).toBe("only clone\n");
-  await expect(
-    (f.host as any).prepareGitCommit({
-      ...request,
-      scope: { ...scope, branch: "main" },
-    }),
-  ).rejects.toThrow();
-  await rm(clone.path, { recursive: true, force: true });
-  await expect((f.host as any).prepareGitCommit(request)).rejects.toThrow();
-  expect(await f.git(["show", "HEAD:file.txt"])).toBe("base\n");
-});
-it("invalidates commit authority after project settings change", async () => {
-  const f = await fixture();
-  await writeFile(path.join(f.root, "file.txt"), "chosen\n");
-  const snap = await f.host.readGitWorkspace(f.project.id);
-  const preview = await (f.host as any).prepareGitCommit({
-    scope: f.project.id,
-    revision: snap.revision,
-    paths: ["file.txt"],
-    message: "selected",
-  });
-  const settings = await f.host.readProjectSettings(f.project.id);
-  await f.host.saveProjectSettings(
-    f.project.id,
-    {
-      ...settings.value,
-      env: [
-        { key: "FIXTURE", value: "changed", secret: false, runtime: false },
-      ],
-    },
-    settings.version,
-  );
-  const outcome = await (f.host as any)
-    .executeGitCommit(preview.token)
-    .catch((e: Error) => e);
-  expect(outcome instanceof Error || outcome.status === "not-committed").toBe(
-    true,
-  );
-  expect(await f.git(["rev-parse", "HEAD"])).toBe(snap.head + "\n");
-});
-it("refuses a runner without the native byte-command capability without falling back", async () => {
-  const f = await fixture();
-  await writeFile(path.join(f.root, "file.txt"), "chosen\n");
-  const snap = await f.host.readGitWorkspace(f.project.id);
-  const preview = await f.host.prepareGitCommit({
-    scope: f.project.id,
-    revision: snap.revision,
-    paths: ["file.txt"],
-    message: "selected",
-  });
-  const before = await readFile(path.join(f.root, ".git/index"));
-  Object.defineProperty(f.runner, "commandBytes", { value: undefined });
-  const outcome = await f.host
-    .executeGitCommit(preview.token)
-    .catch((e: Error) => e);
-  expect(outcome instanceof Error || outcome.status === "not-committed").toBe(
-    true,
-  );
-  expect(await f.git(["rev-parse", "HEAD"])).toBe(snap.head + "\n");
-  expect(await readFile(path.join(f.root, ".git/index"))).toEqual(before);
-  expect(
-    (await readdir(path.join(f.root, ".git"))).some(
-      (name) => name === "index.lock" || name.startsWith("goga-commit-"),
-    ),
-  ).toBe(false);
-});
-it("reads primary changes offline without Goga and rejects invalid scope/path", async () => {
-  const f = await fixture();
-  expect((f.host as any).readGitWorkspace).toBeTypeOf("function");
-  await writeFile(path.join(f.root, "file.txt"), "primary edit\n");
-  const original = f.runner.command.bind(f.runner);
-  const calls = vi
-    .spyOn(f.runner, "command")
-    .mockImplementation(async (exe, args, cwd, env, stdin) => {
-      expect(exe).toBe("git");
-      expect(isOfflineGitRead()).toBe(true);
-      return original(exe, args, cwd, env, stdin);
-    });
-  const snapshot = await (f.host as any).readGitWorkspace(f.project.id);
-  expect(snapshot.scope).toBe(f.project.id);
-  expect(snapshot.root).toBe(f.root);
-  expect(snapshot.files.map((x: any) => x.path)).toEqual(["file.txt"]);
-  const diff = await (f.host as any).readGitDiff({
-    scope: f.project.id,
-    path: "file.txt",
-    revision: snapshot.revision,
-  });
-  expect(diff.unstaged.text).toContain("+primary edit");
-  expect(
-    calls.mock.calls.every(
-      (c) => !c[1].includes("board") && !c[1].includes("fetch"),
-    ),
-  ).toBe(true);
-  const count = calls.mock.calls.length;
-  await expect((f.host as any).readGitWorkspace("missing")).rejects.toThrow();
-  await expect(
-    (f.host as any).readGitDiff({
+it(
+  "commits only selected primary files through a one-use ticket without publishing",
+  fixtureScope.run(async () => {
+    const f = await fixture();
+    await writeFile(path.join(f.root, "file.txt"), "chosen\n");
+    await writeFile(path.join(f.root, "other.txt"), "staged other\n");
+    await f.git(["add", "other.txt"]);
+    const snapshot = await f.host.readGitWorkspace(f.project.id);
+    const preview = await (f.host as any).prepareGitCommit({
       scope: f.project.id,
-      path: "../outside",
       revision: snapshot.revision,
-    }),
-  ).rejects.toThrow();
-  expect(calls).toHaveBeenCalledTimes(count);
-});
-it("reads exactly the clone owner, rejects stale revision and never falls back to primary", async () => {
-  const f = await fixture();
-  expect((f.host as any).readGitWorkspace).toBeTypeOf("function");
-  const clone = await new CloneManager(f.home, f.runner).ensure(f.project, {
-    projectId: f.project.id,
-    year: "2026",
-    topic: "feature",
-    branch: "feature",
-  });
-  const scope = worktreeContextRef(clone);
-  await writeFile(path.join(f.root, "primary.txt"), "only primary\n");
-  await writeFile(path.join(clone.path, "clone.txt"), "only clone\n");
-  const snapshot = await (f.host as any).readGitWorkspace(scope);
-  expect(snapshot.scope).toEqual(scope);
-  expect(snapshot.root).toBe(clone.path);
-  expect(snapshot.files.some((x: any) => x.path === "clone.txt")).toBe(true);
-  expect(snapshot.files.some((x: any) => x.path === "primary.txt")).toBe(false);
-  await expect(
-    (f.host as any).readGitWorkspace({
-      ...scope,
-      revision: scope.revision + 1,
-    }),
-  ).rejects.toThrow();
-  await rm(clone.path, { recursive: true, force: true });
-  await expect((f.host as any).readGitWorkspace(scope)).rejects.toThrow();
-});
-it("keeps a managed clone readable while a real merge conflict is present", async () => {
-  const f = await fixture();
-  const clone = await new CloneManager(f.home, f.runner).ensure(f.project, {
-    projectId: f.project.id,
-    year: "2026",
-    topic: "feature",
-    branch: "feature",
-  });
-  const git = (args: string[]) =>
-    f.runner.command(
-      "git",
-      ["-c", "core.hooksPath=/dev/null", "-c", "commit.gpgSign=false", ...args],
-      clone.path,
+      paths: ["file.txt"],
+      message: "selected",
+    });
+    expect(preview.root).toBe(f.root);
+    const result = await (f.host as any).executeGitCommit(preview.token);
+    expect(result.status).toBe("committed");
+    expect(result.indexPublished).toBe(true);
+    expect(await f.git(["show", "HEAD:file.txt"])).toBe("chosen\n");
+    expect((await f.git(["diff", "--cached", "--name-only"])).trim()).toBe(
+      "other.txt",
     );
-  await writeFile(path.join(clone.path, "file.txt"), "ours\n");
-  await git(["add", "file.txt"]);
-  await git(["commit", "-m", "ours"]);
-  await git(["checkout", "-b", "other", "HEAD~1"]);
-  await writeFile(path.join(clone.path, "file.txt"), "theirs\n");
-  await git(["add", "file.txt"]);
-  await git(["commit", "-m", "theirs"]);
-  await git(["checkout", "feature"]);
-  await expect(git(["merge", "--no-edit", "other"])).rejects.toThrow();
-  const snapshot = await f.host.readGitWorkspace(worktreeContextRef(clone));
-  expect(snapshot.operation).toBe("merge");
-  expect(snapshot.files.find((file) => file.path === "file.txt")?.kind).toBe(
-    "conflict",
-  );
-  expect(snapshot.root).toBe(clone.path);
-});
+    await expect(
+      (f.host as any).executeGitCommit(preview.token),
+    ).rejects.toThrow();
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "commits in the exact managed clone and refuses disappeared or forged owners",
+  fixtureScope.run(async () => {
+    const f = await fixture();
+    const clone = await new CloneManager(f.home, f.runner).ensure(f.project, {
+      projectId: f.project.id,
+      year: "2026",
+      topic: "feature",
+      branch: "feature",
+    });
+    const scope = worktreeContextRef(clone);
+    await writeFile(path.join(clone.path, "file.txt"), "only clone\n");
+    const snapshot = await f.host.readGitWorkspace(scope);
+    const request = {
+      scope,
+      revision: snapshot.revision,
+      paths: ["file.txt"],
+      message: "clone selected",
+    };
+    const preview = await (f.host as any).prepareGitCommit(request);
+    const result = await (f.host as any).executeGitCommit(preview.token);
+    expect(result.status).toBe("committed");
+    expect(result.scope).toEqual(scope);
+    expect(await f.git(["show", "HEAD:file.txt"])).toBe("base\n");
+    expect(
+      (await f.runner.command("git", ["show", "HEAD:file.txt"], clone.path))
+        .stdout,
+    ).toBe("only clone\n");
+    await expect(
+      (f.host as any).prepareGitCommit({
+        ...request,
+        scope: { ...scope, branch: "main" },
+      }),
+    ).rejects.toThrow();
+    await rm(clone.path, { recursive: true, force: true });
+    await expect((f.host as any).prepareGitCommit(request)).rejects.toThrow();
+    expect(await f.git(["show", "HEAD:file.txt"])).toBe("base\n");
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "invalidates commit authority after project settings change",
+  fixtureScope.run(async () => {
+    const f = await fixture();
+    await writeFile(path.join(f.root, "file.txt"), "chosen\n");
+    const snap = await f.host.readGitWorkspace(f.project.id);
+    const preview = await (f.host as any).prepareGitCommit({
+      scope: f.project.id,
+      revision: snap.revision,
+      paths: ["file.txt"],
+      message: "selected",
+    });
+    const settings = await f.host.readProjectSettings(f.project.id);
+    await f.host.saveProjectSettings(
+      f.project.id,
+      {
+        ...settings.value,
+        env: [
+          { key: "FIXTURE", value: "changed", secret: false, runtime: false },
+        ],
+      },
+      settings.version,
+    );
+    const outcome = await (f.host as any)
+      .executeGitCommit(preview.token)
+      .catch((e: Error) => e);
+    expect(outcome instanceof Error || outcome.status === "not-committed").toBe(
+      true,
+    );
+    expect(await f.git(["rev-parse", "HEAD"])).toBe(snap.head + "\n");
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "refuses a runner without the native byte-command capability without falling back",
+  fixtureScope.run(async () => {
+    const f = await fixture();
+    await writeFile(path.join(f.root, "file.txt"), "chosen\n");
+    const snap = await f.host.readGitWorkspace(f.project.id);
+    const preview = await f.host.prepareGitCommit({
+      scope: f.project.id,
+      revision: snap.revision,
+      paths: ["file.txt"],
+      message: "selected",
+    });
+    const before = await readFile(path.join(f.root, ".git/index"));
+    Object.defineProperty(f.runner, "commandBytes", { value: undefined });
+    const outcome = await f.host
+      .executeGitCommit(preview.token)
+      .catch((e: Error) => e);
+    expect(outcome instanceof Error || outcome.status === "not-committed").toBe(
+      true,
+    );
+    expect(await f.git(["rev-parse", "HEAD"])).toBe(snap.head + "\n");
+    expect(await readFile(path.join(f.root, ".git/index"))).toEqual(before);
+    expect(
+      (await readdir(path.join(f.root, ".git"))).some(
+        (name) => name === "index.lock" || name.startsWith("goga-commit-"),
+      ),
+    ).toBe(false);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "reads primary changes offline without Goga and rejects invalid scope/path",
+  fixtureScope.run(async () => {
+    const f = await fixture();
+    expect((f.host as any).readGitWorkspace).toBeTypeOf("function");
+    await writeFile(path.join(f.root, "file.txt"), "primary edit\n");
+    const original = f.runner.command.bind(f.runner);
+    const calls = vi
+      .spyOn(f.runner, "command")
+      .mockImplementation(async (exe, args, cwd, env, stdin) => {
+        expect(exe).toBe("git");
+        expect(isOfflineGitRead()).toBe(true);
+        return original(exe, args, cwd, env, stdin);
+      });
+    const snapshot = await (f.host as any).readGitWorkspace(f.project.id);
+    expect(snapshot.scope).toBe(f.project.id);
+    expect(snapshot.root).toBe(f.root);
+    expect(snapshot.files.map((x: any) => x.path)).toEqual(["file.txt"]);
+    const diff = await (f.host as any).readGitDiff({
+      scope: f.project.id,
+      path: "file.txt",
+      revision: snapshot.revision,
+    });
+    expect(diff.unstaged.text).toContain("+primary edit");
+    expect(
+      calls.mock.calls.every(
+        (c) => !c[1].includes("board") && !c[1].includes("fetch"),
+      ),
+    ).toBe(true);
+    const count = calls.mock.calls.length;
+    await expect((f.host as any).readGitWorkspace("missing")).rejects.toThrow();
+    await expect(
+      (f.host as any).readGitDiff({
+        scope: f.project.id,
+        path: "../outside",
+        revision: snapshot.revision,
+      }),
+    ).rejects.toThrow();
+    expect(calls).toHaveBeenCalledTimes(count);
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "reads exactly the clone owner, rejects stale revision and never falls back to primary",
+  fixtureScope.run(async () => {
+    const f = await fixture();
+    expect((f.host as any).readGitWorkspace).toBeTypeOf("function");
+    const clone = await new CloneManager(f.home, f.runner).ensure(f.project, {
+      projectId: f.project.id,
+      year: "2026",
+      topic: "feature",
+      branch: "feature",
+    });
+    const scope = worktreeContextRef(clone);
+    await writeFile(path.join(f.root, "primary.txt"), "only primary\n");
+    await writeFile(path.join(clone.path, "clone.txt"), "only clone\n");
+    const snapshot = await (f.host as any).readGitWorkspace(scope);
+    expect(snapshot.scope).toEqual(scope);
+    expect(snapshot.root).toBe(clone.path);
+    expect(snapshot.files.some((x: any) => x.path === "clone.txt")).toBe(true);
+    expect(snapshot.files.some((x: any) => x.path === "primary.txt")).toBe(
+      false,
+    );
+    await expect(
+      (f.host as any).readGitWorkspace({
+        ...scope,
+        revision: scope.revision + 1,
+      }),
+    ).rejects.toThrow();
+    await rm(clone.path, { recursive: true, force: true });
+    await expect((f.host as any).readGitWorkspace(scope)).rejects.toThrow();
+  }),
+  gitIntegrationBudget(15000),
+);
+it(
+  "keeps a managed clone readable while a real merge conflict is present",
+  fixtureScope.run(async () => {
+    const f = await fixture();
+    const clone = await new CloneManager(f.home, f.runner).ensure(f.project, {
+      projectId: f.project.id,
+      year: "2026",
+      topic: "feature",
+      branch: "feature",
+    });
+    const git = (args: string[]) =>
+      f.runner.command(
+        "git",
+        [
+          "-c",
+          "core.hooksPath=/dev/null",
+          "-c",
+          "gc.auto=0",
+          "-c",
+          "maintenance.auto=false",
+          "-c",
+          "commit.gpgSign=false",
+          ...args,
+        ],
+        clone.path,
+      );
+    await writeFile(path.join(clone.path, "file.txt"), "ours\n");
+    await git(["add", "file.txt"]);
+    await git(["commit", "-m", "ours"]);
+    await git(["checkout", "-b", "other", "HEAD~1"]);
+    await writeFile(path.join(clone.path, "file.txt"), "theirs\n");
+    await git(["add", "file.txt"]);
+    await git(["commit", "-m", "theirs"]);
+    await git(["checkout", "feature"]);
+    await expect(git(["merge", "--no-edit", "other"])).rejects.toThrow();
+    const snapshot = await f.host.readGitWorkspace(worktreeContextRef(clone));
+    expect(snapshot.operation).toBe("merge");
+    expect(snapshot.files.find((file) => file.path === "file.txt")?.kind).toBe(
+      "conflict",
+    );
+    expect(snapshot.root).toBe(clone.path);
+  }),
+  gitIntegrationBudget(15000),
+);
 
 it.each(["primary", "clone"] as const)(
   "rejects a %s split index before touching shared metadata through host resolution",
-  async (kind) => {
+  fixtureScope.run(async (kind) => {
     const f = await fixture();
     const clone =
       kind === "clone"
@@ -309,7 +358,8 @@ it.each(["primary", "clone"] as const)(
     ).rejects.toThrow(/split-index/);
     expect(await readFile(file)).toEqual(bytes);
     expect((await stat(file)).mtimeMs).toBe(mtime);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 
 async function makeConflict(
@@ -323,6 +373,10 @@ async function makeConflict(
         [
           "-c",
           "core.hooksPath=/dev/null",
+          "-c",
+          "gc.auto=0",
+          "-c",
+          "maintenance.auto=false",
           "-c",
           "commit.gpgSign=false",
           ...args,
@@ -343,7 +397,7 @@ async function makeConflict(
 }
 it.each([false, true])(
   "reads exact conflict stages offline in primary/clone=%s with no mutation or fallback",
-  async (inClone) => {
+  fixtureScope.run(async (inClone) => {
     const f = await fixture();
     const clone = inClone
       ? await new CloneManager(f.home, f.runner).ensure(f.project, {
@@ -394,12 +448,13 @@ it.each([false, true])(
       await writeFile(path.join(root, "file.txt"), "manual change\n");
       await expect(read(request)).rejects.toThrow();
     }
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 
 it.each([false, true])(
   "saves exactly one conflict in primary/clone=%s without committing or changing another staged file",
-  async (inClone) => {
+  fixtureScope.run(async (inClone) => {
     const f = await fixture();
     const clone = inClone
       ? await new CloneManager(f.home, f.runner).ensure(f.project, {
@@ -499,51 +554,61 @@ it.each([false, true])(
       ).rejects.toThrow();
       expect(await f.git(["show", "HEAD:file.txt"])).toBe("base\n");
     }
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
 
-it("invalidates conflict-save authority after settings change before writing any bytes", async () => {
-  const f = await fixture();
-  await makeConflict(f, f.root);
-  const scope = f.project.id,
-    snap = await f.host.readGitWorkspace(scope);
-  const document = await f.host.readGitConflict({
-    scope,
-    path: "file.txt",
-    revision: snap.revision,
-  });
-  expect(typeof (f.host as any).prepareGitConflictSave).toBe("function");
-  const preview = await (f.host as any).prepareGitConflictSave({
-    scope,
-    path: "file.txt",
-    revision: snap.revision,
-    fingerprint: document.fingerprint,
-    resolution: { kind: "current" },
-  });
-  const before = await readFile(path.join(f.root, ".git/index")),
-    work = await readFile(path.join(f.root, "file.txt"));
-  const settings = await f.host.readProjectSettings(scope);
-  await f.host.saveProjectSettings(
-    scope,
-    {
-      ...settings.value,
-      env: [
-        { key: "FIXTURE", value: "new-setting", secret: false, runtime: false },
-      ],
-    },
-    settings.version,
-  );
-  const result = await (f.host as any)
-    .executeGitConflictSave(preview.token)
-    .catch((e: Error) => e);
-  expect(result instanceof Error || result.status === "not-saved").toBe(true);
-  expect(await readFile(path.join(f.root, ".git/index"))).toEqual(before);
-  expect(await readFile(path.join(f.root, "file.txt"))).toEqual(work);
-});
+it(
+  "invalidates conflict-save authority after settings change before writing any bytes",
+  fixtureScope.run(async () => {
+    const f = await fixture();
+    await makeConflict(f, f.root);
+    const scope = f.project.id,
+      snap = await f.host.readGitWorkspace(scope);
+    const document = await f.host.readGitConflict({
+      scope,
+      path: "file.txt",
+      revision: snap.revision,
+    });
+    expect(typeof (f.host as any).prepareGitConflictSave).toBe("function");
+    const preview = await (f.host as any).prepareGitConflictSave({
+      scope,
+      path: "file.txt",
+      revision: snap.revision,
+      fingerprint: document.fingerprint,
+      resolution: { kind: "current" },
+    });
+    const before = await readFile(path.join(f.root, ".git/index")),
+      work = await readFile(path.join(f.root, "file.txt"));
+    const settings = await f.host.readProjectSettings(scope);
+    await f.host.saveProjectSettings(
+      scope,
+      {
+        ...settings.value,
+        env: [
+          {
+            key: "FIXTURE",
+            value: "new-setting",
+            secret: false,
+            runtime: false,
+          },
+        ],
+      },
+      settings.version,
+    );
+    const result = await (f.host as any)
+      .executeGitConflictSave(preview.token)
+      .catch((e: Error) => e);
+    expect(result instanceof Error || result.status === "not-saved").toBe(true);
+    expect(await readFile(path.join(f.root, ".git/index"))).toEqual(before);
+    expect(await readFile(path.join(f.root, "file.txt"))).toEqual(work);
+  }),
+  gitIntegrationBudget(15000),
+);
 
 it.each(["content", "operation", "head"] as const)(
   "refuses a read document after %s changes before conflict preview",
-  async (changed) => {
+  fixtureScope.run(async (changed) => {
     const f = await fixture();
     await makeConflict(f, f.root);
     const scope = f.project.id,
@@ -577,50 +642,55 @@ it.each(["content", "operation", "head"] as const)(
     expect(
       (await readdir(path.join(f.root, ".git"))).includes("index.lock"),
     ).toBe(false);
-  },
+  }),
+  gitIntegrationBudget(15000),
 );
-it("reads display summaries only from the authorized primary or exact managed owner", async () => {
-  const f = await fixture();
-  const clone = await new CloneManager(f.home, f.runner).ensure(f.project, {
-    projectId: f.project.id,
-    year: "2026",
-    topic: "feature",
-    branch: "feature",
-  });
-  const scope = worktreeContextRef(clone);
-  await writeFile(path.join(f.root, "file.txt"), "primary change\n");
-  await writeFile(path.join(f.root, "primary.txt"), "primary only\n");
-  await writeFile(path.join(clone.path, "clone.txt"), "clone only\n");
-  const original = f.runner.command.bind(f.runner);
-  const commands = vi
-    .spyOn(f.runner, "command")
-    .mockImplementation((exe, args, cwd, env, stdin) => {
-      expect(exe).toBe("git");
-      expect(isOfflineGitRead()).toBe(true);
-      return original(exe, args, cwd, env, stdin);
+it(
+  "reads display summaries only from the authorized primary or exact managed owner",
+  fixtureScope.run(async () => {
+    const f = await fixture();
+    const clone = await new CloneManager(f.home, f.runner).ensure(f.project, {
+      projectId: f.project.id,
+      year: "2026",
+      topic: "feature",
+      branch: "feature",
     });
-  expect(await f.host.readGitSummary(f.project.id)).toEqual({
-    scope: f.project.id,
-    branch: "main",
-    changedFiles: 2,
-    conflicts: 0,
-  });
-  expect(await f.host.readGitSummary(scope)).toEqual({
-    scope,
-    branch: "feature",
-    changedFiles: 1,
-    conflicts: 0,
-  });
-  const count = commands.mock.calls.length;
-  await expect(f.host.readGitSummary("unknown-project")).rejects.toThrow();
-  await expect(
-    f.host.readGitSummary({ ...scope, revision: scope.revision + 1 }),
-  ).rejects.toThrow();
-  await expect(
-    f.host.readGitSummary({ ...scope, branch: "main" }),
-  ).rejects.toThrow();
-  expect(commands).toHaveBeenCalledTimes(count);
-  await rm(clone.path, { recursive: true, force: true });
-  await expect(f.host.readGitSummary(scope)).rejects.toThrow();
-  expect(commands).toHaveBeenCalledTimes(count);
-});
+    const scope = worktreeContextRef(clone);
+    await writeFile(path.join(f.root, "file.txt"), "primary change\n");
+    await writeFile(path.join(f.root, "primary.txt"), "primary only\n");
+    await writeFile(path.join(clone.path, "clone.txt"), "clone only\n");
+    const original = f.runner.command.bind(f.runner);
+    const commands = vi
+      .spyOn(f.runner, "command")
+      .mockImplementation((exe, args, cwd, env, stdin) => {
+        expect(exe).toBe("git");
+        expect(isOfflineGitRead()).toBe(true);
+        return original(exe, args, cwd, env, stdin);
+      });
+    expect(await f.host.readGitSummary(f.project.id)).toEqual({
+      scope: f.project.id,
+      branch: "main",
+      changedFiles: 2,
+      conflicts: 0,
+    });
+    expect(await f.host.readGitSummary(scope)).toEqual({
+      scope,
+      branch: "feature",
+      changedFiles: 1,
+      conflicts: 0,
+    });
+    const count = commands.mock.calls.length;
+    await expect(f.host.readGitSummary("unknown-project")).rejects.toThrow();
+    await expect(
+      f.host.readGitSummary({ ...scope, revision: scope.revision + 1 }),
+    ).rejects.toThrow();
+    await expect(
+      f.host.readGitSummary({ ...scope, branch: "main" }),
+    ).rejects.toThrow();
+    expect(commands).toHaveBeenCalledTimes(count);
+    await rm(clone.path, { recursive: true, force: true });
+    await expect(f.host.readGitSummary(scope)).rejects.toThrow();
+    expect(commands).toHaveBeenCalledTimes(count);
+  }),
+  gitIntegrationBudget(15000),
+);

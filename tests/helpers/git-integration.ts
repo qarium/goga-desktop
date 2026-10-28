@@ -3,7 +3,7 @@ import { execFile, type ExecFileOptions } from "node:child_process";
 import { promisify } from "node:util";
 import type { TopicContextRef } from "../../src/shared/worktrees";
 
-/** Opt-in only in the five Git-heavy suites measured on the native Intel runner. */
+/** Opt-in finite budgets for measured Git-heavy integration scenarios. */
 export function gitIntegrationBudget(
   baseMs: number,
   profile = process.env.GOGA_TEST_PROFILE ?? "default",

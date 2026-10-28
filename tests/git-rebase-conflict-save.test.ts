@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   mkdtemp,
   mkdir,
@@ -24,17 +24,15 @@ import { withReadScope } from "../src/host/read-scope";
 import { DesktopStateStore } from "../src/host/desktop-state";
 import { worktreeContextRef } from "../src/shared/worktrees";
 
-const cleanup: (() => Promise<unknown>)[] = [];
-afterEach(async () => {
-  vi.restoreAllMocks();
-  for (const action of cleanup.splice(0).reverse()) await action();
-});
+import { installGitFixtureScope } from "./helpers/git-test-scope";
+import { gitIntegrationBudget } from "./helpers/git-integration";
+const fixtureScope = installGitFixtureScope();
 async function fixture(
   backend: "merge" | "apply" = "merge",
   remainingCommits = 0,
 ) {
   const base = await mkdtemp("/private/tmp/goga-rebase-save-");
-  cleanup.push(() => rm(base, { recursive: true, force: true }));
+  fixtureScope().cleanup(() => rm(base, { recursive: true, force: true }));
   const home = path.join(base, "home"),
     root = path.join(base, "source");
   await mkdir(home);
@@ -50,8 +48,10 @@ async function fixture(
     GIT_COMMITTER_NAME: "Fixture",
     GIT_COMMITTER_EMAIL: "fixture@example.invalid",
   };
-  const runner = new NodeRunner(10000, env);
-  cleanup.push(() => runner.dispose());
+  const rawRunner = new NodeRunner(10000, env);
+  fixtureScope().cancelOnTimeout(() => rawRunner.dispose());
+  const runner = fixtureScope().own(rawRunner);
+  fixtureScope().cleanup(() => runner.dispose());
   const git = async (cwd: string, args: string[], stdin?: string) =>
     (
       await runner.command(
@@ -61,6 +61,10 @@ async function fixture(
           "core.hooksPath=/dev/null",
           "-c",
           "commit.gpgSign=false",
+          "-c",
+          "gc.auto=0",
+          "-c",
+          "maintenance.auto=false",
           ...args,
         ],
         cwd,
@@ -74,13 +78,14 @@ async function fixture(
   await git(root, ["add", "."]);
   await git(root, ["commit", "-m", "base"]);
   await git(root, ["branch", "feature"]);
-  const host = new HostService({
+  const rawHost = new HostService({
     home,
     dataDir: path.join(base, "data"),
     runner,
     goga: "/nonexistent-fixture-goga",
   });
-  cleanup.push(() => host.dispose());
+  fixtureScope().cleanup(() => rawHost.dispose());
+  const host = fixtureScope().own(rawHost);
   const project = await host.addProject(root),
     manager = new CloneManager(home, runner);
   const record = await manager.ensure(project, {
@@ -177,7 +182,7 @@ async function stable(f: Awaited<ReturnType<typeof fixture>>) {
 }
 it.each(["merge", "apply"] as const)(
   "saves one conflict during a native multi-commit %s rebase without advancing the operation",
-  async (backend) => {
+  fixtureScope.run(async (backend) => {
     const f = await fixture(backend, 1);
     await writeFile(path.join(f.record.path, "other.txt"), "staged other\n");
     await f.git(f.record.path, ["add", "--", "other.txt"]);
@@ -285,47 +290,58 @@ it.each(["merge", "apply"] as const)(
         calls: call.mock.calls.length,
       }),
     );
-  },
+  }),
+  gitIntegrationBudget(45000),
 );
 
 describe.each(["merge", "apply"] as const)("next conflict in %s", (backend) => {
   let f: Awaited<ReturnType<typeof fixture>>,
     req: Awaited<ReturnType<typeof request>>;
-  beforeEach(async () => {
-    f = await fixture(backend, 1);
-    req = await request(f);
-  });
-  beforeEach(async () => {
-    const preview = await f.host.prepareGitConflictSave({
-      ...req,
-      resolution: { kind: "current" },
-    });
-    expect((await f.host.executeGitConflictSave(preview.token)).status).toBe(
-      "saved",
-    );
-  });
-  it("keeps the operation pending and the next unresolved file readable and preparable", async () => {
-    expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("rebase");
-    const req = await request(f, "second.txt"),
-      before = await tree(f.record.path);
-    expect(
-      (
-        await f.host.prepareGitConflictSave({
-          ...req,
-          resolution: { kind: "incoming" },
-        })
-      ).path,
-    ).toBe("second.txt");
-    expect(await tree(f.record.path)).toBe(before);
-    expect(await f.git(f.record.path, ["show", ":file.txt"])).toBe(
-      "upstream\n",
-    );
-  });
+  beforeEach(
+    fixtureScope.run(async () => {
+      f = await fixture(backend, 1);
+      req = await request(f);
+    }),
+    gitIntegrationBudget(30000),
+  );
+  beforeEach(
+    fixtureScope.run(async () => {
+      const preview = await f.host.prepareGitConflictSave({
+        ...req,
+        resolution: { kind: "current" },
+      });
+      expect((await f.host.executeGitConflictSave(preview.token)).status).toBe(
+        "saved",
+      );
+    }),
+    gitIntegrationBudget(30000),
+  );
+  it(
+    "keeps the operation pending and the next unresolved file readable and preparable",
+    fixtureScope.run(async () => {
+      expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("rebase");
+      const req = await request(f, "second.txt"),
+        before = await tree(f.record.path);
+      expect(
+        (
+          await f.host.prepareGitConflictSave({
+            ...req,
+            resolution: { kind: "incoming" },
+          })
+        ).path,
+      ).toBe("second.txt");
+      expect(await tree(f.record.path)).toBe(before);
+      expect(await f.git(f.record.path, ["show", ":file.txt"])).toBe(
+        "upstream\n",
+      );
+    }),
+    gitIntegrationBudget(45000),
+  );
 });
 
 it.each(["current", "incoming", "delete", "crlf"] as const)(
   "supports explicit %s resolution without completing rebase",
-  async (kind) => {
+  fixtureScope.run(async (kind) => {
     const f = await fixture("merge", 1);
     if (kind === "crlf")
       await f.git(f.record.path, ["config", "core.autocrlf", "true"]);
@@ -361,32 +377,37 @@ it.each(["current", "incoming", "delete", "crlf"] as const)(
       );
     }
     expect(await stable(f)).toBe(unchanged);
-  },
+  }),
+  gitIntegrationBudget(45000),
 );
 
-it("rejects every forged owner dimension and revision without a primary fallback", async () => {
-  const f = await fixture(),
-    req = await request(f);
-  const before = await tree(f.record.path),
-    primary = await tree(f.root);
-  for (const change of [
-    { projectId: "other-project" },
-    { year: "2025" },
-    { topic: "other" },
-    { branch: "other" },
-    { contextId: "ctx-other" },
-    { revision: randomUUID() },
-  ])
-    await expect(
-      f.host.prepareGitConflictSave({
-        ...req,
-        scope: { ...f.scope, ...change },
-        resolution: { kind: "current" },
-      }),
-    ).rejects.toThrow();
-  expect(await tree(f.record.path)).toBe(before);
-  expect(await tree(f.root)).toBe(primary);
-});
+it(
+  "rejects every forged owner dimension and revision without a primary fallback",
+  fixtureScope.run(async () => {
+    const f = await fixture(),
+      req = await request(f);
+    const before = await tree(f.record.path),
+      primary = await tree(f.root);
+    for (const change of [
+      { projectId: "other-project" },
+      { year: "2025" },
+      { topic: "other" },
+      { branch: "other" },
+      { contextId: "ctx-other" },
+      { revision: randomUUID() },
+    ])
+      await expect(
+        f.host.prepareGitConflictSave({
+          ...req,
+          scope: { ...f.scope, ...change },
+          resolution: { kind: "current" },
+        }),
+      ).rejects.toThrow();
+    expect(await tree(f.record.path)).toBe(before);
+    expect(await tree(f.root)).toBe(primary);
+  }),
+  gitIntegrationBudget(45000),
+);
 
 async function changeFixture(
   f: Awaited<ReturnType<typeof fixture>>,
@@ -527,7 +548,7 @@ const races = [
 ];
 it.each(races)(
   "rejects %s changes between read and prepare without writes",
-  async (change) => {
+  fixtureScope.run(async (change) => {
     const f = await fixture(),
       req = await request(f);
     await changeFixture(f, change);
@@ -541,11 +562,12 @@ it.each(races)(
     ).rejects.toThrow();
     expect(await tree(f.record.path)).toBe(clone);
     expect(await tree(f.root)).toBe(source);
-  },
+  }),
+  gitIntegrationBudget(45000),
 );
 it.each(races)(
   "rejects %s changes between prepare and execute without publication",
-  async (change) => {
+  fixtureScope.run(async (change) => {
     const f = await fixture(),
       req = await request(f);
     const preview = await f.host.prepareGitConflictSave({
@@ -563,7 +585,8 @@ it.each(races)(
     await expect(
       f.host.executeGitConflictSave(preview.token),
     ).rejects.toThrow();
-  },
+  }),
+  gitIntegrationBudget(45000),
 );
 it.each([
   "plain detached",
@@ -574,22 +597,29 @@ it.each([
   "symlink",
   "hardlink",
   "metadata link",
-])("refuses %s despite an earlier readable document", async (change) => {
-  const f = await fixture(),
-    req = await request(f);
-  await changeFixture(f, change);
-  const clone = await tree(f.record.path),
-    source = await tree(f.root);
-  await expect(
-    f.host.prepareGitConflictSave({ ...req, resolution: { kind: "delete" } }),
-  ).rejects.toThrow();
-  expect(await tree(f.record.path)).toBe(clone);
-  expect(await tree(f.root)).toBe(source);
-});
+])(
+  "refuses %s despite an earlier readable document",
+  fixtureScope.run(async (change) => {
+    const f = await fixture(),
+      req = await request(f);
+    await changeFixture(f, change);
+    const clone = await tree(f.record.path),
+      source = await tree(f.root);
+    await expect(
+      f.host.prepareGitConflictSave({
+        ...req,
+        resolution: { kind: "delete" },
+      }),
+    ).rejects.toThrow();
+    expect(await tree(f.record.path)).toBe(clone);
+    expect(await tree(f.root)).toBe(source);
+  }),
+  gitIntegrationBudget(45000),
+);
 
 it.each(["settings", "revision", "operation", "remote", "source topology"])(
   "rejects a late %s race during native pre-publication verification",
-  async (change) => {
+  fixtureScope.run(async (change) => {
     const f = await fixture(),
       req = await request(f);
     const preview = await f.host.prepareGitConflictSave({
@@ -623,12 +653,13 @@ it.each(["settings", "revision", "operation", "remote", "source topology"])(
     expect(await readFile(path.join(f.record.path, "file.txt"))).toEqual(
       beforeWork,
     );
-  },
+  }),
+  gitIntegrationBudget(45000),
 );
 
 it.each(["clones", "desktop"])(
   "never repairs %s root permissions between admission and lifecycle lock",
-  async (which) => {
+  fixtureScope.run(async (which) => {
     const f = await fixture(),
       req = await request(f);
     const target =
@@ -656,100 +687,117 @@ it.each(["clones", "desktop"])(
     expect(triggered).toBe(true);
     expect((await lstat(target)).mode & 0o777).toBe(0o755);
     expect(await tree(f.record.path)).toBe(before);
-  },
+  }),
+  gitIntegrationBudget(45000),
 );
 
 describe("detached rebase publication recovery", () => {
   let f: Awaited<ReturnType<typeof fixture>>,
     req: Awaited<ReturnType<typeof request>>,
     token: string;
-  beforeEach(async () => {
-    f = await fixture();
-    req = await request(f);
-  });
-  beforeEach(async () => {
-    token = (
-      await f.host.prepareGitConflictSave({
-        ...req,
-        resolution: { kind: "text", text: "resolved\n" },
-      })
-    ).token;
-  });
+  beforeEach(
+    fixtureScope.run(async () => {
+      f = await fixture();
+      req = await request(f);
+    }),
+    gitIntegrationBudget(30000),
+  );
+  beforeEach(
+    fixtureScope.run(async () => {
+      token = (
+        await f.host.prepareGitConflictSave({
+          ...req,
+          resolution: { kind: "text", text: "resolved\n" },
+        })
+      ).token;
+    }),
+    gitIntegrationBudget(30000),
+  );
   it.each([
     ["beforePublishWork", "uncertain", false, false, true],
     ["afterPublishWork", "uncertain", true, false, true],
     ["afterPublishIndex", "uncertain", true, true, true],
   ] as const)(
     "preserves recovery semantics for a race at %s",
-    async (hook, status, worktreePublished, indexPublished, lockRetained) => {
-      const metadata = path.join(f.metadata, "done"),
-        old = await readFile(metadata, "utf8");
-      const oldWork = await readFile(path.join(f.record.path, "file.txt")),
-        oldIndex = await readFile(path.join(f.record.gitCommonDir, "index"));
-      (f.host as any).gitConflictActions.options[hook] = () =>
-        writeFileSync(metadata, old + "# external change\n");
-      const result = await f.host.executeGitConflictSave(token);
-      expect(result).toMatchObject({
-        status,
-        worktreePublished,
-        indexPublished,
-        lockRetained,
-      });
-      expect(result.recoveryPath).toBeTruthy();
-      await retainedNativeRecovery(f, result, status);
-      expect(await readFile(path.join(f.record.path, "file.txt"))).toEqual(
-        worktreePublished ? Buffer.from("resolved\n") : oldWork,
-      );
-      if (!indexPublished)
-        expect(
-          await readFile(path.join(f.record.gitCommonDir, "index")),
-        ).toEqual(oldIndex);
-      expect(await readFile(metadata, "utf8")).toBe(
-        old + "# external change\n",
-      );
-      await expect(f.host.executeGitConflictSave(token)).rejects.toThrow();
-    },
+    fixtureScope.run(
+      async (hook, status, worktreePublished, indexPublished, lockRetained) => {
+        const metadata = path.join(f.metadata, "done"),
+          old = await readFile(metadata, "utf8");
+        const oldWork = await readFile(path.join(f.record.path, "file.txt")),
+          oldIndex = await readFile(path.join(f.record.gitCommonDir, "index"));
+        (f.host as any).gitConflictActions.options[hook] = () =>
+          writeFileSync(metadata, old + "# external change\n");
+        const result = await f.host.executeGitConflictSave(token);
+        expect(result).toMatchObject({
+          status,
+          worktreePublished,
+          indexPublished,
+          lockRetained,
+        });
+        expect(result.recoveryPath).toBeTruthy();
+        await retainedNativeRecovery(f, result, status);
+        expect(await readFile(path.join(f.record.path, "file.txt"))).toEqual(
+          worktreePublished ? Buffer.from("resolved\n") : oldWork,
+        );
+        if (!indexPublished)
+          expect(
+            await readFile(path.join(f.record.gitCommonDir, "index")),
+          ).toEqual(oldIndex);
+        expect(await readFile(metadata, "utf8")).toBe(
+          old + "# external change\n",
+        );
+        await expect(f.host.executeGitConflictSave(token)).rejects.toThrow();
+      },
+    ),
+    gitIntegrationBudget(45000),
   );
 });
 
-it("requires explicit deletion instead of silently selecting an absent current side", async () => {
-  const f = await fixture();
-  const stages = await f.git(f.record.path, [
-    "ls-files",
-    "--unmerged",
-    "--stage",
-    "-z",
-    "--",
-    "file.txt",
-  ]);
-  const retained =
-    stages
-      .split("\0")
-      .filter((row) => row && !row.includes(" 2\t"))
-      .join("\0") + "\0";
-  await f.git(
-    f.record.path,
-    ["update-index", "-z", "--index-info"],
-    `0 ${"0".repeat(40)}\tfile.txt\0${retained}`,
-  );
-  const req = await request(f),
-    before = await tree(f.record.path);
-  await expect(
-    f.host.prepareGitConflictSave({ ...req, resolution: { kind: "current" } }),
-  ).rejects.toThrow(/отсутствует/);
-  expect(await tree(f.record.path)).toBe(before);
-  const preview = await f.host.prepareGitConflictSave({
-    ...req,
-    resolution: { kind: "delete" },
-  });
-  expect((await f.host.executeGitConflictSave(preview.token)).status).toBe(
-    "saved",
-  );
-  expect(await f.git(f.record.path, ["ls-files", "--", "file.txt"])).toBe("");
-});
+it(
+  "requires explicit deletion instead of silently selecting an absent current side",
+  fixtureScope.run(async () => {
+    const f = await fixture();
+    const stages = await f.git(f.record.path, [
+      "ls-files",
+      "--unmerged",
+      "--stage",
+      "-z",
+      "--",
+      "file.txt",
+    ]);
+    const retained =
+      stages
+        .split("\0")
+        .filter((row) => row && !row.includes(" 2\t"))
+        .join("\0") + "\0";
+    await f.git(
+      f.record.path,
+      ["update-index", "-z", "--index-info"],
+      `0 ${"0".repeat(40)}\tfile.txt\0${retained}`,
+    );
+    const req = await request(f),
+      before = await tree(f.record.path);
+    await expect(
+      f.host.prepareGitConflictSave({
+        ...req,
+        resolution: { kind: "current" },
+      }),
+    ).rejects.toThrow(/отсутствует/);
+    expect(await tree(f.record.path)).toBe(before);
+    const preview = await f.host.prepareGitConflictSave({
+      ...req,
+      resolution: { kind: "delete" },
+    });
+    expect((await f.host.executeGitConflictSave(preview.token)).status).toBe(
+      "saved",
+    );
+    expect(await f.git(f.record.path, ["ls-files", "--", "file.txt"])).toBe("");
+  }),
+  gitIntegrationBudget(45000),
+);
 it.each(["symlink stage", "binary stage"])(
   "refuses unsupported %s even for explicit deletion",
-  async (kind) => {
+  fixtureScope.run(async (kind) => {
     const f = await fixture();
     const original = (
       await f.git(f.record.path, [
@@ -786,10 +834,14 @@ it.each(["symlink stage", "binary stage"])(
     const req = await request(f),
       before = await tree(f.record.path);
     await expect(
-      f.host.prepareGitConflictSave({ ...req, resolution: { kind: "delete" } }),
+      f.host.prepareGitConflictSave({
+        ...req,
+        resolution: { kind: "delete" },
+      }),
     ).rejects.toThrow(/symlink|binary/);
     expect(await tree(f.record.path)).toBe(before);
-  },
+  }),
+  gitIntegrationBudget(45000),
 );
 
 describe("lifecycle cleanup preserves completed conflict-save facts", () => {
@@ -797,35 +849,41 @@ describe("lifecycle cleanup preserves completed conflict-save facts", () => {
   let f: Awaited<ReturnType<typeof fixture>>,
     req: Awaited<ReturnType<typeof request>>,
     token: string;
-  beforeEach(async () => {
-    f = await fixture("merge", 1);
-    const store = new DesktopStateStore(f.home, path.join(f.base, "data")),
-      settings = await store.read(f.project.id);
-    await store.save(
-      f.project.id,
-      {
-        ...settings.value,
-        env: [
-          {
-            key: "CLEANUP_SECRET",
-            value: secret,
-            secret: true,
-            runtime: false,
-          },
-        ],
-      },
-      settings.version,
-    );
-    req = await request(f);
-  });
-  beforeEach(async () => {
-    token = (
-      await f.host.prepareGitConflictSave({
-        ...req,
-        resolution: { kind: "text", text: "saved before cleanup\n" },
-      })
-    ).token;
-  });
+  beforeEach(
+    fixtureScope.run(async () => {
+      f = await fixture("merge", 1);
+      const store = new DesktopStateStore(f.home, path.join(f.base, "data")),
+        settings = await store.read(f.project.id);
+      await store.save(
+        f.project.id,
+        {
+          ...settings.value,
+          env: [
+            {
+              key: "CLEANUP_SECRET",
+              value: secret,
+              secret: true,
+              runtime: false,
+            },
+          ],
+        },
+        settings.version,
+      );
+      req = await request(f);
+    }),
+    gitIntegrationBudget(30000),
+  );
+  beforeEach(
+    fixtureScope.run(async () => {
+      token = (
+        await f.host.prepareGitConflictSave({
+          ...req,
+          resolution: { kind: "text", text: "saved before cleanup\n" },
+        })
+      ).token;
+    }),
+    gitIntegrationBudget(30000),
+  );
   function failAfterRelease(after?: () => void) {
     const acquire = ownedLocks.acquireOwnedLock;
     let releases = 0;
@@ -846,138 +904,161 @@ describe("lifecycle cleanup preserves completed conflict-save facts", () => {
     );
     return () => releases;
   }
-  it("retains uncertain native recovery and exact publication facts after EACCES releasing the lifecycle lock", async () => {
-    const index = await readFile(path.join(f.record.gitCommonDir, "index"));
-    (f.host as any).gitConflictActions.options.afterPublishWork = () =>
-      chmodSync(f.manager.store.root, 0o500);
-    try {
+  it(
+    "retains uncertain native recovery and exact publication facts after EACCES releasing the lifecycle lock",
+    fixtureScope.run(async () => {
+      const index = await readFile(path.join(f.record.gitCommonDir, "index"));
+      (f.host as any).gitConflictActions.options.afterPublishWork = () =>
+        chmodSync(f.manager.store.root, 0o500);
+      try {
+        const result = await f.host.executeGitConflictSave(token);
+        expect(result).toMatchObject({
+          status: "uncertain",
+          worktreePublished: true,
+          indexPublished: false,
+          lockRetained: true,
+        });
+        expect(result.recoveryPath).toBeTruthy();
+        expect(result.log).toMatch(/блокировки/);
+        expect(
+          await readFile(path.join(f.record.path, "file.txt"), "utf8"),
+        ).toBe("saved before cleanup\n");
+        expect(
+          await readFile(path.join(f.record.gitCommonDir, "index")),
+        ).toEqual(index);
+        await retainedNativeRecovery(f, result, "uncertain");
+        await expect(f.host.executeGitConflictSave(token)).rejects.toThrow(
+          /использовано/,
+        );
+      } finally {
+        chmodSync(f.manager.store.root, 0o700);
+      }
+    }),
+    gitIntegrationBudget(45000),
+  );
+  it(
+    "downgrades saved to uncertain after lifecycle cleanup failure and retains the native write fence",
+    fixtureScope.run(async () => {
+      const releases = failAfterRelease();
       const result = await f.host.executeGitConflictSave(token);
       expect(result).toMatchObject({
         status: "uncertain",
         worktreePublished: true,
-        indexPublished: false,
+        indexPublished: true,
         lockRetained: true,
       });
       expect(result.recoveryPath).toBeTruthy();
       expect(result.log).toMatch(/блокировки/);
-      expect(await readFile(path.join(f.record.path, "file.txt"), "utf8")).toBe(
+      expect(result.log).toContain("CLEANUP_FAILED");
+      expect(JSON.stringify(result)).not.toContain(secret);
+      expect(await f.git(f.record.path, ["show", ":file.txt"])).toBe(
         "saved before cleanup\n",
+      );
+      await expect(
+        lstat(
+          path.join(
+            f.manager.store.root,
+            `.repository-${f.record.repositoryKey}.lock`,
+          ),
+        ),
+      ).rejects.toThrow();
+      await retainedNativeRecovery(f, result, "completed");
+      await expect(f.host.executeGitConflictSave(token)).rejects.toThrow(
+        /использовано/,
+      );
+      expect(releases()).toBe(1);
+    }),
+    gitIntegrationBudget(45000),
+  );
+  it(
+    "preserves no-publication facts and both diagnostics without retry after native and lifecycle failures",
+    fixtureScope.run(async () => {
+      const releases = failAfterRelease(),
+        work = await readFile(path.join(f.record.path, "file.txt")),
+        index = await readFile(path.join(f.record.gitCommonDir, "index"));
+      (f.host as any).gitConflictActions.options.beforePublishWork = () => {
+        throw Error(`ACTION_FAILED ${secret}`);
+      };
+      const result = await f.host.executeGitConflictSave(token);
+      expect(result).toMatchObject({
+        status: "uncertain",
+        worktreePublished: false,
+        indexPublished: false,
+        lockRetained: true,
+      });
+      // The prepared native transport deliberately replaces callback exceptions
+      // with its safe verification failure; the lifecycle diagnostic stays visible.
+      expect(result.log).toContain("verification");
+      expect(result.log).toContain("CLEANUP_FAILED");
+      expect(JSON.stringify(result)).not.toContain(secret);
+      expect(result.recoveryPath).toBeTruthy();
+      expect(await readFile(path.join(f.record.path, "file.txt"))).toEqual(
+        work,
       );
       expect(await readFile(path.join(f.record.gitCommonDir, "index"))).toEqual(
         index,
       );
-      await retainedNativeRecovery(f, result, "uncertain");
       await expect(f.host.executeGitConflictSave(token)).rejects.toThrow(
         /использовано/,
       );
-    } finally {
-      chmodSync(f.manager.store.root, 0o700);
-    }
-  });
-  it("downgrades saved to uncertain after lifecycle cleanup failure and retains the native write fence", async () => {
-    const releases = failAfterRelease();
-    const result = await f.host.executeGitConflictSave(token);
-    expect(result).toMatchObject({
-      status: "uncertain",
-      worktreePublished: true,
-      indexPublished: true,
-      lockRetained: true,
-    });
-    expect(result.recoveryPath).toBeTruthy();
-    expect(result.log).toMatch(/блокировки/);
-    expect(result.log).toContain("CLEANUP_FAILED");
-    expect(JSON.stringify(result)).not.toContain(secret);
-    expect(await f.git(f.record.path, ["show", ":file.txt"])).toBe(
-      "saved before cleanup\n",
-    );
-    await expect(
-      lstat(
-        path.join(
-          f.manager.store.root,
-          `.repository-${f.record.repositoryKey}.lock`,
-        ),
-      ),
-    ).rejects.toThrow();
-    await retainedNativeRecovery(f, result, "completed");
-    await expect(f.host.executeGitConflictSave(token)).rejects.toThrow(
-      /использовано/,
-    );
-    expect(releases()).toBe(1);
-  });
-  it("preserves no-publication facts and both diagnostics without retry after native and lifecycle failures", async () => {
-    const releases = failAfterRelease(),
-      work = await readFile(path.join(f.record.path, "file.txt")),
-      index = await readFile(path.join(f.record.gitCommonDir, "index"));
-    (f.host as any).gitConflictActions.options.beforePublishWork = () => {
-      throw Error(`ACTION_FAILED ${secret}`);
-    };
-    const result = await f.host.executeGitConflictSave(token);
-    expect(result).toMatchObject({
-      status: "uncertain",
-      worktreePublished: false,
-      indexPublished: false,
-      lockRetained: true,
-    });
-    // The prepared native transport deliberately replaces callback exceptions
-    // with its safe verification failure; the lifecycle diagnostic stays visible.
-    expect(result.log).toContain("verification");
-    expect(result.log).toContain("CLEANUP_FAILED");
-    expect(JSON.stringify(result)).not.toContain(secret);
-    expect(result.recoveryPath).toBeTruthy();
-    expect(await readFile(path.join(f.record.path, "file.txt"))).toEqual(work);
-    expect(await readFile(path.join(f.record.gitCommonDir, "index"))).toEqual(
-      index,
-    );
-    await expect(f.host.executeGitConflictSave(token)).rejects.toThrow(
-      /использовано/,
-    );
-    expect(releases()).toBe(1);
-  });
-  it("rejects canceled prepare after cleanup failure instead of issuing an apparently successful preview", async () => {
-    const controller = new AbortController();
-    const releases = failAfterRelease(() => controller.abort()),
-      before = await tree(f.record.path);
-    const error = await withReadScope(controller.signal, () =>
-      f.host.prepareGitConflictSave({
-        ...req,
-        resolution: { kind: "current" },
-      }),
-    ).then(
-      () => {
-        throw Error("unexpected preview");
-      },
-      (e: Error) => e,
-    );
-    expect(error.message).toContain("CLEANUP_FAILED");
-    expect(error.message).not.toContain(secret);
-    expect(await tree(f.record.path)).toBe(before);
-    expect(releases()).toBe(1);
-  });
-  it("preserves and redacts action and cleanup errors when execute failed before producing a result", async () => {
-    const releases = failAfterRelease(),
-      before = await tree(f.record.path),
-      command = f.runner.command.bind(f.runner);
-    vi.spyOn(f.runner, "command").mockImplementation(
-      (exe, args, cwd, env, stdin) => {
-        if (args.includes("check-attr")) throw Error(`ACTION_FAILED ${secret}`);
-        return command(exe, args, cwd, env, stdin);
-      },
-    );
-    const error = await f.host.executeGitConflictSave(token).then(
-      () => {
-        throw Error("unexpected result");
-      },
-      (e: Error) => e,
-    );
-    expect(error.message).toContain("ACTION_FAILED");
-    expect(error.message).toContain("CLEANUP_FAILED");
-    expect(error.message).not.toContain(secret);
-    expect(await tree(f.record.path)).toBe(before);
-    await expect(f.host.executeGitConflictSave(token)).rejects.toThrow(
-      /использовано/,
-    );
-    expect(releases()).toBe(1);
-  });
+      expect(releases()).toBe(1);
+    }),
+    gitIntegrationBudget(45000),
+  );
+  it(
+    "rejects canceled prepare after cleanup failure instead of issuing an apparently successful preview",
+    fixtureScope.run(async () => {
+      const controller = new AbortController();
+      const releases = failAfterRelease(() => controller.abort()),
+        before = await tree(f.record.path);
+      const error = await withReadScope(controller.signal, () =>
+        f.host.prepareGitConflictSave({
+          ...req,
+          resolution: { kind: "current" },
+        }),
+      ).then(
+        () => {
+          throw Error("unexpected preview");
+        },
+        (e: Error) => e,
+      );
+      expect(error.message).toContain("CLEANUP_FAILED");
+      expect(error.message).not.toContain(secret);
+      expect(await tree(f.record.path)).toBe(before);
+      expect(releases()).toBe(1);
+    }),
+    gitIntegrationBudget(45000),
+  );
+  it(
+    "preserves and redacts action and cleanup errors when execute failed before producing a result",
+    fixtureScope.run(async () => {
+      const releases = failAfterRelease(),
+        before = await tree(f.record.path),
+        command = f.runner.command.bind(f.runner);
+      vi.spyOn(f.runner, "command").mockImplementation(
+        (exe, args, cwd, env, stdin) => {
+          if (args.includes("check-attr"))
+            throw Error(`ACTION_FAILED ${secret}`);
+          return command(exe, args, cwd, env, stdin);
+        },
+      );
+      const error = await f.host.executeGitConflictSave(token).then(
+        () => {
+          throw Error("unexpected result");
+        },
+        (e: Error) => e,
+      );
+      expect(error.message).toContain("ACTION_FAILED");
+      expect(error.message).toContain("CLEANUP_FAILED");
+      expect(error.message).not.toContain(secret);
+      expect(await tree(f.record.path)).toBe(before);
+      await expect(f.host.executeGitConflictSave(token)).rejects.toThrow(
+        /использовано/,
+      );
+      expect(releases()).toBe(1);
+    }),
+    gitIntegrationBudget(45000),
+  );
 });
 
 async function retainedNativeRecovery(

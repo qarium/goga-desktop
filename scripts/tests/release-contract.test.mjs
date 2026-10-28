@@ -69,8 +69,16 @@ test("release gates native two-architecture builds and narrowly scoped publisher
   assert.deepEqual(w.on.push.tags, ["v*"]);
   assert.equal(w.concurrency["cancel-in-progress"], false);
   assert.deepEqual(w.jobs.build.strategy.matrix.include, [
-    { arch: "arm64", runner: "macos-15", testProfile: "default" },
-    { arch: "x64", runner: "macos-15-intel", testProfile: "slow-git" },
+    {
+      arch: "arm64",
+      runner: "macos-15",
+      testProfile: "default",
+    },
+    {
+      arch: "x64",
+      runner: "macos-15-intel",
+      testProfile: "slow-git",
+    },
   ]);
   assert.equal(w.jobs.publish.needs, "build");
   assert.deepEqual(w.jobs.publish.permissions, {
@@ -128,8 +136,18 @@ test("packaging keeps adhoc-only settings and architecture-qualified names", asy
 // Intel must be exercised on main/PR before choosing another release tag.
 test("CI exercises both native architectures with scoped Intel test budgets", async () => {
   const expected = [
-    { arch: "arm64", runner: "macos-15", testProfile: "default" },
-    { arch: "x64", runner: "macos-15-intel", testProfile: "slow-git" },
+    {
+      arch: "arm64",
+      runner: "macos-15",
+      testProfile: "default",
+      shardCount: 4,
+    },
+    {
+      arch: "x64",
+      runner: "macos-15-intel",
+      testProfile: "slow-git",
+      shardCount: 8,
+    },
   ];
   for (const name of ["ci"]) {
     const workflow = await load(name);
@@ -157,15 +175,42 @@ test("CI exercises both native architectures with scoped Intel test budgets", as
   }
 });
 
-test("every native architecture runs all four independent CI shards", async () => {
+test("native architectures run all four arm64 and eight Intel CI shards", async () => {
   for (const name of ["ci"]) {
     const w = await load(name);
     const j = w.jobs.tests;
     assert.ok(j, `${name}: independent test job required`);
     assert.deepEqual(j.strategy.matrix.arch, ["arm64", "x64"]);
-    assert.deepEqual(j.strategy.matrix.shard, [1, 2, 3, 4]);
+    assert.deepEqual(j.strategy.matrix.shard, [1, 2, 3, 4, 5, 6, 7, 8]);
+    assert.deepEqual(
+      j.strategy.matrix.exclude,
+      [5, 6, 7, 8].map((shard) => ({ arch: "arm64", shard })),
+    );
+    for (const [arch, count] of [
+      ["arm64", 4],
+      ["x64", 8],
+    ]) {
+      assert.equal(
+        j.strategy.matrix.include.find((row) => row.arch === arch).shardCount,
+        count,
+      );
+      const selected = j.strategy.matrix.shard.filter(
+        (shard) =>
+          !j.strategy.matrix.exclude.some(
+            (row) => row.arch === arch && row.shard === shard,
+          ),
+      );
+      assert.deepEqual(
+        selected,
+        Array.from({ length: count }, (_, i) => i + 1),
+      );
+    }
+    assert.equal(j["timeout-minutes"], 60);
     assert.equal(j.strategy["fail-fast"], false);
-    assert.equal(j.env.TEST_SHARD, "${{ matrix.shard }}/4");
+    assert.equal(
+      j.env.TEST_SHARD,
+      "${{ matrix.shard }}/${{ matrix.shardCount }}",
+    );
     const step = j.steps.find((s) => s.id === "tests");
     assert.ok(step);
     assert.match(step.run, /--shard="\$TEST_SHARD"/);
@@ -193,17 +238,18 @@ test("Vitest shards partition every discovered test file exactly once", async ()
   const cwd = fileURLToPath(new URL("../../", import.meta.url));
   // `vitest list --filesOnly` intentionally bypasses sharding. Exercise the
   // configured sequencer used by the real runner against discovered specs.
-  const p = spawnSync(
-    process.execPath,
-    [
-      "--input-type=module",
-      "-e",
-      `
+  for (const count of [4, 8]) {
+    const p = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `
     import { createVitest } from 'vitest/node';
     const groups = [];
     let all;
-    for (let index = 1; index <= 4; index++) {
-      const ctx = await createVitest({ watch: false, shard: index + '/4' });
+    for (let index = 1; index <= ${count}; index++) {
+      const ctx = await createVitest({ watch: false, shard: index + '/${count}' });
       try {
         const specs = await ctx.globTestSpecifications();
         all = specs.map(s => s.moduleId);
@@ -213,24 +259,25 @@ test("Vitest shards partition every discovered test file exactly once", async ()
     }
     console.log(JSON.stringify({ all, shards: groups }));
   `,
-    ],
-    { cwd, encoding: "utf8", timeout: 30000 },
-  );
-  assert.equal(p.status, 0, p.stderr);
-  const { all, shards } = JSON.parse(p.stdout);
-  assert.ok(all.length > 0);
-  assert.ok(shards.every((files) => files.length > 0));
-  const combined = shards.flat();
-  assert.equal(
-    new Set(combined).size,
-    combined.length,
-    "No duplicates between shards",
-  );
-  assert.deepEqual(
-    combined.sort(),
-    all.sort(),
-    "No omitted test files, including future additions",
-  );
+      ],
+      { cwd, encoding: "utf8", timeout: 30000 },
+    );
+    assert.equal(p.status, 0, p.stderr);
+    const { all, shards } = JSON.parse(p.stdout);
+    assert.ok(all.length > 0);
+    assert.ok(shards.every((files) => files.length > 0));
+    const combined = shards.flat();
+    assert.equal(
+      new Set(combined).size,
+      combined.length,
+      "No duplicates between shards",
+    );
+    assert.deepEqual(
+      combined.sort(),
+      all.sort(),
+      "No omitted test files, including future additions",
+    );
+  }
 });
 
 test("release reuses successful exact-commit CI and never reruns the full suite", async () => {
