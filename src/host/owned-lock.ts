@@ -109,7 +109,7 @@ async function syncParent(file: string) {
  */
 export async function acquireOwnedLock(
   file: string,
-  options: { attempts?: number; delayMs?: number } = {},
+  options: { attempts?: number; delayMs?: number; reclaim?: boolean } = {},
 ): Promise<{ release(): Promise<void> }> {
   const attempts = options.attempts ?? 100,
     delayMs = options.delayMs ?? 20;
@@ -119,6 +119,7 @@ export async function acquireOwnedLock(
     !Number.isInteger(attempts) ||
     attempts < 1 ||
     attempts > 1000 ||
+    (options.reclaim !== undefined && typeof options.reclaim !== "boolean") ||
     !Number.isFinite(delayMs) ||
     delayMs < 0 ||
     delayMs > 1000
@@ -174,7 +175,7 @@ export async function acquireOwnedLock(
         published = true;
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-        if (!reclaimed) {
+        if (!reclaimed && options.reclaim !== false) {
           const old = await snapshot(file);
           if (old) {
             let dead = false;

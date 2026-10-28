@@ -1,6 +1,10 @@
+import {
+  startNativeHostOperation,
+  afterNativeHostCommand,
+} from "./helpers/native-host-operation";
 import { afterEach, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
-import { writeFileSync } from "node:fs";
+import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { HostService } from "../src/host/service";
 import { NodeRunner } from "../src/host/process";
@@ -12,7 +16,10 @@ afterEach(async () => {
   vi.restoreAllMocks();
   for (const fn of cleanup.splice(0).reverse()) await fn();
 });
-async function fixture(kind: "primary" | "managed") {
+async function fixture(
+  kind: "primary" | "managed",
+  options: { secret?: string; reconciled?: boolean } = {},
+) {
   const base = await fs.mkdtemp("/private/tmp/goga-rebase-abort-host-");
   cleanup.push(() => fs.rm(base, { recursive: true, force: true }));
   const home = path.join(base, "home"),
@@ -55,7 +62,7 @@ async function fixture(kind: "primary" | "managed") {
   });
   cleanup.push(() => host.dispose());
   const project = await host.addProject(source);
-  const record =
+  let record =
     kind === "managed"
       ? await new CloneManager(home, runner).ensure(project, {
           projectId: project.id,
@@ -64,6 +71,37 @@ async function fixture(kind: "primary" | "managed") {
           branch: "feature",
         })
       : null;
+  // Install pre-existing owner/settings BEFORE the durable native receipt.
+  // Changing either after start would correctly revoke continuation authority.
+  if (options.secret) {
+    const settings = await host.readProjectSettings(project.id);
+    await host.saveProjectSettings(
+      project.id,
+      {
+        ...settings.value,
+        env: [
+          {
+            key: "FIXTURE_SECRET",
+            value: options.secret,
+            secret: true,
+            runtime: false,
+          },
+        ],
+      },
+      settings.version,
+    );
+  }
+  if (options.reconciled && record) {
+    record = await new CloneManager(home, runner).store.update(
+      {
+        ...record,
+        revision: randomUUID(),
+        state: "conflict",
+        reason: "branch",
+      },
+      record.revision,
+    );
+  }
   const root = record?.path ?? source,
     branch = record?.branch ?? "main",
     scope = record ? worktreeContextRef(record) : project.id;
@@ -74,9 +112,11 @@ async function fixture(kind: "primary" | "managed") {
   await fs.writeFile(path.join(root, "file"), "topic\n");
   await git(root, ["commit", "-am", "topic"]);
   const original = (await git(root, ["rev-parse", "HEAD"])).stdout.trim();
-  await expect(
-    git(root, ["rebase", "--merge", "upstream-fixture"]),
-  ).rejects.toThrow();
+  await startNativeHostOperation(host, scope, {
+    operation: "rebase",
+    backend: "merge",
+    source: (await git(root, ["rev-parse", "upstream-fixture"])).stdout.trim(),
+  });
   expect(
     (host as any).prepareGitRebaseOperation,
     "host operation admission is missing",
@@ -111,9 +151,13 @@ it.each(["primary", "managed"] as const)(
       r = await f.host.executeGitRebaseOperation(p.token);
     expect(r).toMatchObject({
       status: "success",
+      native: {
+        outcome: "completed",
+        processSettled: true,
+        verifiedUnrelatedData: true,
+        recovery: "removed",
+      },
       changed: true,
-      metadataCleared: true,
-      headPublished: true,
     });
     expect((await f.git(f.root, ["symbolic-ref", "HEAD"])).stdout).toBe(
       `refs/heads/${f.branch}\n`,
@@ -121,6 +165,8 @@ it.each(["primary", "managed"] as const)(
     expect((await f.git(f.root, ["rev-parse", "HEAD"])).stdout.trim()).toBe(
       f.original,
     );
+    expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("none");
+    await expect(f.host.executeGitRebaseOperation(p.token)).rejects.toThrow();
     if (f.record)
       expect(
         (
@@ -149,10 +195,34 @@ it("preserves completed abort facts if lifecycle release throws", async () => {
   expect(r).toMatchObject({
     status: "uncertain",
     changed: true,
-    headPublished: true,
-    metadataCleared: true,
   });
+  expect(r.native).toMatchObject({
+    outcome: "uncertain",
+    processSettled: true,
+    afterHead: f.original,
+    verifiedUnrelatedData: true,
+    recovery: "retained",
+  });
+  // Completion is not durable until the OUTERMOST context has released.
+  // Preserve both actual Git facts and the recovery fence after that failure.
+  expect(r.recoveryPath).toBe(r.native?.recoveryPath);
   expect(r.recoveryPath).toBeTruthy();
+  expect((await fs.stat(r.recoveryPath!)).isFile()).toBe(true);
+  expect((await fs.stat(r.recoveryPath! + ".pending")).isFile()).toBe(true);
+  const journalDir = path.join(f.home, ".goga/desktop/git-operations");
+  const records = await Promise.all(
+    (await fs.readdir(journalDir))
+      .filter((name) => name.endsWith(".json"))
+      .map(async (name) =>
+        JSON.parse(await fs.readFile(path.join(journalDir, name), "utf8")),
+      ),
+  );
+  expect(records).toHaveLength(1);
+  expect(records[0].recovery).not.toBeNull();
+  expect(
+    (await f.git(f.root, ["symbolic-ref", "--short", "HEAD"])).stdout.trim(),
+  ).toBe(f.branch);
+  expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("none");
   expect(r.log).toContain("fixture lifecycle cleanup");
 });
 it("rejects settings drift without primary fallback", async () => {
@@ -196,37 +266,44 @@ it("binds both ownership files so a coherent nonce swap cannot reuse a ticket", 
   await expect(f.host.executeGitRebaseOperation(p.token)).rejects.toThrow();
   expect(await fs.readFile(path.join(f.root, ".git/index"))).toEqual(before);
 });
-it("redacts partial-native diagnostics without discarding publication facts", async () => {
-  const f = await fixture("managed"),
-    secret = "fixture-secret-do-not-leak";
-  const settings = await f.host.readProjectSettings(f.project.id);
-  await f.host.saveProjectSettings(
-    f.project.id,
-    {
-      ...settings.value,
-      env: [
-        { key: "FIXTURE_SECRET", value: secret, secret: true, runtime: false },
-      ],
-    },
-    settings.version,
-  );
-  const p = await f.prepare(),
-    engine = (f.host as any).gitRebaseOperations;
-  engine.options.afterNative = () => {
-    throw Error(`failure ${secret}`);
-  };
+it("redacts partial-native diagnostics without discarding settled process facts", async () => {
+  const secret = "fixture-secret-do-not-leak",
+    f = await fixture("managed", { secret }),
+    p = await f.prepare();
+  const fault = afterNativeHostCommand(f.runner, "abort", async (result) => {
+    // Replace legacy afterNative: preserve real process facts, inject a late
+    // foreign marker and diagnostic before the final capture/verification.
+    result.stderr = Buffer.concat([
+      result.stderr,
+      Buffer.from(`fixture diagnostic ${secret}\n`),
+    ]);
+    await fs.writeFile(path.join(f.root, ".git/BISECT_START"), "feature\n");
+  });
   const r = await f.host.executeGitRebaseOperation(p.token);
+  expect(fault.calls).toBe(1);
   expect(r).toMatchObject({
     status: "uncertain",
     changed: true,
-    mutationStarted: true,
+    native: {
+      outcome: "uncertain",
+      exitCode: 0,
+      processSettled: true,
+      recovery: "retained",
+    },
   });
+  expect(r.log).toContain("fixture diagnostic");
   expect(r.log).not.toContain(secret);
   expect(r.message).not.toContain(secret);
   expect(r.recoveryPath).toBeTruthy();
+  const recovery = JSON.parse(await fs.readFile(r.recoveryPath!, "utf8"));
+  expect(recovery.recovery.head).toBe(f.original);
+  expect(recovery.state).toBe("uncertain");
+  expect((await f.git(f.root, ["rev-parse", "HEAD"])).stdout.trim()).toBe(
+    f.original,
+  );
 });
 it("completes a reconciled conflict/branch owner without making ordinary admission ready", async () => {
-  const f = await fixture("managed"),
+  const f = await fixture("managed", { reconciled: true }),
     manager = new CloneManager(f.home, f.runner);
   await expect(
     manager.resolve(f.scope as ReturnType<typeof worktreeContextRef>),
@@ -248,8 +325,12 @@ it("completes a reconciled conflict/branch owner without making ordinary admissi
   const r = await f.host.executeGitRebaseOperation(preview.token);
   expect(r).toMatchObject({
     status: "success",
-    headPublished: true,
-    metadataCleared: true,
+    native: {
+      outcome: "completed",
+      processSettled: true,
+      verifiedUnrelatedData: true,
+      recovery: "removed",
+    },
   });
   expect(
     await fs.readFile(path.join(manager.store.root, "registry.json")),
@@ -278,7 +359,12 @@ it("completion verifier refuses every active operation marker on an attached own
   const admission = await manager.resolveGitRead(
     f.scope as ReturnType<typeof worktreeContextRef>,
   );
-  await f.git(f.root, ["rebase", "--abort"]);
+  expect(
+    await f.host.executeGitRebaseOperation((await f.prepare()).token),
+  ).toMatchObject({
+    status: "success",
+    native: { outcome: "completed", processSettled: true },
+  });
   await expect(
     manager.verifyGitOperationOwner(
       f.scope as ReturnType<typeof worktreeContextRef>,
@@ -319,17 +405,35 @@ it("completion verifier refuses every active operation marker on an attached own
 it("refuses late BISECT_START after managed operation metadata cleanup", async () => {
   const f = await fixture("managed"),
     p = await f.prepare();
-  (f.host as any).gitRebaseOperations.options.afterPublish = (step: string) => {
-    if (step === "metadata")
-      writeFileSync(path.join(f.root, ".git/BISECT_START"), "feature\n");
-  };
+  const fault = afterNativeHostCommand(f.runner, "abort", async () => {
+    // Git already removed its metadata; no manual publication callback exists.
+    await expect(
+      fs.stat(path.join(f.root, ".git/rebase-merge")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    await fs.writeFile(path.join(f.root, ".git/BISECT_START"), "feature\n");
+  });
   const r = await f.host.executeGitRebaseOperation(p.token);
+  expect(fault.calls).toBe(1);
   expect(r).toMatchObject({
     status: "uncertain",
     changed: true,
-    headPublished: true,
-    metadataCleared: true,
+    native: {
+      outcome: "uncertain",
+      exitCode: 0,
+      processSettled: true,
+      recovery: "retained",
+    },
   });
+  expect(
+    (await f.git(f.root, ["symbolic-ref", "--short", "HEAD"])).stdout.trim(),
+  ).toBe(f.branch);
+  expect((await f.git(f.root, ["rev-parse", "HEAD"])).stdout.trim()).toBe(
+    f.original,
+  );
+  expect(
+    JSON.parse(await fs.readFile(r.recoveryPath!, "utf8")).recovery.head,
+  ).toBe(f.original);
+  await expect(f.host.executeGitRebaseOperation(p.token)).rejects.toThrow();
   expect(
     await fs.readFile(path.join(f.root, ".git/BISECT_START"), "utf8"),
   ).toBe("feature\n");

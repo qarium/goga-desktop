@@ -214,3 +214,19 @@ it("rolls back publication when closing the preparation handle fails", async () 
   expect(await fs.stat(file).catch(() => null)).toBeNull();
   expect(await fs.readdir(root)).toEqual([]);
 });
+it("non-reclaimable operation fence is preserved even when its owner PID is dead", async () => {
+  const { file, root } = await setup();
+  try {
+    const raw = metadata(2147483647);
+    await fs.writeFile(file, raw, { mode: 0o600 });
+    const kill = vi.spyOn(process, "kill");
+    await expect(
+      acquireOwnedLock(file, { attempts: 1, reclaim: false }),
+    ).rejects.toThrow();
+    expect(kill).not.toHaveBeenCalled();
+    expect(await fs.readFile(file, "utf8")).toBe(raw);
+    expect(await fs.readdir(root)).toEqual([path.basename(file)]);
+  } finally {
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});

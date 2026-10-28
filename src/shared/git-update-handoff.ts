@@ -1,3 +1,4 @@
+import type { NativeGitOperationResult } from "./git-native-operation";
 import { z } from "zod";
 import { scopeRefSchema, type ScopeRef } from "./context";
 import { gitRevisionSchema } from "./git-workspace";
@@ -30,6 +31,7 @@ export interface GitUpdateHandoffCandidate {
   baseRef: string;
   strategy: GitUpdateStrategy;
   algorithm: "merge" | "rebase";
+  backend?: "merge" | "apply";
   conflicts: string[];
   expiresAt: number;
 }
@@ -47,7 +49,11 @@ export interface GitUpdateHandoffResult {
   scope: ScopeRef;
   root: string;
   algorithm: "merge" | "rebase";
-  status: "conflict" | "error" | "uncertain";
+  status: "success" | "conflict" | "error" | "uncertain";
+  native?: NativeGitOperationResult;
+  lockRetained?: boolean;
+  retainedLocks?: string[];
+  uncheckedLocks?: string[];
   changed: boolean;
   conflicts: string[];
   message: string;

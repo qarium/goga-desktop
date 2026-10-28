@@ -14,6 +14,7 @@ import { HostService } from "../src/host/service";
 import { NodeRunner } from "../src/host/process";
 import { CloneManager } from "../src/host/clones";
 import { worktreeContextRef } from "../src/shared/worktrees";
+import { childEnvironment } from "../src/host/process-environment";
 import { isOfflineGitRead } from "../src/host/read-scope";
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
@@ -107,6 +108,17 @@ it("explicit fetch uses online transport only for fetch and leaves worktree unch
       return original(file, args, cwd, env, stdin);
     },
   );
+  const bytes = f.runner.commandBytes.bind(f.runner);
+  vi.spyOn(f.runner, "commandBytes").mockImplementation((command) => {
+    const env = childEnvironment({}, {}, command.env);
+    expect(path.isAbsolute(command.executable)).toBe(true);
+    expect(command.cwd).toBe(f.root);
+    calls.push({ args: command.args, offline: env.GIT_ALLOW_PROTOCOL === "" });
+    if (command.args.includes("fetch"))
+      expect(env.GIT_ALLOW_PROTOCOL).toBe("https:ssh:file");
+    else expect(env.GIT_ALLOW_PROTOCOL).toBe("");
+    return bytes(command);
+  });
   const inventory = await (f.host as any).readGitBranches(f.project.id);
   expect(calls.every((c) => c.offline)).toBe(true);
   const preview = await (f.host as any).prepareGitBranch({
@@ -141,6 +153,16 @@ it("merges only in the primary owner offline while preserving unrelated edits", 
       return original(file, args, cwd, env, stdin);
     },
   );
+  const bytes = f.runner.commandBytes.bind(f.runner);
+  vi.spyOn(f.runner, "commandBytes").mockImplementation((command) => {
+    expect(path.isAbsolute(command.executable)).toBe(true);
+    calls.push({
+      file: "git",
+      cwd: command.cwd,
+      offline: childEnvironment({}, {}, command.env).GIT_ALLOW_PROTOCOL === "",
+    });
+    return bytes(command);
+  });
   const inventory = await f.host.readGitBranches(f.project.id);
   const preview = await f.host.prepareGitBranch({
     projectId: f.project.id,
@@ -200,3 +222,49 @@ it("keeps native conflicts and permits only a fresh explicit primary abort ticke
   );
   await expect(f.host.executeGitBranch(abort.token)).rejects.toThrow();
 });
+
+it.each(["pull", "switch-remote"] as const)(
+  "journals native %s through the primary host owner",
+  async (action) => {
+    const f = await fixture();
+    const remote = path.join(f.base, "native-remote.git");
+    await f.runner.command("git", ["init", "--bare", remote], f.base);
+    await f.git(["remote", "add", "origin", remote]);
+    await f.git(["push", "-u", "origin", "main"]);
+    await f.git(["switch", "-c", "incoming"]);
+    await writeFile(path.join(f.root, "incoming.txt"), "incoming\n");
+    await f.git(["add", "."]);
+    await f.git(["-c", "commit.gpgSign=false", "commit", "-m", "incoming"]);
+    const target = (await f.git(["rev-parse", "HEAD"])).trim();
+    await f.git(["push", "origin", "incoming:main", "incoming:new"]);
+    await f.git(["switch", "main"]);
+    const inventory = await f.host.readGitBranches(f.project.id);
+    const preview = await f.host.prepareGitBranch({
+      projectId: f.project.id,
+      revision: inventory.revision,
+      ...(action === "pull"
+        ? { action }
+        : { action, ref: "refs/remotes/origin/new" }),
+    });
+    expect(await f.host.executeGitBranch(preview.token)).toMatchObject({
+      status: "success",
+    });
+    expect((await f.git(["rev-parse", "HEAD"])).trim()).toBe(target);
+    expect((await f.git(["symbolic-ref", "HEAD"])).trim()).toBe(
+      action === "pull" ? "refs/heads/main" : "refs/heads/new",
+    );
+    const directory = path.join(f.home, ".goga/desktop/git-operations");
+    const names = (await readdir(directory)).filter((name) =>
+      name.endsWith(".json"),
+    );
+    expect(names).toHaveLength(1);
+    expect(
+      JSON.parse(await readFile(path.join(directory, names[0]), "utf8")),
+    ).toMatchObject({
+      state: "completed",
+      recovery: null,
+      operation: action === "pull" ? "pull" : "switch",
+    });
+    await expect(f.host.executeGitBranch(preview.token)).rejects.toThrow();
+  },
+);

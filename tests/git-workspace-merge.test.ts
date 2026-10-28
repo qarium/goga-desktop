@@ -1,3 +1,5 @@
+import { createNativeGitCapability } from "../src/host/git-native-context";
+import { NativeGitJournal } from "../src/host/git-native-journal";
 import { withTrustedGitIndex } from "../src/host/git-index-scope";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
@@ -34,7 +36,13 @@ async function fixture() {
   const runner = new NodeRunner(15000, env);
   cleanup.push(() => runner.dispose());
   const git = (args: string[], stdin?: string) =>
-    runner.command("git", args, root, env, stdin);
+    runner.command(
+      "git",
+      ["-c", "gc.auto=0", "-c", "maintenance.auto=false", ...args],
+      root,
+      env,
+      stdin,
+    );
   const write = (name: string, content: string) =>
     fs.writeFile(path.join(root, name), content);
   const read = (name: string) => fs.readFile(path.join(root, name), "utf8");
@@ -65,6 +73,28 @@ async function fixture() {
     intercept: ((args: string[]) => Promise<void>) | undefined;
   const calls: string[][] = [];
   const ctx: GitBranchContext = {
+    native: createNativeGitCapability({
+      root,
+      env,
+      journal: new NativeGitJournal({
+        directory: path.join(dir, "journal"),
+        now: () => now,
+      }),
+      owner: async () => ({
+        scope: "project",
+        registryRevision: ownerKey,
+        projectPath: root,
+      }),
+      runner: {
+        commandBytes: async (command) => {
+          const args = [...command.args];
+          calls.push(args);
+          await intercept?.(args);
+          return runner.commandBytes(command);
+        },
+      },
+    }),
+
     root,
     scope: "project",
     ownerKey,
@@ -239,12 +269,16 @@ describe("primary explicit merge", () => {
       await f.write(file, "keep my data\n");
       if (kind === "staged") await f.git(["add", "--", file]);
       const before = await f.head();
-      const p = await f.prepare();
-      const result = await f.actions.execute(p.token);
-      expect(result, JSON.stringify(result)).toMatchObject({
-        status: "error",
-        changed: false,
-      });
+      if (kind === "staged") {
+        await expect(f.prepare()).rejects.toThrow(/staged/);
+        expect(f.calls.some((args) => args.includes("merge"))).toBe(false);
+      } else {
+        const result = await f.actions.execute((await f.prepare()).token);
+        expect(result, JSON.stringify(result)).toMatchObject({
+          status: "error",
+          changed: false,
+        });
+      }
       expect(await f.head()).toBe(before);
       expect(await f.read(file)).toBe("keep my data\n");
       expect((await f.reader.snapshot()).operation).toBe("none");
@@ -335,10 +369,10 @@ describe("primary explicit merge", () => {
       if (args.includes("merge-tree"))
         await f.write("unrelated", "late edit\n");
     });
-    expect(await f.actions.execute(p.token)).toMatchObject({
-      status: "error",
-      changed: false,
-    });
+    const result = await f.actions.execute(p.token);
+    expect(result).toMatchObject({ status: "uncertain", changed: false });
+    expect(result.recoveryPath).toBeTruthy();
+    await expect(f.prepare()).rejects.toThrow(/Журнал/);
     expect(await f.head()).toBe(f.base);
     expect(await f.read("unrelated")).toBe("late edit\n");
     expect(f.calls.some((args) => args.includes("merge"))).toBe(false);
@@ -450,11 +484,7 @@ describe("primary explicit merge", () => {
       if (kind === "unrelated-refusal")
         await f.write("incoming", "other collision\n");
       const before = await f.head();
-      const result = await f.actions.execute((await f.prepare()).token);
-      expect(result, JSON.stringify(result)).toMatchObject({
-        status: "error",
-        changed: false,
-      });
+      await expect(f.prepare()).rejects.toThrow();
       expect(await f.head()).toBe(before);
       expect(await f.read("base/data")).toBe("USER DATA\n");
       expect(f.calls.some((args) => args.includes("merge"))).toBe(false);
@@ -550,14 +580,17 @@ describe("primary explicit merge", () => {
   );
 });
 describe("confirmed native merge abort", () => {
-  it.each(["index.lock", "config.lock"])(
-    "reports primary abort cleanup failure after mutation: %s",
+  it.each(["config.lock"])(
+    "reports native abort config cleanup failure after mutation: %s",
     async (name) => {
       const f = await fixture();
       await f.conflict();
       await f.actions.execute((await f.prepare()).token);
       const p = await f.prepare("abort-merge");
-      (f.actions as any).releaseLockFault = (lock: string, phase: string) => {
+      (f.actions as any).nativeMerges.releaseLockFault = (
+        lock: string,
+        phase: string,
+      ) => {
         if (lock === name && phase === "before") throw Error("release fault");
       };
       const out = await f.actions.execute(p.token);
@@ -572,7 +605,7 @@ describe("confirmed native merge abort", () => {
     },
   );
   it.each(["same", "different"])(
-    "old primary abort also pins HEAD against %s-OID cooperative replacement",
+    "native abort detects %s-OID external HEAD replacement and retains recovery without fake HEAD locks",
     async (kind) => {
       const f = await fixture();
       await f.conflict();
@@ -583,17 +616,23 @@ describe("confirmed native merge abort", () => {
       f.intercept(async (args) => {
         if (!args.includes("--abort")) return;
         await expect(
-          f.git(["symbolic-ref", "HEAD", "refs/heads/other"]),
-        ).rejects.toThrow();
+          fs.stat(path.join(f.root, ".git/HEAD.lock")),
+        ).rejects.toMatchObject({ code: "ENOENT" });
+        await f.git(["symbolic-ref", "HEAD", "refs/heads/other"]);
       });
       const out = await f.actions.execute(p.token);
       expect(out, JSON.stringify(out)).toMatchObject({
-        status: "success",
+        status: "uncertain",
         changed: true,
       });
-      expect(await f.head()).toBe(head);
-      expect((await f.reader.snapshot()).branch).toBe("main");
-      expect(out.log).not.toMatch(/HEAD.lock|update_ref failed|кодом 1/);
+      expect(out.recoveryPath).toBeTruthy();
+      expect(
+        (await f.git(["rev-parse", "refs/heads/main"])).stdout.trim(),
+      ).toBe(head);
+      expect((await f.reader.snapshot()).branch).toBe("other");
+      await expect(f.actions.execute(p.token)).rejects.toThrow();
+      await expect(f.prepare()).rejects.toThrow(/Журнал/);
+      expect(f.calls.some((args) => args.includes("reset"))).toBe(false);
     },
   );
   it("aborts a reopened authentic merge and preserves unrelated edits", async () => {
@@ -637,12 +676,7 @@ describe("confirmed native merge abort", () => {
         await fs.mkdir(path.join(f.root, "unrelated"));
         await f.write("unrelated/data", "NEW USER DATA\n");
       } else await fs.symlink(outside, path.join(f.root, "unrelated"));
-      const p = await f.prepare("abort-merge");
-      const result = await f.actions.execute(p.token);
-      expect(result, JSON.stringify(result)).toMatchObject({
-        status: "error",
-        changed: false,
-      });
+      await expect(f.prepare("abort-merge")).rejects.toThrow();
       expect((await f.reader.snapshot()).operation).toBe("merge");
       expect(f.calls.some((args) => args.includes("--abort"))).toBe(false);
       if (kind === "file")
@@ -672,13 +706,7 @@ describe("confirmed native merge abort", () => {
       if (kind === "renamed")
         await f.git(["mv", "unrelated", "renamed-user-file"]);
       const index = (await f.git(["ls-files", "--stage", "-z"])).stdout;
-      const result = await f.actions.execute(
-        (await f.prepare("abort-merge")).token,
-      );
-      expect(result, JSON.stringify(result)).toMatchObject({
-        status: "error",
-        changed: false,
-      });
+      await expect(f.prepare("abort-merge")).rejects.toThrow();
       expect((await f.git(["ls-files", "--stage", "-z"])).stdout).toBe(index);
       expect((await f.reader.snapshot()).operation).toBe("merge");
       expect(f.calls.some((args) => args.includes("--abort"))).toBe(false);
@@ -707,13 +735,7 @@ describe("confirmed native merge abort", () => {
       await f.actions.execute((await f.prepare()).token);
       if (kind === "missing") await fs.rm(path.join(f.root, ".git/AUTO_MERGE"));
       else await f.write(".git/info/attributes", "base merge=union\n");
-      const result = await f.actions.execute(
-        (await f.prepare("abort-merge")).token,
-      );
-      expect(result, JSON.stringify(result)).toMatchObject({
-        status: "error",
-        changed: false,
-      });
+      await expect(f.prepare("abort-merge")).rejects.toThrow();
       expect((await f.reader.snapshot()).operation).toBe("merge");
       expect(f.calls.some((args) => args.includes("--abort"))).toBe(false);
     },
@@ -763,13 +785,12 @@ describe("confirmed native merge abort", () => {
         await fs.mkdir(path.join(f.root, "collision/.git"));
       if (kind === "changed-tracked")
         await f.write("collision/child", "KEEP CHILD EDIT\n");
-      const result = await f.actions.execute(
-        (await f.prepare("abort-merge")).token,
-      );
-      expect(result, JSON.stringify(result)).toMatchObject({
-        status: kind === "none" ? "success" : "error",
-        changed: kind === "none",
-      });
+      if (kind === "none") {
+        const result = await f.actions.execute(
+          (await f.prepare("abort-merge")).token,
+        );
+        expect(result).toMatchObject({ status: "success", changed: true });
+      } else await expect(f.prepare("abort-merge")).rejects.toThrow();
       if (kind === "none")
         expect(await f.read("collision")).toBe("HEAD file\n");
       else {
@@ -795,12 +816,8 @@ describe("confirmed native merge abort", () => {
     await f.conflict();
     await f.actions.execute((await f.prepare()).token);
     await f.write("incoming", "post-conflict edit\n");
-    const p = await f.prepare("abort-merge");
-    const result = await f.actions.execute(p.token);
-    expect(result, JSON.stringify(result)).toMatchObject({
-      status: "error",
-      changed: false,
-    });
+    await expect(f.prepare("abort-merge")).rejects.toThrow();
+    expect(f.calls.some((args) => args.includes("--abort"))).toBe(false);
     expect((await f.reader.snapshot()).operation).toBe("merge");
     expect(await f.read("incoming")).toBe("post-conflict edit\n");
     await f.write("incoming", "source\n");
@@ -836,11 +853,8 @@ describe("confirmed native merge abort", () => {
     await f.actions.execute((await f.prepare()).token);
     const p = await f.prepare("abort-merge");
     await f.write(".git/MERGE_MSG", "externally changed\n");
-    const result = await f.actions.execute(p.token);
-    expect(result, JSON.stringify(result)).toMatchObject({
-      status: "error",
-      changed: false,
-    });
+    await expect(f.actions.execute(p.token)).rejects.toThrow();
+    expect(f.calls.some((args) => args.includes("--abort"))).toBe(false);
     expect((await f.reader.snapshot()).operation).toBe("merge");
     await expect(f.actions.execute(p.token)).rejects.toThrow();
   });

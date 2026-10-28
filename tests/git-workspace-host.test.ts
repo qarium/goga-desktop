@@ -152,7 +152,7 @@ it("invalidates commit authority after project settings change", async () => {
   );
   expect(await f.git(["rev-parse", "HEAD"])).toBe(snap.head + "\n");
 });
-it("refuses a runner without safe ref transactions without falling back to a native commit", async () => {
+it("refuses a runner without the native byte-command capability without falling back", async () => {
   const f = await fixture();
   await writeFile(path.join(f.root, "file.txt"), "chosen\n");
   const snap = await f.host.readGitWorkspace(f.project.id);
@@ -163,7 +163,7 @@ it("refuses a runner without safe ref transactions without falling back to a nat
     message: "selected",
   });
   const before = await readFile(path.join(f.root, ".git/index"));
-  Object.defineProperty(f.runner, "gitRefTransaction", { value: undefined });
+  Object.defineProperty(f.runner, "commandBytes", { value: undefined });
   const outcome = await f.host
     .executeGitCommit(preview.token)
     .catch((e: Error) => e);

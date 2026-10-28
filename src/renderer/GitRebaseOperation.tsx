@@ -1,3 +1,7 @@
+import {
+  verifiedNativeSequenceResult,
+  nativeSequenceDiagnostics,
+} from "./git-native-sequence-result";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { scopeRefSchema, type ScopeRef } from "../shared/context";
@@ -12,7 +16,7 @@ import { readWithSignal } from "./read-request";
 import { TopicModal, topicError } from "./TopicsCommon";
 import { LoadingState } from "./LoadingBoundary";
 type Action = "continue" | "abort";
-const oid = z.string().regex(/^[a-f0-9]{40}$/);
+const oid = z.string().regex(/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/);
 const text = z
   .string()
   .min(1)
@@ -64,6 +68,8 @@ function verifiedResult(
   value: unknown,
   submitted: GitRebaseOperationPreview,
 ): boolean {
+  if (value && typeof value === "object" && "native" in value)
+    return verifiedNativeSequenceResult(value, submitted);
   const parsed = resultSchema.safeParse(value);
   if (!parsed.success) return false;
   const v = parsed.data;
@@ -110,6 +116,8 @@ function verifiedResult(
 }
 /** Even malformed replies retain each observable fact, without treating omissions as false. */
 function diagnostics(value: unknown, verified: boolean): string {
+  if (value && typeof value === "object" && "native" in value)
+    return nativeSequenceDiagnostics(value, verified);
   const v =
     value && typeof value === "object"
       ? (value as Record<string, unknown>)

@@ -1,12 +1,15 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { HostService } from "../src/host/service";
 import { NodeRunner, CommandExitError, type Runner } from "../src/host/process";
 import { CloneManager } from "../src/host/clones";
+import { CloneStore } from "../src/host/clone-store";
 import { worktreeContextRef } from "../src/shared/worktrees";
+import { NativeGitUpdateHandoff } from "../src/host/git-native-update-handoff";
 const cleanup: (() => Promise<unknown>)[] = [];
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const fn of cleanup.splice(0).reverse()) await fn();
 });
 async function fixture(kind: "primary" | "managed", strategy = "merge") {
@@ -61,6 +64,7 @@ async function fixture(kind: "primary" | "managed", strategy = "merge") {
   let onUpdate: ((cwd: string, args: string[]) => Promise<void>) | undefined;
   const postFailureStatus: string[][] = [];
   const runner: Runner = {
+    commandBytes: node.commandBytes.bind(node),
     start: node.start.bind(node),
     kill: node.kill.bind(node),
     command: async (exe, args, cwd, e, input) => {
@@ -186,6 +190,29 @@ it.each([
       conflicts: ["file"],
     });
     expect((await f.host.readGitWorkspace(f.scope)).operation).toBe(strategy);
+    if (strategy === "rebase") {
+      await fs.writeFile(path.join(f.root, "file"), "resolved\n");
+      await f.git(f.root, ["add", "file"]);
+      const next = await f.host.prepareGitRebaseOperation({
+        scope: f.scope,
+        action: "continue",
+        revision: (await f.host.readGitWorkspace(f.scope)).revision,
+      });
+      expect(await f.host.executeGitRebaseOperation(next.token)).toMatchObject({
+        status: "success",
+        native: { outcome: "completed", processSettled: true },
+      });
+    } else {
+      const next = await f.host.prepareGitMergeOperation({
+        scope: f.scope,
+        action: "abort",
+        revision: (await f.host.readGitWorkspace(f.scope)).revision,
+      });
+      expect(await f.host.executeGitMergeOperation(next.token)).toMatchObject({
+        status: "success",
+      });
+    }
+    expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("none");
     await expect(
       f.host.executeGitUpdateHandoff(preview.token),
     ).rejects.toThrow();
@@ -294,3 +321,52 @@ it("failure diagnostics cannot refresh the index after a handoff candidate has b
   for (const args of f.postFailureStatus)
     expect(args).toContain("--no-optional-locks");
 });
+
+it("managed Goga probes use physical native admission without repeating the display resolver", async () => {
+  const f = await fixture("managed");
+  const head = (await f.git(f.root, ["rev-parse", "HEAD"])).stdout;
+  const display = vi.spyOn(CloneManager.prototype, "resolveGitRead");
+  const counts: number[][] = [];
+  const locks = vi.spyOn(CloneStore.prototype as any, "locked");
+  const capture = NativeGitUpdateHandoff.prototype.captureAttempt;
+  const failure = NativeGitUpdateHandoff.prototype.afterFailure;
+  vi.spyOn(
+    NativeGitUpdateHandoff.prototype,
+    "captureAttempt",
+  ).mockImplementation(async function (this: NativeGitUpdateHandoff, ...args) {
+    const before = display.mock.calls.length;
+    const locked = locks.mock.calls.length;
+    try {
+      return await capture.apply(this, args);
+    } finally {
+      counts.push([
+        display.mock.calls.length - before,
+        locks.mock.calls.length - locked,
+      ]);
+    }
+  });
+  vi.spyOn(NativeGitUpdateHandoff.prototype, "afterFailure").mockImplementation(
+    async function (this: NativeGitUpdateHandoff, ...args) {
+      const before = display.mock.calls.length;
+      const locked = locks.mock.calls.length;
+      try {
+        return await failure.apply(this, args);
+      } finally {
+        counts.push([
+          display.mock.calls.length - before,
+          locks.mock.calls.length - locked,
+        ]);
+      }
+    },
+  );
+  const result = await f.update();
+  expect(result.status).toBe("failed");
+  expect(result.handoff).toBeDefined();
+  expect(counts).toEqual([
+    [0, 0],
+    [0, 0],
+  ]);
+  expect(f.updates()).toBe(1);
+  expect((await f.git(f.root, ["rev-parse", "HEAD"])).stdout).toBe(head);
+  expect((await f.host.readGitWorkspace(f.scope)).files).toEqual([]);
+}, 30000);

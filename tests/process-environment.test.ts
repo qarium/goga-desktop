@@ -7,8 +7,32 @@ import {
 import {
   withTrustedGitIndex,
   withPrivateGitIndexWrite,
+  withNativeGitIndex,
+  withNativeGitObjects,
 } from "../src/host/git-index-scope";
 import { withOfflineGitReadScope } from "../src/host/read-scope";
+import { withNativeGitPolicy } from "../src/host/git-native-policy";
+
+it("native remote policy cannot weaken an enclosing offline read capability", () => {
+  const env = withOfflineGitReadScope(() =>
+    withNativeGitPolicy("remote", () =>
+      childEnvironment({ GIT_ALLOW_PROTOCOL: "https" }),
+    ),
+  );
+  expect(env.GIT_ALLOW_PROTOCOL).toBe("");
+});
+
+it("native policy cannot reintroduce the live index into a private read", () => {
+  const env = withTrustedGitIndex(
+    "/private/tmp/repo/.git/goga-commit-00000000-0000-0000-0000-000000000000/index",
+    () =>
+      withPrivateGitReadScope(() =>
+        withNativeGitPolicy("local-read", () => childEnvironment({})),
+      ),
+  );
+  expect(env.GIT_INDEX_FILE).toBeUndefined();
+  expect(env.GIT_ATTR_NOSYSTEM).toBe("1");
+});
 
 describe("private Git read environment", () => {
   it("overrides inherited, default and explicit configuration/attribute redirects without changing the ordinary environment", () => {
@@ -256,4 +280,30 @@ it("freezes config for native private abort without changing index, attributes o
   expect(result.GIT_OBJECT_DIRECTORY).toBeUndefined();
   expect(result.GIT_TRACE).toBeUndefined();
   expect(childEnvironment(env).GIT_CONFIG_GLOBAL).toBe("/test/global");
+});
+
+it("scopes native object writes to the minted index without leaking redirects", async () => {
+  const index = "/private/tmp/goga-native-index-abcdef/index",
+    objects = "/private/tmp/repo/.git/objects";
+  const hostile = {
+    GIT_INDEX_FILE: "/foreign/index",
+    GIT_OBJECT_DIRECTORY: "/foreign/objects",
+  };
+  const scoped = withNativeGitIndex(index, () =>
+    withNativeGitObjects(objects, () =>
+      withNativeGitPolicy("local-write", () =>
+        childEnvironment(hostile, hostile, hostile),
+      ),
+    ),
+  );
+  expect(scoped.GIT_INDEX_FILE).toBe(index);
+  expect(scoped.GIT_OBJECT_DIRECTORY).toBe(objects);
+  expect(scoped.GIT_ALLOW_PROTOCOL).toBe("");
+  expect(childEnvironment(hostile).GIT_OBJECT_DIRECTORY).toBeUndefined();
+  expect(() => withNativeGitObjects(objects, () => {})).toThrow();
+  expect(() =>
+    withNativeGitIndex(index, () =>
+      withPrivateGitReadScope(() => childEnvironment({})),
+    ),
+  ).toThrow();
 });

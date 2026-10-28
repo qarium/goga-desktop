@@ -36,7 +36,7 @@ const candidate = {
   baseRef: "main",
   strategy: "merge" as const,
   algorithm: "merge" as const,
-  conflicts: ["file.txt"],
+  conflicts: [],
   expiresAt: Date.now() + 300000,
 };
 let api: any;
@@ -316,7 +316,7 @@ it("moves native popup handoff to a main-document confirmation after close ackno
     expect(api.prepareGitUpdateHandoff).not.toHaveBeenCalled();
     await act(async () => acknowledge());
     const confirmation = await screen.findByRole("button", {
-      name: "Подтвердить переход к конфликту",
+      name: "Начать локальное обновление",
     });
     expect(confirmation.ownerDocument).toBe(document);
     expect(frame.contentDocument!.querySelector("dialog")).toBeNull();

@@ -1,6 +1,5 @@
-import { withFrozenGitConfigScope } from "./git-private-read-scope";
-import { createHash, randomUUID } from "node:crypto";
-import { constants, renameSync, unlinkSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -16,12 +15,18 @@ import {
   gitFilePathSchema,
   type GitWorkspaceSnapshot,
 } from "../shared/git-workspace";
-import { noSymlinks } from "./settings";
+import {
+  nativeGitGuard,
+  nativeIntent,
+  type NativeGitCapability,
+} from "./git-native-context";
 import { CommandExitError } from "./process";
+import { noSymlinks } from "./settings";
 export interface GitMergeContext {
   scope: ScopeRef;
   root: string;
   ownerKey: string;
+  native?: NativeGitCapability;
   /** Host-bound settings redaction; never a renderer capability. */
   sanitizeDiagnostics?(value: string): string;
   snapshot(): Promise<GitWorkspaceSnapshot>;
@@ -275,6 +280,67 @@ export class GitMergeSafety {
   }
   protected git(ctx: GitMergeContext, args: string[], stdin?: string) {
     return ctx.git(this.args(ctx, args), stdin);
+  }
+  protected nativeGuard(
+    ctx: GitMergeContext,
+    state: State,
+    paths: string[],
+    source?: string,
+    configAdditions: Row[] = [],
+  ) {
+    let observed = state.snapshot;
+    return nativeGitGuard({
+      root: ctx.root,
+      capability: ctx.native,
+      paths,
+      configuration: state.config,
+      verify: () => ctx.verify(),
+      admittedStatus: async () => {
+        observed = await ctx.snapshot();
+        const { revision: _, ...semantic } = observed;
+        return {
+          data: Buffer.from(JSON.stringify(semantic)),
+          headRef: semantic.branch ? `refs/heads/${semantic.branch}` : null,
+        };
+      },
+      policy: async () => {
+        let raw = (await this.git(ctx, ["config", "--null", "--list"])).stdout;
+        // The remote-switch handler admits exactly two previously absent
+        // tracking entries. Every other config byte remains part of the seal.
+        // A partial/duplicate/wrong addition is not an allowed policy change.
+        if (configAdditions.length) {
+          const entries = rows(raw);
+          const found = configAdditions.map(([key, value]) => {
+            const values = entries.filter(([k]) => k === key).map(([, v]) => v);
+            if (values.length > 1 || (values.length && values[0] !== value))
+              throw stale();
+            return values.length;
+          });
+          if (found.some(Boolean) && !found.every(Boolean)) throw stale();
+          raw = raw
+            .split("\0")
+            .filter(
+              (row) =>
+                !configAdditions.some(
+                  ([key, value]) => row === `${key}\n${value}`,
+                ),
+            )
+            .join("\0");
+        }
+        return nativeIntent([
+          raw,
+          source
+            ? await this.mergeAttributes(
+                ctx,
+                state.snapshot.head!,
+                source,
+                [],
+                observed,
+              )
+            : null,
+        ]);
+      },
+    });
   }
   protected async capture(
     ctx: GitMergeContext,
@@ -544,17 +610,39 @@ export class GitMergeSafety {
     head: string,
     source: string,
     extraPaths: string[] = [],
+    nativePolicy?: GitWorkspaceSnapshot,
   ) {
+    const indexedPaths = (await this.git(ctx, ["ls-files", "-z"])).stdout
+      .split("\0")
+      .filter(Boolean)
+      .map((name) => gitFilePathSchema.parse(name));
     const paths = [
       ...new Set([
         ...(await this.treePaths(ctx, head)),
         ...(await this.treePaths(ctx, source)),
-        ...(await this.git(ctx, ["ls-files", "-z"])).stdout
-          .split("\0")
-          .filter(Boolean)
-          .map((name) => gitFilePathSchema.parse(name)),
+        ...indexedPaths,
       ]),
     ].sort();
+    // Tracked attributes are repository data: native merge/abort may replace
+    // them. Seal external sources and dirty overrides, not a clean checkout of
+    // the index. The ordinary preview still seals *all* effective attributes.
+    // Only the CURRENT public index grants that exemption. A removed path
+    // still present as an ignored file is an external policy source again.
+    // Index changes are separately verified by the journalled operation; a
+    // follow-up permits only the original conflict paths to change in the index.
+    const managed = new Set(
+      indexedPaths.filter((p) => path.posix.basename(p) === ".gitattributes"),
+    );
+    const dirty = nativePolicy
+      ? new Set(
+          nativePolicy.files
+            .filter(
+              (f) =>
+                f.kind !== "conflict" && ![".", " "].includes(f.worktreeStatus),
+            )
+            .map((f) => f.path),
+        )
+      : new Set<string>();
     const files = new Set([
       path.join(ctx.root, ".git/info/attributes"),
       path.join(ctx.root, ".gitattributes"),
@@ -566,6 +654,9 @@ export class GitMergeSafety {
         parent = path.posix.dirname(parent);
       }
     }
+    const externalFiles = new Set([
+      path.join(ctx.root, ".git/info/attributes"),
+    ]);
     for (const variable of ["GIT_ATTR_GLOBAL", "GIT_ATTR_SYSTEM"]) {
       let raw: string;
       try {
@@ -580,10 +671,22 @@ export class GitMergeSafety {
       }
       if (!raw || /[\0\r\n]/.test(raw))
         throw Error("Недопустимый путь attributes Git.");
-      if (raw !== "/dev/null") files.add(path.resolve(ctx.root, raw));
+      if (raw !== "/dev/null") {
+        const file = path.resolve(ctx.root, raw);
+        files.add(file);
+        externalFiles.add(file);
+      }
     }
     const sources: Row[] = [];
     for (const file of [...files].sort()) {
+      const relative = path.relative(ctx.root, file).split(path.sep).join("/");
+      if (
+        nativePolicy &&
+        !externalFiles.has(file) &&
+        managed.has(relative) &&
+        !dirty.has(relative)
+      )
+        continue;
       let identity: string;
       try {
         await noSymlinks(file);
@@ -595,15 +698,18 @@ export class GitMergeSafety {
         throw error;
       }
       // New synthetic directories without attributes are not extra policy.
-      if (identity !== "missing") sources.push([file, identity]);
+      if (identity !== "missing" || (nativePolicy && dirty.has(relative)))
+        sources.push([file, identity]);
     }
-    const effective = (
-      await this.git(
-        ctx,
-        ["check-attr", "--all", "-z", "--stdin"],
-        paths.length ? `${paths.join("\0")}\0` : "",
-      )
-    ).stdout;
+    const effective = nativePolicy
+      ? null
+      : (
+          await this.git(
+            ctx,
+            ["check-attr", "--all", "-z", "--stdin"],
+            paths.length ? `${paths.join("\0")}\0` : "",
+          )
+        ).stdout;
     return digest(JSON.stringify([sources, effective]));
   }
   /** ORT can overwrite ignored files even with --no-overwrite-ignore (including
@@ -832,507 +938,4 @@ export class GitMergeSafety {
       }
     }
   }
-  /** Logical user-visible state, ignoring native index stat-cache refreshes and
-   * ORIG_HEAD/AUTO_MERGE bookkeeping on an ordinary refusal. Staged blobs are included. */
-  protected async mergeEffect(ctx: GitMergeContext, state: State) {
-    const { revision: _revision, ...snapshot } = state.snapshot;
-    const metadata = [];
-    for (const name of mergeFiles.filter(
-      (name) => name !== "ORIG_HEAD" && name !== "AUTO_MERGE",
-    ))
-      metadata.push([
-        name,
-        await contentIdentity(path.join(ctx.root, ".git", name)),
-      ]);
-    return digest(
-      JSON.stringify([
-        snapshot,
-        state.content,
-        metadata,
-        (await this.git(ctx, ["ls-files", "--stage", "-z"])).stdout,
-      ]),
-    );
-  }
-  /** Keep live HEAD/ref/index pinned while native abort operates on a private
-   * metadata directory and index, sharing only the explicitly owned worktree.
-   * Publish the verified index and merge cleanup only after native success. */
-  protected async pinnedMergeAbort(
-    ctx: GitMergeContext,
-    before: State,
-    destinations: MergeDestinations,
-    finalCheck: () => Promise<void>,
-  ): Promise<PinnedMergeAbortResult> {
-    if (!ctx.privateGit)
-      throw Error(
-        "Исполнитель не поддерживает безопасный частный индекс для отмены слияния.",
-      );
-    const head = before.snapshot.head!,
-      branch = before.snapshot.branch!,
-      ref = `refs/heads/${branch}`;
-    await this.git(ctx, ["check-ref-format", ref]);
-    const gitdir = path.join(ctx.root, ".git"),
-      recovery = path.join(gitdir, `goga-abort-${randomUUID()}`),
-      realIndex = path.join(gitdir, "index"),
-      privateIndex = path.join(recovery, "index"),
-      nativeDir = path.join(recovery, "native");
-    let attempted = false,
-      unchanged = false,
-      retain = false,
-      created = false,
-      published = false,
-      log = "";
-    const locks = new Map<string, string>();
-    const lockId = async (name: string) => {
-      const info = await stat(path.join(gitdir, name));
-      return info && info.isFile() && !info.isSymbolicLink()
-        ? `${info.dev}:${info.ino}`
-        : "missing";
-    };
-    const assertPins = async () => {
-      for (const [name, identity] of locks)
-        if ((await lockId(name)) !== identity) throw stale();
-      if (
-        (await fs.readFile(path.join(gitdir, "HEAD"), "utf8")) !==
-          `ref: ${ref}\n` ||
-        (
-          await this.git(ctx, ["symbolic-ref", "--no-recurse", "HEAD"])
-        ).stdout.trim() !== ref ||
-        (await this.git(ctx, ["symbolic-ref", "HEAD"])).stdout.trim() !== ref ||
-        (
-          await this.git(ctx, ["rev-parse", "--verify", "HEAD"])
-        ).stdout.trim() !== head
-      )
-        throw stale();
-    };
-    const workIdentity = async (name: string) => {
-      const info = await stat(path.join(ctx.root, name));
-      return JSON.stringify([
-        info
-          ? info.isSymbolicLink()
-            ? "link"
-            : info.isFile()
-              ? "file"
-              : info.isDirectory()
-                ? "directory"
-                : "other"
-          : "missing",
-        info ? Number(info.mode & 0o777n) : null,
-        await contentIdentity(path.join(ctx.root, name)),
-      ]);
-    };
-    const outcome = (
-      status: PinnedMergeAbortResult["status"],
-      message: string,
-      nativeWarning = false,
-    ): PinnedMergeAbortResult => ({
-      status,
-      changed: status !== "error",
-      message,
-      log,
-      nativeWarning,
-      lockRetained: retain,
-      retainedLocks: retain ? [...locks.keys()] : [],
-      ...(created ? { recoveryPath: recovery } : {}),
-    });
-    const journal = async (
-      state: string,
-      heldLocks = [...locks.keys()],
-      uncheckedLocks: string[] = [],
-    ) =>
-      fs.writeFile(
-        path.join(recovery, "journal.json"),
-        JSON.stringify({
-          version: 1,
-          root: ctx.root,
-          scope: ctx.scope,
-          head,
-          ref,
-          state,
-          published,
-          locks: heldLocks,
-          uncheckedLocks,
-          log,
-        }),
-        { mode: 0o600 },
-      );
-    // Freeze effective settings resolved for the original gitdir (including
-    // includeIf). Re-evaluating includes against the private gitdir could change
-    // checkout conversion and other policy.
-    const nativeConfigArgs = before.config
-      .filter(([key]) => !/^include(?:if\..*)?\.path$/i.test(key))
-      .flatMap(([key, value]) => ["-c", `${key}=${value}`]);
-    const privateGit = (args: string[]) =>
-      withFrozenGitConfigScope(() =>
-        ctx.privateGit!(
-          [
-            ...nativeConfigArgs,
-            ...safeArgs,
-            `--git-dir=${nativeDir}`,
-            `--work-tree=${ctx.root}`,
-            ...args,
-          ],
-          privateIndex,
-        ),
-      );
-    let result: PinnedMergeAbortResult;
-    try {
-      result = await this.withMetadataLock(
-        ctx,
-        "HEAD.lock",
-        async () => {
-          locks.set("HEAD.lock", await lockId("HEAD.lock"));
-          return this.withMetadataLock(
-            ctx,
-            `${ref}.lock`,
-            async () => {
-              locks.set(`${ref}.lock`, await lockId(`${ref}.lock`));
-              return this.withMetadataLock(
-                ctx,
-                "index.lock",
-                async () => {
-                  locks.set("index.lock", await lockId("index.lock"));
-                  try {
-                    await assertPins();
-                    if (
-                      (await this.capture(ctx, ctx.scope)).fingerprint !==
-                      before.fingerprint
-                    )
-                      throw stale();
-                    const indexIdentity = await fileIdentity(realIndex),
-                      indexMode = (await fs.lstat(realIndex)).mode & 0o777;
-                    const preserved = new Map<string, string>();
-                    for (const file of before.snapshot.files) {
-                      if (destinations.original!.conflicts.has(file.path))
-                        continue;
-                      if (
-                        file.kind === "untracked" ||
-                        file.worktreeStatus !== "."
-                      )
-                        for (const name of [
-                          file.path,
-                          ...(file.originalPath ? [file.originalPath] : []),
-                        ])
-                          preserved.set(name, await workIdentity(name));
-                    }
-                    await fs.mkdir(recovery, { mode: 0o700 });
-                    created = true;
-                    await fs.copyFile(
-                      realIndex,
-                      privateIndex,
-                      constants.COPYFILE_EXCL,
-                    );
-                    await fs.copyFile(
-                      realIndex,
-                      path.join(recovery, "original-index"),
-                      constants.COPYFILE_EXCL,
-                    );
-                    for (const name of mergeFiles)
-                      if (await stat(path.join(gitdir, name)))
-                        await fs.copyFile(
-                          path.join(gitdir, name),
-                          path.join(recovery, name),
-                          constants.COPYFILE_EXCL,
-                        );
-                    // Native reset updates HEAD even when its OID does not change.
-                    // Give it private refs rather than deliberately causing EEXIST
-                    // against our live HEAD pin. Effective config is pinned above;
-                    // objects are read through alternates, never fetched.
-                    await fs.mkdir(path.join(nativeDir, "objects", "info"), {
-                      recursive: true,
-                    });
-                    await fs.mkdir(path.dirname(path.join(nativeDir, ref)), {
-                      recursive: true,
-                    });
-                    await fs.mkdir(path.join(nativeDir, "info"));
-                    await fs.writeFile(
-                      path.join(nativeDir, "HEAD"),
-                      `ref: ${ref}\n`,
-                      { flag: "wx" },
-                    );
-                    await fs.writeFile(path.join(nativeDir, ref), `${head}\n`, {
-                      flag: "wx",
-                    });
-                    await fs.writeFile(
-                      path.join(nativeDir, "config"),
-                      head.length === 64
-                        ? "[core]\nrepositoryformatversion = 1\n[extensions]\nobjectFormat = sha256\n"
-                        : "[core]\nrepositoryformatversion = 0\n",
-                      { flag: "wx" },
-                    );
-                    await fs.writeFile(
-                      path.join(nativeDir, "objects", "info", "alternates"),
-                      JSON.stringify(path.join(gitdir, "objects")) + "\n",
-                      { flag: "wx" },
-                    );
-                    for (const name of [...mergeFiles, "info/attributes"])
-                      if (await stat(path.join(gitdir, name)))
-                        await fs.copyFile(
-                          path.join(gitdir, name),
-                          path.join(nativeDir, name),
-                          constants.COPYFILE_EXCL,
-                        );
-                    const metadataBefore = new Map<string, string>();
-                    for (const name of [...mergeFiles, ...mixedOperations])
-                      metadataBefore.set(
-                        name,
-                        await fileIdentity(path.join(gitdir, name)),
-                      );
-                    await journal("native-abort-prepared");
-                    await finalCheck();
-                    await assertPins();
-                    if (
-                      (await this.capture(ctx, ctx.scope)).fingerprint !==
-                        before.fingerprint ||
-                      (await fileIdentity(realIndex)) !== indexIdentity
-                    )
-                      throw stale();
-                    await this.checkMergeDestinations(ctx, destinations);
-                    let failure: unknown;
-                    attempted = true;
-                    try {
-                      const output = await privateGit([
-                        "-c",
-                        "rerere.enabled=false",
-                        "-c",
-                        "rerere.autoupdate=false",
-                        "-c",
-                        "merge.autoStash=false",
-                        "merge",
-                        "--abort",
-                      ]);
-                      log += output.stdout + output.stderr;
-                    } catch (error) {
-                      failure = error;
-                      const e = error as {
-                        stdout?: string;
-                        stderr?: string;
-                        message?: string;
-                      };
-                      log += `${e.stdout ?? ""}${e.stderr ?? ""}\n${e.message ?? String(error)}`;
-                    }
-                    // Timeout/unknown child outcome must retain all pins even when a
-                    // snapshot looks completed. No automatic retry or rollback.
-                    if (
-                      failure &&
-                      (!(failure instanceof CommandExitError) ||
-                        failure.exitCode === null)
-                    )
-                      throw failure;
-                    await assertPins();
-                    await ctx.verify();
-                    if (
-                      failure &&
-                      (await stat(path.join(gitdir, "MERGE_HEAD"))) &&
-                      (await this.capture(ctx, ctx.scope)).fingerprint ===
-                        before.fingerprint
-                    ) {
-                      unchanged = true;
-                      return outcome(
-                        "error",
-                        "Git отказал в отмене. Слияние и данные сохранены; повтор не выполнялся.",
-                      );
-                    }
-                    for (const name of [
-                      ...mergeFiles.filter((n) => n !== "ORIG_HEAD"),
-                      ...mixedOperations,
-                    ])
-                      if (await stat(path.join(nativeDir, name))) throw stale();
-                    if (
-                      (
-                        await fs.readFile(
-                          path.join(nativeDir, "ORIG_HEAD"),
-                          "utf8",
-                        )
-                      ).trim() !== head
-                    )
-                      throw stale();
-                    if (failure) throw failure;
-                    if (
-                      (
-                        await privateGit(["rev-parse", "--verify", "HEAD"])
-                      ).stdout.trim() !== head ||
-                      (
-                        await privateGit(["symbolic-ref", "HEAD"])
-                      ).stdout.trim() !== ref
-                    )
-                      throw stale();
-                    const expected = (
-                      await this.git(ctx, ["ls-tree", "-r", "-z", head])
-                    ).stdout
-                      .split("\0")
-                      .filter(Boolean)
-                      .map((row) => {
-                        const match = /^(\d{6}) blob ([a-f0-9]+)\t(.+)$/s.exec(
-                          row,
-                        );
-                        if (!match)
-                          throw Error(
-                            "Не подтверждено исходное дерево после отмены.",
-                          );
-                        return `${match[1]} ${match[2]} 0\t${match[3]}`;
-                      })
-                      .sort();
-                    const actual = (
-                      await privateGit(["ls-files", "--stage", "-z"])
-                    ).stdout
-                      .split("\0")
-                      .filter(Boolean)
-                      .sort();
-                    if (JSON.stringify(actual) !== JSON.stringify(expected))
-                      throw stale();
-                    for (const [name, identity] of preserved)
-                      if ((await workIdentity(name)) !== identity)
-                        throw stale();
-                    // Private index contains HEAD: any remaining tracked dirt must be
-                    // the explicitly preserved working edits, not incomplete restoration.
-                    const dirty = (
-                      await privateGit([
-                        "diff-files",
-                        "--name-only",
-                        "--no-ext-diff",
-                        "--no-textconv",
-                        "-z",
-                      ])
-                    ).stdout
-                      .split("\0")
-                      .filter(Boolean);
-                    if (dirty.some((name) => !preserved.has(name)))
-                      throw stale();
-                    for (const name of destinations.original!.paths) {
-                      if (
-                        destinations.incoming.includes(name) ||
-                        preserved.has(name)
-                      )
-                        continue;
-                      const info = await stat(path.join(ctx.root, name)).catch(
-                        (error) => {
-                          if (error.code === "ENOTDIR") return null;
-                          throw error;
-                        },
-                      );
-                      if (info) throw stale();
-                    }
-                    await fs.chmod(privateIndex, indexMode);
-                    const privateIdentity = await fileIdentity(privateIndex);
-                    const h = await fs.open(privateIndex, "r");
-                    try {
-                      await h.sync();
-                    } finally {
-                      await h.close();
-                    }
-                    await journal("native-aborted-index-unpublished");
-                    await ctx.verify();
-                    await assertPins();
-                    if (
-                      (await fileIdentity(realIndex)) !== indexIdentity ||
-                      (await fileIdentity(privateIndex)) !== privateIdentity
-                    )
-                      throw stale();
-                    for (const [name, identity] of metadataBefore)
-                      if (
-                        (await fileIdentity(path.join(gitdir, name))) !==
-                        identity
-                      )
-                        throw stale();
-                    // Only our confirmed native merge bookkeeping is removed.
-                    // Keep ORIG_HEAD and the backups until all outer guards settle.
-                    // No await between final guards, index publication and cleanup.
-                    renameSync(privateIndex, realIndex);
-                    published = true;
-                    for (const name of mergeFiles.filter(
-                      (name) => name !== "ORIG_HEAD",
-                    ))
-                      if (metadataBefore.get(name) !== "missing")
-                        unlinkSync(path.join(gitdir, name));
-                    await journal("published");
-                    const after = await this.capture(ctx, ctx.scope);
-                    if (
-                      after.snapshot.operation !== "none" ||
-                      after.snapshot.head !== head ||
-                      after.snapshot.branch !== branch ||
-                      after.snapshot.files.some(
-                        (file) => !preserved.has(file.path),
-                      )
-                    )
-                      throw stale();
-                    await assertPins();
-                    return outcome(
-                      "success",
-                      "Слияние отменено и результат проверен. Несвязанные изменения сохранены.",
-                    );
-                  } catch (error) {
-                    log += `\n${error instanceof Error ? error.message : String(error)}`;
-                    retain = attempted;
-                    if (retain && created)
-                      await journal("uncertain").catch(() => {});
-                    return outcome(
-                      attempted ? "uncertain" : "error",
-                      attempted
-                        ? "Результат отмены не подтверждён. Сохранены материалы проверки и защитные блокировки HEAD, ветки и индекса; не повторяйте операцию автоматически."
-                        : error instanceof Error
-                          ? error.message
-                          : String(error),
-                    );
-                  }
-                },
-                () => retain,
-              );
-            },
-            () => retain,
-          );
-        },
-        () => retain,
-      );
-    } catch (error) {
-      log += `\n${error instanceof Error ? error.message : String(error)}`;
-      result = outcome(
-        attempted && !unchanged ? "uncertain" : "error",
-        "Очистка защитных блокировок не подтверждена. Проверьте журнал и оставшиеся блокировки; автоматический повтор не выполнялся.",
-      );
-    }
-    // Run outside every finally: failed close/unlink must not turn a completed
-    // native mutation into changed=false. Never claim a removed inode is held.
-    const remaining: string[] = [],
-      unchecked: string[] = [];
-    const diagnosticFailure = (error: unknown) => {
-      result.status = result.changed ? "uncertain" : "error";
-      result.message =
-        "Итоговая диагностика не завершена. Результат операции и последний известный путь восстановления сохранены; непроверенные блокировки не считаются отсутствующими. Не повторяйте автоматически.";
-      result.log += `\n${error instanceof Error ? error.message : String(error)}`;
-    };
-    for (const [name, identity] of locks) {
-      try {
-        if ((await lockId(name)) === identity) remaining.push(name);
-      } catch (error) {
-        unchecked.push(name);
-        diagnosticFailure(error);
-      }
-    }
-    result.lockRetained = remaining.length > 0;
-    result.retainedLocks = remaining;
-    result.uncheckedLocks = unchecked;
-    if (created) {
-      try {
-        await journal(result.status, remaining, unchecked);
-      } catch (error) {
-        diagnosticFailure(error);
-      }
-    }
-    // The caller removes recovery only AFTER its outer config pin and owner
-    // context have settled. Any late cleanup failure retains the original copy.
-    return result;
-  }
-}
-
-export interface PinnedMergeAbortResult {
-  status: "success" | "error" | "uncertain";
-  changed: boolean;
-  message: string;
-  log: string;
-  nativeWarning: boolean;
-  lockRetained: boolean;
-  retainedLocks: string[];
-  uncheckedLocks?: string[];
-  recoveryUnverified?: boolean;
-  recoveryPath?: string;
 }

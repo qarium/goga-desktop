@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { scopeRefSchema, type ScopeRef } from "./context";
+import type { NativeGitOperationResult } from "./git-native-operation";
 import { gitRevisionSchema } from "./git-workspace";
 /** This API is deliberately merge-only, never a generic sequencer continuation. */
 const common = { scope: scopeRefSchema, revision: gitRevisionSchema };
@@ -50,6 +51,7 @@ export interface GitMergeOperationResult {
   action: "continue" | "abort";
   status: "success" | "error" | "uncertain";
   changed: boolean;
+  native?: NativeGitOperationResult;
   commit?: string;
   recoveryPath?: string;
   lockRetained: boolean;

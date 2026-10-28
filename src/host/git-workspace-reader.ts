@@ -289,7 +289,18 @@ export class GitWorkspaceReader {
         throw new Error(
           "Git с внешним хранилищем объектов пока не поддерживается.",
         );
-      metadata.push(`${name}:${fingerprint(value)}`);
+      // Native Git may add/repack unused objects without changing the worktree.
+      // Keep physical storage identity and the full audit, not directory mtime.
+      const objectDirectory = [
+        "objects",
+        "objects/info",
+        "objects/pack",
+      ].includes(name);
+      const evidence =
+        objectDirectory && value
+          ? [value.dev, value.ino, value.mode].join(":")
+          : fingerprint(value);
+      metadata.push(`${name}:${evidence}`);
     }
     // Git itself follows symlinks in refs/object storage. Audit metadata names,
     // not blob contents; fail closed rather than reading an external store.
@@ -390,8 +401,10 @@ export class GitWorkspaceReader {
     if (await exists("MERGE_HEAD")) return "merge";
     if (await exists("CHERRY_PICK_HEAD")) return "cherry-pick";
     if (await exists("REVERT_HEAD")) return "revert";
-    if ((await exists("sequencer")) || (await exists("REBASE_HEAD")))
-      return "unknown";
+    if (await exists("sequencer")) return "unknown";
+    // REBASE_HEAD identifies a stopped commit, not an operation lifetime.
+    // Native Git can retain it after a successful rebase; do not delete it or
+    // report an ongoing operation without an actual sequencer control directory.
     return "none";
   }
   private async status(context: PrivateGitRead) {

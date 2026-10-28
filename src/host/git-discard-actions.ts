@@ -1,44 +1,31 @@
-import { randomBytes, randomUUID } from "node:crypto";
-import {
-  constants,
-  openSync,
-  closeSync,
-  writeFileSync,
-  fsyncSync,
-  fchmodSync,
-  mkdirSync,
-  renameSync,
-  unlinkSync,
-  linkSync,
-  readdirSync,
-  rmSync,
-} from "node:fs";
+import { randomBytes } from "node:crypto";
+import { readdirSync } from "node:fs";
 import path from "node:path";
 import type { ScopeRef } from "../shared/context";
 import {
   gitDiscardRequestSchema,
   gitDiscardTokenSchema,
-  type GitDiscardRequest,
   type GitDiscardPreview,
+  type GitDiscardRequest,
   type GitDiscardResult,
 } from "../shared/git-discard";
 import { gitFilePathSchema } from "../shared/git-workspace";
-import type { GitCommitContext } from "./git-workspace-actions";
 import {
-  safe,
-  hash,
-  stat,
-  regular,
-  directory,
-  parents,
   assertParents,
-  metadata,
-  identity,
-  policy,
   assertPolicySupported,
+  directory,
+  hash,
+  identity,
+  metadata,
+  parents,
+  policy,
+  regular,
+  safe,
+  stat,
   type File,
   type Policy,
 } from "./git-conflict-state";
+import type { GitCommitContext } from "./git-workspace-actions";
 
 const FILE_LIMIT = 8 * 1024 * 1024,
   TOTAL_LIMIT = 32 * 1024 * 1024,
@@ -90,36 +77,6 @@ function fingerprint(s: State) {
     }),
   );
 }
-function syncDirectory(dir: string) {
-  const fd = openSync(
-    dir,
-    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-  );
-  try {
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-}
-function writeNew(file: string, bytes: string | Buffer, mode = 0o600) {
-  const fd = openSync(
-    file,
-    constants.O_WRONLY |
-      constants.O_CREAT |
-      constants.O_EXCL |
-      constants.O_NOFOLLOW,
-    mode,
-  );
-  try {
-    fchmodSync(fd, mode);
-    writeFileSync(fd, bytes);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-}
-/** Refuse indirections before Git can follow them. This feature deliberately does
- * not support linked worktrees, split/sparse indexes, gitlinks or symlinks. */
 function audit(root: string) {
   directory(root);
   const gd = path.join(root, ".git");
@@ -198,10 +155,10 @@ function assertRawRestore(p: Policy) {
 /** Whole selected files only. The host supplies owner validation, exclusive
  * lifecycle locking and offline Git. Not an atomic multi-file transaction: every
  * moved original and old index remain recoverable until final success verification. */
-export class GitDiscardActions {
+export abstract class GitDiscardActions {
   private readonly tickets = new Map<string, Ticket>();
   constructor(
-    private readonly options: {
+    protected readonly options: {
       context: <T>(
         scope: ScopeRef,
         fn: (context: GitCommitContext) => Promise<T>,
@@ -215,10 +172,10 @@ export class GitDiscardActions {
       afterPublishIndex?: () => void;
     },
   ) {}
-  private now() {
+  protected now() {
     return this.options.now?.() ?? Date.now();
   }
-  private git(
+  protected git(
     c: GitCommitContext,
     args: string[],
     options?: { stdin?: string; indexFile?: string },
@@ -233,7 +190,7 @@ export class GitDiscardActions {
       options,
     );
   }
-  private disk(root: string, names: string[]) {
+  protected disk(root: string, names: string[]) {
     const ps = new Map<string, string>(),
       attrs = new Map<string, string>(),
       work = new Map<string, File | null>();
@@ -293,7 +250,10 @@ export class GitDiscardActions {
       metadata: stableMetadata(root),
     };
   }
-  private async capture(c: GitCommitContext, names: string[]): Promise<State> {
+  protected async capture(
+    c: GitCommitContext,
+    names: string[],
+  ): Promise<State> {
     await c.verify();
     audit(c.root);
     const root = c.root,
@@ -397,7 +357,7 @@ export class GitDiscardActions {
       throw stale();
     return state;
   }
-  private async sources(c: GitCommitContext, s: State) {
+  protected async sources(c: GitCommitContext, s: State) {
     const result = new Map<string, Buffer>();
     let total = 0;
     for (const [name, e] of s.entries) {
@@ -506,7 +466,7 @@ export class GitDiscardActions {
     if (!ticket || ticket.preview.expiresAt <= this.now())
       throw Error("Подтверждение истекло или уже использовано.");
     let completed: GitDiscardResult | undefined;
-    let cleanupRecovery: (() => void) | undefined;
+    let cleanupRecovery: (() => Promise<void>) | undefined;
     try {
       const result = await this.options.context(
         ticket.preview.scope,
@@ -524,16 +484,17 @@ export class GitDiscardActions {
         },
       );
       // Keep recovery if even the outer lifecycle lock failed to release.
-      if (result.status === "discarded" && cleanupRecovery) {
+      if (result.status !== "uncertain" && cleanupRecovery) {
         try {
-          cleanupRecovery();
+          await cleanupRecovery();
           delete result.recoveryPath;
         } catch (error) {
           return {
             ...result,
+            status: "uncertain",
             message:
-              "Отмена изменений завершена и проверена, но очистка служебных материалов не завершена. Повторять отмену не нужно.",
-            log: `${result.log}\n${String(error)}`,
+              "Завершение очистки служебных материалов не подтверждено. Не повторяйте отмену автоматически; материалы восстановления сохранены.",
+            log: `${result.log}\nНе удалось очистить служебные материалы; диагностика окружения скрыта.`,
           };
         }
       }
@@ -548,334 +509,17 @@ export class GitDiscardActions {
             : "not-discarded",
         message:
           "Завершение служебной блокировки не подтверждено. Не повторяйте откат автоматически; проверьте результат и журнал.",
-        log: `${completed.log}\n${String(error)}`,
+        // The throwing context never returned its sanitized result copy.
+        log: "Завершающая проверка отмены изменений или освобождение контекста завершились ошибкой. Диагностика окружения скрыта.",
       };
     }
   }
-  private async transact(
+  protected abstract transact(
     c: GitCommitContext,
     t: Ticket,
     s: State,
-    onVerified: (cleanup: () => void) => void,
-  ): Promise<GitDiscardResult> {
-    const root = s.root,
-      gd = path.join(root, ".git"),
-      index = path.join(gd, "index"),
-      lock = path.join(gd, "index.lock");
-    // Existing trusted-index capability admits this namespace. Journal kind
-    // identifies discard; this is not a commit and never changes any Git ref.
-    const recovery = path.join(gd, `goga-commit-${randomUUID()}`),
-      privateIndex = path.join(recovery, "index");
-    let recoveryId = "",
-      lockId = "",
-      lockHash = "",
-      indexPublished = false,
-      worktreePublished = false;
-    const changedPaths: string[] = [],
-      trashedPaths: string[] = [],
-      expectedWork = new Map(s.work),
-      moved = new Map<string, File>(),
-      ready = new Map<string, File>();
-    const ownLock = () => {
-      try {
-        assertParents(s.parents.slice(0, 2));
-        const f = regular(lock);
-        return (
-          !!lockId &&
-          !!f &&
-          f.identity.split(":").slice(0, 2).join(":") === lockId &&
-          hash(f.bytes) === lockHash
-        );
-      } catch {
-        return false;
-      }
-    };
-    const result = (
-      status: GitDiscardResult["status"],
-      message: string,
-      log = "",
-    ): GitDiscardResult => ({
-      scope: t.preview.scope,
-      status,
-      changedPaths: [...changedPaths],
-      trashedPaths: [...trashedPaths],
-      indexPublished,
-      worktreePublished,
-      message,
-      log,
-      ...(recoveryId ? { recoveryPath: recovery } : {}),
-    });
-    const journal = () => {
-      if (directory(recovery) !== recoveryId) throw stale();
-      const next = path.join(recovery, `journal-${randomUUID()}`);
-      writeNew(
-        next,
-        JSON.stringify(
-          {
-            version: 1,
-            kind: "discard-selected",
-            root,
-            scope: t.preview.scope,
-            head: s.head,
-            paths: t.preview.paths,
-            ownerHash: hash(s.owner),
-            changedPaths,
-            trashedPaths,
-            indexPublished,
-            worktreePublished,
-            lockRetained: ownLock(),
-            oldIndex: s.index.identity,
-            originalFiles: [...s.work].map(([name, f]) => [
-              name,
-              f?.identity ?? "missing",
-            ]),
-          },
-          null,
-          2,
-        ),
-      );
-      renameSync(next, path.join(recovery, "journal.json"));
-      syncDirectory(recovery);
-    };
-    const guard = (readyIndex?: File) => {
-      assertParents(s.parents);
-      if (
-        c.root !== root ||
-        c.ownerKey !== s.owner ||
-        JSON.stringify(c.scope) !== s.scope ||
-        directory(recovery) !== recoveryId ||
-        stableMetadata(root) !== s.metadata ||
-        t.preview.expiresAt <= this.now()
-      )
-        throw stale();
-      if (
-        !indexPublished &&
-        (regular(index)?.identity !== s.index.identity || !ownLock())
-      )
-        throw stale();
-      if (
-        indexPublished &&
-        readyIndex &&
-        !regular(index)?.bytes.equals(readyIndex.bytes)
-      )
-        throw stale();
-      for (const [name, expected] of expectedWork)
-        if (
-          (regular(path.join(root, name), FILE_LIMIT)?.identity ??
-            "missing") !== (expected?.identity ?? "missing")
-        )
-          throw stale();
-      for (const [filename, id] of s.attributes) {
-        const name = path.relative(root, filename).split(path.sep).join("/");
-        const expected = expectedWork.has(name)
-          ? (expectedWork.get(name)?.identity ?? "missing")
-          : id;
-        if ((regular(filename)?.identity ?? "missing") !== expected)
-          throw stale();
-      }
-    };
-    try {
-      if (!c.refTransaction)
-        throw Error(
-          "Безопасная блокировка HEAD недоступна; откат не выполнен.",
-        );
-      if (
-        !this.options.trashItem &&
-        t.preview.items.some((i) => i.action === "trash" && s.work.get(i.path))
-      )
-        throw Error("Системная Корзина недоступна.");
-      assertParents(s.parents);
-      mkdirSync(recovery, { mode: 0o700 });
-      recoveryId = directory(recovery);
-      mkdirSync(path.join(recovery, "originals"), { mode: 0o700 });
-      mkdirSync(path.join(recovery, "ready"), { mode: 0o700 });
-      writeNew(path.join(recovery, "original-index"), s.index.bytes);
-      writeNew(privateIndex, s.index.bytes);
-      journal();
-      const sources = await this.sources(c, s),
-        zero = "0".repeat(s.head.length);
-      const stdin = t.preview.paths
-        .map((name) => {
-          const e = s.entries.get(name);
-          return `0 ${zero}\t${name}\0${e ? `${e.mode} ${e.oid} 0\t${name}\0` : ""}`;
-        })
-        .join("");
-      await this.git(c, ["update-index", "-z", "--index-info"], {
-        stdin,
-        indexFile: privateIndex,
-      });
-      const preparedIndex = regular(privateIndex);
-      if (!preparedIndex) throw stale();
-      for (const [name, bytes] of sources) {
-        const output = path.join(recovery, "ready", name);
-        mkdirSync(path.dirname(output), { recursive: true, mode: 0o700 });
-        const mode = s.work.get(name)?.mode ?? 0o644;
-        const workMode =
-          s.entries.get(name)!.mode === "100755"
-            ? mode | ((mode & 0o444) >> 2) | 0o100
-            : mode & ~0o111;
-        writeNew(output, bytes, workMode);
-        ready.set(name, regular(output, FILE_LIMIT)!);
-      }
-      for (const name of t.preview.paths)
-        mkdirSync(path.dirname(path.join(recovery, "originals", name)), {
-          recursive: true,
-          mode: 0o700,
-        });
-      const candidate = path.join(recovery, "index-ready");
-      writeNew(candidate, preparedIndex.bytes);
-      lockHash = hash(preparedIndex.bytes);
-      const cs = stat(candidate)!;
-      lockId = `${cs.dev}:${cs.ino}`;
-      try {
-        linkSync(candidate, lock);
-      } catch (error) {
-        lockId = "";
-        throw Error(
-          `Индекс Git занят или index.lock недоступна. Чужая блокировка не изменена. ${String(error)}`,
-        );
-      }
-      unlinkSync(candidate);
-      syncDirectory(gd);
-      if (fingerprint(await this.capture(c, t.preview.paths)) !== t.fingerprint)
-        throw stale();
-      const referenceResult = await c.refTransaction(
-        [
-          ...safe,
-          `--git-dir=${gd}`,
-          `--work-tree=${root}`,
-          "update-ref",
-          "--stdin",
-        ],
-        `start\nverify HEAD ${s.head}\nprepare\n`,
-        async (assertPreparedActive) => {
-          await c.verify();
-          if (
-            fingerprint(await this.capture(c, t.preview.paths)) !==
-            t.fingerprint
-          )
-            throw stale();
-          this.options.beforePublishWork?.();
-          guard();
-          assertPreparedActive();
-          // No await from final guard through publication: native HEAD locks stay
-          // held and no late callback can run after their timeout/release.
-          for (const name of t.preview.paths) {
-            guard();
-            assertPreparedActive();
-            const filename = path.join(root, name),
-              original = s.work.get(name);
-            if (original) {
-              const saved = path.join(recovery, "originals", name);
-              directory(path.dirname(saved));
-              if (stat(saved)) throw stale();
-              renameSync(filename, saved);
-              worktreePublished = true;
-              changedPaths.push(name);
-              expectedWork.set(name, null);
-              const actual = regular(saved, FILE_LIMIT);
-              if (
-                !actual ||
-                !actual.bytes.equals(original.bytes) ||
-                actual.identity.split(":").slice(0, 4).join(":") !==
-                  original.identity.split(":").slice(0, 4).join(":")
-              )
-                throw stale();
-              moved.set(name, actual);
-              syncDirectory(path.dirname(saved));
-              syncDirectory(path.dirname(filename));
-            }
-            const source = ready.get(name);
-            if (source) {
-              const output = path.join(recovery, "ready", name);
-              directory(path.dirname(output));
-              if (regular(output, FILE_LIMIT)?.identity !== source.identity)
-                throw stale();
-              // link is no-clobber: an editor's newly-created pathname wins.
-              linkSync(output, filename);
-              unlinkSync(output);
-              worktreePublished = true;
-              if (!changedPaths.includes(name)) changedPaths.push(name);
-              const actual = regular(filename, FILE_LIMIT);
-              expectedWork.set(name, actual);
-              if (
-                !actual ||
-                !actual.bytes.equals(source.bytes) ||
-                actual.identity.split(":").slice(0, 4).join(":") !==
-                  source.identity.split(":").slice(0, 4).join(":")
-              )
-                throw stale();
-              syncDirectory(path.dirname(filename));
-            }
-            journal();
-            this.options.afterPublishWork?.();
-          }
-          this.options.beforePublishIndex?.();
-          guard();
-          assertPreparedActive();
-          renameSync(lock, index);
-          indexPublished = true;
-          lockId = "";
-          worktreePublished = true;
-          for (const name of t.preview.paths)
-            if (!changedPaths.includes(name)) changedPaths.push(name);
-          syncDirectory(gd);
-          this.options.afterPublishIndex?.();
-          guard(preparedIndex);
-          assertPreparedActive();
-          journal();
-        },
-      );
-      if (referenceResult.stderr.trim()) throw Error(referenceResult.stderr);
-      // Trash only receives the exact moved originals in the private recovery
-      // area, never a live user pathname that an editor may have recreated.
-      for (const item of t.preview.items)
-        if (item.action === "trash" && moved.has(item.path)) {
-          guard(preparedIndex);
-          const saved = path.join(recovery, "originals", item.path);
-          directory(path.dirname(saved));
-          if (
-            regular(saved, FILE_LIMIT)?.identity !==
-            moved.get(item.path)!.identity
-          )
-            throw stale();
-          await this.options.trashItem!(saved);
-          if (stat(saved))
-            throw Error("Корзина не подтвердила перемещение файла.");
-          trashedPaths.push(item.path);
-          journal();
-        }
-      await c.verify();
-      guard(preparedIndex);
-      journal();
-      // Register cleanup only after final verification; execute after context release.
-      onVerified(() => {
-        assertParents(s.parents.slice(0, 2));
-        if (directory(recovery) !== recoveryId) throw stale();
-        rmSync(recovery, { recursive: true });
-      });
-      return result(
-        "discarded",
-        "Выбранные файлы возвращены к HEAD, новые файлы перемещены в Корзину. Остальные изменения сохранены.",
-      );
-    } catch (error) {
-      if (!worktreePublished && !indexPublished && ownLock()) {
-        unlinkSync(lock);
-        lockId = "";
-        syncDirectory(gd);
-      }
-      try {
-        if (recoveryId) journal();
-      } catch {
-        /* Durable originals remain; never overwrite user files. */
-      }
-      return result(
-        worktreePublished || indexPublished ? "uncertain" : "not-discarded",
-        worktreePublished || indexPublished
-          ? "Откат выполнен не полностью или итог не подтверждён. Не повторяйте автоматически; исходные файлы и индекс сохранены для восстановления."
-          : "Откат не выполнен. Файлы и исходный индекс не изменены; обновите предпросмотр.",
-        String(error),
-      );
-    }
-  }
+    onVerified: (cleanup: () => Promise<void>) => void,
+  ): Promise<GitDiscardResult>;
 }
+export { fingerprint as gitDiscardStateFingerprint };
+export type { State as GitDiscardState, Ticket as GitDiscardTicket };

@@ -1,19 +1,23 @@
 import { useEffect, useRef, useState } from "react";
 import type { ScopeRef } from "../shared/context";
-import type { GitWorkspaceSnapshot } from "../shared/git-workspace";
 import {
   gitMergeOperationRequestSchema,
   gitMergeOperationTokenSchema,
   type GitMergeOperationPreview,
 } from "../shared/git-operations";
-import { documentScopeId } from "./settings-documents";
-import { readWithSignal } from "./read-request";
-import { TopicModal, topicError } from "./TopicsCommon";
-import { LoadingState } from "./LoadingBoundary";
+import type { GitWorkspaceSnapshot } from "../shared/git-workspace";
+import {
+  nativeSequenceDiagnostics,
+  verifiedNativeSequenceResult,
+} from "./git-native-sequence-result";
 import {
   formatGitDiagnostics,
   hasGitDiagnostics,
 } from "./git-operation-diagnostics";
+import { LoadingState } from "./LoadingBoundary";
+import { readWithSignal } from "./read-request";
+import { documentScopeId } from "./settings-documents";
+import { TopicModal, topicError } from "./TopicsCommon";
 type Action = "continue" | "abort";
 const validMessage = (message: string) =>
   !!message.trim() && message.length <= 16384 && !message.includes("\0");
@@ -222,7 +226,15 @@ export function useGitMergeOperation(options: Options) {
         value.action !== submitted.action
       )
         throw Error("Результат относится к другому контексту или действию.");
+      const verified = verifiedNativeSequenceResult(value, {
+        scope: issuedScope,
+        operation: "merge",
+        action: submitted.action,
+        head: submitted.head,
+        original: submitted.head,
+      });
       if (
+        verified &&
         value.status === "success" &&
         !value.lockRetained &&
         !value.retainedLocks?.length &&
@@ -233,7 +245,13 @@ export function useGitMergeOperation(options: Options) {
         draftRef.current = undefined;
         latest.current.onSucceeded(issuedScope);
       }
-      if (hasGitDiagnostics(value)) setResult(formatGitDiagnostics(value));
+      if (!verified)
+        setResult(
+          [nativeSequenceDiagnostics(value, false), formatGitDiagnostics(value)]
+            .filter(Boolean)
+            .join("\n\n"),
+        );
+      else if (hasGitDiagnostics(value)) setResult(formatGitDiagnostics(value));
     } catch (error) {
       if (alive.current) {
         setRereadAfter(latest.current.getIssuedReadVersion());

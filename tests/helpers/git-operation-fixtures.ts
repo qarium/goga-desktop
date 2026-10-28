@@ -53,7 +53,9 @@ export async function createOperationFixture(
     await fs.mkdir(root);
     await fs.mkdir(home);
     const env: NodeJS.ProcessEnv = {
-      PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
+      // The compatibility matrix chooses Git through PATH. Do not silently
+      // create fixtures with another Git than the application under test.
+      PATH: process.env.PATH ?? "/usr/bin:/bin",
       HOME: home,
       XDG_CONFIG_HOME: home,
       TMPDIR: base,

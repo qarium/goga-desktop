@@ -1,3 +1,4 @@
+import { startNativeHostOperation } from "./helpers/native-host-operation";
 import {
   afterEach,
   afterAll,
@@ -98,9 +99,11 @@ async function fixture(kind: "primary" | "managed", long = false) {
     await git(root, ["commit", "-am", "clean after"]);
   }
   const original = (await git(root, ["rev-parse", "HEAD"])).stdout.trim();
-  await expect(
-    git(root, ["rebase", "--apply", "upstream-fixture"]),
-  ).rejects.toThrow();
+  await startNativeHostOperation(host, scope, {
+    operation: "rebase",
+    backend: "apply",
+    source: (await git(root, ["rev-parse", "upstream-fixture"])).stdout.trim(),
+  });
   await fs.writeFile(path.join(root, "file"), "resolved first\n");
   await git(root, ["add", "file"]);
   expect(
@@ -157,10 +160,19 @@ describe.each(["primary", "managed"] as const)(
       const r = await f.host.executeGitRebaseOperation(p.token);
       expect(r, r.log).toMatchObject({
         status: "conflict",
-        metadataPublished: true,
-        branchPublished: false,
+        native: {
+          outcome: "conflicts",
+          processSettled: true,
+          verifiedUnrelatedData: true,
+          recovery: "retained",
+        },
         lockRetained: false,
       });
+      expect(
+        (
+          await f.git(f.root, ["rev-parse", `refs/heads/${f.branch}`])
+        ).stdout.trim(),
+      ).toBe(f.original);
       expect(
         await fs.readFile(path.join(f.root, ".git/rebase-apply/next"), "utf8"),
       ).toBe("2\n");
@@ -189,8 +201,12 @@ describe.each(["primary", "managed"] as const)(
       );
       expect(r, r.log).toMatchObject({
         status: "success",
-        metadataCleared: true,
-        branchPublished: true,
+        native: {
+          outcome: "completed",
+          processSettled: true,
+          verifiedUnrelatedData: true,
+          recovery: "removed",
+        },
         lockRetained: false,
       });
       const snapshot = await f.host.readGitWorkspace(f.scope);
@@ -215,16 +231,30 @@ it.each(["primary", "managed"] as const)(
       action: "abort",
     });
     expect(p.backend).toBe("apply");
-    expect(p.discardedResolutionPaths).toEqual(["file"]);
+    expect(p.paths).toContain("file"); // Native preview exposes protected paths, not legacy publication deltas.
+    expect(
+      (await f.git(f.root, ["diff", "--cached", "--name-only"])).stdout.trim(),
+    ).toBe("file");
     const r = await f.host.executeGitRebaseOperation(p.token);
     expect(r, r.log).toMatchObject({
       status: "success",
-      metadataCleared: true,
+      native: {
+        outcome: "completed",
+        processSettled: true,
+        verifiedUnrelatedData: true,
+        recovery: "removed",
+      },
       lockRetained: false,
     });
     expect((await f.host.readGitWorkspace(f.scope)).branch).toBe(f.branch);
     expect((await f.git(f.root, ["rev-parse", "HEAD"])).stdout.trim()).toBe(
       f.original,
+    );
+    expect(await fs.readFile(path.join(f.root, "file"), "utf8")).toBe(
+      "topic\n",
+    );
+    expect(await fs.readFile(path.join(f.root, "second"), "utf8")).toBe(
+      "second topic\n",
     );
     if (f.record)
       expect((await f.git(f.source, ["rev-parse", "HEAD"])).stdout).toBe(

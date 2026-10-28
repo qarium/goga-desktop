@@ -1,3 +1,4 @@
+import type { NativeGitOperationResult } from "./git-native-operation";
 import { z } from "zod";
 import { gitRevisionSchema, type GitWorkspaceSnapshot } from "./git-workspace";
 export const gitBranchProjectSchema = z.string().min(1).max(256);
@@ -85,6 +86,7 @@ export interface GitBranchPreview {
   expiresAt: number;
 }
 export interface GitBranchResult {
+  native?: NativeGitOperationResult;
   projectId: string;
   action: GitBranchRequest["action"];
   status: "success" | "error" | "uncertain" | "conflict";

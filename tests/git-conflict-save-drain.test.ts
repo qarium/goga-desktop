@@ -1,8 +1,6 @@
+import { NativeGitConflictActions as GitConflictActions } from "../src/host/git-native-conflict-save";
 import { expect, it, vi } from "vitest";
-import {
-  GitConflictActions,
-  type GitConflictActionContext,
-} from "../src/host/git-conflict-actions";
+import { type GitConflictActionContext } from "../src/host/git-conflict-actions";
 import {
   identity,
   stateFingerprint,

@@ -1,10 +1,82 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { childEnvironment } from "./process-environment";
-import { readSignal, assertReadActive } from "./read-scope";
+import { readSignal, assertReadActive, withReadScope } from "./read-scope";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import http from "node:http";
 import { StringDecoder } from "node:string_decoder";
 import { DashboardParser } from "./parsers";
+// A prepared ref lock must outlive every command launched by its verifier,
+// including commands on another runner. Cancellation also fences late awaits.
+interface PreparedCommands {
+  controller: AbortController;
+  pending: Set<Promise<unknown>>;
+  unsettled: boolean;
+}
+const preparedCommands = new AsyncLocalStorage<PreparedCommands>();
+function trackPrepared<T>(promise: Promise<T>): Promise<T> {
+  const scope = preparedCommands.getStore();
+  if (!scope) return promise;
+  const tracked = promise.then(
+    (value) => {
+      scope.pending.delete(tracked);
+      return value;
+    },
+    (error) => {
+      scope.pending.delete(tracked);
+      if (error instanceof ByteCommandError && !error.processSettled)
+        scope.unsettled = true;
+      throw error;
+    },
+  );
+  scope.pending.add(tracked);
+  return tracked;
+}
+export interface ByteCommand {
+  executable: string;
+  args: readonly string[];
+  cwd: string;
+  env?: NodeJS.ProcessEnv;
+  stdin?: Buffer;
+  maxOutputBytes?: number;
+  /** Host-only update-ref --stdin prepare gate, never a generic stdin callback. */
+  verifyPrepared?: (assertActive: () => void) => Promise<void>;
+}
+export interface ByteCommandResult {
+  stdout: Buffer;
+  stderr: Buffer;
+  exitCode: number | null;
+  signal: NodeJS.Signals | null;
+  processSettled: true;
+}
+export type ByteCommandFailure =
+  | "spawn"
+  | "timeout"
+  | "output-limit"
+  | "aborted"
+  | "shutdown"
+  | "descendants"
+  | "process-unsettled"
+  | "protocol"
+  | "verification";
+/** Transport failure, never evidence that Git rolled back or made no writes. */
+export class ByteCommandError extends Error {
+  constructor(
+    readonly reason: ByteCommandFailure,
+    readonly processSettled: boolean,
+    readonly stdout: Buffer,
+    readonly stderr: Buffer,
+    readonly exitCode: number | null = null,
+    readonly signal: NodeJS.Signals | null = null,
+  ) {
+    super(
+      `Не удалось завершить команду (${reason}). Результат операции требует проверки.`,
+    );
+    this.name = "ByteCommandError";
+  }
+}
 export interface Runner {
+  /** Host-only bounded binary transport; absence fails closed, no text fallback. */
+  commandBytes?(command: ByteCommand): Promise<ByteCommandResult>;
   command(
     exe: string,
     args: string[],
@@ -72,6 +144,10 @@ export class GitRefTransactionError extends Error {
 export class NodeRunner implements Runner {
   private children = new Set<ChildProcessWithoutNullStreams>();
   private closing = false;
+  private preparedStops = new Map<
+    ChildProcessWithoutNullStreams,
+    () => Promise<void>
+  >();
   private disposal?: Promise<void>;
   private pendingCommands = new Map<
     ChildProcessWithoutNullStreams,
@@ -86,7 +162,8 @@ export class NodeRunner implements Runner {
     args: string[],
     cwd: string,
     env: NodeJS.ProcessEnv = {},
-    stdin?: string,
+    stdin?: string | Buffer,
+    keepStdin = false,
   ) {
     if (this.closing) throw new RunnerShutdownError("closing");
     const child = spawn(exe, args, {
@@ -101,7 +178,9 @@ export class NodeRunner implements Runner {
       if (!this.groupExists(child.pid)) this.children.delete(child);
     });
     child.stdin.on("error", () => {});
-    child.stdin.end(stdin);
+    if (keepStdin) {
+      if (stdin) child.stdin.write(stdin);
+    } else child.stdin.end(stdin);
     return child;
   }
   private groupExists(pid: number | undefined): boolean {
@@ -147,7 +226,9 @@ export class NodeRunner implements Runner {
     const attempt = Promise.resolve().then(async () => {
       // A failed child must not reopen admissions while other stop attempts still run.
       const results = await Promise.allSettled(
-        children.map((child) => this.kill(child)),
+        children.map(
+          (child) => this.preparedStops.get(child)?.() ?? this.kill(child),
+        ),
       );
       const failure = results.find(
         (result): result is PromiseRejectedResult =>
@@ -168,6 +249,268 @@ export class NodeRunner implements Runner {
       },
     );
     return attempt;
+  }
+
+  commandBytes(command: ByteCommand): Promise<ByteCommandResult> {
+    return trackPrepared(this.runCommandBytes(command));
+  }
+  private async runCommandBytes(
+    command: ByteCommand,
+  ): Promise<ByteCommandResult> {
+    assertReadActive();
+    if (this.closing) throw new RunnerShutdownError("closing");
+    const limit = command.maxOutputBytes ?? 8 * 1024 * 1024;
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit < 1 ||
+      limit > 32 * 1024 * 1024 ||
+      !command.executable ||
+      command.executable.includes("\0") ||
+      !command.args.every(
+        (arg) => typeof arg === "string" && !arg.includes("\0"),
+      )
+    )
+      throw Error("Недопустимые параметры команды.");
+    const prepared = command.verifyPrepared;
+    if (prepared) {
+      const input =
+        /^start\n(?:update HEAD ([a-f0-9]{40}|[a-f0-9]{64}) ([a-f0-9]{40}|[a-f0-9]{64})|verify HEAD ([a-f0-9]{40}|[a-f0-9]{64}))\nprepare\n$/.exec(
+          command.stdin?.toString("utf8") ?? "",
+        );
+      if (
+        command.args.at(-1) !== "--stdin" ||
+        !command.args.includes("update-ref") ||
+        !input ||
+        (input[1] && input[1].length !== input[2].length)
+      )
+        throw Error("Недопустимая подготовленная транзакция Git.");
+    }
+    const verificationScope: PreparedCommands = {
+      controller: new AbortController(),
+      pending: new Set(),
+      unsettled: false,
+    };
+    const drainVerification = async () => {
+      verificationScope.controller.abort();
+      await Promise.allSettled([...verificationScope.pending]);
+    };
+    const signal = readSignal(),
+      deadline = Date.now() + this.timeoutMs;
+    return new Promise((resolve, reject) => {
+      const out: Buffer[] = [],
+        err: Buffer[] = [];
+      let size = 0,
+        finishing = false,
+        interrupted = false,
+        verifying = false,
+        commitSent = false,
+        verificationFailed = false;
+      let child: ChildProcessWithoutNullStreams;
+      try {
+        child = this.start(
+          command.executable,
+          [...command.args],
+          command.cwd,
+          command.env,
+          command.stdin,
+          !!prepared,
+        );
+      } catch (error) {
+        reject(
+          error instanceof RunnerShutdownError
+            ? error
+            : new ByteCommandError(
+                "spawn",
+                true,
+                Buffer.alloc(0),
+                Buffer.alloc(0),
+              ),
+        );
+        return;
+      }
+      const detach = () => {
+        this.pendingCommands.delete(child);
+        this.preparedStops.delete(child);
+        clearTimeout(timer);
+        signal?.removeEventListener("abort", abort);
+      };
+      let failing: Promise<boolean> | undefined;
+      const failure = (reason: ByteCommandFailure): Promise<boolean> => {
+        if (failing) return failing;
+        if (finishing) return Promise.resolve(!verificationScope.unsettled);
+        finishing = true;
+        failing = (async () => {
+          await drainVerification();
+          let settled = !verificationScope.unsettled;
+          try {
+            // Same managed group and shutdown protocol as all other host commands.
+            await this.kill(child);
+          } catch {
+            reason = "process-unsettled";
+            settled = false;
+          }
+          detach();
+          reject(
+            new ByteCommandError(
+              reason,
+              settled,
+              Buffer.concat(out),
+              Buffer.concat(err),
+              child.exitCode,
+              child.signalCode,
+            ),
+          );
+          return settled;
+        })();
+        return failing;
+      };
+      if (prepared)
+        this.preparedStops.set(child, async () => {
+          if (!(await failure("shutdown")))
+            throw Error(
+              "Не удалось подтвердить остановку подготовленной транзакции.",
+            );
+        });
+      const abort = () => {
+        void failure("aborted");
+      };
+      const timer = setTimeout(() => {
+        void failure("timeout");
+      }, this.timeoutMs);
+      this.pendingCommands.set(child, () => {
+        if (
+          !finishing &&
+          child.pid &&
+          child.signalCode === null &&
+          (child.exitCode === null || child.exitCode === 0)
+        )
+          interrupted = true;
+      });
+      signal?.addEventListener("abort", abort, { once: true });
+      const receive = (target: Buffer[], chunk: Buffer) => {
+        if (finishing) return;
+        size += chunk.length;
+        if (size > limit) {
+          void failure("output-limit");
+          return;
+        }
+        target.push(Buffer.from(chunk));
+      };
+      const assertActive = () => {
+        if (
+          finishing ||
+          interrupted ||
+          signal?.aborted ||
+          Date.now() >= deadline ||
+          child.exitCode !== null ||
+          child.signalCode !== null
+        )
+          throw Error("Подготовленная транзакция Git уже не активна.");
+      };
+      child.stdout.on("data", (chunk: Buffer) => {
+        receive(out, chunk);
+        if (!prepared || verifying || finishing) return;
+        const reply = Buffer.concat(out).toString("utf8"),
+          expected = "start: ok\nprepare: ok\n";
+        if (!expected.startsWith(reply)) {
+          void failure("protocol");
+          return;
+        }
+        if (reply !== expected) return;
+        verifying = true;
+        void Promise.resolve()
+          .then(() => {
+            assertActive();
+            return preparedCommands.run(verificationScope, () =>
+              withReadScope(verificationScope.controller.signal, () =>
+                prepared(assertActive),
+              ),
+            );
+          })
+          .then(
+            () => {
+              if (finishing) return;
+              try {
+                assertActive();
+                if (
+                  verificationScope.pending.size ||
+                  verificationScope.unsettled
+                )
+                  throw Error("Проверка оставила незавершённые команды.");
+                verificationScope.controller.abort();
+                commitSent = true;
+                child.stdin.end("commit\n");
+              } catch {
+                void failure("aborted");
+              }
+            },
+            async (error) => {
+              if (error instanceof ByteCommandError && !error.processSettled)
+                verificationScope.unsettled = true;
+              if (finishing) return;
+              verificationFailed = true;
+              await drainVerification();
+              if (!finishing) child.stdin.end("abort\n");
+            },
+          );
+      });
+      child.stderr.on("data", (chunk: Buffer) => receive(err, chunk));
+      child.once("error", () => {
+        void failure("spawn");
+      });
+      child.once("close", (exitCode, exitSignal) => {
+        if (finishing) return;
+        if (interrupted) {
+          void failure("shutdown");
+          return;
+        }
+        // A zero exit is not completion if a descendant still owns the group.
+        if (this.groupExists(child.pid)) {
+          void failure("descendants");
+          return;
+        }
+        // A ref process can disappear while its verifier still has children.
+        if (prepared && verifying && !commitSent && !verificationFailed) {
+          void failure("protocol");
+          return;
+        }
+        if (verificationScope.pending.size) {
+          void failure("verification");
+          return;
+        }
+        verificationScope.controller.abort();
+        finishing = true;
+        detach();
+        if (
+          prepared &&
+          (verificationFailed ||
+            (exitCode === 0 &&
+              (!commitSent ||
+                Buffer.concat(out).toString("utf8") !==
+                  "start: ok\nprepare: ok\ncommit: ok\n")))
+        ) {
+          reject(
+            new ByteCommandError(
+              verificationFailed ? "verification" : "protocol",
+              !verificationScope.unsettled,
+              Buffer.concat(out),
+              Buffer.concat(err),
+              exitCode,
+              exitSignal,
+            ),
+          );
+          return;
+        }
+        resolve({
+          stdout: Buffer.concat(out),
+          stderr: Buffer.concat(err),
+          exitCode,
+          signal: exitSignal,
+          processSettled: true,
+        });
+      });
+      if (signal?.aborted) abort();
+    });
   }
 
   gitRefTransaction(
@@ -341,7 +684,17 @@ export class NodeRunner implements Runner {
     stdout: string;
     stderr: string;
   }> {
+    return trackPrepared(this.runCommand(exe, args, cwd, env, stdin));
+  }
+  private runCommand(
+    exe: string,
+    args: string[],
+    cwd: string,
+    env?: NodeJS.ProcessEnv,
+    stdin?: string,
+  ): Promise<{ stdout: string; stderr: string }> {
     assertReadActive();
+    const scope = preparedCommands.getStore();
     const signal = readSignal();
     return new Promise((resolve, reject) => {
       let out = "",
@@ -369,7 +722,13 @@ export class NodeRunner implements Runner {
         const error = interrupted
           ? new RunnerShutdownError("interrupted")
           : new Error(message);
-        void this.kill(child).then(() => reject(error), reject);
+        void this.kill(child).then(
+          () => reject(error),
+          (failure) => {
+            if (scope) scope.unsettled = true;
+            reject(failure);
+          },
+        );
       };
       const abort = () =>
         fail("Чтение отменено; остановлена только его команда.");
@@ -396,6 +755,10 @@ export class NodeRunner implements Runner {
       );
       child.on("close", (code) => {
         if (done) return;
+        if (scope && this.groupExists(child.pid)) {
+          fail("Проверка оставила работающую группу процессов.");
+          return;
+        }
         done = true;
         this.pendingCommands.delete(child);
         clearTimeout(timer);

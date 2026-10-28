@@ -1,181 +1,12 @@
-import { GitHistoryReader } from "./git-history-reader";
-import {
-  gitHistoryRequestSchema,
-  gitCommitReadRequestSchema,
-  gitCommitDiffRequestSchema,
-  type GitHistoryRequest,
-  type GitCommitReadRequest,
-  type GitCommitDiffRequest,
-} from "../shared/git-history";
-import { GitDiscardActions } from "./git-discard-actions";
-import {
-  gitDiscardRequestSchema,
-  gitDiscardTokenSchema,
-  type GitDiscardRequest,
-} from "../shared/git-discard";
-import {
-  GitUpdateHandoffCandidates,
-  type GitUpdateHandoffContext,
-  type GitUpdateAttemptInput,
-} from "./git-update-handoff";
-import {
-  gitUpdateHandoffRequestSchema,
-  gitUpdateHandoffTokenSchema,
-  type GitUpdateHandoffRequest,
-  type GitUpdateHandoffResult,
-  type GitUpdateHandoffCandidate,
-} from "../shared/git-update-handoff";
-import { GitSequencerOperations } from "./git-sequencer-operations";
-import {
-  gitSequencerOperationRequestSchema,
-  gitSequencerOperationTokenSchema,
-  type GitSequencerOperationRequest,
-  type GitSequencerOperationResult,
-} from "../shared/git-sequencer-operations";
-import { GitRebaseOperations } from "./git-rebase-operations";
-import {
-  gitRebaseOperationRequestSchema,
-  gitRebaseOperationTokenSchema,
-  type GitRebaseOperationRequest,
-  type GitRebaseOperationResult,
-} from "../shared/git-rebase-operations";
-import { preserveGitMergeCleanupError } from "./git-merge-safety";
-import { GitMergeOperations } from "./git-operations";
-import {
-  gitMergeOperationRequestSchema,
-  gitMergeOperationTokenSchema,
-  type GitMergeOperationRequest,
-} from "../shared/git-operations";
-import { GitConflictActions } from "./git-conflict-actions";
-import {
-  regular as conflictRegular,
-  hash as conflictHash,
-  directory as conflictDirectory,
-  assertStoppedRebaseOwnership,
-  type StoppedRebaseConflictBinding,
-} from "./git-conflict-state";
-import {
-  gitConflictSaveRequestSchema,
-  gitConflictSaveTokenSchema,
-  type GitConflictSaveRequest,
-  type GitConflictSaveResult,
-} from "../shared/git-conflict-save";
-import { GitConflictReader, type GitConflictContext } from "./git-conflicts";
-import {
-  gitConflictReadRequestSchema,
-  type GitConflictDocument,
-  type GitConflictReadRequest,
-} from "../shared/git-conflicts";
-import { GitBranchActions, type GitBranchContext } from "./git-branches";
-import {
-  gitBranchProjectSchema,
-  gitBranchRequestSchema,
-  gitBranchTokenSchema,
-  type GitBranchRequest,
-} from "../shared/git-branches";
-import { GitWorkspaceReader } from "./git-workspace-reader";
-import {
-  GitWorkspaceActions,
-  type GitCommitContext,
-} from "./git-workspace-actions";
-import { withTrustedGitIndex } from "./git-index-scope";
-import {
-  gitCommitRequestSchema,
-  gitCommitTokenSchema,
-  type GitCommitRequest,
-} from "../shared/git-commit";
-import {
-  gitDiffRequestSchema,
-  type GitDiffRequest,
-  type GitWorkspaceDiff,
-  type GitWorkspaceSnapshot,
-  type GitWorkspaceSummary,
-} from "../shared/git-workspace";
-import type { TerminalSessions } from "./terminal-sessions";
-import {
-  deletionSwitchBranches,
-  prepareDeletionSwitch,
-  verifyDeletionSwitch,
-  type DeletionSwitch,
-} from "./deletion-branch-switch";
-import { HistoryPruner, type PruneAccess } from "./history-prune";
-import type {
-  HistoryPrunePreview,
-  HistoryPruneResult,
-} from "../shared/history";
-import * as history from "./history";
-import {
-  historyYearSchema,
-  historyEntrySchema,
-  historyPathSchema,
-} from "../shared/history";
-import type { PreparedShutdown } from "./shutdown";
-import type { TerminalContext } from "../shared/terminal";
-import {
-  prepareTerminalEnvironment,
-  type TerminalSystem,
-  type TerminalLaunch,
-} from "./terminal-environment";
-import { parseDockerfile } from "./project-dockerfile";
-import { assertTopicTaskReady } from "./topic-readiness";
-import {
-  RepositoryActions,
-  repositoryActionFailure,
-  sanitizeRepositoryLog,
-} from "./repository-actions";
-import {
-  repositoryActionRequestSchema,
-  type RepositoryActionRequest,
-  type RepositoryActionResult,
-} from "../shared/repository-actions";
-import { assertReadActive, withOfflineGitReadScope } from "./read-scope";
-import {
-  ContextExchangeManager,
-  type BaseSnapshot,
-  type PublicationSnapshot,
-} from "./context-exchange";
-import { RunRecoveryManager } from "./run-recovery";
-import { createBuildRepeatSnapshot } from "./build-repeat";
-import {
-  buildRepeatPreparationSchema,
-  type BuildRepeatPreparation,
-} from "../shared/build-repeat";
-import { ContextRunsStore } from "./context-runs-store";
-import { ContextSyncManager } from "./context-sync";
-import { CloneManager, type ContextDeletionPlan } from "./clones";
-import type {
-  ContextDeletionPreview,
-  ContextDeletionResult,
-} from "../shared/context-deletion";
-import {
-  scopeProjectId,
-  scopeRefSchema,
-  type ScopeRef,
-} from "../shared/context";
-import {
-  childEnvironment,
-  assertContextEnvironment,
-} from "./process-environment";
-import { assertTopicBranchesAvailable } from "./worktree-topic-guards";
-import { WorktreeManager } from "./worktrees";
-import {
-  topicContextIdentitySchema,
-  topicContextReadinessSchema,
-  topicContextRefSchema,
-  type TopicContextIdentity,
-  type TopicContextRef,
-  type WorktreeRecord,
-  worktreeContextRef,
-} from "../shared/worktrees";
-import {
-  buildArgs,
-  buildCapabilities,
-  buildReviewDefault,
-  buildHomeEnvironment,
-  buildConfigurationSecrets,
-  listBuildFiles as browseBuildFiles,
-  readBuildPlan as readPlan,
-} from "./build";
+import { AsyncLocalStorage } from "node:async_hooks";
+import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { EventEmitter } from "node:events";
+import { lstat, readFile, readdir, realpath } from "node:fs/promises";
+import { homedir } from "node:os";
+import path from "node:path";
+import { stripVTControlCharacters } from "node:util";
+import { parseDocument } from "yaml";
 import {
   buildPlanProblem,
   buildRequestSchema,
@@ -186,20 +17,19 @@ import {
   type BuildOptions,
   type BuildRequest,
 } from "../shared/build";
-import { TopicsDomain, readBranchChoices, type TopicsContext } from "./topics";
-import { readTopicTableDisplay, readTopicTaskOverview } from "./topic-display";
+import {
+  buildRepeatPreparationSchema,
+  type BuildRepeatPreparation,
+} from "../shared/build-repeat";
+import {
+  scopeProjectId,
+  scopeRefSchema,
+  type ScopeRef,
+} from "../shared/context";
 import type {
-  TopicTarget,
-  TopicOperationRequest,
-  TopicCatalogSnapshot,
-  TopicBoardSnapshot,
-  TopicDetails,
-} from "../shared/topics";
-import { topicYearSchema, topicTargetSchema } from "../shared/topics-schema";
-import { captureRunOutput } from "./run-output";
-import { DEFAULT_STARTUP_TIMEOUT_MINUTES } from "../shared/startup-timeout";
-import { stripVTControlCharacters } from "node:util";
-import { DocumentDeletionTickets } from "./document-deletion";
+  ContextDeletionPreview,
+  ContextDeletionResult,
+} from "../shared/context-deletion";
 import {
   isDeletableDocument,
   isDeletionToken,
@@ -209,68 +39,235 @@ import {
   type DeletionTicket,
   type TrashItem,
 } from "../shared/document-deletion";
-import { availableWorkflowPipelines } from "../shared/workflow-suggestions";
+import { assertEnvironmentTransport } from "../shared/environment-transport";
+import {
+  gitBranchProjectSchema,
+  gitBranchRequestSchema,
+  gitBranchTokenSchema,
+  type GitBranchRequest,
+} from "../shared/git-branches";
+import {
+  gitCommitRequestSchema,
+  gitCommitTokenSchema,
+  type GitCommitRequest,
+} from "../shared/git-commit";
+import {
+  gitConflictSaveRequestSchema,
+  gitConflictSaveTokenSchema,
+  type GitConflictSaveRequest,
+} from "../shared/git-conflict-save";
+import {
+  gitConflictReadRequestSchema,
+  type GitConflictDocument,
+  type GitConflictReadRequest,
+} from "../shared/git-conflicts";
+import {
+  gitDiscardRequestSchema,
+  gitDiscardTokenSchema,
+  type GitDiscardRequest,
+} from "../shared/git-discard";
+import {
+  gitCommitDiffRequestSchema,
+  gitCommitReadRequestSchema,
+  gitHistoryRequestSchema,
+  type GitCommitDiffRequest,
+  type GitCommitReadRequest,
+  type GitHistoryRequest,
+} from "../shared/git-history";
+import {
+  gitMergeOperationRequestSchema,
+  gitMergeOperationTokenSchema,
+  type GitMergeOperationRequest,
+} from "../shared/git-operations";
+import {
+  gitRebaseOperationRequestSchema,
+  gitRebaseOperationTokenSchema,
+  type GitRebaseOperationRequest,
+} from "../shared/git-rebase-operations";
+import {
+  gitSequencerOperationRequestSchema,
+  gitSequencerOperationTokenSchema,
+  type GitSequencerOperationRequest,
+} from "../shared/git-sequencer-operations";
+import {
+  gitUpdateHandoffRequestSchema,
+  gitUpdateHandoffTokenSchema,
+  type GitUpdateHandoffCandidate,
+  type GitUpdateHandoffRequest,
+} from "../shared/git-update-handoff";
+import {
+  gitDiffRequestSchema,
+  type GitDiffRequest,
+  type GitWorkspaceDiff,
+  type GitWorkspaceSnapshot,
+  type GitWorkspaceSummary,
+} from "../shared/git-workspace";
+import type {
+  HistoryPrunePreview,
+  HistoryPruneResult,
+} from "../shared/history";
+import {
+  historyEntrySchema,
+  historyPathSchema,
+  historyYearSchema,
+} from "../shared/history";
 import type { ProjectDocumentTarget } from "../shared/project-documents";
 import {
-  listProjectTools,
-  listProjectWorkflows,
-  listProjectPipelines,
-  listProjectProfiles,
-  readProjectDocument,
-  saveProjectDocument,
-  prepareSourceDeletion,
-} from "./project-documents";
-import { assertEnvironmentTransport } from "../shared/environment-transport";
-import { AsyncLocalStorage } from "node:async_hooks";
-import {
-  DesktopStateStore,
-  type ProjectSettingsDocument,
-  validateProjectSettings,
-} from "./desktop-state";
-import { EventEmitter } from "node:events";
-import { homedir } from "node:os";
-import path from "node:path";
-import { realpath, readdir, lstat, readFile } from "node:fs/promises";
-import { randomUUID } from "node:crypto";
-import { parseDocument } from "yaml";
-import type { ChildProcessWithoutNullStreams } from "node:child_process";
+  repositoryActionRequestSchema,
+  type RepositoryActionRequest,
+  type RepositoryActionResult,
+} from "../shared/repository-actions";
+import { DEFAULT_STARTUP_TIMEOUT_MINUTES } from "../shared/startup-timeout";
+import type { TerminalContext } from "../shared/terminal";
 import type {
-  Project,
-  Pipeline,
+  TopicBoardSnapshot,
+  TopicCatalogSnapshot,
+  TopicDetails,
+  TopicOperationRequest,
+  TopicTarget,
+} from "../shared/topics";
+import { topicTargetSchema, topicYearSchema } from "../shared/topics-schema";
+import type {
   Discovery,
+  LaunchRequest,
+  Pipeline,
   PipelineRequest,
   Preview,
-  LaunchRequest,
-  Run,
-  Topic,
-  TopicTaskRequest,
-  TopicTaskDocument,
+  Project,
   ProjectSettings,
   ProjectSettingsView,
+  Run,
+  Topic,
+  TopicTaskDocument,
+  TopicTaskRequest,
 } from "../shared/types";
-import { NodeRunner, type Runner, watchDashboard } from "./process";
+import { availableWorkflowPipelines } from "../shared/workflow-suggestions";
 import {
-  parseCatalog,
+  topicContextIdentitySchema,
+  topicContextReadinessSchema,
+  topicContextRefSchema,
+  worktreeContextRef,
+  type TopicContextIdentity,
+  type TopicContextRef,
+  type WorktreeRecord,
+} from "../shared/worktrees";
+import {
+  listBuildFiles as browseBuildFiles,
+  buildArgs,
+  buildCapabilities,
+  buildConfigurationSecrets,
+  buildHomeEnvironment,
+  buildReviewDefault,
+  readBuildPlan as readPlan,
+} from "./build";
+import { createBuildRepeatSnapshot } from "./build-repeat";
+import { CloneManager, type ContextDeletionPlan } from "./clones";
+import {
+  ContextExchangeManager,
+  type BaseSnapshot,
+  type PublicationSnapshot,
+} from "./context-exchange";
+import { ContextRunsStore } from "./context-runs-store";
+import { ContextSyncManager } from "./context-sync";
+import {
+  deletionSwitchBranches,
+  prepareDeletionSwitch,
+  verifyDeletionSwitch,
+  type DeletionSwitch,
+} from "./deletion-branch-switch";
+import {
+  DesktopStateStore,
+  validateProjectSettings,
+  type ProjectSettingsDocument,
+} from "./desktop-state";
+import { DocumentDeletionTickets } from "./document-deletion";
+import { GitBranchActions, type GitBranchContext } from "./git-branches";
+import {
+  assertStoppedRebaseOwnership,
+  directory as conflictDirectory,
+  regular as conflictRegular,
+  stat as conflictStat,
+  type StoppedRebaseConflictBinding,
+} from "./git-conflict-state";
+import { GitConflictReader, type GitConflictContext } from "./git-conflicts";
+import { GitHistoryReader } from "./git-history-reader";
+import { withTrustedGitIndex } from "./git-index-scope";
+import type { GitMergeContext } from "./git-merge-safety";
+import { preserveGitMergeCleanupError } from "./git-merge-safety";
+import { NativeGitWorkspaceActions } from "./git-native-commit";
+import { NativeGitConflictActions } from "./git-native-conflict-save";
+import { createNativeGitCapability, nativeIntent } from "./git-native-context";
+import { NativeGitDiscardActions } from "./git-native-discard";
+import { NativeGitJournal } from "./git-native-journal";
+import { NativeGitMergeOperations } from "./git-native-merge";
+import { NativeGitSequenceAPI } from "./git-native-sequence-api";
+import { fingerprintNativeGitControls } from "./git-native-state";
+import type { GitUpdateAttemptInput } from "./git-native-update-handoff";
+import {
+  NativeGitUpdateHandoff,
+  type NativeGitUpdateContext,
+} from "./git-native-update-handoff";
+import { type GitCommitContext } from "./git-workspace-actions";
+import { GitWorkspaceReader } from "./git-workspace-reader";
+import * as history from "./history";
+import { HistoryPruner, type PruneAccess } from "./history-prune";
+import {
   parseCard,
-  pipelineArgs,
+  parseCatalog,
   peekWorkflowProfile,
+  pipelineArgs,
   workflowName,
 } from "./parsers";
+import { NodeRunner, watchDashboard, type Runner } from "./process";
+import {
+  assertContextEnvironment,
+  childEnvironment,
+} from "./process-environment";
+import { parseDockerfile } from "./project-dockerfile";
+import {
+  listProjectPipelines,
+  listProjectProfiles,
+  listProjectTools,
+  listProjectWorkflows,
+  prepareSourceDeletion,
+  readProjectDocument,
+  saveProjectDocument,
+} from "./project-documents";
+import { assertReadActive, withOfflineGitReadScope } from "./read-scope";
+import {
+  RepositoryActions,
+  repositoryActionFailure,
+  sanitizeRepositoryLog,
+} from "./repository-actions";
+import { captureRunOutput } from "./run-output";
+import { RunRecoveryManager } from "./run-recovery";
 import {
   SettingsStore,
   atomicWrite,
-  optionalText,
   digest,
   noSymlinks,
+  optionalText,
 } from "./settings";
+import type { PreparedShutdown } from "./shutdown";
+import {
+  prepareTerminalEnvironment,
+  type TerminalLaunch,
+  type TerminalSystem,
+} from "./terminal-environment";
+import type { TerminalSessions } from "./terminal-sessions";
+import { readTopicTableDisplay, readTopicTaskOverview } from "./topic-display";
+import { assertTopicTaskReady } from "./topic-readiness";
 import {
   guardedProject,
-  readWorkingTask,
   readCommittedTask,
-  taskPath,
+  readWorkingTask,
   taskDocument,
+  taskPath,
   validateTaskText,
 } from "./topic-task";
+import { TopicsDomain, readBranchChoices, type TopicsContext } from "./topics";
+import { assertTopicBranchesAvailable } from "./worktree-topic-guards";
+import { WorktreeManager } from "./worktrees";
 const slug = (name: string) =>
   name
     .toLowerCase()
@@ -304,92 +301,19 @@ export class HostService extends EventEmitter {
   private topicDomain = new TopicsDomain();
   private deletionTickets = new DocumentDeletionTickets();
   private historyPruner = new HistoryPruner();
-  private gitUpdateHandoff = new GitUpdateHandoffCandidates({
+  private gitUpdateHandoff = new NativeGitUpdateHandoff({
     context: (scope, action) => this.gitUpdateContext(scope, action),
   });
-  private gitRebaseOperations = new GitRebaseOperations({
-    context: (scope, action) =>
-      this.gitConflictSaveContext(
-        scope,
-        (context) =>
-          action({
-            ...context,
-            verifyOwner: context.verifyOwner ?? context.verify,
-            verifyNextRebase: context.verifyNextRebase ?? context.verify,
-            isolatedGit: (args) =>
-              this.runner.command("git", args, context.root, {
-                HOME: this.home,
-                GIT_CONFIG: undefined,
-                GIT_CONFIG_GLOBAL: "/dev/null",
-                GIT_CONFIG_SYSTEM: "/dev/null",
-                GIT_CONFIG_NOSYSTEM: "1",
-                GIT_ATTR_NOSYSTEM: "1",
-                GIT_ATTR_GLOBAL: "/dev/null",
-                GIT_ATTR_SYSTEM: "/dev/null",
-                GIT_ATTR_SOURCE: undefined,
-                GIT_NAMESPACE: undefined,
-                GIT_REPLACE_REF_BASE: undefined,
-                GIT_EXEC_PATH: undefined,
-                GIT_EDITOR: ":",
-                GIT_SEQUENCE_EDITOR: "/usr/bin/false",
-                GIT_TERMINAL_PROMPT: "0",
-                GIT_NO_LAZY_FETCH: "1",
-                GIT_ALLOW_PROTOCOL: "",
-              }),
-          }),
-        { operationTransition: true },
-      ),
+  private gitNativeSequence = new NativeGitSequenceAPI({
+    context: (scope, action) => this.gitNativeSequenceContext(scope, action),
   });
-  private gitSequencerOperations = new GitSequencerOperations({
-    context: (scope, action) =>
-      this.gitConflictSaveContext(
-        scope,
-        (context) =>
-          action({
-            ...context,
-            verifyOwner: context.verifyOwner ?? context.verify,
-            verifyNextRebase: context.verifyNextRebase ?? context.verify,
-            isolatedGit: (args) =>
-              this.runner.command("git", args, context.root, {
-                HOME: this.home,
-                GIT_CONFIG: undefined,
-                GIT_CONFIG_GLOBAL: "/dev/null",
-                GIT_CONFIG_SYSTEM: "/dev/null",
-                GIT_CONFIG_NOSYSTEM: "1",
-                GIT_ATTR_NOSYSTEM: "1",
-                GIT_ATTR_GLOBAL: "/dev/null",
-                GIT_ATTR_SYSTEM: "/dev/null",
-                GIT_ATTR_SOURCE: undefined,
-                GIT_NAMESPACE: undefined,
-                GIT_REPLACE_REF_BASE: undefined,
-                GIT_EXEC_PATH: undefined,
-                GIT_EDITOR: ":",
-                GIT_SEQUENCE_EDITOR: "/usr/bin/false",
-                GIT_TERMINAL_PROMPT: "0",
-                GIT_NO_LAZY_FETCH: "1",
-                GIT_ALLOW_PROTOCOL: "",
-              }),
-          }),
-        { operationTransition: true },
-      ),
-  });
-  private gitMergeOperations = new GitMergeOperations({
-    context: (scope, action) =>
-      this.gitCommitContext(scope, (context) => {
-        const secrets = this.context
-          .getStore()!
-          .document.value.env.map((row) => row.value)
-          .filter(Boolean);
-        return action({
-          ...context,
-          sanitizeDiagnostics: (value) => sanitizeRepositoryLog(value, secrets),
-        });
-      }),
+  private gitMergeOperations = new NativeGitMergeOperations({
+    context: (scope, action) => this.gitNativeSequenceContext(scope, action),
   });
   private gitBranches = new GitBranchActions({
     context: (id, action) => this.gitBranchContext(id, action),
   });
-  private gitConflictActions = new GitConflictActions({
+  private gitConflictActions = new NativeGitConflictActions({
     context: (scope, action) =>
       this.gitConflictSaveContext(scope, (context) =>
         action({
@@ -416,16 +340,17 @@ export class HostService extends EventEmitter {
         }),
       ),
   });
-  private gitActions = new GitWorkspaceActions({
+  private gitActions = new NativeGitWorkspaceActions({
     context: (scope, action) => this.gitCommitContext(scope, action),
   });
   private personalSettings: SettingsStore;
-  private gitDiscardActions: GitDiscardActions;
+  private gitDiscardActions: NativeGitDiscardActions;
   private trashItem?: TrashItem;
   private terminalLeases = new Map<string, number>();
   private operationTail: Promise<unknown> = Promise.resolve();
   private catalogEpoch = 0;
   private deleting = false;
+  private nativeGitJournal: NativeGitJournal;
   private home: string;
   private dataDir: string;
   private goga: string;
@@ -473,9 +398,12 @@ export class HostService extends EventEmitter {
   }) {
     super();
     this.home = options.home ?? homedir();
+    this.nativeGitJournal = new NativeGitJournal({
+      directory: path.join(this.home, ".goga", "desktop", "git-operations"),
+    });
     this.personalSettings = options.settings ?? new SettingsStore(this.home);
     this.trashItem = options.trashItem;
-    this.gitDiscardActions = new GitDiscardActions({
+    this.gitDiscardActions = new NativeGitDiscardActions({
       context: (scope, action) => this.gitCommitContext(scope, action),
       trashItem: this.trashItem,
     });
@@ -1935,359 +1863,295 @@ export class HostService extends EventEmitter {
       ownership: Object.freeze(ownership),
     });
   }
-  /** Immutable physical pins for the synchronous continuation publication window.
-   * No lookup, registry rewrite, new authorization or ordinary detached access. */
-  private rebasePublicationOwner(
-    project: Project,
-    root: string,
-    binding?: WorktreeRecord,
-  ) {
-    const desktop = path.join(this.home, ".goga", "desktop");
-    const sourceCommon = binding?.sourceCommonDir;
-    if (binding && !sourceCommon)
-      throw Error("Физический источник клона не подтверждён.");
-    const files = [
-      path.join(desktop, "projects.json"),
-      path.join(desktop, "settings", `${conflictHash(project.id)}.json`),
-      ...(binding ? [path.join(this.clones.store.root, "registry.json")] : []),
-    ];
-    const dirs = [
-      ...new Set([
-        root,
-        project.path,
-        ...(sourceCommon ? [binding!.projectPath, sourceCommon] : []),
-        ...files.map((file) => path.dirname(file)),
-      ]),
-    ].map((dir) => [dir, conflictDirectory(dir)] as const);
-    const captured = files.map((file) => {
-      const value = conflictRegular(file);
-      if (!value) throw Error("Владелец продолжения не подтверждён.");
-      return [file, value.identity] as const;
-    });
-    return () => {
-      for (const [dir, id] of dirs)
-        if (conflictDirectory(dir) !== id)
-          throw Error("Физический владелец продолжения изменился.");
-      for (const [file, id] of captured)
-        if (conflictRegular(file)?.identity !== id)
-          throw Error("Настройки или реестр продолжения изменились.");
-    };
-  }
-  /** A separate, narrow write admission; a display proof or renderer digest alone
-   * is never authority. No admitted binding enters the ordinary settings ALS. */
+  /** Conflict-file writes use the same physical owner admission as native
+   * continuation. The stopped-operation seal is checked separately on every
+   * verification; no cached cross-request authority or repeated clone resolver. */
   private async gitConflictSaveContext<T>(
     scope: ScopeRef,
     action: (
       context: GitCommitContext & {
         stoppedRebase?: StoppedRebaseConflictBinding;
-        verifyOwner?: () => Promise<void>;
-        verifyNextRebase?: () => Promise<void>;
-        assertPublicationOwner?: () => void;
       },
     ) => Promise<T>,
-    options: { operationTransition?: boolean } = {},
+  ): Promise<T> {
+    return this.gitNativeSequenceContext(scope, async (context) => {
+      const owner = context.scope;
+      const admission =
+        typeof owner === "string"
+          ? undefined
+          : await this.clones.resolveGitRead(owner);
+      if (admission && admission.record.path !== context.root)
+        throw Error("Рабочая папка конфликта не соответствует владельцу.");
+      const settings = await this.state.read(scopeProjectId(owner));
+      const stoppedRebase = this.stoppedRebaseConflictBinding(admission);
+      const controls = await fingerprintNativeGitControls(context.root);
+      const verify = async () => {
+        await context.verify();
+        assertStoppedRebaseOwnership(stoppedRebase);
+        if (controls !== (await fingerprintNativeGitControls(context.root)))
+          throw Error("Операция Git изменилась. Откройте конфликт заново.");
+      };
+      await verify();
+      const result = await action({
+        ...context,
+        stoppedRebase,
+        verify,
+        ownerKey: JSON.stringify([
+          owner,
+          context.root,
+          settings.version,
+          admission?.record.gitCommonDir,
+        ]),
+        git: (args, options) =>
+          options?.indexFile
+            ? withTrustedGitIndex(options.indexFile, () =>
+                context.git(args, options.stdin),
+              )
+            : context.git(args, options?.stdin),
+      });
+      if (
+        result &&
+        typeof result === "object" &&
+        "log" in result &&
+        "message" in result
+      )
+        return {
+          ...result,
+          log: context.sanitizeDiagnostics!(String(result.log)),
+          message: context.sanitizeDiagnostics!(String(result.message)),
+        };
+      return result;
+    });
+  }
+  /** Fresh scoped settings/owner admission spans the entire action, never a stale closure. */
+  private nativeCloneOwnerProof(binding?: WorktreeRecord) {
+    if (!binding) return [];
+    if (!binding.sourceCommonDir) throw Error("Источник клона не подтверждён.");
+    return [
+      ...[
+        path.join(this.clones.store.root, `.owner-${binding.contextId}.json`),
+        path.join(binding.gitCommonDir, "desktop-owner.json"),
+      ].map((file) => {
+        const value = conflictRegular(file, 4096);
+        if (!value) throw Error("Владение клоном не подтверждено.");
+        return ["file", file, value.identity];
+      }),
+      // Bind source redirection as opaque filesystem identity, not parsed Git
+      // formats. Repeated owner checks must detect topology changes before a
+      // publication, not only during the final Git-based clone validation.
+      ...[
+        path.join(binding.projectPath, ".git"),
+        ...["commondir", "gitdir", "objects/info/alternates", "objects/info/http-alternates"]
+          .map((name) => path.join(binding.sourceCommonDir!, name)),
+      ].map((file) => [
+        "source-topology", file,
+        conflictStat(file)?.isDirectory()
+          ? conflictDirectory(file)
+          : conflictRegular(file, 65536)?.identity ?? "missing",
+      ]),
+      ...[binding.projectPath, binding.sourceCommonDir].map((dir) => [
+        "directory",
+        dir,
+        conflictDirectory(dir),
+      ]),
+    ];
+  }
+  /** Narrow native-operation context. Physical clone admission is deliberately
+   * separate from branch/launch admission; only the engine's durable receipt
+   * can authorize a detached continuation. Never install it into settings ALS. */
+  private async gitNativeSequenceContext<T>(
+    scope: ScopeRef,
+    action: (context: GitMergeContext) => Promise<T>,
+    readOnlyProbe = false,
   ): Promise<T> {
     const owner = this.parseScope(scope);
-    if (typeof owner === "string")
-      return this.gitCommitContext(owner, async (context) => {
-        if (!options.operationTransition) return action(context);
-        const project = await this.project(owner);
-        let pin: (() => void) | undefined;
-        return action({
-          ...context,
-          assertPublicationOwner: () => {
-            pin ??= this.rebasePublicationOwner(project, context.root);
-            pin();
-          },
-        });
-      });
     return this.context.exit(() =>
       withOfflineGitReadScope(async () => {
-        // Discover only the lifecycle lock to acquire. Fresh physical/operation
-        // authorization below is mandatory while that lock is held.
-        const admission = await this.clones.resolveGitRead(owner);
-        if (!admission.operationBinding)
-          return this.gitCommitContext(owner, action);
-        return this.exclusive(owner.projectId, async () => {
-          // Lifecycle cleanup runs outside the action callback. Retain its actual
-          // outcome before release can throw; a prepared preview is not an execute
-          // result and must never escape this error boundary as a successful token.
-          let completed: { value: T } | undefined;
-          let failure: { error: unknown } | undefined;
-          let secrets: string[] = [];
-          const diagnostic = (error: unknown) =>
-            sanitizeRepositoryLog(
-              error instanceof Error ? error.message : String(error),
-              secrets,
-            );
-          try {
-            return await this.clones.store.withRepositoryLock(
-              admission.record.repositoryKey,
-              async () => {
-                try {
-                  this.check();
-                  assertReadActive();
-                  const epoch = this.catalogEpoch;
-                  const project = await this.project(owner.projectId);
-                  const document = await this.state.read(project.id);
-                  const binding = admission.record,
-                    root = binding.path;
-                  const stoppedRebase =
-                    this.stoppedRebaseConflictBinding(admission)!;
-                  secrets = document.value.env
-                    .map((row) => row.value)
-                    .filter(Boolean);
-                  let publicationPin: (() => void) | undefined;
-                  const assertPublicationOwner = options.operationTransition
-                    ? () => {
-                        publicationPin ??= this.rebasePublicationOwner(
-                          project,
-                          root,
-                          binding,
-                        );
-                        publicationPin();
-                      }
-                    : undefined;
-                  const verify = async (
-                    sameOperation: boolean | "next-rebase" = true,
-                  ) => {
-                    this.check();
-                    assertReadActive();
-                    this.assertCatalog(epoch);
-                    if (
-                      document.version !==
-                      (await this.state.read(project.id)).version
-                    )
-                      throw Error(
-                        "Настройки проекта изменились. Откройте конфликт заново.",
-                      );
-                    const current = (await this.listProjects()).find(
-                      (p) => p.id === project.id,
-                    );
-                    if (
-                      !current ||
-                      current.path !== project.path ||
-                      binding.projectPath !== (await realpath(project.path)) ||
-                      root !== (await realpath(root))
-                    )
-                      throw Error(
-                        "Владелец клона изменился; подмена основной папкой запрещена.",
-                      );
-                    // Read-only store validation is deliberate: no refresh/registry repair
-                    // and no recursive repository lock. Every check repeats owner/source,
-                    // effective Git topology and stopped operation validation.
-                    const paths = (
-                      await this.runner.command(
-                        "git",
-                        [
-                          "rev-parse",
-                          "--path-format=absolute",
-                          "--show-toplevel",
-                          "--absolute-git-dir",
-                          "--git-common-dir",
-                          "--git-path",
-                          "index",
-                          "--git-path",
-                          "objects",
-                        ],
-                        root,
-                        { HOME: this.home },
-                      )
-                    ).stdout
-                      .trim()
-                      .split("\n");
-                    const expected = [
-                      root,
-                      binding.gitCommonDir,
-                      binding.gitCommonDir,
-                      path.join(binding.gitCommonDir, "index"),
-                      path.join(binding.gitCommonDir, "objects"),
-                    ];
-                    if (
-                      paths.length !== expected.length ||
-                      paths.some(
-                        (p, i) => path.resolve(root, p) !== expected[i],
-                      )
-                    )
-                      throw Error(
-                        "Эффективные пути Git не соответствуют контексту.",
-                      );
-                    if (sameOperation === true) {
-                      const fresh = await this.clones.resolveGitRead(owner);
-                      if (JSON.stringify(fresh) !== JSON.stringify(admission))
-                        throw Error(
-                          "Владелец или операция Git изменились. Откройте конфликт заново.",
-                        );
-                    } else {
-                      if (!options.operationTransition)
-                        throw Error("Переход операции не разрешён.");
-                      if (sameOperation === "next-rebase") {
-                        const fresh = await this.clones.resolveGitRead(owner);
-                        if (
-                          !fresh.operationBinding ||
-                          JSON.stringify(fresh.record) !==
-                            JSON.stringify(binding)
-                        )
-                          throw Error(
-                            "Владелец следующего конфликта изменился.",
-                          );
-                      } else
-                        await this.clones.verifyGitOperationOwner(
-                          owner,
-                          binding,
-                        );
-                    }
-                    // Settings can change while owner Git commands await; do not cache
-                    // authorization across any prepare/execute/capture boundary.
-                    if (
-                      document.version !==
-                      (await this.state.read(project.id)).version
-                    )
-                      throw Error(
-                        "Настройки проекта изменились. Откройте конфликт заново.",
-                      );
-                    this.assertCatalog(epoch);
-                    assertStoppedRebaseOwnership(stoppedRebase);
-                    assertReadActive();
-                  };
-                  const git: GitCommitContext["git"] = (args, options) => {
-                    const run = () =>
-                      this.runner.command(
-                        "git",
-                        args,
-                        root,
-                        {
-                          HOME: this.home,
-                          GIT_TERMINAL_PROMPT: "0",
-                          GIT_NO_LAZY_FETCH: "1",
-                          GIT_ALLOW_PROTOCOL: "",
-                        },
-                        options?.stdin,
-                      );
-                    return options?.indexFile
-                      ? withTrustedGitIndex(options.indexFile, run)
-                      : run();
-                  };
-                  await verify();
-                  const reader = new GitWorkspaceReader({
-                    scope: owner,
-                    root,
-                    verify,
-                    git: async (args) => (await git(args)).stdout,
-                  });
-                  const result = await action({
-                    scope: owner,
-                    root,
-                    stoppedRebase,
-                    verify: () => verify(),
-                    ...(options.operationTransition
-                      ? {
-                          verifyOwner: () => verify(false),
-                          verifyNextRebase: () => verify("next-rebase"),
-                          assertPublicationOwner,
-                        }
-                      : {}),
-                    git,
-                    ownerKey: JSON.stringify([
-                      owner,
-                      root,
-                      document.version,
-                      binding.gitCommonDir,
-                    ]),
-                    snapshot: () => reader.snapshot(),
-                  });
-                  // The transaction owns publication/recovery verification. Capture
-                  // its facts before releasing the separate lifecycle lock.
-                  const value =
-                    result &&
-                    typeof result === "object" &&
-                    "log" in result &&
-                    "message" in result
-                      ? {
-                          ...result,
-                          log: sanitizeRepositoryLog(
-                            String(result.log),
-                            secrets,
-                          ),
-                          message: sanitizeRepositoryLog(
-                            String(result.message),
-                            secrets,
-                          ),
-                        }
-                      : result;
-                  completed = { value: value as T };
-                  return completed.value;
-                } catch (error) {
-                  failure = { error };
-                  throw error;
-                }
+        // Goga capture/refusal probes run under the caller's mutation mutex.
+        // They share physical native admission, but never acquire another lock.
+        const admit = async () => {
+          const binding =
+            typeof owner === "string"
+              ? undefined
+              : await this.clones.resolveNativeOperationOwner(owner);
+          let completed: T | undefined;
+          let actionFailure: unknown;
+          let sanitize = (v: string) => sanitizeRepositoryLog(v);
+          const run = async () => {
+            if (
+              binding &&
+              typeof owner !== "string" &&
+              JSON.stringify(
+                await this.clones.resolveNativeOperationOwner(owner),
+              ) !== JSON.stringify(binding)
+            )
+              throw Error("Владелец клона изменился.");
+            const epoch = this.catalogEpoch;
+            const project = await this.project(scopeProjectId(owner));
+            const settings = await this.state.read(project.id);
+            const root = binding?.path ?? (await realpath(project.path));
+            const ownership = () => this.nativeCloneOwnerProof(binding);
+            const physicalOwner = ownership();
+            const verify = async () => {
+              this.check();
+              assertReadActive();
+              this.assertCatalog(epoch);
+              const current = (await this.listProjects()).find(
+                (p) => p.id === project.id,
+              );
+              if (
+                !current ||
+                current.path !== project.path ||
+                root !== (await realpath(root)) ||
+                settings.version !== (await this.state.read(project.id)).version
+              )
+                throw Error(
+                  "Владелец или настройки операции изменились. Повторите предпросмотр.",
+                );
+              if (binding && typeof owner !== "string") {
+                if (
+                  binding.projectPath !== (await realpath(project.path)) ||
+                  JSON.stringify(await ownership()) !==
+                    JSON.stringify(physicalOwner)
+                )
+                  throw Error(
+                    "Владелец клона изменился; переход в основной проект запрещён.",
+                  );
+                await this.clones.assertNativeOperationOwnerRecord(binding);
+              }
+              this.assertCatalog(epoch);
+              if (
+                settings.version !== (await this.state.read(project.id)).version
+              )
+                throw Error("Настройки операции изменились.");
+            };
+            const native = createNativeGitCapability({
+              root,
+              runner: this.runner,
+              journal: this.nativeGitJournal,
+              env: { HOME: this.home },
+              owner: async () => {
+                await verify();
+                return {
+                  scope: owner,
+                  projectPath: await realpath(project.path),
+                  registryRevision: nativeIntent([
+                    settings.version,
+                    binding ? worktreeContextRef(binding) : null,
+                    ...(binding ? [physicalOwner] : []),
+                  ]),
+                };
               },
-              { existingOnly: true },
-            );
+            });
+            const git: GitMergeContext["git"] = (args, stdin) =>
+              this.runner.command(
+                "git",
+                args,
+                root,
+                {
+                  HOME: this.home,
+                  GIT_TERMINAL_PROMPT: "0",
+                  GIT_NO_LAZY_FETCH: "1",
+                  GIT_ALLOW_PROTOCOL: "",
+                },
+                stdin,
+              );
+            const reader = new GitWorkspaceReader({
+              scope: owner,
+              root,
+              verify,
+              git: async (args) => (await git(args)).stdout,
+            });
+            sanitize = (value: string) =>
+              sanitizeRepositoryLog(
+                value,
+                settings.value.env.map((r) => r.value).filter(Boolean),
+              );
+            await verify();
+            try {
+              const value = await action({
+                scope: owner,
+                root,
+                ownerKey: nativeIntent([
+                  owner,
+                  root,
+                  settings.version,
+                  physicalOwner,
+                ]),
+                verify,
+                git,
+                native,
+                snapshot: () => reader.snapshot(),
+                sanitizeDiagnostics: sanitize,
+              });
+              completed = value;
+              await verify();
+              if (
+                binding &&
+                typeof owner !== "string" &&
+                JSON.stringify(
+                  await this.clones.resolveNativeOperationOwner(owner),
+                ) !== JSON.stringify(binding)
+              )
+                throw Error("Владелец клона изменился после операции.");
+              return value;
+            } catch (error) {
+              actionFailure = error;
+              throw preserveGitMergeCleanupError(
+                error,
+                sanitize(
+                  error instanceof Error ? error.message : String(error),
+                ),
+              );
+            }
+          };
+          try {
+            return await (binding && !readOnlyProbe
+              ? this.clones.store.withRepositoryLock(
+                  binding.repositoryKey,
+                  run,
+                  { existingOnly: true },
+                )
+              : run());
           } catch (error) {
-            const value = completed?.value;
             if (
-              value &&
-              typeof value === "object" &&
-              "status" in value &&
-              "worktreePublished" in value &&
-              "indexPublished" in value
+              completed &&
+              typeof completed === "object" &&
+              "log" in completed &&
+              ("outcome" in completed || "status" in completed)
             ) {
-              const result = value as T & GitConflictSaveResult;
-              // lockRetained describes the engine's index.lock only. A lifecycle
-              // release failure may be a failed fsync AFTER a successful unlink:
-              // do not claim that the lifecycle lock is still present or owned.
-              const cleanup = `Снятие служебной блокировки не подтверждено: ${diagnostic(error)}`;
               return {
-                ...result,
-                status: result.status === "saved" ? "uncertain" : result.status,
-                message: `${result.message} Снятие служебной блокировки не подтверждено; не повторяйте автоматически.`,
-                log: [result.log, cleanup].filter(Boolean).join("\n"),
+                ...completed,
+                ...("outcome" in completed
+                  ? { outcome: "uncertain" }
+                  : { status: "uncertain" }),
+                log: sanitize(
+                  String(completed.log) +
+                    "\nИтоговая проверка владельца/служебной блокировки не пройдена: " +
+                    (error instanceof Error ? error.message : String(error)),
+                ),
               } as T;
             }
-            if (
-              value &&
-              typeof value === "object" &&
-              "operation" in value &&
-              ["rebase", "cherry-pick", "revert"].includes(
-                String(value.operation),
-              ) &&
-              "mutationStarted" in value &&
-              "status" in value
-            ) {
-              const result = value as T &
-                (GitRebaseOperationResult | GitSequencerOperationResult);
-              return {
-                ...result,
-                status: ["success", "conflict"].includes(result.status)
-                  ? "uncertain"
-                  : result.status,
-                message: `${result.message} Снятие служебной блокировки не подтверждено; не повторяйте автоматически.`,
-                log: [
-                  result.log,
-                  `Снятие служебной блокировки не подтверждено: ${diagnostic(error)}`,
-                ]
-                  .filter(Boolean)
-                  .join("\n"),
-              } as T;
-            }
-            // Preserve the original action failure if finally/release replaced it.
-            // Canceled/failed prepare (even one that created a private ticket) is
-            // still a rejection, never an issued preview or a fabricated result.
-            const message = failure
-              ? diagnostic(failure.error)
-              : diagnostic(error);
-            throw Error(
-              failure && failure.error !== error
-                ? `${message}\nСнятие служебной блокировки не подтверждено: ${diagnostic(error)}`
-                : message,
+            // A finally/release failure must not erase the original action
+            // failure. Both diagnostics pass through the same secret filter.
+            const describe = (value: unknown) =>
+              value instanceof Error ? value.message : String(value);
+            throw preserveGitMergeCleanupError(
+              error,
+              sanitize(
+                actionFailure && describe(actionFailure) !== describe(error)
+                  ? `${describe(actionFailure)}\n${describe(error)}`
+                  : describe(error),
+              ),
             );
           }
-        });
+        };
+        return readOnlyProbe
+          ? admit()
+          : this.exclusive(scopeProjectId(owner), admit);
       }),
     );
   }
-  /** Fresh scoped settings/owner admission spans the entire action, never a stale closure. */
   private async gitCommitContext<T>(
     scope: ScopeRef,
     action: (context: GitCommitContext) => Promise<T>,
@@ -2308,6 +2172,7 @@ export class HostService extends EventEmitter {
               const secrets = settings.document.value.env
                 .map((row) => row.value)
                 .filter(Boolean);
+              const physicalOwner = this.nativeCloneOwnerProof(binding);
               const verify = async () => {
                 this.check();
                 assertReadActive();
@@ -2345,6 +2210,11 @@ export class HostService extends EventEmitter {
                       "Владелец клона изменился. Коммит в основной папке запрещён.",
                     );
                   await this.clones.store.assertOwned(row);
+                  if (
+                    JSON.stringify(this.nativeCloneOwnerProof(binding)) !==
+                    JSON.stringify(physicalOwner)
+                  )
+                    throw Error("Физический владелец клона изменился.");
                 }
               };
               const git: GitCommitContext["git"] = (args, options) => {
@@ -2367,6 +2237,15 @@ export class HostService extends EventEmitter {
               };
               const run = async () => {
                 await verify();
+                await this.nativeGitJournal.assertAdmission(root, {
+                  scope: owner,
+                  registryRevision: nativeIntent([
+                    settings.document.version,
+                    binding ? worktreeContextRef(binding) : null,
+                    ...(binding ? [physicalOwner] : []),
+                  ]),
+                  projectPath: await realpath(project.path),
+                });
                 const reader = new GitWorkspaceReader({
                   scope: owner,
                   root,
@@ -2385,21 +2264,24 @@ export class HostService extends EventEmitter {
                     ]),
                     verify,
                     git,
-                    refTransaction: this.runner.gitRefTransaction
-                      ? (args, input, verifyPrepared) =>
-                          this.runner.gitRefTransaction!(
-                            args,
-                            root,
-                            {
-                              HOME: this.home,
-                              GIT_TERMINAL_PROMPT: "0",
-                              GIT_NO_LAZY_FETCH: "1",
-                              GIT_ALLOW_PROTOCOL: "",
-                            },
-                            input,
-                            verifyPrepared,
-                          )
-                      : undefined,
+                    native: createNativeGitCapability({
+                      root,
+                      runner: this.runner,
+                      journal: this.nativeGitJournal,
+                      env: { HOME: this.home },
+                      owner: async () => {
+                        await verify();
+                        return {
+                          scope: owner,
+                          registryRevision: nativeIntent([
+                            settings.document.version,
+                            binding ? worktreeContextRef(binding) : null,
+                            ...(binding ? [physicalOwner] : []),
+                          ]),
+                          projectPath: await realpath(project.path),
+                        };
+                      },
+                    }),
                     snapshot: async () => {
                       const value = await reader.snapshot();
                       if (binding && value.branch !== binding.branch)
@@ -2442,6 +2324,7 @@ export class HostService extends EventEmitter {
                 ? this.clones.store.withRepositoryLock(
                     binding.repositoryKey,
                     run,
+                    { existingOnly: true },
                   )
                 : run();
             },
@@ -2517,6 +2400,23 @@ export class HostService extends EventEmitter {
                 ownerKey: JSON.stringify([id, root, settings.document.version]),
                 verify,
                 git,
+                native: createNativeGitCapability({
+                  root,
+                  runner: this.runner,
+                  journal: this.nativeGitJournal,
+                  env: { HOME: this.home },
+                  owner: async () => {
+                    await verify();
+                    return {
+                      scope: id,
+                      registryRevision: nativeIntent([
+                        settings.document.version,
+                        null,
+                      ]),
+                      projectPath: await realpath(project.path),
+                    };
+                  },
+                }),
                 sanitizeDiagnostics: (value) =>
                   sanitizeRepositoryLog(value, secrets),
                 privateGit: (args, indexFile) =>
@@ -2583,22 +2483,52 @@ export class HostService extends EventEmitter {
     return this.operation(() => this.gitConflictActions.execute(token));
   }
   async prepareGitRebaseOperation(input: GitRebaseOperationRequest) {
-    return this.gitRebaseOperations.prepare(
+    return this.gitNativeSequence.prepareRebase(
       gitRebaseOperationRequestSchema.parse(input),
     );
   }
   async executeGitRebaseOperation(input: string) {
     this.assertLaunchAllowed();
     const token = gitRebaseOperationTokenSchema.parse(input);
-    return this.operation(() => this.gitRebaseOperations.execute(token));
+    return this.operation(() => this.gitNativeSequence.executeRebase(token));
   }
   private async updateHandoffContext(
     context: GitCommitContext,
-    assertPublicationOwner?: () => void,
-  ): Promise<GitUpdateHandoffContext> {
-    const document = await this.state.read(scopeProjectId(context.scope));
-    const value = document.value;
+  ): Promise<NativeGitUpdateContext> {
+    const project = await this.project(scopeProjectId(context.scope));
+    const document = await this.state.read(project.id),
+      value = document.value;
     if (typeof context.scope !== "string") assertContextEnvironment(value.env);
+    const binding =
+      typeof context.scope === "string"
+        ? undefined
+        : await this.clones.resolveNativeOperationOwner(context.scope);
+    const physicalOwner = this.nativeCloneOwnerProof(binding);
+    const native =
+      context.native ??
+      createNativeGitCapability({
+        root: context.root,
+        runner: this.runner,
+        journal: this.nativeGitJournal,
+        env: { HOME: this.home },
+        owner: async () => {
+          await context.verify();
+          if (
+            JSON.stringify(this.nativeCloneOwnerProof(binding)) !==
+            JSON.stringify(physicalOwner)
+          )
+            throw Error("Владелец клона изменился.");
+          return {
+            scope: context.scope,
+            projectPath: await realpath(project.path),
+            registryRevision: nativeIntent([
+              document.version,
+              binding ? worktreeContextRef(binding) : null,
+              ...(binding ? [physicalOwner] : []),
+            ]),
+          };
+        },
+      });
     const env = Object.fromEntries(
       value.env.map((entry) => [entry.key, entry.value]),
     );
@@ -2606,9 +2536,7 @@ export class HostService extends EventEmitter {
       value.executable === "goga" ? this.goga : value.executable;
     return {
       ...context,
-      verifyOwner: context.verify,
-      verifyNextRebase: context.verify,
-      assertPublicationOwner,
+      native,
       topicsConfig: async () => {
         await context.verify();
         const output = await this.runner.command(
@@ -2620,65 +2548,24 @@ export class HostService extends EventEmitter {
         await context.verify();
         return output.stdout;
       },
-      isolatedGit: (args) =>
-        this.runner.command("git", args, context.root, {
-          HOME: this.home,
-          GIT_CONFIG: undefined,
-          GIT_CONFIG_GLOBAL: "/dev/null",
-          GIT_CONFIG_SYSTEM: "/dev/null",
-          GIT_CONFIG_NOSYSTEM: "1",
-          GIT_ATTR_NOSYSTEM: "1",
-          GIT_ATTR_GLOBAL: "/dev/null",
-          GIT_ATTR_SYSTEM: "/dev/null",
-          GIT_ATTR_SOURCE: undefined,
-          GIT_NAMESPACE: undefined,
-          GIT_REPLACE_REF_BASE: undefined,
-          GIT_EXEC_PATH: undefined,
-          GIT_EDITOR: ":",
-          GIT_SEQUENCE_EDITOR: "/usr/bin/false",
-          GIT_TERMINAL_PROMPT: "0",
-          GIT_NO_LAZY_FETCH: "1",
-          GIT_ALLOW_PROTOCOL: "",
-        }),
     };
   }
-  private async gitUpdateContext<T>(
+  private gitUpdateContext<T>(
     scope: ScopeRef,
-    action: (context: GitUpdateHandoffContext) => Promise<T>,
+    action: (context: NativeGitUpdateContext) => Promise<T>,
+    readOnlyProbe = false,
   ): Promise<T> {
-    let completed: T | undefined;
-    try {
-      return await this.gitCommitContext(scope, async (context) => {
-        const project = this.context.getStore()!.scopedProject;
-        const pin = this.rebasePublicationOwner(
-          project,
-          context.root,
-          this.binding(project),
-        );
-        completed = await action(await this.updateHandoffContext(context, pin));
-        return completed;
-      });
-    } catch (error) {
-      // A lifecycle/catalog failure after a write must never masquerade as an
-      // unstarted operation, nor enable a second attempt with the same ticket.
-      if (
-        completed &&
-        typeof completed === "object" &&
-        "status" in completed &&
-        "changed" in completed
-      ) {
-        const result = completed as unknown as GitUpdateHandoffResult;
-        return {
-          ...result,
-          status: "uncertain",
-          changed: true,
-          message:
-            "Git завершил попытку, но итоговая проверка владельца не прошла. Проверьте состояние вручную; повторный запуск не выполнялся.",
-          log: result.log + "\nИтоговая проверка владельца не пройдена.",
-        } as T;
-      }
-      throw error;
-    }
+    return this.gitNativeSequenceContext(
+      scope,
+      async (c) =>
+        action(
+          await this.updateHandoffContext({
+            ...c,
+            git: (args, options) => c.git(args, options?.stdin),
+          }),
+        ),
+      readOnlyProbe,
+    );
   }
   /** Capture and refusal probes are read-only and never re-enter the mutation
    * mutex held by the caller. Goga itself runs outside that offline read scope. */
@@ -2690,31 +2577,35 @@ export class HostService extends EventEmitter {
   ): Promise<T> {
     let attempt: object | undefined;
     try {
-      attempt = await this.gitWorkspaceRead(scope, async (_reader, context) => {
-        if (
-          (
-            await context.git(["symbolic-ref", "--quiet", "--short", "HEAD"])
-          ).stdout.trim() !== input.targetBranch
-        )
-          throw Error("Топик не является текущей веткой этого контекста.");
-        const sourceRef = (
-          await context.git([
-            "rev-parse",
-            "--symbolic-full-name",
-            "--verify",
-            input.sourceRef,
-          ])
-        ).stdout.trim();
-        if (
-          !/^refs\/(heads|remotes|desktop)\//.test(sourceRef) ||
-          sourceRef.includes("\n")
-        )
-          throw Error("Источник не является прямой веткой.");
-        return this.gitUpdateHandoff.capture(
-          await this.updateHandoffContext(context),
-          { ...input, sourceRef },
-        );
-      });
+      attempt = await this.gitUpdateContext(
+        scope,
+        async (context) => {
+          if (
+            (
+              await context.git(["symbolic-ref", "--quiet", "--short", "HEAD"])
+            ).stdout.trim() !== input.targetBranch
+          )
+            throw Error("Топик не является текущей веткой этого контекста.");
+          const sourceRef = (
+            await context.git([
+              "rev-parse",
+              "--symbolic-full-name",
+              "--verify",
+              input.sourceRef,
+            ])
+          ).stdout.trim();
+          if (
+            !/^refs\/(heads|remotes|desktop)\//.test(sourceRef) ||
+            sourceRef.includes("\n")
+          )
+            throw Error("Источник не является прямой веткой.");
+          return this.gitUpdateHandoff.captureAttempt(context, {
+            ...input,
+            sourceRef,
+          });
+        },
+        true,
+      );
     } catch {
       // Ineligible/unsupported handoff does not disable the ordinary Goga path.
     }
@@ -2723,14 +2614,11 @@ export class HostService extends EventEmitter {
     } catch (error) {
       if (attempt) {
         try {
-          const candidate = await this.gitWorkspaceRead(
+          const candidate = await this.gitUpdateContext(
             scope,
-            async (_reader, context) =>
-              this.gitUpdateHandoff.afterFailure(
-                await this.updateHandoffContext(context),
-                attempt!,
-                error,
-              ),
+            (context) =>
+              this.gitUpdateHandoff.afterFailure(context, attempt!, error),
+            true,
           );
           if (candidate) offer(candidate);
         } catch {
@@ -2751,14 +2639,14 @@ export class HostService extends EventEmitter {
     return this.operation(() => this.gitUpdateHandoff.execute(token));
   }
   async prepareGitSequencerOperation(input: GitSequencerOperationRequest) {
-    return this.gitSequencerOperations.prepare(
+    return this.gitNativeSequence.prepareSequencer(
       gitSequencerOperationRequestSchema.parse(input),
     );
   }
   async executeGitSequencerOperation(input: string) {
     this.assertLaunchAllowed();
     const token = gitSequencerOperationTokenSchema.parse(input);
-    return this.operation(() => this.gitSequencerOperations.execute(token));
+    return this.operation(() => this.gitNativeSequence.executeSequencer(token));
   }
   async prepareGitMergeOperation(input: GitMergeOperationRequest) {
     return this.gitMergeOperations.prepare(

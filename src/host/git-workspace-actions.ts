@@ -1,11 +1,10 @@
-import { createHash, randomBytes, randomUUID } from "node:crypto";
-import { constants, renameSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { type ScopeRef, scopeRefSchema } from "../shared/context";
+import { scopeRefSchema, type ScopeRef } from "../shared/context";
 import {
   gitCommitRequestSchema,
-  gitCommitTokenSchema,
   type GitCommitPreview,
   type GitCommitRequest,
   type GitCommitResult,
@@ -14,20 +13,16 @@ import {
   gitFilePathSchema,
   type GitWorkspaceSnapshot,
 } from "../shared/git-workspace";
-import { CommandExitError, GitRefTransactionError } from "./process";
-import { withPrivateGitRead, type PrivateGitRead } from "./git-private-read";
 import { withPrivateGitIndexWrite } from "./git-index-scope";
+import type { NativeGitCapability } from "./git-native-context";
+import { withPrivateGitRead, type PrivateGitRead } from "./git-private-read";
 
 export interface GitCommitContext {
   scope: ScopeRef;
   root: string;
   /** Complete owner and effective settings identity, reconstructed by HostService. */
   ownerKey: string;
-  refTransaction?: (
-    args: string[],
-    prepareInput: string,
-    verifyPrepared: (assertPreparedActive: () => void) => Promise<void>,
-  ) => Promise<{ stdout: string; stderr: string }>;
+  native?: NativeGitCapability;
   snapshot(): Promise<GitWorkspaceSnapshot>;
   verify(): Promise<void>;
   git(
@@ -200,24 +195,12 @@ function ident(raw: string) {
   if (!match) throw Error("Git не подтвердил настроенное авторство коммита.");
   return match[1];
 }
-async function syncDirectory(directory: string) {
-  const handle = await fs.open(
-    directory,
-    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-  );
-  try {
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-}
-
 /** Serial admission is supplied by HostService. Tickets never authorize a path or
  * a project by themselves: their context is reconstructed inside each operation. */
-export class GitWorkspaceActions {
-  private tickets = new Map<string, Ticket>();
+export abstract class GitWorkspaceActions {
+  protected tickets = new Map<string, Ticket>();
   constructor(
-    private readonly options: {
+    protected readonly options: {
       context: <T>(
         scope: ScopeRef,
         action: (context: GitCommitContext) => Promise<T>,
@@ -228,10 +211,10 @@ export class GitWorkspaceActions {
       afterPublishIndex?: (source: string, target: string) => undefined;
     },
   ) {}
-  private now() {
+  protected now() {
     return this.options.now?.() ?? Date.now();
   }
-  private git(
+  protected git(
     context: GitCommitContext,
     args: string[],
     filters: string[] = [],
@@ -248,7 +231,7 @@ export class GitWorkspaceActions {
       options,
     );
   }
-  private withPolicy<T>(
+  protected withPolicy<T>(
     context: GitCommitContext,
     action: (policy: PrivateGitRead) => Promise<T>,
     options?: { stdin?: string; indexFile?: string },
@@ -313,7 +296,7 @@ export class GitWorkspaceActions {
       filters,
     };
   }
-  private async capture(
+  protected async capture(
     context: GitCommitContext,
     paths: string[],
   ): Promise<State> {
@@ -522,553 +505,5 @@ export class GitWorkspaceActions {
       return preview;
     });
   }
-  async execute(input: string): Promise<GitCommitResult> {
-    const token = gitCommitTokenSchema.parse(input),
-      ticket = this.tickets.get(token);
-    this.tickets.delete(token);
-    if (!ticket || ticket.preview.expiresAt <= this.now())
-      throw Error("Подтверждение коммита истекло или уже использовано.");
-    return this.options.context(ticket.preview.scope, async (context) => {
-      if (ticket.preview.expiresAt <= this.now())
-        throw Error("Подтверждение коммита истекло; подтвердите заново.");
-      if (
-        context.root !== ticket.preview.root ||
-        context.ownerKey !== ticket.ownerKey ||
-        JSON.stringify(context.scope) !== JSON.stringify(ticket.preview.scope)
-      )
-        throw stale();
-      if (!context.refTransaction)
-        throw Error(
-          "Исполнитель не поддерживает безопасную транзакцию Git refs; коммит не начат.",
-        );
-      const current = await this.capture(context, ticket.preview.paths);
-      if (JSON.stringify(current) !== JSON.stringify(ticket.state))
-        throw stale();
-      return this.transact(context, ticket);
-    });
-  }
-  private async transact(
-    context: GitCommitContext,
-    ticket: Ticket,
-  ): Promise<GitCommitResult> {
-    const root = context.root,
-      gitdir = path.join(root, ".git"),
-      realIndex = path.join(gitdir, "index"),
-      lock = path.join(gitdir, "index.lock"),
-      recovery = path.join(gitdir, `goga-commit-${randomUUID()}`),
-      temporary = path.join(recovery, "index"),
-      publication = path.join(recovery, "publication"),
-      candidate = path.join(recovery, "lock"),
-      journalFile = path.join(recovery, "journal.json");
-    await fs.mkdir(recovery, { mode: 0o700 });
-    const journal = {
-      version: 2,
-      pid: process.pid,
-      root,
-      scope: ticket.preview.scope,
-      paths: ticket.preview.paths,
-      old: ticket.state.head,
-      new: null as string | null,
-      reference: ticket.state.reference,
-      headIdentity: ticket.state.headIdentity,
-      originalIndexFingerprint: ticket.state.index,
-      expectedBlobs: ticket.state.blobs,
-      expectedModes: ticket.state.modes,
-      privateIndex: temporary,
-      publication,
-      realIndex,
-      state: "prepared",
-    };
-    const syncedWrite = async (filename: string, bytes: string | Buffer) => {
-      const handle = await fs.open(filename, "w", 0o600);
-      try {
-        await handle.writeFile(bytes);
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-    };
-    const writeJournal = async () => {
-      const next = path.join(recovery, "journal.next");
-      await syncedWrite(next, JSON.stringify(journal, null, 2));
-      await fs.rename(next, journalFile);
-      await syncDirectory(recovery);
-    };
-    const lockBytes = JSON.stringify({
-      version: 2,
-      pid: process.pid,
-      recoveryPath: recovery,
-    });
-    let lockOwned = false,
-      retain = false,
-      attempted = false,
-      indexPublished = false,
-      knownNotCommitted = true,
-      committed: string | undefined,
-      log = "",
-      lockIdentity = "";
-    const ownLock = async () => {
-      const info = await stat(lock);
-      return (
-        !!info &&
-        `${info.dev}:${info.ino}` === lockIdentity &&
-        info.isFile() &&
-        (await fs.readFile(lock, "utf8")) === lockBytes
-      );
-    };
-    const assertHead = async (oid: string | null) => {
-      const actual = await regularFile(path.join(gitdir, "HEAD"));
-      if (!actual) throw stale();
-      if (ticket.state.reference) {
-        if (
-          digest(actual.bytes) !== ticket.state.headIdentity ||
-          (
-            await this.git(context, ["symbolic-ref", "--quiet", "HEAD"])
-          ).stdout.trim() !== ticket.state.reference
-        )
-          throw stale();
-      } else if (actual.bytes.toString("utf8").trim() !== oid) throw stale();
-    };
-    const refArgs = (message: string) => [
-      ...safeArgs,
-      `--git-dir=${gitdir}`,
-      `--work-tree=${root}`,
-      "update-ref",
-      "-m",
-      message,
-      "--stdin",
-    ];
-    const result = (
-      status: GitCommitResult["status"],
-      message: string,
-    ): GitCommitResult => ({
-      scope: ticket.preview.scope,
-      status,
-      ...(committed ? { commit: committed } : {}),
-      message,
-      log,
-      indexPublished,
-      ...(retain ? { recoveryPath: recovery } : {}),
-    });
-    try {
-      await writeJournal();
-      const handle = await fs.open(candidate, "wx", 0o600);
-      try {
-        await handle.writeFile(lockBytes);
-        await handle.sync();
-        const info = await handle.stat({ bigint: true });
-        lockIdentity = `${info.dev}:${info.ino}`;
-      } finally {
-        await handle.close();
-      }
-      try {
-        await fs.link(candidate, lock);
-        lockOwned = true;
-        await syncDirectory(gitdir);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "EEXIST")
-          throw Error(
-            "Индекс Git занят: существует блокировка index.lock. Существующая блокировка не изменена.",
-          );
-        throw error;
-      }
-      if (
-        JSON.stringify(await this.capture(context, ticket.preview.paths)) !==
-        JSON.stringify(ticket.state)
-      )
-        throw stale();
-      const original = await regularFile(realIndex);
-      if (original) {
-        await syncedWrite(temporary, original.bytes);
-        await syncedWrite(
-          path.join(recovery, "original-index"),
-          original.bytes,
-        );
-      }
-      const config = await this.config(context),
-        existing = ticket.preview.paths.filter(
-          (name) => ticket.state.blobs[name] !== null,
-        ),
-        missing = ticket.preview.paths.filter(
-          (name) => ticket.state.blobs[name] === null,
-        );
-      if (!original)
-        await this.git(context, ["read-tree", "--empty"], config.filters, {
-          indexFile: temporary,
-        });
-      // Stage selected whole files once against the original index: unrelated
-      // stage entries/flags survive and Git's filemode/encoding rules are kept.
-      if (missing.length)
-        await this.git(
-          context,
-          ["update-index", "--force-remove", "-z", "--stdin"],
-          config.filters,
-          { stdin: missing.join("\0") + "\0", indexFile: temporary },
-        );
-      if (existing.length)
-        await this.withPolicy(
-          context,
-          async (policy) => {
-            await policy.git([
-              "add",
-              "--all",
-              "--pathspec-from-file=-",
-              "--pathspec-file-nul",
-            ]);
-            await policy.verify();
-          },
-          { stdin: existing.join("\0") + "\0", indexFile: temporary },
-        );
-      const selectedEntries = (
-        await this.git(
-          context,
-          ["ls-files", "--stage", "-z", "--", ...ticket.preview.paths],
-          config.filters,
-          { indexFile: temporary },
-        )
-      ).stdout
-        .split("\0")
-        .filter(Boolean);
-      const actualEntries: Record<string, { mode: string; blob: string }> =
-        Object.create(null);
-      for (const row of selectedEntries) {
-        const match = /^(100644|100755) ([a-f0-9]{40,64}) 0\t([\s\S]+)$/.exec(
-          row,
-        );
-        if (!match) throw Error("Неподдерживаемый тип выбранной записи Git.");
-        actualEntries[match[3]] = { mode: match[1], blob: match[2] };
-      }
-      for (const name of ticket.preview.paths)
-        if (
-          (actualEntries[name]?.blob ?? null) !== ticket.state.blobs[name] ||
-          (actualEntries[name]?.mode ?? null) !== ticket.state.modes[name]
-        )
-          throw stale();
-      const ready = await regularFile(temporary);
-      if (!ready) throw Error("Подготовленный индекс отсутствует.");
-      await syncedWrite(publication, ready.bytes);
-      await syncDirectory(recovery);
-      // Commit-tree gets HEAD plus ONLY the selected canonical index entries.
-      // The full publication index is kept separately, never used as the tree.
-      await this.git(
-        context,
-        ticket.state.head
-          ? ["read-tree", ticket.state.head]
-          : ["read-tree", "--empty"],
-        config.filters,
-        { indexFile: temporary },
-      );
-      const zero = "0".repeat(
-        ticket.state.head?.length ??
-          Object.values(ticket.state.blobs).find(Boolean)?.length ??
-          40,
-      );
-      const indexInfo = ticket.preview.paths
-        .map((name) =>
-          actualEntries[name]
-            ? `${actualEntries[name].mode} ${actualEntries[name].blob} 0\t${name}\0`
-            : `0 ${zero}\t${name}\0`,
-        )
-        .join("");
-      await this.git(
-        context,
-        ["update-index", "-z", "--index-info"],
-        config.filters,
-        { stdin: indexInfo, indexFile: temporary },
-      );
-      const tree = (
-        await this.git(context, ["write-tree"], config.filters, {
-          indexFile: temporary,
-        })
-      ).stdout.trim();
-      await syncedWrite(temporary, ready.bytes);
-      await syncDirectory(recovery);
-      if (
-        ticket.state.head &&
-        tree ===
-          (
-            await this.git(
-              context,
-              ["rev-parse", `${ticket.state.head}^{tree}`],
-              config.filters,
-            )
-          ).stdout.trim()
-      )
-        return result(
-          "not-committed",
-          "Выбранные файлы не содержат изменений для коммита. Исходный индекс сохранён.",
-        );
-      const last = await this.capture(context, ticket.preview.paths);
-      if (
-        JSON.stringify({ ...last, revision: ticket.state.revision }) !==
-          JSON.stringify(ticket.state) ||
-        !(await ownLock())
-      )
-        throw stale();
-      await context.verify();
-      if (ticket.preview.expiresAt <= this.now())
-        throw Error("Подтверждение коммита истекло; подтвердите заново.");
-      attempted = true;
-      let newCommit: string;
-      try {
-        const output = await this.git(
-          context,
-          [
-            "commit-tree",
-            tree,
-            ...(ticket.state.head ? ["-p", ticket.state.head] : []),
-            ...(ticket.state.signing ? ["-S"] : []),
-            "-F",
-            "-",
-          ],
-          config.filters,
-          { stdin: ticket.preview.message },
-        );
-        log = output.stderr;
-        newCommit = output.stdout.trim();
-        if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(newCommit))
-          throw Error("Git не подтвердил объект коммита.");
-      } catch (error) {
-        log +=
-          error instanceof CommandExitError
-            ? `${error.stdout}${error.stderr}`
-            : String(error);
-        return result(
-          "not-committed",
-          "Git не создал подтверждённый объект коммита. Ветки и исходный индекс не изменены.",
-        );
-      }
-      // No ref has moved yet. Validate the object and all selected tree modes.
-      const contents = (
-        await this.git(context, ["cat-file", "-p", newCommit], config.filters)
-      ).stdout;
-      const headers = contents.split("\n\n", 1)[0].split("\n"),
-        parents = headers
-          .filter((line) => line.startsWith("parent "))
-          .map((line) => line.slice(7));
-      if (
-        JSON.stringify(parents) !==
-          JSON.stringify(ticket.state.head ? [ticket.state.head] : []) ||
-        ident(headers.find((line) => line.startsWith("author "))!.slice(7)) !==
-          ticket.state.author ||
-        ident(
-          headers.find((line) => line.startsWith("committer "))!.slice(10),
-        ) !== ticket.state.committer
-      )
-        throw Error(
-          "Созданный объект коммита не соответствует подтверждённому авторству или родителю.",
-        );
-      const changed = (
-        await this.git(
-          context,
-          [
-            "diff-tree",
-            "--root",
-            "--no-commit-id",
-            "--name-only",
-            "-r",
-            "-z",
-            "--no-renames",
-            newCommit,
-          ],
-          config.filters,
-        )
-      ).stdout
-        .split("\0")
-        .filter(Boolean);
-      if (
-        !changed.length ||
-        changed.some((name) => !ticket.preview.paths.includes(name))
-      )
-        throw Error(
-          "Состав созданного дерева не соответствует выбранным файлам.",
-        );
-      const treeRows = (
-          await this.git(
-            context,
-            ["ls-tree", "-z", newCommit, "--", ...ticket.preview.paths],
-            config.filters,
-          )
-        ).stdout
-          .split("\0")
-          .filter(Boolean),
-        treeEntries: Record<string, { mode: string; blob: string }> =
-          Object.create(null);
-      for (const row of treeRows) {
-        const match = /^(100644|100755) blob ([a-f0-9]+)\t([\s\S]+)$/.exec(row);
-        if (!match) throw Error("Неподдерживаемый тип созданного дерева Git.");
-        treeEntries[match[3]] = { mode: match[1], blob: match[2] };
-      }
-      for (const name of ticket.preview.paths)
-        if (
-          (treeEntries[name]?.blob ?? null) !== ticket.state.blobs[name] ||
-          (treeEntries[name]?.mode ?? null) !== ticket.state.modes[name]
-        )
-          throw Error(
-            "Содержимое или режим файла отличаются от подтверждённых.",
-          );
-      journal.new = newCommit;
-      journal.state = "ref-preparing";
-      await writeJournal();
-      try {
-        const update = await context.refTransaction!(
-          refArgs(`commit: ${ticket.preview.message.split(/\r?\n/, 1)[0]}`),
-          `start\nupdate HEAD ${newCommit} ${ticket.state.head ?? zero}\nprepare\n`,
-          async (assertPreparedActive) => {
-            // Git owns HEAD+resolved ref locks. Raw and recursive symbolic identity
-            // must both match: a branch can itself become a symbolic-ref chain.
-            await assertHead(ticket.state.head);
-            const prepared = await this.capture(context, ticket.preview.paths);
-            if (
-              JSON.stringify({
-                ...prepared,
-                revision: ticket.state.revision,
-              }) !== JSON.stringify(ticket.state) ||
-              !(await ownLock()) ||
-              (await indexFingerprint(root)) !== ticket.state.index
-            )
-              throw stale();
-            await context.verify();
-            if (ticket.preview.expiresAt <= this.now())
-              throw Error("Подтверждение коммита истекло; подтвердите заново.");
-            assertPreparedActive();
-            journal.state = "ref-commit-authorized";
-            await writeJournal();
-            assertPreparedActive();
-          },
-        );
-        log += update.stdout + update.stderr;
-      } catch (error) {
-        log +=
-          error instanceof GitRefTransactionError
-            ? `${error.stdout}${error.stderr}\n${error.message}`
-            : String(error);
-        if (error instanceof GitRefTransactionError && !error.commitSent) {
-          knownNotCommitted = true;
-          return result(
-            "not-committed",
-            "Коммит не применён: подтверждение транзакции отклонено. Ветки и исходный индекс не изменены.",
-          );
-        }
-        knownNotCommitted = false;
-        retain = true;
-        journal.state = "ref-outcome-uncertain";
-        await writeJournal().catch(() => {});
-        return result(
-          "uncertain",
-          "Результат публикации Git ref неизвестен. Не повторяйте коммит; сохранены журнал и индексы для проверки.",
-        );
-      }
-      committed = newCommit;
-      knownNotCommitted = false;
-      journal.state = "committed-unpublished";
-      await writeJournal();
-      // A second read-only prepared transaction closes the ACK→index gap. It
-      // pins HEAD and its referent while the real index is atomically published.
-      const verifiedPublication = await context.refTransaction!(
-        refArgs("goga: verify index publication"),
-        `start\nverify HEAD ${newCommit}\nprepare\n`,
-        async (assertPreparedActive) => {
-          await assertHead(newCommit);
-          await context.verify();
-          if (
-            !(await ownLock()) ||
-            (await indexFingerprint(root)) !== ticket.state.index
-          )
-            throw stale();
-          const expected = await regularFile(publication);
-          if (!expected || digest(expected.bytes) !== digest(ready.bytes))
-            throw Error("Подготовленный индекс изменился.");
-          // NO await between guard, publication and its recorded outcome: timeout
-          // cannot release native ref locks and allow this write to happen later.
-          this.options.beforePublishIndex?.(publication, realIndex);
-          assertPreparedActive();
-          renameSync(publication, realIndex);
-          indexPublished = true;
-          this.options.afterPublishIndex?.(publication, realIndex);
-          await syncDirectory(gitdir);
-          assertPreparedActive();
-          journal.state = "published";
-          await writeJournal();
-          assertPreparedActive();
-        },
-      );
-      log += verifiedPublication.stdout + verifiedPublication.stderr;
-      // Git may ACK a successful read-only transaction yet fail to unlink its
-      // native ref locks. Never discard that warning or delete recovery state;
-      // those locks belong to Git, not to our owned index-lock cleanup.
-      if (verifiedPublication.stderr.trim()) {
-        retain = true;
-        journal.state = "published-native-warning";
-        await writeJournal().catch(() => {});
-        return result(
-          "committed",
-          "Коммит создан и индекс опубликован, но Git сообщил предупреждение при завершении транзакции. Не повторяйте коммит; проверьте сохранённый журнал и блокировки Git.",
-        );
-      }
-      return result(
-        "committed",
-        "Локальный коммит создан. Посторонние подготовленные изменения сохранены.",
-      );
-    } catch (error) {
-      if (!attempted) throw error;
-      log += `\n${error instanceof GitRefTransactionError ? `${error.message}\n${error.stdout}${error.stderr}` : error instanceof Error ? error.message : String(error)}`;
-      if (knownNotCommitted && !committed)
-        return result(
-          "not-committed",
-          "Объект не применён к ветке. Ветки и исходный индекс не изменены.",
-        );
-      retain = true;
-      journal.state = indexPublished
-        ? "published-needs-check"
-        : committed
-          ? "committed-unpublished"
-          : "uncertain";
-      await writeJournal().catch(() => {});
-      return result(
-        committed ? "committed" : "uncertain",
-        indexPublished
-          ? "Коммит создан и индекс опубликован, но окончательное подтверждение не получено. Не повторяйте коммит; сохранён материал восстановления."
-          : committed
-            ? "Коммит создан, но индекс не опубликован. Не повторяйте коммит; сохранены журнал, частный индекс и блокировка."
-            : "Результат операции неизвестен. Не повторяйте коммит; проверьте сохранённый журнал и HEAD.",
-      );
-    } finally {
-      if (!retain) {
-        try {
-          if (lockOwned) {
-            if (!(await ownLock()))
-              throw Error(
-                "Владелец блокировки Git изменился; очистка остановлена.",
-              );
-            await fs.unlink(lock);
-            await syncDirectory(gitdir);
-          }
-          await fs.rm(recovery, { recursive: true, force: true });
-        } catch (error) {
-          if (!attempted) throw error;
-          retain = true;
-          journal.state = indexPublished
-            ? "published-needs-cleanup"
-            : committed
-              ? "committed-unpublished"
-              : knownNotCommitted
-                ? "not-committed-needs-cleanup"
-                : "uncertain";
-          await writeJournal().catch(() => {});
-          log += `\n${error instanceof Error ? error.message : String(error)}`;
-          return result(
-            committed
-              ? "committed"
-              : knownNotCommitted
-                ? "not-committed"
-                : "uncertain",
-            committed
-              ? "Коммит создан, но очистка служебного состояния не завершена. Не повторяйте коммит; проверьте сохранённый журнал."
-              : "Очистка служебного состояния Git не завершена. Перед повторением проверьте сохранённый журнал и HEAD.",
-          );
-        }
-      }
-    }
-  }
+  abstract execute(input: string): Promise<GitCommitResult>;
 }

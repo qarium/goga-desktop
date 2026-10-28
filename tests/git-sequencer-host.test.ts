@@ -1,3 +1,4 @@
+import { startNativeHostOperation } from "./helpers/native-host-operation";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -83,12 +84,10 @@ async function fixture(
       await fs.writeFile(path.join(root, n), "local\n");
     await git(root, ["commit", "-am", "local"]);
     const original = (await git(root, ["rev-parse", "HEAD"])).stdout.trim();
-    await expect(
-      git(root, [
-        operation,
-        ...(operation === "revert" ? [...sources].reverse() : sources),
-      ]),
-    ).rejects.toThrow();
+    await startNativeHostOperation(host, scope, {
+      operation,
+      commits: operation === "revert" ? [...sources].reverse() : sources,
+    });
     const first = operation === "revert" ? "second" : "first",
       second = operation === "revert" ? "first" : "second";
     await fs.writeFile(path.join(root, first), "resolved first\n");
@@ -107,6 +106,7 @@ async function fixture(
       registry,
       git,
       original,
+      branch,
       second,
       dispose,
     };
@@ -139,7 +139,16 @@ for (const operation of ["cherry-pick", "revert"] as const)
         });
         const r = await f.host.executeGitSequencerOperation(p.token);
         expect(r.status, r.log).toBe("conflict");
+        expect(r.native).toMatchObject({
+          outcome: "conflicts",
+          processSettled: true,
+          verifiedUnrelatedData: true,
+          recovery: "retained",
+        });
         expect(r.lockRetained).toBe(false);
+        await expect(
+          f.host.executeGitSequencerOperation(p.token),
+        ).rejects.toThrow();
         expect((await f.host.readGitWorkspace(f.scope)).operation).toBe(
           operation,
         );
@@ -170,6 +179,20 @@ for (const operation of ["cherry-pick", "revert"] as const)
           }),
           r = await f.host.executeGitSequencerOperation(p.token);
         expect(r.status, r.log).toBe("success");
+        expect(
+          (
+            await f.git(f.root, ["symbolic-ref", "--short", "HEAD"])
+          ).stdout.trim(),
+        ).toBe(f.branch);
+        expect(r.native).toMatchObject({
+          outcome: "completed",
+          processSettled: true,
+          verifiedUnrelatedData: true,
+          recovery: "removed",
+        });
+        await expect(
+          f.host.executeGitSequencerOperation(p.token),
+        ).rejects.toThrow();
         expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("none");
         if (f.record) {
           expect((await f.git(f.source, ["rev-parse", "HEAD"])).stdout).toBe(
@@ -194,8 +217,28 @@ for (const operation of ["cherry-pick", "revert"] as const)
           }),
           r = await f.host.executeGitSequencerOperation(p.token);
         expect(r.status, r.log).toBe("success");
+        expect(
+          (
+            await f.git(f.root, ["symbolic-ref", "--short", "HEAD"])
+          ).stdout.trim(),
+        ).toBe(f.branch);
+        expect(r.native).toMatchObject({
+          outcome: "completed",
+          processSettled: true,
+          verifiedUnrelatedData: true,
+          recovery: "removed",
+        });
+        await expect(
+          f.host.executeGitSequencerOperation(p.token),
+        ).rejects.toThrow();
         expect((await f.git(f.root, ["rev-parse", "HEAD"])).stdout.trim()).toBe(
           f.original,
+        );
+        expect(await fs.readFile(path.join(f.root, "first"), "utf8")).toBe(
+          "local\n",
+        );
+        expect(await fs.readFile(path.join(f.root, "second"), "utf8")).toBe(
+          "local\n",
         );
         expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("none");
         if (f.record) {

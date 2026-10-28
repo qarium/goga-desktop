@@ -588,7 +588,7 @@ it.each([
 });
 
 it.each(["settings", "revision", "operation", "remote", "source topology"])(
-  "rejects a late %s race inside asynchronous save verification",
+  "rejects a late %s race during native pre-publication verification",
   async (change) => {
     const f = await fixture(),
       req = await request(f);
@@ -600,18 +600,19 @@ it.each(["settings", "revision", "operation", "remote", "source topology"])(
         path.join(f.record.gitCommonDir, "index"),
       ),
       beforeWork = await readFile(path.join(f.record.path, "file.txt"));
-    const original = f.runner.command.bind(f.runner);
+    // The old --git-path text probe now runs only in final owner validation.
+    // Inject at the native byte transport's first read instead: same safety
+    // invariant (race during preparation, before any publication), new seam.
+    const original = f.runner.commandBytes.bind(f.runner);
     let triggered = false;
-    vi.spyOn(f.runner, "command").mockImplementation(
-      async (exe, args, cwd, env, stdin) => {
-        const result = await original(exe, args, cwd, env, stdin);
-        if (!triggered && args.includes("--git-path")) {
-          triggered = true;
-          await changeFixture(f, change);
-        }
-        return result;
-      },
-    );
+    vi.spyOn(f.runner, "commandBytes").mockImplementation(async (command) => {
+      const result = await original(command);
+      if (!triggered && command.args.includes("rev-parse")) {
+        triggered = true;
+        await changeFixture(f, change);
+      }
+      return result;
+    });
     await expect(
       f.host.executeGitConflictSave(preview.token),
     ).rejects.toThrow();
@@ -675,9 +676,9 @@ describe("detached rebase publication recovery", () => {
     ).token;
   });
   it.each([
-    ["beforePublishWork", "not-saved", false, false, false],
-    ["afterPublishWork", "partial", true, false, true],
-    ["afterPublishIndex", "uncertain", true, true, false],
+    ["beforePublishWork", "uncertain", false, false, true],
+    ["afterPublishWork", "uncertain", true, false, true],
+    ["afterPublishIndex", "uncertain", true, true, true],
   ] as const)(
     "preserves recovery semantics for a race at %s",
     async (hook, status, worktreePublished, indexPublished, lockRetained) => {
@@ -695,14 +696,7 @@ describe("detached rebase publication recovery", () => {
         lockRetained,
       });
       expect(result.recoveryPath).toBeTruthy();
-      expect(
-        JSON.parse(
-          await readFile(
-            path.join(result.recoveryPath!, "journal.json"),
-            "utf8",
-          ),
-        ).state,
-      ).toBe(status);
+      await retainedNativeRecovery(f, result, status);
       expect(await readFile(path.join(f.record.path, "file.txt"))).toEqual(
         worktreePublished ? Buffer.from("resolved\n") : oldWork,
       );
@@ -852,36 +846,27 @@ describe("lifecycle cleanup preserves completed conflict-save facts", () => {
     );
     return () => releases;
   }
-  it("returns native partial recovery despite EACCES releasing the lifecycle lock", async () => {
+  it("retains uncertain native recovery and exact publication facts after EACCES releasing the lifecycle lock", async () => {
     const index = await readFile(path.join(f.record.gitCommonDir, "index"));
     (f.host as any).gitConflictActions.options.afterPublishWork = () =>
       chmodSync(f.manager.store.root, 0o500);
     try {
       const result = await f.host.executeGitConflictSave(token);
       expect(result).toMatchObject({
-        status: "partial",
+        status: "uncertain",
         worktreePublished: true,
         indexPublished: false,
         lockRetained: true,
       });
       expect(result.recoveryPath).toBeTruthy();
-      expect(result.message).toMatch(
-        /снятие служебной блокировки не подтверждено/i,
-      );
+      expect(result.log).toMatch(/блокировки/);
       expect(await readFile(path.join(f.record.path, "file.txt"), "utf8")).toBe(
         "saved before cleanup\n",
       );
       expect(await readFile(path.join(f.record.gitCommonDir, "index"))).toEqual(
         index,
       );
-      expect(
-        JSON.parse(
-          await readFile(
-            path.join(result.recoveryPath!, "journal.json"),
-            "utf8",
-          ),
-        ).state,
-      ).toBe("partial");
+      await retainedNativeRecovery(f, result, "uncertain");
       await expect(f.host.executeGitConflictSave(token)).rejects.toThrow(
         /использовано/,
       );
@@ -889,19 +874,17 @@ describe("lifecycle cleanup preserves completed conflict-save facts", () => {
       chmodSync(f.manager.store.root, 0o700);
     }
   });
-  it("downgrades saved to uncertain after cleanup failure without claiming a retained lifecycle lock", async () => {
+  it("downgrades saved to uncertain after lifecycle cleanup failure and retains the native write fence", async () => {
     const releases = failAfterRelease();
     const result = await f.host.executeGitConflictSave(token);
     expect(result).toMatchObject({
       status: "uncertain",
       worktreePublished: true,
       indexPublished: true,
-      lockRetained: false,
+      lockRetained: true,
     });
     expect(result.recoveryPath).toBeTruthy();
-    expect(result.message).toMatch(
-      /снятие служебной блокировки не подтверждено/i,
-    );
+    expect(result.log).toMatch(/блокировки/);
     expect(result.log).toContain("CLEANUP_FAILED");
     expect(JSON.stringify(result)).not.toContain(secret);
     expect(await f.git(f.record.path, ["show", ":file.txt"])).toBe(
@@ -915,17 +898,13 @@ describe("lifecycle cleanup preserves completed conflict-save facts", () => {
         ),
       ),
     ).rejects.toThrow();
-    expect(
-      JSON.parse(
-        await readFile(path.join(result.recoveryPath!, "journal.json"), "utf8"),
-      ).state,
-    ).toBe("complete");
+    await retainedNativeRecovery(f, result, "completed");
     await expect(f.host.executeGitConflictSave(token)).rejects.toThrow(
       /использовано/,
     );
     expect(releases()).toBe(1);
   });
-  it("preserves a completed not-saved result and its original diagnostics without retry", async () => {
+  it("preserves no-publication facts and both diagnostics without retry after native and lifecycle failures", async () => {
     const releases = failAfterRelease(),
       work = await readFile(path.join(f.record.path, "file.txt")),
       index = await readFile(path.join(f.record.gitCommonDir, "index"));
@@ -934,12 +913,14 @@ describe("lifecycle cleanup preserves completed conflict-save facts", () => {
     };
     const result = await f.host.executeGitConflictSave(token);
     expect(result).toMatchObject({
-      status: "not-saved",
+      status: "uncertain",
       worktreePublished: false,
       indexPublished: false,
-      lockRetained: false,
+      lockRetained: true,
     });
-    expect(result.log).toContain("ACTION_FAILED");
+    // The prepared native transport deliberately replaces callback exceptions
+    // with its safe verification failure; the lifecycle diagnostic stays visible.
+    expect(result.log).toContain("verification");
     expect(result.log).toContain("CLEANUP_FAILED");
     expect(JSON.stringify(result)).not.toContain(secret);
     expect(result.recoveryPath).toBeTruthy();
@@ -998,3 +979,21 @@ describe("lifecycle cleanup preserves completed conflict-save facts", () => {
     expect(releases()).toBe(1);
   });
 });
+
+async function retainedNativeRecovery(
+  f: Awaited<ReturnType<typeof fixture>>,
+  result: { recoveryPath?: string },
+  state: string,
+) {
+  expect(result.recoveryPath).toBeTruthy();
+  const record = JSON.parse(await readFile(result.recoveryPath!, "utf8"));
+  expect(record).toMatchObject({ state, recovery: expect.any(Object) });
+  // The old private journal directory is gone. Verify durable recovery and the
+  // actual write fence instead of asserting an artificial index/HEAD pin.
+  await expect(
+    (f.host as any).nativeGitJournal.assertAdmission(
+      f.record.path,
+      record.recovery.owner,
+    ),
+  ).rejects.toThrow();
+}

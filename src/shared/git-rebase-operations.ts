@@ -1,3 +1,4 @@
+import type { NativeGitOperationResult } from "./git-native-operation";
 import { z } from "zod";
 import { scopeRefSchema, type ScopeRef } from "./context";
 import { gitRevisionSchema } from "./git-workspace";
@@ -37,11 +38,12 @@ export interface GitRebaseOperationResult {
   status: "success" | "conflict" | "error" | "uncertain";
   /** True also when native worktree writes may have occurred but cannot be verified. */
   changed: boolean;
-  mutationStarted: boolean;
-  worktreeRestored: boolean;
-  indexPublished: boolean;
-  headPublished: boolean;
-  metadataCleared: boolean;
+  native?: NativeGitOperationResult;
+  mutationStarted?: boolean;
+  worktreeRestored?: boolean;
+  indexPublished?: boolean;
+  headPublished?: boolean;
+  metadataCleared?: boolean;
   /** Continuation facts; count includes partial object promotion before failure. */
   /** Complete object-promotion step, not a claim of zero writes when false. */
   objectsPublished?: boolean;
@@ -50,14 +52,14 @@ export interface GitRebaseOperationResult {
   branchPublished?: boolean;
   metadataPublished?: boolean;
   worktreeUpdated?: boolean;
-  recoveryStatus: "not-created" | "retained" | "missing" | "unverified";
+  recoveryStatus?: "not-created" | "retained" | "missing" | "unverified";
   /** Issued only when the owned directory and captured backup bytes are present. */
   recoveryPath?: string;
   /** Diagnostic location only: never authority to find, restore or remove files. */
   lastKnownRecoveryPath?: string;
-  lockRetained: boolean;
-  retainedLocks: string[];
-  uncheckedLocks: string[];
+  lockRetained?: boolean;
+  retainedLocks?: string[];
+  uncheckedLocks?: string[];
   message: string;
   log: string;
 }

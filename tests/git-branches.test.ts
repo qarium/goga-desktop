@@ -1,3 +1,5 @@
+import { createNativeGitCapability } from "../src/host/git-native-context";
+import { NativeGitJournal } from "../src/host/git-native-journal";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -34,7 +36,12 @@ async function fixture(unborn = false) {
   const runner = new NodeRunner(15000, env);
   cleanup.push(() => runner.dispose());
   const git = (args: string[], cwd = root) =>
-    runner.command("git", args, cwd, env);
+    runner.command(
+      "git",
+      ["-c", "gc.auto=0", "-c", "maintenance.auto=false", ...args],
+      cwd,
+      env,
+    );
   const write = (name: string, text: string) =>
     fs.writeFile(path.join(root, name), text);
   await git(["init", "-b", "main"]);
@@ -56,6 +63,28 @@ async function fixture(unborn = false) {
     git: async (args) => (await git(args)).stdout,
   });
   const ctx: GitBranchContext = {
+    native: createNativeGitCapability({
+      root,
+      env,
+      journal: new NativeGitJournal({
+        directory: path.join(dir, "journal"),
+        now: () => now,
+      }),
+      owner: async () => ({
+        scope: "project",
+        registryRevision: ownerKey,
+        projectPath: root,
+      }),
+      runner: {
+        commandBytes: async (command) => {
+          const args = [...command.args];
+          calls.push({ args, online: command.args.includes("fetch") });
+          await intercept?.(args, command.args.includes("fetch"));
+          return runner.commandBytes(command);
+        },
+      },
+    }),
+
     scope: "project",
     root,
     ownerKey,
@@ -477,7 +506,7 @@ describe("branch remote operations and safety", () => {
       f.prepare({ action: "create", name: "unsafe", switch: false }),
     ).rejects.toThrow(/метаданн/);
   });
-  it("reports partial writes honestly when branch creation succeeded but switch failed, and consumes token", async () => {
+  it("reports a lost result after native create-and-switch honestly and consumes token", async () => {
     const f = await fixture();
     const p = await f.prepare({
       action: "create",
@@ -485,15 +514,17 @@ describe("branch remote operations and safety", () => {
       switch: true,
     });
     f.intercept(async (args) => {
-      if (args.includes("switch"))
-        throw Error("simulated failure after creation");
+      if (args.includes("switch")) {
+        await f.git(args); // Native command completed, then transport lost its result.
+        throw Error("simulated lost native result");
+      }
     });
     const result = await f.actions.execute(p.token);
     expect(result).toMatchObject({ status: "uncertain", changed: true });
     expect(
       (await f.git(["rev-parse", "refs/heads/partial"])).stdout.trim(),
     ).toBe(await f.head());
-    expect((await f.reader.snapshot()).branch).toBe("main");
+    expect((await f.reader.snapshot()).branch).toBe("partial");
     await expect(f.actions.execute(p.token)).rejects.toThrow();
   });
 });
@@ -595,18 +626,25 @@ describe("branch mutation boundary regressions", () => {
     expect(await f.head()).toBe(before);
     expect(f.calls.some((c) => c.args.includes("merge"))).toBe(false);
     f.intercept(undefined);
-    await fs.rm(path.join(f.root, "new-arrival"));
-    await f.git([
+    expect(await fs.readFile(path.join(f.root, "new-arrival"), "utf8")).toBe(
+      "external",
+    );
+    await expect(f.prepare({ action: "fetch" })).rejects.toThrow(/Журнал/);
+    // Redaction is a separate scenario: an uncertain repository must not be
+    // made writable again just to test a second transport failure.
+    const redaction = await fixture();
+    await redaction.remote();
+    await redaction.git([
       "remote",
       "set-url",
       "origin",
       "https://user:password@example.invalid/repo?token=secret",
     ]);
-    const q = await f.prepare({ action: "fetch" });
-    f.intercept(async (args, online) => {
+    const q = await redaction.prepare({ action: "fetch" });
+    redaction.intercept(async (args, online) => {
       if (online) throw Error(`fetch failed ${args.at(-2)}`);
     });
-    const result = await f.actions.execute(q.token);
+    const result = await redaction.actions.execute(q.token);
     expect(result.log).not.toContain("password");
     expect(result.log).not.toContain("secret");
     expect(result.message).not.toContain("password");
@@ -633,22 +671,33 @@ describe("branch mutation boundary regressions", () => {
     ).rejects.toThrow(/метаданн/);
   });
 });
-it("does not accept external config changes between creating and switching a branch", async () => {
+it("keeps configuration fixed throughout the single native create-and-switch command", async () => {
   const f = await fixture();
   const p = await f.prepare({
     action: "create",
     name: "two-step",
     switch: true,
   });
+  let blocked = false;
   f.intercept(async (args) => {
-    if (args.includes("branch") && args.includes("--no-track"))
-      await f.git(["config", "filter.injected.smudge", "false"]);
+    if (args.includes("switch")) {
+      try {
+        await f.git(["config", "filter.injected.smudge", "false"]);
+      } catch {
+        blocked = true;
+      }
+    }
   });
   const result = await f.actions.execute(p.token);
-  expect(result).toMatchObject({ status: "uncertain", changed: true });
-  expect((await f.reader.snapshot()).branch).toBe("main");
-  expect(f.calls.some((c) => c.args.includes("switch"))).toBe(false);
+  expect(result).toMatchObject({ status: "success", changed: true });
+  expect(blocked).toBe(true);
+  expect((await f.reader.snapshot()).branch).toBe("two-step");
+  await expect(
+    f.git(["config", "--get", "filter.injected.smudge"]),
+  ).rejects.toThrow();
+  expect(f.calls.filter((c) => c.args.includes("switch"))).toHaveLength(1);
 });
+
 it("holds the native config lock during checkout so a cooperative config writer cannot install filters", async () => {
   const f = await fixture();
   await f.git(["branch", "other"]);

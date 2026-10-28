@@ -15,6 +15,9 @@ import {
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { deflateSync } from "node:zlib";
+import { NativeGitSequence } from "../src/host/git-native-sequence";
+import type { GitMergeContext } from "../src/host/git-merge-safety";
+import type { ScopeRef } from "../src/shared/context";
 import { HostService } from "../src/host/service";
 import { NodeRunner } from "../src/host/process";
 import { CloneManager } from "../src/host/clones";
@@ -30,6 +33,7 @@ afterEach(async () => {
 async function fixture(
   backend: "merge" | "apply" = "merge",
   remainingCommits = 0,
+  controlled = false,
 ) {
   const base = await mkdtemp("/private/tmp/goga-rebase-read-");
   cleanup.push(() => rm(base, { recursive: true, force: true }));
@@ -97,9 +101,33 @@ async function fixture(
     await git(record.path, ["add", "--", name]);
     await git(record.path, ["commit", "-m", `later ${index}`]);
   }
-  await expect(
-    git(record.path, ["rebase", `--${backend}`, "upstream-fixture"]),
-  ).rejects.toThrow();
+  if (controlled) {
+    const engine = new NativeGitSequence({
+      context: (scope, action) =>
+        (
+          host as unknown as {
+            gitNativeSequenceContext<T>(
+              scope: ScopeRef,
+              action: (c: GitMergeContext) => Promise<T>,
+            ): Promise<T>;
+          }
+        ).gitNativeSequenceContext(scope, action),
+    });
+    const preview = await engine.prepareStart(worktreeContextRef(record), {
+      operation: "rebase",
+      backend,
+      source: (
+        await git(record.path, ["rev-parse", "upstream-fixture"])
+      ).trim(),
+    });
+    expect(await engine.execute(preview.token)).toMatchObject({
+      outcome: "conflicts",
+    });
+  } else {
+    await expect(
+      git(record.path, ["rebase", `--${backend}`, "upstream-fixture"]),
+    ).rejects.toThrow();
+  }
   expect(await git(record.path, ["ls-files", "-u"])).not.toBe("");
   expect(
     (await git(record.path, ["rev-parse", "--abbrev-ref", "HEAD"])).trim(),
@@ -197,24 +225,16 @@ it.each(["merge", "apply"] as const)(
   "reads a native multi-commit %s rebase stopped before its remaining commit",
   async (backend) => {
     const f = await fixture(backend, 1);
-    if (backend === "merge") {
-      expect(await readFile(path.join(f.metadata, "done"), "utf8")).toMatch(
-        /^pick /,
-      );
-      expect(
-        await readFile(path.join(f.metadata, "git-rebase-todo"), "utf8"),
-      ).toMatch(/^pick /);
-      expect(await readFile(path.join(f.metadata, "msgnum"), "utf8")).toBe(
-        "1\n",
-      );
-      expect(await readFile(path.join(f.metadata, "end"), "utf8")).toBe("2\n");
-    } else {
-      expect(await readFile(path.join(f.metadata, "next"), "utf8")).toBe("1\n");
-      expect(await readFile(path.join(f.metadata, "last"), "utf8")).toBe("2\n");
-      expect(
-        (await readFile(path.join(f.metadata, "0002"))).length,
-      ).toBeGreaterThan(0);
-    }
+    // Public refs prove there is a later source commit; no private counters/patch names.
+    expect(
+      (
+        await f.git(f.record.path, [
+          "rev-list",
+          "--count",
+          "upstream-fixture..feature",
+        ])
+      ).trim(),
+    ).toBe("2");
     const before = await repositories(f),
       snapshot = await f.host.readGitWorkspace(f.scope);
     expect(snapshot.operation).toBe("rebase");
@@ -236,48 +256,69 @@ it.each([
   "inconsistent counters",
   "ready repository reason",
   "missing current apply patch",
-])("rejects confirmed spec defect: %s", async (change) => {
-  const f = await fixture(
-    change === "missing current apply patch" ? "apply" : "merge",
-  );
-  await f.manager.resolveGitRead(f.scope);
-  if (change === "malformed todo")
-    await writeFile(
-      path.join(f.metadata, "git-rebase-todo"),
-      "this-is-not-a-git-command\n",
+])(
+  "separates opaque control drift from physical read ownership: %s",
+  async (change) => {
+    const f = await fixture(
+      change === "missing current apply patch" ? "apply" : "merge",
+      0,
+      true,
     );
-  if (change === "malformed earlier done")
-    await writeFile(
-      path.join(f.metadata, "done"),
-      "this-is-not-a-git-command\n" +
-        (await readFile(path.join(f.metadata, "done"), "utf8")),
-    );
-  if (change === "inconsistent counters") {
-    await writeFile(path.join(f.metadata, "msgnum"), "2\n");
-    await writeFile(path.join(f.metadata, "end"), "2\n");
-  }
-  if (change === "ready repository reason") {
-    const row = await f.manager.store.update(
-      { ...f.record, reason: "repository", revision: randomUUID() },
-      f.record.revision,
-    );
-    f.scope = worktreeContextRef(row);
-  }
-  if (change === "missing current apply patch")
-    await rm(path.join(f.metadata, "0001"));
-  const before = await repositories(f);
-  await expect(f.host.readGitWorkspace(f.scope)).rejects.toThrow();
-  expect(await repositories(f)).toBe(before);
-});
+    await f.manager.resolveGitRead(f.scope);
+    if (change === "malformed todo")
+      await writeFile(
+        path.join(f.metadata, "git-rebase-todo"),
+        "this-is-not-a-git-command\n",
+      );
+    if (change === "malformed earlier done")
+      await writeFile(
+        path.join(f.metadata, "done"),
+        "this-is-not-a-git-command\n" +
+          (await readFile(path.join(f.metadata, "done"), "utf8")),
+      );
+    if (change === "inconsistent counters") {
+      await writeFile(path.join(f.metadata, "msgnum"), "2\n");
+      await writeFile(path.join(f.metadata, "end"), "2\n");
+    }
+    if (change === "ready repository reason") {
+      const row = await f.manager.store.update(
+        { ...f.record, reason: "repository", revision: randomUUID() },
+        f.record.revision,
+      );
+      f.scope = worktreeContextRef(row);
+    }
+    if (change === "missing current apply patch")
+      await rm(path.join(f.metadata, "0001"));
+    const before = await repositories(f);
+    if (change === "ready repository reason") {
+      await expect(f.host.readGitWorkspace(f.scope)).rejects.toThrow();
+    } else {
+      expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("rebase");
+    }
+    expect(await repositories(f)).toBe(before);
+    if (change !== "ready repository reason") {
+      const snapshot = await f.host.readGitWorkspace(f.scope);
+      await expect(
+        f.host.prepareGitRebaseOperation({
+          scope: f.scope,
+          revision: snapshot.revision,
+          action: "abort",
+        }),
+      ).rejects.toThrow();
+    }
+  },
+);
 
-it("accepts a fresh reconciled conflict/branch owner without publishing ready or accepting the old revision", async () => {
+it("reconcile preserves durable owner revision while ordinary resolution rejects stopped rebase", async () => {
   const f = await fixture();
+  const registryBefore = await f.manager.store.read();
   const [row] = await f.manager.reconcile(f.project.id);
-  expect(row.state).toBe("conflict");
-  expect(row.reason).toBe("branch");
-  expect(row.revision).not.toBe(f.scope.revision);
+  expect(row.state).toBe("ready");
+  expect(row.reason).toBeUndefined();
+  expect(row.revision).toBe(f.scope.revision);
+  expect(await f.manager.store.read()).toEqual(registryBefore);
   const before = await repositories(f);
-  await expect(f.host.readGitWorkspace(f.scope)).rejects.toThrow();
+  expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("rebase");
   expect(
     (await f.host.readGitWorkspace(worktreeContextRef(row))).operation,
   ).toBe("rebase");
@@ -375,45 +416,58 @@ it.each([
   "blob stopped",
   "unrelated stopped",
   "unrelated HEAD",
-])("rejects a plausible rebase with %s", async (change) => {
-  const f = await fixture();
-  await expect(f.manager.resolveGitRead(f.scope)).resolves.toHaveProperty(
-    "operationBinding",
-  );
-  const blob = (
-    await f.git(f.record.path, ["rev-parse", "HEAD:file.txt"])
-  ).trim();
-  const treeId = (
-    await f.git(f.record.path, ["rev-parse", "HEAD^{tree}"])
-  ).trim();
-  const unrelated = (
-    await f.git(f.record.path, [
-      "commit-tree",
-      treeId,
-      "-m",
-      "unrelated fixture",
-    ])
-  ).trim();
-  const oid = change.startsWith("missing")
-    ? "0".repeat(40)
-    : change.startsWith("blob")
-      ? blob
-      : unrelated;
-  if (change.endsWith("onto"))
-    await writeFile(path.join(f.metadata, "onto"), oid + "\n");
-  else if (change.endsWith("HEAD"))
-    await writeFile(path.join(f.record.gitCommonDir, "HEAD"), oid + "\n");
-  else {
-    await writeFile(path.join(f.metadata, "stopped-sha"), oid + "\n");
-    await writeFile(
-      path.join(f.record.gitCommonDir, "REBASE_HEAD"),
-      oid + "\n",
+])(
+  "reads opaque rebase controls but refuses journal continuation after %s",
+  async (change) => {
+    const f = await fixture("merge", 0, true);
+    await expect(f.manager.resolveGitRead(f.scope)).resolves.toHaveProperty(
+      "operationBinding",
     );
-  }
-  const before = await repositories(f);
-  await expect(f.manager.resolveGitRead(f.scope)).rejects.toThrow();
-  expect(await repositories(f)).toBe(before);
-});
+    const blob = (
+      await f.git(f.record.path, ["rev-parse", "HEAD:file.txt"])
+    ).trim();
+    const treeId = (
+      await f.git(f.record.path, ["rev-parse", "HEAD^{tree}"])
+    ).trim();
+    const unrelated = (
+      await f.git(f.record.path, [
+        "commit-tree",
+        treeId,
+        "-m",
+        "unrelated fixture",
+      ])
+    ).trim();
+    const oid = change.startsWith("missing")
+      ? "0".repeat(40)
+      : change.startsWith("blob")
+        ? blob
+        : unrelated;
+    if (change.endsWith("onto"))
+      await writeFile(path.join(f.metadata, "onto"), oid + "\n");
+    else if (change.endsWith("HEAD"))
+      await writeFile(path.join(f.record.gitCommonDir, "HEAD"), oid + "\n");
+    else {
+      await writeFile(path.join(f.metadata, "stopped-sha"), oid + "\n");
+      await writeFile(
+        path.join(f.record.gitCommonDir, "REBASE_HEAD"),
+        oid + "\n",
+      );
+    }
+    const before = await repositories(f);
+    await expect(f.manager.resolveGitRead(f.scope)).resolves.toHaveProperty(
+      "operationBinding",
+    );
+    expect(await repositories(f)).toBe(before);
+    const snap = await f.host.readGitWorkspace(f.scope);
+    await expect(
+      f.host.prepareGitRebaseOperation({
+        scope: f.scope,
+        revision: snap.revision,
+        action: "abort",
+      }),
+    ).rejects.toThrow();
+  },
+);
 
 it.each([
   "head-name",
@@ -437,7 +491,7 @@ it.each([
 ] as const)(
   "fails closed without repairing rebase metadata: %s",
   async (change) => {
-    const f = await fixture();
+    const f = await fixture("merge", 0, true);
     await f.manager.resolveGitRead(f.scope);
     const gd = f.record.gitCommonDir,
       head = await readFile(path.join(gd, "HEAD"));
@@ -491,7 +545,8 @@ it.each([
       case "oversize":
         await writeFile(
           path.join(f.metadata, "patch"),
-          Buffer.alloc(1024 * 1024 + 1),
+          // Opaque control snapshot has an 8 MiB budget; no patch parser limit.
+          Buffer.alloc(8 * 1024 * 1024 + 1),
         );
         break;
       case "mixed-merge":
@@ -532,15 +587,37 @@ it.each([
         break;
     }
     const before = await repositories(f);
-    await expect(f.manager.resolveGitRead(f.scope)).rejects.toThrow();
+    const opaque = [
+      "head-name",
+      "orig-head",
+      "branch-tip",
+      "malformed-oid",
+      "mismatched-done",
+      "missing-stopped",
+    ].includes(change);
+    if (opaque)
+      await expect(f.manager.resolveGitRead(f.scope)).resolves.toHaveProperty(
+        "operationBinding",
+      );
+    else await expect(f.manager.resolveGitRead(f.scope)).rejects.toThrow();
     expect(await repositories(f)).toBe(before);
+    if (opaque) {
+      const snap = await f.host.readGitWorkspace(f.scope);
+      await expect(
+        f.host.prepareGitRebaseOperation({
+          scope: f.scope,
+          revision: snap.revision,
+          action: "abort",
+        }),
+      ).rejects.toThrow();
+    }
   },
 );
 
 it.each(["missing-rebasing", "nonempty-rebasing", "applying", "abort-safety"])(
-  "rejects ambiguous apply backend: %s",
+  "does not parse apply controls for display but revokes changed journal state: %s",
   async (change) => {
-    const f = await fixture("apply");
+    const f = await fixture("apply", 0, true);
     await f.manager.resolveGitRead(f.scope);
     if (change === "missing-rebasing")
       await rm(path.join(f.metadata, "rebasing"));
@@ -553,7 +630,17 @@ it.each(["missing-rebasing", "nonempty-rebasing", "applying", "abort-safety"])(
         path.join(f.metadata, "abort-safety"),
         "0".repeat(40) + "\n",
       );
-    await expect(f.manager.resolveGitRead(f.scope)).rejects.toThrow();
+    await expect(f.manager.resolveGitRead(f.scope)).resolves.toHaveProperty(
+      "operationBinding",
+    );
+    const snap = await f.host.readGitWorkspace(f.scope);
+    await expect(
+      f.host.prepareGitRebaseOperation({
+        scope: f.scope,
+        revision: snap.revision,
+        action: "abort",
+      }),
+    ).rejects.toThrow();
   },
 );
 

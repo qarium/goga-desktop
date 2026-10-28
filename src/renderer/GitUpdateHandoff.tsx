@@ -1,3 +1,4 @@
+import { nativeResultSchema } from "./git-native-sequence-result";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { scopeRefSchema, type ScopeRef } from "../shared/context";
@@ -30,7 +31,8 @@ const candidateSchema = z.object({
   baseRef: text,
   strategy: gitUpdateStrategySchema,
   algorithm: algorithmSchema,
-  conflicts: z.array(gitFilePathSchema).min(1),
+  backend: z.enum(["merge", "apply"]).optional(),
+  conflicts: z.array(gitFilePathSchema),
   expiresAt: z.number().finite(),
 });
 const previewSchema = z.object({
@@ -47,7 +49,11 @@ const identitySchema = z.object({
   algorithm: algorithmSchema,
 });
 const resultSchema = identitySchema.extend({
-  status: z.enum(["conflict", "error", "uncertain"]),
+  status: z.enum(["success", "conflict", "error", "uncertain"]),
+  native: nativeResultSchema.optional(),
+  lockRetained: z.boolean().optional(),
+  retainedLocks: z.array(z.string()).optional(),
+  uncheckedLocks: z.array(z.string()).optional(),
   changed: z.boolean(),
   conflicts: z.array(gitFilePathSchema),
   message: z.string(),
@@ -65,6 +71,7 @@ function candidateKey(c: GitUpdateHandoffCandidate) {
     c.baseRef,
     c.strategy,
     c.algorithm,
+    c.backend,
     c.conflicts,
     c.expiresAt,
   ]);
@@ -226,20 +233,47 @@ function HandoffConfirmation({
           "Результат относится к другому контексту, рабочей папке или алгоритму; его данные не показаны.",
         );
       const checked = resultSchema.safeParse(value);
+      const n = checked.success ? checked.data.native : undefined;
       const verified =
         checked.success &&
-        checked.data.status === "conflict" &&
         checked.data.changed &&
-        checked.data.conflicts.length > 0;
+        (n
+          ? n.processSettled &&
+            n.verifiedUnrelatedData &&
+            n.signal === null &&
+            n.beforeHead === candidate.targetHead &&
+            !!n.afterHead &&
+            checked.data.lockRetained === false &&
+            checked.data.retainedLocks?.length === 0 &&
+            checked.data.uncheckedLocks?.length === 0 &&
+            JSON.stringify(n.conflicts) ===
+              JSON.stringify(checked.data.conflicts) &&
+            (checked.data.status === "success"
+              ? n.outcome === "completed" &&
+                n.exitCode === 0 &&
+                !n.conflicts.length &&
+                n.recovery === "removed" &&
+                !n.recoveryPath
+              : checked.data.status === "conflict" &&
+                n.outcome === "conflicts" &&
+                n.exitCode === 1 &&
+                n.conflicts.length > 0 &&
+                n.recovery === "retained" &&
+                !!n.recoveryPath)
+          : checked.data.status === "conflict" &&
+            checked.data.conflicts.length > 0);
       const diagnostics = value as unknown as Record<string, unknown>;
       setReport(
         [
           verified
-            ? "Конфликт подтверждён. Разрешите файлы в редакторе конфликтов; операция ещё не завершена."
+            ? n?.outcome === "completed"
+              ? "Локальная Git-операция завершена. Публикация и завершение всего обновления Goga не подтверждаются."
+              : "Конфликт подтверждён. Разрешите файлы в редакторе конфликтов; операция ещё не завершена."
             : "Результат не подтверждён. Проверьте состояние Git: изменения могли произойти. Автоматического повтора не будет.",
           typeof diagnostics.message === "string"
             ? diagnostics.message
             : "Сообщение не получено.",
+          n?.recoveryPath ? `Материалы восстановления: ${n.recoveryPath}` : "",
           typeof diagnostics.log === "string"
             ? diagnostics.log
             : "Журнал не получен.",
@@ -272,7 +306,9 @@ function HandoffConfirmation({
     <>
       {!autoPrepare && (
         <button type="button" disabled={open} onClick={() => void prepare()}>
-          Разрешить конфликт вручную…
+          {candidate.conflicts.length
+            ? "Разрешить конфликт вручную…"
+            : "Обновить через Git…"}
         </button>
       )}
       {open && (
@@ -333,8 +369,9 @@ function HandoffConfirmation({
                     <p className="git-conflict-warning">{preview.effects}</p>
                     <p>
                       В текущей рабочей папке начнётся {p.algorithm}. Файлы и
-                      индекс будут изменены; операция остановится на конфликте.
-                      Продолжение или отмена потребует отдельного подтверждения.
+                      индекс могут измениться; Git может завершить операцию или
+                      остановиться на конфликте. Продолжение или отмена
+                      потребует отдельного подтверждения.
                     </p>
                     <ul>
                       {p.conflicts.map((path) => (
@@ -357,7 +394,9 @@ function HandoffConfirmation({
                         className="primary"
                         onClick={() => void execute()}
                       >
-                        Подтвердить переход к конфликту
+                        {candidate.conflicts.length
+                          ? "Подтвердить переход к конфликту"
+                          : "Начать локальное обновление"}
                       </button>
                     </div>
                   </div>

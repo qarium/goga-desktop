@@ -56,8 +56,45 @@ jobs:
         env:
           TEST_OUTCOME: ${{ steps.tests.outcome }}
         run: node scripts/test-summary.mjs work/vitest.json
+  git-compatibility:
+    runs-on: macos-15
+    timeout-minutes: 45
+    env:
+      GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "24"
+      - run: npm ci
+      - name: Build isolated lower-version Git (system Git stays unchanged)
+        run: |
+          set -eu
+          root="$RUNNER_TEMP/goga-git-compatibility"
+          mkdir -p "$root"
+          cd "$root"
+          curl --fail --location --max-time 120 https://www.kernel.org/pub/software/scm/git/git-2.45.2.tar.xz -o git-2.45.2.tar.xz
+          echo '51bfe87eb1c02fed1484051875365eeab229831d30d0cec5d89a14f9e40e9adb  git-2.45.2.tar.xz' | shasum -a 256 -c -
+          tar -xJf git-2.45.2.tar.xz
+          make -C git-2.45.2 -j2 prefix="$root/install" NO_GETTEXT=YesPlease NO_TCLTK=YesPlease install
+          echo "$root/install/bin" >> "$GITHUB_PATH"
+      - name: Native Git compatibility
+        id: compatibility
+        run: |
+          mkdir -p work
+          node --version
+          git --version
+          node scripts/test-git-compatibility.mjs
+      - name: Compatibility test report
+        if: always()
+        env:
+          TEST_OUTCOME: ${{ steps.compatibility.outcome }}
+        run: node scripts/test-summary.mjs work/git-compatibility.json
   check:
-    needs: tests
+    needs: [tests, git-compatibility]
     if: always()
     strategy:
       fail-fast: false
@@ -80,9 +117,10 @@ jobs:
       - name: Require all test shards to succeed
         env:
           TEST_RESULT: ${{ needs.tests.result }}
+          COMPAT_RESULT: ${{ needs.git-compatibility.result }}
         run: |
-          if [ "$TEST_RESULT" != success ]; then
-            echo "Test verification incomplete or failed: $TEST_RESULT"
+          if [ "$TEST_RESULT" != success ] || [ "$COMPAT_RESULT" != success ]; then
+            echo "Test verification incomplete or failed: shards=$TEST_RESULT compatibility=$COMPAT_RESULT"
             exit 1
           fi
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

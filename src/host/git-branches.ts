@@ -1,5 +1,11 @@
+import {
+  withNativeGitCompletion,
+  deferNativeGitRecovery,
+} from "./git-native-completion";
+import { NativeGitPreflightRejection } from "./git-native-journal";
+import { NativeGitMergeOperations } from "./git-native-merge";
+import { nativeIntent } from "./git-native-context";
 import { randomBytes } from "node:crypto";
-import * as fs from "node:fs/promises";
 import path from "node:path";
 import {
   gitBranchProjectSchema,
@@ -12,10 +18,8 @@ import {
 } from "../shared/git-branches";
 import {
   GitMergeSafety,
-  GitMetadataLockCleanupError,
   type GitMergeContext,
   type State,
-  type MergeDestinations,
   stale,
   oid,
   stat,
@@ -24,7 +28,7 @@ import {
 } from "./git-merge-safety";
 import { sanitizeRepositoryLog } from "./repository-actions";
 import { noSymlinks } from "./settings";
-import { CommandExitError } from "./process";
+import { ByteCommandError, CommandExitError } from "./process";
 export interface GitBranchContext extends GitMergeContext {
   scope: string;
   /** Host-bound online capability, used exclusively for an explicit fetch. */
@@ -35,7 +39,9 @@ interface Plan {
   request: GitBranchRequest;
   state: State;
   ownerKey: string;
+  mergeToken?: string;
   attributes?: string;
+  native?: { token: string; intent: string; paths: string[] };
   remote?: {
     name: string;
     endpoint: string;
@@ -45,6 +51,7 @@ interface Plan {
 }
 export class GitBranchActions extends GitMergeSafety {
   private tickets = new Map<string, Plan>();
+  private nativeMerges: NativeGitMergeOperations;
   constructor(
     private readonly options: {
       context: <T>(
@@ -55,6 +62,13 @@ export class GitBranchActions extends GitMergeSafety {
     },
   ) {
     super();
+    this.nativeMerges = new NativeGitMergeOperations({
+      context: (scope, action) => {
+        if (typeof scope !== "string") throw stale();
+        return this.options.context(scope, action);
+      },
+      now: options.now,
+    });
   }
   private now() {
     return this.options.now?.() ?? Date.now();
@@ -164,6 +178,7 @@ export class GitBranchActions extends GitMergeSafety {
     ctx: GitBranchContext,
     request: GitBranchRequest,
     state: State,
+    configLocked = false,
   ): Promise<Omit<Plan, "ownerKey" | "state" | "request">> {
     const s = state.snapshot;
     const merging =
@@ -176,6 +191,13 @@ export class GitBranchActions extends GitMergeSafety {
         "Сначала завершите текущую операцию Git и разрешите конфликты.",
       );
     await auditMetadata(ctx.root);
+    if (
+      request.action === "merge" &&
+      s.files.some((f) => ![".", " ", "?"].includes(f.indexStatus))
+    )
+      throw Error(
+        "Перед слиянием уберите посторонние staged изменения: они не должны попасть в merge-коммит.",
+      );
     if (merging) {
       if (!s.branch || !s.head)
         throw Error(
@@ -187,7 +209,12 @@ export class GitBranchActions extends GitMergeSafety {
           .filter((row) => row === `branch refs/heads/${s.branch}`).length !== 1
       )
         throw Error("Текущая ветка уже открыта в другой рабочей копии.");
-      for (const name of [...mixedOperations, "MERGE_AUTOSTASH"])
+      // REBASE_HEAD may survive a completed native rebase; it is sealed as
+      // metadata, but is not proof of a running sequencer on its own.
+      for (const name of [
+        ...mixedOperations.filter((n) => n !== "REBASE_HEAD"),
+        "MERGE_AUTOSTASH",
+      ])
         if (await stat(path.join(ctx.root, ".git", name)))
           throw Error(
             "Смешанная операция Git или внешний autostash: безопасная операция слияния невозможна.",
@@ -205,7 +232,7 @@ export class GitBranchActions extends GitMergeSafety {
     for (const name of [
       "index.lock",
       "HEAD.lock",
-      "config.lock",
+      ...(configLocked ? [] : ["config.lock"]),
       "packed-refs.lock",
     ])
       if (await stat(path.join(ctx.root, ".git", name)))
@@ -380,8 +407,54 @@ export class GitBranchActions extends GitMergeSafety {
   }
   async prepare(input: GitBranchRequest): Promise<GitBranchPreview> {
     const request = gitBranchRequestSchema.parse(input);
+    if (request.action === "abort-merge") {
+      const state = await this.options.context(
+        request.projectId,
+        async (ctx) => {
+          const state = await this.capture(ctx, request.projectId);
+          if (state.fingerprint !== request.revision) throw stale();
+          return { state, ownerKey: ctx.ownerKey };
+        },
+      );
+      const pending = await this.nativeMerges.prepare({
+        scope: request.projectId,
+        action: "abort",
+        revision: state.state.snapshot.revision,
+      });
+      const preview: GitBranchPreview = {
+        token: pending.token,
+        projectId: request.projectId,
+        root: pending.root,
+        action: "abort-merge",
+        fromRef: `refs/heads/${pending.branch}`,
+        fromOid: pending.head,
+        sourceRef: null,
+        sourceOid: pending.sourceOid,
+        toRef: `refs/heads/${pending.branch}`,
+        toOid: pending.head,
+        remote: null,
+        createsBranch: false,
+        switchesBranch: false,
+        hooks: "disabled",
+        expiresAt: pending.expiresAt,
+        mergeMode: "abort",
+        autoCommit: false,
+      };
+      this.tickets.set(preview.token, {
+        preview,
+        request,
+        ...state,
+        mergeToken: pending.token,
+      });
+      return preview;
+    }
     return this.options.context(request.projectId, async (ctx) => {
       const state = await this.capture(ctx, request.projectId);
+      if (ctx.native)
+        await ctx.native.journal.assertAdmission(
+          ctx.root,
+          await ctx.native.owner(),
+        );
       if (state.fingerprint !== request.revision) throw stale();
       const plan = await this.validate(ctx, request, state);
       const again = await this.capture(ctx, request.projectId);
@@ -400,14 +473,866 @@ export class GitBranchActions extends GitMergeSafety {
       while (this.tickets.size >= 64)
         this.tickets.delete(this.tickets.keys().next().value!);
       plan.preview.token = randomBytes(32).toString("hex");
+      let native: Plan["native"];
+      if (
+        request.action === "create" ||
+        request.action === "switch-local" ||
+        request.action === "merge" ||
+        request.action === "fetch" ||
+        request.action === "pull" ||
+        request.action === "switch-remote"
+      ) {
+        const paths = [
+          ...new Set(
+            state.snapshot.files.flatMap((f) => [
+              f.path,
+              ...(f.originalPath ? [f.originalPath] : []),
+            ]),
+          ),
+        ];
+        const guard = await this.nativeGuard(
+          ctx,
+          state,
+          paths,
+          request.action === "merge" ? plan.preview.sourceOid! : undefined,
+          request.action === "switch-remote"
+            ? this.trackingConfig(plan.preview, plan.remote!)
+            : [],
+        );
+        const snapshot = await guard.capture();
+        const record = await guard.journal.inspect(snapshot, true);
+        if (
+          record &&
+          (!["completed", "rejected"].includes(record.state) ||
+            record.recovery !== null)
+        )
+          throw Error(
+            "Предыдущая операция Git требует проверки; повторная запись запрещена.",
+          );
+        const intent = nativeIntent([request, plan.preview, ctx.ownerKey]);
+        native = {
+          token: guard.journal.prepare(
+            request.action === "merge"
+              ? "merge"
+              : request.action === "fetch" || request.action === "pull"
+                ? request.action
+                : plan.preview.switchesBranch
+                  ? "switch"
+                  : "branch",
+            snapshot,
+            intent,
+          ),
+          intent,
+          paths,
+        };
+      }
       this.tickets.set(plan.preview.token, {
         ...plan,
+        native,
         request,
         state,
         ownerKey: ctx.ownerKey,
       });
       return plan.preview;
     });
+  }
+  private matchesTrackingConfig(
+    actual: [string, string][],
+    original: [string, string][],
+    additions: [string, string][],
+  ) {
+    return (
+      JSON.stringify(
+        actual.filter(([key]) => !additions.some(([k]) => key === k)),
+      ) === JSON.stringify(original) &&
+      additions.every(([key, value]) => {
+        const found = actual.filter(([k]) => k === key);
+        return found.length === 1 && found[0][1] === value;
+      })
+    );
+  }
+  private trackingConfig(
+    preview: GitBranchPreview,
+    remote: NonNullable<Plan["remote"]>,
+  ): [string, string][] {
+    const name = preview.toRef!.slice(11);
+    return [
+      [`branch.${name}.remote`, remote.name],
+      [`branch.${name}.merge`, remote.source],
+    ];
+  }
+  private async switchRemote(
+    ctx: GitBranchContext,
+    ticket: Plan,
+    before: State,
+    client: Awaited<
+      ReturnType<NonNullable<GitBranchContext["native"]>["client"]>
+    >,
+    lines: string[],
+    attempted: () => void,
+  ) {
+    const p = ticket.preview,
+      additions = this.trackingConfig(p, ticket.remote!);
+    return this.withRefLock(
+      ctx,
+      ticket.request.action === "switch-remote" ? ticket.request.ref : "",
+      async () => {
+        if (
+          (await this.capture(ctx, ticket.request.projectId)).fingerprint !==
+          before.fingerprint
+        )
+          throw stale();
+        attempted();
+        const run = async (args: string[]) => {
+          const output = await client.run({
+            policy: "local-write",
+            command: "branch",
+            args,
+          });
+          lines.push(
+            output.stdout.toString("utf8"),
+            output.stderr.toString("utf8"),
+          );
+          return output;
+        };
+        // No checkout while config is writable. Native branch config owns config.lock.
+        const createdOutput = await this.withMetadataLock(
+          ctx,
+          "config.lock",
+          () => run(["--no-track", "--", p.toRef!.slice(11), p.toOid!]),
+        );
+        if (createdOutput.exitCode !== 0 || createdOutput.signal)
+          return createdOutput;
+        const created = await this.capture(ctx, ticket.request.projectId);
+        if (
+          created.anchor !== before.anchor ||
+          JSON.stringify(created.inventory.remote) !==
+            JSON.stringify(before.inventory.remote) ||
+          JSON.stringify(
+            created.inventory.local.filter((r) => r.ref !== p.toRef),
+          ) !== JSON.stringify(before.inventory.local) ||
+          created.inventory.local.find((r) => r.ref === p.toRef)?.oid !==
+            p.toOid
+        )
+          throw stale();
+        const trackingOutput = await run([
+          `--set-upstream-to=${ticket.remote!.destination}`,
+          "--",
+          p.toRef!.slice(11),
+        ]);
+        if (trackingOutput.exitCode !== 0 || trackingOutput.signal)
+          return trackingOutput;
+        return this.withMetadataLock(ctx, "config.lock", () =>
+          this.withRefLock(ctx, p.toRef!, async () => {
+            const ready = await this.capture(ctx, ticket.request.projectId);
+            if (
+              ready.workspace !== created.workspace ||
+              !this.matchesTrackingConfig(
+                ready.config,
+                before.config,
+                additions,
+              ) ||
+              ready.inventory.local.find((r) => r.ref === p.toRef)?.oid !==
+                p.toOid ||
+              JSON.stringify(ready.inventory.remote) !==
+                JSON.stringify(before.inventory.remote)
+            )
+              throw stale();
+            const output = await client.run({
+              policy: "local-write",
+              command: "switch",
+              args: ["--no-guess", "--no-overwrite-ignore", p.toRef!.slice(11)],
+            });
+            lines.push(
+              output.stdout.toString("utf8"),
+              output.stderr.toString("utf8"),
+            );
+            return output;
+          }),
+        );
+      },
+    );
+  }
+  private async executeNativeLocal(ticket: Plan): Promise<GitBranchResult> {
+    const { request, preview } = ticket;
+    let attempted = false;
+    const lines: string[] = [];
+    try {
+      return await this.options.context(request.projectId, async (ctx) => {
+        if (ctx.ownerKey !== ticket.ownerKey || !ticket.native) throw stale();
+        const before = await this.capture(ctx, request.projectId);
+        if (before.fingerprint !== ticket.state.fingerprint) throw stale();
+        await this.validate(ctx, request, before);
+        const additions =
+          request.action === "switch-remote"
+            ? this.trackingConfig(preview, ticket.remote!)
+            : [];
+        const guard = await this.nativeGuard(
+          ctx,
+          before,
+          ticket.native.paths,
+          undefined,
+          additions,
+        );
+        const result = await guard.journal.execute({
+          deferRecoveryCleanup: deferNativeGitRecovery,
+          token: ticket.native.token,
+          intentFingerprint: ticket.native.intent,
+          operation: preview.switchesBranch ? "switch" : "branch",
+          capture: guard.capture,
+          run: () =>
+            request.action === "switch-remote"
+              ? this.switchRemote(
+                  ctx,
+                  ticket,
+                  before,
+                  guard.client,
+                  lines,
+                  () => {
+                    attempted = true;
+                  },
+                )
+              : this.withMetadataLock(ctx, "config.lock", async () => {
+                  // The journal and recovery are durable; Git owns its own native locks.
+                  if (
+                    (await this.capture(ctx, request.projectId)).fingerprint !==
+                    before.fingerprint
+                  )
+                    throw stale();
+                  attempted = true;
+                  const command = preview.switchesBranch
+                    ? ("switch" as const)
+                    : ("branch" as const);
+                  const args = preview.switchesBranch
+                    ? [
+                        "--no-guess",
+                        "--no-overwrite-ignore",
+                        ...(preview.createsBranch
+                          ? [
+                              "--no-track",
+                              "--create",
+                              preview.toRef!.slice(11),
+                              preview.toOid!,
+                            ]
+                          : [preview.toRef!.slice(11)]),
+                      ]
+                    : [
+                        "--no-track",
+                        "--",
+                        preview.toRef!.slice(11),
+                        preview.toOid!,
+                      ];
+                  const execute = () =>
+                    guard.client.run({ policy: "local-write", command, args });
+                  const output =
+                    preview.switchesBranch && !preview.createsBranch
+                      ? await this.withRefLock(ctx, preview.toRef!, execute)
+                      : await execute();
+                  lines.push(
+                    output.stdout.toString("utf8"),
+                    output.stderr.toString("utf8"),
+                  );
+                  return output;
+                }),
+          verify: async (baseline, after) => {
+            const actual = await this.capture(ctx, request.projectId);
+            if (
+              actual.snapshot.operation !== "none" ||
+              actual.snapshot.head !== preview.toOid ||
+              actual.snapshot.branch !==
+                (preview.switchesBranch
+                  ? preview.toRef!.slice(11)
+                  : before.snapshot.branch) ||
+              actual.inventory.local.find((r) => r.ref === preview.toRef)
+                ?.oid !== preview.toOid ||
+              !this.matchesTrackingConfig(
+                actual.config,
+                before.config,
+                additions,
+              ) ||
+              JSON.stringify(actual.inventory.remote) !==
+                JSON.stringify(before.inventory.remote)
+            )
+              throw stale();
+            // checkedOut is expected to change on switch, no other ref/OID/upstream is.
+            const refs = (state: State) =>
+              state.inventory.local
+                .filter(
+                  (r) => !preview.createsBranch || r.ref !== preview.toRef,
+                )
+                .map(({ checkedOut: _, ...r }) => r);
+            if (JSON.stringify(refs(actual)) !== JSON.stringify(refs(before)))
+              throw stale();
+            if (JSON.stringify(baseline.files) !== JSON.stringify(after.files))
+              throw stale();
+            if (
+              preview.switchesBranch
+                ? actual.inventory.dirty
+                : baseline.index !== after.index ||
+                  baseline.status !== after.status
+            )
+              throw stale();
+            return {
+              outcome: "completed",
+              afterHead: after.head,
+              conflicts: [],
+              verifiedUnrelatedData: true,
+            };
+          },
+        });
+        return {
+          projectId: request.projectId,
+          action: request.action,
+          native: result,
+          status: result.outcome === "completed" ? "success" : "uncertain",
+          changed: attempted,
+          ...(result.recoveryPath ? { recoveryPath: result.recoveryPath } : {}),
+          message:
+            result.outcome === "completed"
+              ? "Операция Git завершена; результат проверен."
+              : "Результат Git не подтверждён. Материалы восстановления сохранены; автоматический повтор запрещён.",
+          log: (ctx.sanitizeDiagnostics ?? sanitizeRepositoryLog)(
+            lines.join("\n"),
+          ),
+        };
+      });
+    } catch (error) {
+      return {
+        projectId: request.projectId,
+        action: request.action,
+        status: attempted ? "uncertain" : "error",
+        changed: attempted,
+        message: sanitizeRepositoryLog(
+          error instanceof Error ? error.message : "Операция Git не выполнена.",
+        ),
+        log: "Внешний контекст операции завершился ошибкой; диагностика окружения скрыта.",
+      };
+    }
+  }
+  private async executeNativeFetch(ticket: Plan): Promise<GitBranchResult> {
+    const { request } = ticket;
+    let attempted = false;
+    const lines: string[] = [];
+    try {
+      return await this.options.context(request.projectId, async (ctx) => {
+        if (
+          ctx.ownerKey !== ticket.ownerKey ||
+          !ticket.native ||
+          !ticket.remote
+        )
+          throw stale();
+        const before = await this.capture(ctx, request.projectId);
+        if (before.fingerprint !== ticket.state.fingerprint) throw stale();
+        const validated = await this.validate(ctx, request, before);
+        if (JSON.stringify(validated.remote) !== JSON.stringify(ticket.remote))
+          throw stale();
+        const guard = await this.nativeGuard(ctx, before, ticket.native.paths);
+        const remote = ticket.remote;
+        const client = await ctx.native!.client([
+          ...before.config,
+          ["protocol.file.allow", "always"],
+          ["protocol.https.allow", "always"],
+          ["protocol.ssh.allow", "always"],
+          ["http.followRedirects", "false"],
+          ["credential.helper", ""],
+          ["fetch.pruneTags", "false"],
+          ["fetch.writeCommitGraph", "false"],
+        ]);
+        // Inspect all public refs, not just the branch inventory (tags included).
+        const refs = async () => {
+          const result = await guard.client.run({
+            policy: "local-read",
+            command: "for-each-ref",
+            args: ["--format=%(refname) %(objectname)"],
+          });
+          if (result.exitCode !== 0) throw stale();
+          return result.stdout
+            .toString("utf8")
+            .split("\n")
+            .filter(Boolean)
+            .sort();
+        };
+        const beforeRefs = await refs();
+        const pull = request.action === "pull";
+        let expectedHead: string | null = before.snapshot.head;
+        let fetchedRefs: string[] | undefined;
+        const prefix = `refs/remotes/${remote.name}/`;
+        const unrelated = (rows: string[]) =>
+          rows.filter(
+            (row) =>
+              !(pull
+                ? row.startsWith(remote.destination + " ") ||
+                  row.startsWith(`refs/heads/${before.snapshot.branch} `)
+                : row.startsWith(prefix)),
+          );
+        const applyClient = await ctx.native!.client([
+          ...before.config,
+          [`branch.${before.snapshot.branch}.mergeOptions`, ""],
+          ["merge.autoStash", "false"],
+        ]);
+        const result = await guard.journal.execute({
+          deferRecoveryCleanup: deferNativeGitRecovery,
+          token: ticket.native.token,
+          intentFingerprint: ticket.native.intent,
+          operation: pull ? "pull" : "fetch",
+          capture: guard.capture,
+          run: () =>
+            this.withMetadataLock(ctx, "config.lock", async () => {
+              if (
+                (await this.capture(ctx, request.projectId)).fingerprint !==
+                  before.fingerprint ||
+                JSON.stringify(await refs()) !== JSON.stringify(beforeRefs)
+              )
+                throw new NativeGitPreflightRejection(
+                  "Состояние Git изменилось до fetch.",
+                );
+              attempted = true;
+              const output = await client.run({
+                policy: "remote",
+                command: "fetch",
+                args: [
+                  "--atomic",
+                  "--no-tags",
+                  "--no-prune",
+                  "--no-write-fetch-head",
+                  "--no-recurse-submodules",
+                  "--no-auto-maintenance",
+                  "--no-write-commit-graph",
+                  "--",
+                  remote.endpoint,
+                  `${remote.source}:${remote.destination}`,
+                ],
+              });
+              lines.push(
+                output.stdout.toString("utf8"),
+                output.stderr.toString("utf8"),
+              );
+              if (!pull || output.exitCode !== 0 || output.signal)
+                return output;
+              const fetched = await this.capture(ctx, request.projectId);
+              fetchedRefs = await refs();
+              if (
+                fetched.anchor !== before.anchor ||
+                JSON.stringify(unrelated(fetchedRefs)) !==
+                  JSON.stringify(unrelated(beforeRefs))
+              )
+                throw stale();
+              const target = fetched.inventory.remote.find(
+                (r) => r.ref === remote.destination,
+              );
+              if (!target)
+                throw Error("После fetch upstream-ветка не найдена.");
+              await this.validate(ctx, request, fetched, true);
+              if (await this.isAncestor(ctx, before.snapshot.head!, target.oid))
+                expectedHead = target.oid;
+              else if (
+                !(await this.isAncestor(ctx, target.oid, before.snapshot.head!))
+              )
+                throw Error(
+                  "Ветки разошлись. Fetch выполнен, fast-forward невозможен; merge/rebase не запускались.",
+                );
+              if (
+                (await this.capture(ctx, request.projectId)).fingerprint !==
+                fetched.fingerprint
+              )
+                throw stale();
+              const applied = await applyClient.run({
+                policy: "local-write",
+                command: "merge",
+                args: [
+                  "--ff-only",
+                  "--no-overwrite-ignore",
+                  "--no-squash",
+                  "--no-edit",
+                  "--no-autostash",
+                  "--",
+                  target.oid,
+                ],
+              });
+              lines.push(
+                applied.stdout.toString("utf8"),
+                applied.stderr.toString("utf8"),
+              );
+              return applied;
+            }),
+          verify: async (baseline, after, command) => {
+            const actual = await this.capture(ctx, request.projectId);
+            const afterRefs = await refs();
+            if (
+              after.head !==
+                (pull && command.exitCode === 0
+                  ? expectedHead
+                  : baseline.head) ||
+              after.headRef !== baseline.headRef ||
+              (!pull &&
+                (after.index !== baseline.index ||
+                  after.status !== baseline.status ||
+                  after.controlFingerprint !== baseline.controlFingerprint)) ||
+              actual.snapshot.operation !== "none" ||
+              JSON.stringify(actual.snapshot.files) !==
+                JSON.stringify(before.snapshot.files) ||
+              JSON.stringify(after.files) !== JSON.stringify(baseline.files) ||
+              (!pull && actual.anchor !== before.anchor) ||
+              JSON.stringify(actual.config) !== JSON.stringify(before.config) ||
+              JSON.stringify(unrelated(afterRefs)) !==
+                JSON.stringify(unrelated(beforeRefs)) ||
+              beforeRefs.some(
+                (row) =>
+                  !afterRefs.some(
+                    (next) => next.split(" ")[0] === row.split(" ")[0],
+                  ),
+              )
+            )
+              throw stale();
+            if (pull) {
+              const protectedIndex = (data: string) =>
+                Buffer.from(data, "base64")
+                  .toString("utf8")
+                  .split("\0")
+                  .filter((row) =>
+                    ticket.native!.paths.includes(
+                      row.slice(row.indexOf("\t") + 1),
+                    ),
+                  );
+              if (
+                JSON.stringify(protectedIndex(baseline.indexData)) !==
+                JSON.stringify(protectedIndex(after.indexData))
+              )
+                throw stale();
+              // A nonzero command after successful fetch is a partial result,
+              // never unchanged rejection. Keep recovery and prevent replay.
+              if (command.exitCode !== 0 && fetchedRefs) throw stale();
+            }
+            return {
+              outcome: command.exitCode === 0 ? "completed" : "rejected",
+              afterHead: after.head,
+              conflicts: [],
+              verifiedUnrelatedData: true,
+            };
+          },
+        });
+        return {
+          projectId: request.projectId,
+          action: request.action,
+          native: result,
+          status:
+            result.outcome === "completed"
+              ? "success"
+              : result.outcome === "rejected"
+                ? "error"
+                : "uncertain",
+          changed: attempted && result.outcome !== "rejected",
+          ...(result.recoveryPath ? { recoveryPath: result.recoveryPath } : {}),
+          message:
+            result.outcome === "completed"
+              ? pull
+                ? "Изменения подтянуты штатным Git; fast-forward и сохранность правок проверены."
+                : "Remote-ветки обновлены; рабочие файлы, индекс и локальные ветки сохранены и проверены."
+              : result.outcome === "rejected"
+                ? "Git отказал в обновлении; состояние сохранено и проверено."
+                : "Результат обновления не подтверждён. Материалы восстановления сохранены; повтор запрещён.",
+          log: sanitizeRepositoryLog(lines.join("\n"), [remote.endpoint]),
+        };
+      });
+    } catch (error) {
+      return {
+        projectId: request.projectId,
+        action: request.action,
+        status: attempted ? "uncertain" : "error",
+        changed: attempted,
+        message: sanitizeRepositoryLog(
+          error instanceof Error ? error.message : "Обновление не выполнено.",
+          ticket.remote ? [ticket.remote.endpoint] : [],
+        ),
+        log: "Внешний контекст операции завершился ошибкой; диагностика окружения скрыта.",
+      };
+    }
+  }
+  private async executeNativeMerge(ticket: Plan): Promise<GitBranchResult> {
+    const { request, preview } = ticket;
+    let attempted = false;
+    const lines: string[] = [];
+    try {
+      return await this.options.context(request.projectId, async (ctx) => {
+        if (ctx.ownerKey !== ticket.ownerKey || !ticket.native) throw stale();
+        const before = await this.capture(ctx, request.projectId);
+        if (before.fingerprint !== ticket.state.fingerprint) throw stale();
+        const admitted = await this.validate(ctx, request, before);
+        if (admitted.attributes !== ticket.attributes) throw stale();
+        const guard = await this.nativeGuard(
+          ctx,
+          before,
+          ticket.native.paths,
+          preview.sourceOid!,
+        );
+        const expectedHead = (await this.isAncestor(
+          ctx,
+          before.snapshot.head!,
+          preview.sourceOid!,
+        ))
+          ? preview.sourceOid!
+          : (await this.isAncestor(
+                ctx,
+                preview.sourceOid!,
+                before.snapshot.head!,
+              ))
+            ? before.snapshot.head
+            : null;
+        const overrides = [
+          [`branch.${before.snapshot.branch!}.mergeOptions`, ""],
+          ["rerere.enabled", "false"],
+          ["rerere.autoupdate", "false"],
+          ["merge.autoStash", "false"],
+        ] as [string, string][];
+        const client = await ctx.native!.client([
+          ...before.config,
+          ...overrides,
+        ]);
+        const result = await guard.journal.execute({
+          deferRecoveryCleanup: deferNativeGitRecovery,
+          token: ticket.native.token,
+          intentFingerprint: ticket.native.intent,
+          operation: "merge",
+          capture: guard.capture,
+          run: () =>
+            this.withMetadataLock(ctx, "config.lock", async () => {
+              // Native merge-tree may write immutable objects: it too is after the
+              // durable intent, not an unjournalled trial mutation during prepare.
+              try {
+                const probing: GitMergeContext = {
+                  ...ctx,
+                  git: async (args, stdin) => {
+                    const at = args.indexOf("merge-tree");
+                    if (at < 0) return ctx.git(args, stdin);
+                    const output = await client.run({
+                      policy: "local-write",
+                      command: "merge-tree",
+                      args: args.slice(at + 1),
+                    });
+                    if (output.exitCode !== 0)
+                      throw new CommandExitError(
+                        "Git merge-tree отказал в подготовке.",
+                        output.exitCode,
+                        output.stdout.toString("utf8"),
+                        output.stderr.toString("utf8"),
+                      );
+                    return {
+                      stdout: output.stdout.toString("utf8"),
+                      stderr: output.stderr.toString("utf8"),
+                    };
+                  },
+                };
+                const destinations = await this.protectMergeDestinations(
+                  probing,
+                  before,
+                  preview.sourceOid!,
+                  overrides.flatMap(([k, v]) => ["-c", k + "=" + v]),
+                );
+                if (
+                  (await this.capture(ctx, request.projectId)).fingerprint !==
+                    before.fingerprint ||
+                  (await this.mergeAttributes(
+                    ctx,
+                    before.snapshot.head!,
+                    preview.sourceOid!,
+                    destinations.incoming,
+                  )) !== ticket.attributes
+                )
+                  throw stale();
+                await this.checkMergeDestinations(ctx, {
+                  ...destinations,
+                  tracked: new Set([
+                    ...destinations.current,
+                    ...(await this.indexPaths(ctx)),
+                  ]),
+                });
+              } catch (error) {
+                if (error instanceof ByteCommandError) throw error;
+                lines.push(
+                  error instanceof Error
+                    ? error.message
+                    : "Проверка перед слиянием не пройдена.",
+                );
+                throw new NativeGitPreflightRejection(lines.at(-1));
+              }
+              attempted = true;
+              const output = await client.run({
+                policy: "local-write",
+                command: "merge",
+                args: [
+                  "--ff",
+                  "--commit",
+                  "--no-edit",
+                  "--no-squash",
+                  "--no-autostash",
+                  "--no-overwrite-ignore",
+                  "--no-verify-signatures",
+                  "--no-stat",
+                  "--strategy=ort",
+                  "--",
+                  preview.sourceOid!,
+                ],
+              });
+              lines.push(
+                output.stdout.toString("utf8"),
+                output.stderr.toString("utf8"),
+              );
+              return output;
+            }),
+          verify: async (baseline, after, command) => {
+            const actual = await this.capture(ctx, request.projectId);
+            if (
+              actual.snapshot.branch !== before.snapshot.branch ||
+              JSON.stringify(baseline.files) !== JSON.stringify(after.files)
+            )
+              throw stale();
+            const unaffectedRefs = (s: State) => [
+              s.inventory.local.filter(
+                (r) => r.ref !== `refs/heads/${before.snapshot.branch}`,
+              ),
+              s.inventory.remote,
+            ];
+            if (
+              JSON.stringify(unaffectedRefs(actual)) !==
+              JSON.stringify(unaffectedRefs(before))
+            )
+              throw stale();
+            const conflicts = actual.snapshot.files
+              .filter((f) => f.kind === "conflict")
+              .map((f) => f.path);
+            if (
+              command.exitCode === 1 &&
+              conflicts.length &&
+              actual.snapshot.operation === "merge" &&
+              after.head === baseline.head
+            ) {
+              if (
+                oid(
+                  (
+                    await this.git(ctx, [
+                      "rev-parse",
+                      "--verify",
+                      "MERGE_HEAD^{commit}",
+                    ])
+                  ).stdout.trim(),
+                ) !== preview.sourceOid
+              )
+                throw stale();
+              return {
+                outcome: "conflicts",
+                afterHead: after.head,
+                conflicts,
+                verifiedUnrelatedData: true,
+              };
+            }
+            if (
+              command.exitCode !== 0 &&
+              actual.snapshot.operation === "merge" &&
+              conflicts.length === 0 &&
+              after.head === baseline.head
+            ) {
+              if (
+                oid(
+                  (
+                    await this.git(ctx, [
+                      "rev-parse",
+                      "--verify",
+                      "MERGE_HEAD^{commit}",
+                    ])
+                  ).stdout.trim(),
+                ) !== preview.sourceOid
+              )
+                throw stale();
+              return {
+                outcome: "stopped",
+                afterHead: after.head,
+                conflicts: [],
+                verifiedUnrelatedData: true,
+              };
+            }
+            if (
+              command.exitCode !== 0 &&
+              actual.snapshot.operation === "none" &&
+              conflicts.length === 0 &&
+              after.head === baseline.head &&
+              after.index === baseline.index &&
+              after.refs === baseline.refs
+            )
+              return {
+                outcome: "rejected",
+                afterHead: after.head,
+                conflicts: [],
+                verifiedUnrelatedData: true,
+              };
+            if (
+              actual.snapshot.operation !== "none" ||
+              conflicts.length ||
+              !after.head
+            )
+              throw stale();
+            if (
+              expectedHead
+                ? after.head !== expectedHead
+                : (
+                    await this.git(ctx, [
+                      "rev-list",
+                      "--parents",
+                      "-n",
+                      "1",
+                      after.head,
+                    ])
+                  ).stdout.trim() !==
+                  [after.head, baseline.head, preview.sourceOid].join(" ")
+            )
+              throw stale();
+            return {
+              outcome: "completed",
+              afterHead: after.head,
+              conflicts: [],
+              verifiedUnrelatedData: true,
+            };
+          },
+        });
+        return {
+          projectId: request.projectId,
+          action: request.action,
+          native: result,
+          status:
+            result.outcome === "completed"
+              ? "success"
+              : result.outcome === "conflicts"
+                ? "conflict"
+                : result.outcome === "rejected"
+                  ? "error"
+                  : "uncertain",
+          changed: attempted && result.outcome !== "rejected",
+          conflictCount: result.conflicts.length,
+          ...(result.recoveryPath ? { recoveryPath: result.recoveryPath } : {}),
+          message:
+            result.outcome === "completed"
+              ? "Слияние завершено; результат проверен. Публикация не выполнялась."
+              : result.outcome === "rejected"
+                ? "Git отказал в слиянии; ветка и изменения сохранены и проверены. Повтор и сброс не выполнялись."
+                : result.outcome === "conflicts"
+                  ? "Слияние остановлено на конфликтах. Исходные данные сохранены; разрешите конфликты или подтвердите отмену."
+                  : "Результат слияния не подтверждён. Материалы восстановления сохранены; повтор запрещён.",
+          log: (ctx.sanitizeDiagnostics ?? sanitizeRepositoryLog)(
+            lines.join("\n"),
+          ),
+        };
+      });
+    } catch (error) {
+      return {
+        projectId: request.projectId,
+        action: request.action,
+        status: attempted ? "uncertain" : "error",
+        changed: attempted,
+        message: sanitizeRepositoryLog(
+          error instanceof Error ? error.message : "Слияние не выполнено.",
+        ),
+        log: "Внешний контекст операции завершился ошибкой; диагностика окружения скрыта.",
+      };
+    }
   }
   /** Existing-branch switch does not write that branch ref. Holding its native
    * .lock freezes the selected exact OID against cooperative Git ref writers.
@@ -422,576 +1347,29 @@ export class GitBranchActions extends GitMergeSafety {
     await this.git(ctx, ["check-ref-format", ref]);
     return this.withMetadataLock(ctx, `${ref}.lock`, fn);
   }
-  private async executeMerge(ticket: Plan): Promise<GitBranchResult> {
-    const { request, preview } = ticket;
-    let attempted = false;
-    let retainedAbortLocks = false;
-    let executedAbort: GitBranchResult | undefined;
-    const lines: string[] = [];
-    let sanitize = (value: string) => sanitizeRepositoryLog(value);
-    const diagnostics = (value: GitBranchResult): GitBranchResult => ({
-      ...value,
-      message: sanitize(value.message),
-      log: sanitize(value.log),
-    });
-    const result = (
-      status: GitBranchResult["status"],
-      changed: boolean,
-      message: string,
-      conflictCount?: number,
-    ): GitBranchResult => ({
-      projectId: request.projectId,
-      action: request.action,
-      status,
-      changed,
-      ...(conflictCount === undefined ? {} : { conflictCount }),
-      message: sanitizeRepositoryLog(message),
-      log: sanitizeRepositoryLog(lines.join("\n")),
-    });
-    try {
-      const completed = await this.options.context(
-        request.projectId,
-        async (ctx) => {
-          sanitize = ctx.sanitizeDiagnostics ?? sanitize;
-          if (ctx.ownerKey !== ticket.ownerKey) throw stale();
-          const before = await this.capture(ctx, request.projectId);
-          if (before.fingerprint !== ticket.state.fingerprint) throw stale();
-          const validation = await this.validate(ctx, request, before);
-          if (validation.attributes !== ticket.attributes) throw stale();
-          const effect = await this.mergeEffect(ctx, before);
-          const execute = async () => {
-            // Config and the selected source ref are held against cooperative Git
-            // writers; the native merge owns its index and current-ref CAS locks.
-            if (
-              (await this.capture(ctx, request.projectId)).fingerprint !==
-              before.fingerprint
-            )
-              throw stale();
-            const options = [
-              "-c",
-              `branch.${before.snapshot.branch!}.mergeOptions=`,
-              "-c",
-              "rerere.enabled=false",
-              "-c",
-              "rerere.autoupdate=false",
-              "-c",
-              "merge.autoStash=false",
-            ];
-            let expectedHead: string | undefined;
-            if (request.action === "merge") {
-              if (
-                await this.isAncestor(
-                  ctx,
-                  before.snapshot.head!,
-                  preview.sourceOid!,
-                )
-              )
-                expectedHead = preview.sourceOid!;
-              else if (
-                await this.isAncestor(
-                  ctx,
-                  preview.sourceOid!,
-                  before.snapshot.head!,
-                )
-              )
-                expectedHead = before.snapshot.head!;
-            }
-            const mergeTree = await this.protectMergeDestinations(
-              ctx,
-              before,
-              preview.sourceOid!,
-              options,
-            );
-            const indexPaths = await this.indexPaths(ctx);
-            const tracked = new Set([...mergeTree.current, ...indexPaths]);
-            let destinations: MergeDestinations = {
-              current: mergeTree.current,
-              incoming: mergeTree.incoming,
-              tracked,
-            };
-            if (request.action === "abort-merge") {
-              await this.assertAbortIndex(ctx, mergeTree);
-              destinations = {
-                current: new Set(indexPaths),
-                incoming: [...mergeTree.current],
-                tracked,
-                original: {
-                  paths: new Set(mergeTree.incoming),
-                  conflicts: mergeTree.conflicts,
-                },
-              };
-            }
-            if (request.action === "abort-merge") {
-              const aborted = await this.pinnedMergeAbort(
-                ctx,
-                before,
-                destinations,
-                async () => {
-                  await ctx.verify();
-                  if (
-                    preview.expiresAt <= this.now() ||
-                    (await this.mergeAttributes(
-                      ctx,
-                      before.snapshot.head!,
-                      preview.sourceOid!,
-                      destinations.incoming,
-                    )) !== ticket.attributes
-                  )
-                    throw stale();
-                },
-              );
-              const protectedAbort = this.holdConfigForUnknown(aborted);
-              Object.assign(aborted, protectedAbort);
-              retainedAbortLocks = aborted.lockRetained;
-              attempted = aborted.changed;
-              return (executedAbort = {
-                ...result(aborted.status, aborted.changed, aborted.message),
-                log: sanitizeRepositoryLog(aborted.log),
-                nativeWarning: aborted.nativeWarning,
-                lockRetained: aborted.lockRetained,
-                uncheckedLocks: aborted.uncheckedLocks,
-                recoveryUnverified: aborted.recoveryUnverified,
-                retainedLocks: aborted.lockRetained
-                  ? [...new Set([...aborted.retainedLocks, "config.lock"])]
-                  : [],
-                ...(aborted.recoveryPath
-                  ? { recoveryPath: aborted.recoveryPath }
-                  : {}),
-              });
-            }
-            await ctx.verify();
-            if (
-              (await this.capture(ctx, request.projectId)).fingerprint !==
-              before.fingerprint
-            )
-              throw stale();
-            if (
-              (await this.mergeAttributes(
-                ctx,
-                before.snapshot.head!,
-                preview.sourceOid!,
-                destinations.incoming,
-              )) !== ticket.attributes
-            )
-              throw stale();
-            // Last pre-mutation boundary: no unrelated awaited work after this
-            // check. Arbitrary external filesystem writers after the check cannot
-            // be made atomic with native Git; callers must not promise that.
-            await this.checkMergeDestinations(ctx, destinations);
-            let failure: unknown;
-            attempted = true;
-            try {
-              const output = await this.git(ctx, [
-                ...options,
-                "merge",
-                ...[
-                  "--ff",
-                  "--commit",
-                  "--no-edit",
-                  "--no-squash",
-                  "--no-autostash",
-                  "--no-overwrite-ignore",
-                  "--no-verify-signatures",
-                  "--no-stat",
-                  "--strategy=ort",
-                  "--",
-                  preview.sourceOid!,
-                ],
-              ]);
-              lines.push(output.stdout, output.stderr);
-            } catch (error) {
-              failure = error;
-              const e = error as {
-                message?: string;
-                stdout?: string;
-                stderr?: string;
-              };
-              lines.push(
-                e.stdout ?? "",
-                e.stderr ?? "",
-                e.message ?? String(error),
-              );
-            }
-            await ctx.verify();
-            const after = await this.capture(ctx, request.projectId);
-            if (after.snapshot.branch !== before.snapshot.branch) throw stale();
-            if (failure) {
-              if (
-                request.action === "merge" &&
-                after.snapshot.head === before.snapshot.head &&
-                after.snapshot.operation === "merge"
-              ) {
-                const merge = await this.mergeState(ctx, after);
-                if (
-                  merge.source === preview.sourceOid &&
-                  merge.conflictCount > 0
-                )
-                  return result(
-                    "conflict",
-                    true,
-                    "Слияние остановлено: разрешите конфликты или явно подтвердите отмену. Незавершённое слияние сохранено.",
-                    merge.conflictCount,
-                  );
-              }
-              if (
-                failure instanceof CommandExitError &&
-                (await this.mergeEffect(ctx, after)) === effect
-              )
-                return result(
-                  "error",
-                  false,
-                  "Git отказал в слиянии. Ветка и изменения сохранены; изучите журнал. Сброс и повтор не выполнялись.",
-                );
-              return result(
-                "uncertain",
-                true,
-                "Операция Git не завершена; возможно частичное изменение или незавершённое слияние. Проверьте состояние и журнал. Автоматическая отмена и повтор не выполнялись.",
-              );
-            }
-            if (after.snapshot.operation !== "none") throw stale();
-            if (expectedHead) {
-              if (after.snapshot.head !== expectedHead) throw stale();
-            } else {
-              if (!after.snapshot.head) throw stale();
-              const parents = (
-                await this.git(ctx, [
-                  "rev-list",
-                  "--parents",
-                  "-n",
-                  "1",
-                  after.snapshot.head,
-                ])
-              ).stdout
-                .trim()
-                .split(" ");
-              if (
-                parents.length !== 3 ||
-                parents[1] !== before.snapshot.head ||
-                parents[2] !== preview.sourceOid
-              )
-                throw stale();
-            }
-            return result(
-              "success",
-              after.snapshot.head !== before.snapshot.head,
-              "Слияние завершено. Публикация не выполнялась.",
-            );
-          };
-          return this.withMetadataLock(
-            ctx,
-            "config.lock",
-            () =>
-              request.action === "merge" && preview.sourceRef !== preview.toRef
-                ? this.withRefLock(ctx, preview.sourceRef!, execute)
-                : execute(),
-            () => retainedAbortLocks,
-          );
-        },
-      );
-      if (
-        executedAbort?.recoveryPath &&
-        !executedAbort.lockRetained &&
-        executedAbort.status !== "uncertain"
-      ) {
-        await fs.rm(executedAbort.recoveryPath, {
-          recursive: true,
-          force: true,
-        });
-        delete executedAbort.recoveryPath;
-      }
-      return diagnostics(completed);
-    } catch (error) {
-      const e = error as { message?: string; stdout?: string; stderr?: string };
-      lines.push(e.stdout ?? "", e.stderr ?? "", e.message ?? String(error));
-      const failed = result(
-        attempted ? "uncertain" : "error",
-        attempted,
-        attempted
-          ? "Результат Git не подтверждён. Проверьте состояние и журнал; сброс и повтор не выполнялись."
-          : error instanceof Error
-            ? error.message
-            : "Операция Git не выполнена.",
-      );
-      if (executedAbort)
-        failed.log = sanitizeRepositoryLog(
-          executedAbort.log + "\n" + failed.log,
-        );
-      const retained = [...(executedAbort?.retainedLocks ?? [])];
-      if (
-        error instanceof GitMetadataLockCleanupError &&
-        error.retained &&
-        !retained.includes(error.lock)
-      )
-        retained.push(error.lock);
-      const unchecked = [...(executedAbort?.uncheckedLocks ?? [])];
-      if (
-        error instanceof GitMetadataLockCleanupError &&
-        error.unchecked &&
-        !unchecked.includes(error.lock)
-      )
-        unchecked.push(error.lock);
-      return diagnostics(
-        await this.recoveryDiagnostics({
-          ...executedAbort,
-          ...failed,
-          lockRetained: retained.length > 0,
-          retainedLocks: retained,
-          uncheckedLocks: unchecked,
-        }),
-      );
-    }
-  }
   async execute(input: string): Promise<GitBranchResult> {
+    return withNativeGitCompletion(() => this.executeInCompletion(input));
+  }
+  private async executeInCompletion(input: string): Promise<GitBranchResult> {
     const token = gitBranchTokenSchema.parse(input),
       ticket = this.tickets.get(token);
     this.tickets.delete(token);
     if (!ticket || ticket.preview.expiresAt <= this.now()) throw stale();
     const { request, preview } = ticket;
-    if (request.action === "merge" || request.action === "abort-merge")
-      return this.executeMerge(ticket);
-    let changed = false,
-      attempted = false;
-    const lines: string[] = [];
-    try {
-      return await this.options.context(request.projectId, async (ctx) => {
-        if (ctx.ownerKey !== ticket.ownerKey) throw stale();
-        let state = await this.capture(ctx, request.projectId);
-        if (state.fingerprint !== ticket.state.fingerprint) throw stale();
-        await this.validate(ctx, request, state);
-        let pullExpectedHead: string | undefined;
-        const run = async (args: string[]) => {
-          attempted = true;
-          const r = await this.git(ctx, args);
-          lines.push(r.stdout, r.stderr);
-          changed = true;
-        };
-        if (preview.createsBranch) {
-          if (
-            (await this.capture(ctx, request.projectId)).fingerprint !==
-            state.fingerprint
-          )
-            throw stale();
-          await run([
-            "branch",
-            "--no-track",
-            "--",
-            preview.toRef!.slice(11),
-            preview.toOid!,
-          ]);
-          const created = await this.capture(ctx, request.projectId);
-          if (
-            created.anchor !== state.anchor ||
-            JSON.stringify(created.inventory.remote) !==
-              JSON.stringify(state.inventory.remote) ||
-            JSON.stringify(
-              created.inventory.local.filter((r) => r.ref !== preview.toRef),
-            ) !== JSON.stringify(state.inventory.local) ||
-            created.inventory.local.find((r) => r.ref === preview.toRef)
-              ?.oid !== preview.toOid
-          )
-            throw stale();
-          state = created;
-          if (request.action === "switch-remote") {
-            const name = preview.toRef!.slice(11);
-            for (const [key, value] of [
-              [`branch.${name}.remote`, ticket.remote!.name],
-              [`branch.${name}.merge`, ticket.remote!.source],
-            ]) {
-              if (
-                (await this.capture(ctx, request.projectId)).fingerprint !==
-                  state.fingerprint ||
-                state.config.some(([k]) => k === key)
-              )
-                throw stale();
-              // --add cannot replace an unrelated upstream written concurrently.
-              await run(["config", "--local", "--add", key, value]);
-              const updated = await this.capture(ctx, request.projectId),
-                actual = updated.config.filter(([k]) => k === key);
-              if (
-                updated.workspace !== state.workspace ||
-                JSON.stringify(updated.config.filter(([k]) => k !== key)) !==
-                  JSON.stringify(state.config) ||
-                actual.length !== 1 ||
-                actual[0][1] !== value
-              )
-                throw stale();
-              state = updated;
-            }
-          }
-        }
-        if (preview.switchesBranch) {
-          await this.withMetadataLock(ctx, "config.lock", () =>
-            this.withRefLock(ctx, preview.toRef!, async () => {
-              const fresh = await this.capture(ctx, request.projectId);
-              if (fresh.fingerprint !== state.fingerprint) throw stale();
-              if (
-                fresh.inventory.local.find((r) => r.ref === preview.toRef)
-                  ?.oid !== preview.toOid
-              )
-                throw stale();
-              await run([
-                "switch",
-                "--no-guess",
-                "--no-overwrite-ignore",
-                preview.toRef!.slice(11),
-              ]);
-            }),
-          );
-        }
-        if (request.action === "fetch" || request.action === "pull") {
-          if (
-            (await this.capture(ctx, request.projectId)).fingerprint !==
-            state.fingerprint
-          )
-            throw stale();
-          const remote = await this.remote(
-            ctx,
-            state,
-            ticket.remote!.name,
-            ticket.remote!.source,
-          );
-          if (JSON.stringify(remote) !== JSON.stringify(ticket.remote))
-            throw stale();
-          await ctx.verify();
-          const fresh = await this.withMetadataLock(
-            ctx,
-            "config.lock",
-            async () => {
-              if (
-                (await this.capture(ctx, request.projectId)).fingerprint !==
-                state.fingerprint
-              )
-                throw stale();
-              attempted = true;
-              const fetched = await ctx.remoteGit(
-                this.args(ctx, [
-                  "-c",
-                  "protocol.file.allow=always",
-                  "-c",
-                  "protocol.https.allow=always",
-                  "-c",
-                  "protocol.ssh.allow=always",
-                  "-c",
-                  "http.followRedirects=false",
-                  "-c",
-                  "credential.helper=",
-                  "-c",
-                  "fetch.pruneTags=false",
-                  "-c",
-                  "fetch.writeCommitGraph=false",
-                  "fetch",
-                  "--atomic",
-                  "--no-tags",
-                  "--no-prune",
-                  "--no-write-fetch-head",
-                  "--no-recurse-submodules",
-                  "--no-auto-maintenance",
-                  "--no-write-commit-graph",
-                  "--",
-                  remote.endpoint,
-                  `${remote.source}:${remote.destination}`,
-                ]),
-              );
-              lines.push(fetched.stdout, fetched.stderr);
-              changed = true;
-              const fresh = await this.capture(ctx, request.projectId);
-              if (fresh.anchor !== state.anchor) throw stale();
-              if (
-                JSON.stringify(
-                  await this.remote(ctx, fresh, remote.name, remote.source),
-                ) !== JSON.stringify(remote)
-              )
-                throw stale();
-              return fresh;
-            },
-          );
-          if (request.action === "pull") {
-            const target = fresh.inventory.remote.find(
-              (r) => r.ref === remote.destination,
-            );
-            if (!target)
-              throw Error("После fetch настроенная upstream-ветка не найдена.");
-            await this.validate(ctx, request, fresh);
-            await this.withMetadataLock(ctx, "config.lock", async () => {
-              if (
-                (await this.capture(ctx, request.projectId)).fingerprint !==
-                fresh.fingerprint
-              )
-                throw stale();
-              const current = fresh.snapshot.head!;
-              if (await this.isAncestor(ctx, current, target.oid))
-                pullExpectedHead = target.oid;
-              else if (await this.isAncestor(ctx, target.oid, current))
-                pullExpectedHead = current;
-              else
-                throw Error(
-                  "Локальная ветка и upstream разошлись. Допускается только fast-forward; merge/rebase не выполнялись.",
-                );
-              await run([
-                "-c",
-                `branch.${fresh.snapshot.branch!}.mergeOptions=`,
-                "merge",
-                "--ff-only",
-                "--no-overwrite-ignore",
-                "--no-squash",
-                "--no-edit",
-                "--no-autostash",
-                "--no-gpg-sign",
-                target.oid,
-              ]);
-            });
-          }
-        }
-        await ctx.verify();
-        const after = await this.capture(ctx, request.projectId);
-        if (
-          request.action === "pull" &&
-          (after.snapshot.branch !== ticket.state.snapshot.branch ||
-            after.snapshot.head !== pullExpectedHead)
-        )
-          throw stale();
-        if (
-          request.action !== "pull" &&
-          preview.toRef &&
-          after.inventory.local.find((r) => r.ref === preview.toRef)?.oid !==
-            preview.toOid
-        )
-          throw stale();
-        if (
-          preview.switchesBranch &&
-          (after.snapshot.branch !== preview.toRef!.slice(11) ||
-            after.snapshot.head !== preview.toOid)
-        )
-          throw stale();
-        return {
-          projectId: request.projectId,
-          action: request.action,
-          status: "success",
-          changed,
-          message: "Операция Git завершена.",
-          log: sanitizeRepositoryLog(
-            lines.join("\n"),
-            ticket.remote ? [ticket.remote.endpoint] : [],
-          ),
-        };
-      });
-    } catch (error) {
-      const e = error as { message?: string; stdout?: string; stderr?: string };
-      lines.push(e.stdout ?? "", e.stderr ?? "", e.message ?? String(error));
-      return {
-        projectId: request.projectId,
-        action: request.action,
-        status: attempted ? "uncertain" : "error",
-        changed: changed || attempted,
-        message: sanitizeRepositoryLog(
-          e.message ?? "Операция Git не выполнена.",
-          ticket.remote ? [ticket.remote.endpoint] : [],
-        ),
-        log: sanitizeRepositoryLog(
-          lines.join("\n"),
-          ticket.remote ? [ticket.remote.endpoint] : [],
-        ),
-      };
+    if (
+      request.action === "create" ||
+      request.action === "switch-local" ||
+      request.action === "switch-remote"
+    )
+      return this.executeNativeLocal(ticket);
+    if (request.action === "merge") return this.executeNativeMerge(ticket);
+    if (request.action === "fetch" || request.action === "pull")
+      return this.executeNativeFetch(ticket);
+    if (request.action === "abort-merge") {
+      if (!ticket.mergeToken) throw stale();
+      const result = await this.nativeMerges.execute(ticket.mergeToken);
+      return { ...result, projectId: request.projectId, action: "abort-merge" };
     }
+    throw stale();
   }
 }

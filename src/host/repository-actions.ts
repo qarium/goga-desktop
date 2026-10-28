@@ -1,4 +1,4 @@
-import type { GitUpdateAttemptInput } from "./git-update-handoff";
+import type { GitUpdateAttemptInput } from "./git-native-update-handoff";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { lstat, realpath } from "node:fs/promises";

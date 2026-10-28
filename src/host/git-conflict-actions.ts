@@ -1,16 +1,4 @@
-import { randomBytes, randomUUID } from "node:crypto";
-import {
-  constants,
-  openSync,
-  closeSync,
-  writeFileSync,
-  fsyncSync,
-  fchmodSync,
-  mkdirSync,
-  renameSync,
-  unlinkSync,
-  linkSync,
-} from "node:fs";
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -18,30 +6,21 @@ import type { ScopeRef } from "../shared/context";
 import {
   gitConflictSaveRequestSchema,
   gitConflictSaveTokenSchema,
-  type GitConflictSaveRequest,
   type GitConflictSavePreview,
+  type GitConflictSaveRequest,
   type GitConflictSaveResult,
 } from "../shared/git-conflict-save";
 import {
-  hash,
-  stale,
-  safe,
-  stat,
-  directory,
-  regular,
-  parents,
-  assertParents,
-  metadata,
-  disk,
-  stateKey,
-  identity,
-  capture,
-  stateFingerprint,
-  parseStages,
   assertPolicySupported,
-  type File,
-  type State,
+  capture,
+  identity,
+  parseStages,
+  safe,
+  stale,
+  stateFingerprint,
+  stateKey,
   type Policy,
+  type State,
   type StoppedRebaseConflictBinding,
 } from "./git-conflict-state";
 import type { GitCommitContext } from "./git-workspace-actions";
@@ -59,7 +38,7 @@ const LIMIT = 1024 * 1024,
   MAX_TICKETS = 32,
   TTL = 5 * 60 * 1000,
   MAX_TICKET_BYTES = 16 * LIMIT;
-interface Ticket {
+export interface GitConflictTicket {
   retainedBytes: number;
   preview: GitConflictSavePreview;
   state: State;
@@ -68,43 +47,12 @@ interface Ticket {
   oid: string | null;
   mode: string | null;
 }
-function syncDirectory(dir: string) {
-  const fd = openSync(
-    dir,
-    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-  );
-  try {
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-}
-function writeNew(file: string, bytes: string | Buffer, mode = 0o600) {
-  const fd = openSync(
-    file,
-    constants.O_WRONLY |
-      constants.O_CREAT |
-      constants.O_EXCL |
-      constants.O_NOFOLLOW,
-    mode,
-  );
-  try {
-    // Recovery directories are private; preserve approved permissions exactly,
-    // rather than widening a 0600 working file to a generic Git 0644 default.
-    fchmodSync(fd, mode);
-    writeFileSync(fd, bytes);
-    fsyncSync(fd);
-  } finally {
-    closeSync(fd);
-  }
-}
-
 /** One-use, owner-bound single literal path transaction. No commit, continuation,
  * rollback, rename inference or writes through Git to the real working file. */
-export class GitConflictActions {
-  private readonly tickets = new Map<string, Ticket>();
+export abstract class GitConflictActions {
+  private readonly tickets = new Map<string, GitConflictTicket>();
   constructor(
-    private readonly options: {
+    protected readonly options: {
       context: <T>(
         scope: ScopeRef,
         fn: (context: GitConflictActionContext) => Promise<T>,
@@ -117,10 +65,10 @@ export class GitConflictActions {
       afterPublishIndex?: () => void;
     },
   ) {}
-  private now() {
+  protected now() {
     return this.options.now?.() ?? Date.now();
   }
-  private git(
+  protected git(
     c: GitCommitContext,
     args: string[],
     options?: { stdin?: string; indexFile?: string },
@@ -135,7 +83,7 @@ export class GitConflictActions {
       options,
     );
   }
-  private capture(c: GitCommitContext, name: string, revision: string) {
+  protected capture(c: GitCommitContext, name: string, revision: string) {
     return capture(c, name, revision);
   }
   private async canonicalize(
@@ -153,18 +101,19 @@ export class GitConflictActions {
     const root = await fs.realpath(temp),
       gitdir = path.join(root, ".git");
     try {
-      for (const name of ["objects", "refs", "info"])
-        await fs.mkdir(path.join(gitdir, name), {
-          recursive: true,
-          mode: 0o700,
-        });
-      await fs.writeFile(path.join(gitdir, "HEAD"), "ref: refs/heads/unused\n");
-      await fs.writeFile(
-        path.join(gitdir, "config"),
-        oidLength === 64
-          ? "[core]\nrepositoryformatversion = 1\n[extensions]\nobjectformat = sha256\n"
-          : "[core]\nrepositoryformatversion = 0\n",
-      );
+      await c.isolatedGit([
+        ...safe,
+        "-c",
+        "init.templateDir=",
+        "init",
+        "--quiet",
+        `--object-format=${oidLength === 64 ? "sha256" : "sha1"}`,
+        root,
+      ]);
+      await fs.mkdir(path.join(gitdir, "info"), {
+        recursive: true,
+        mode: 0o700,
+      });
       const attributes = Object.entries(policy.values).map(([key, value]) =>
         value === "unspecified"
           ? `!${key}`
@@ -366,312 +315,59 @@ export class GitConflictActions {
     this.tickets.delete(token);
     if (!ticket || ticket.preview.expiresAt <= this.now())
       throw Error("Подтверждение истекло или уже использовано.");
-    return this.options.context(ticket.preview.scope, async (c) => {
-      const current = await this.capture(
-        c,
-        ticket.preview.path,
-        ticket.state.revision,
-      );
-      if (
-        ticket.preview.expiresAt <= this.now() ||
-        stateKey(current) !== stateKey(ticket.state)
-      )
-        throw stale();
-      return this.transact(c, { ...ticket, state: current });
-    });
-  }
-  private async transact(
-    c: GitConflictActionContext,
-    t: Ticket,
-  ): Promise<GitConflictSaveResult> {
-    const root = t.state.root,
-      name = t.preview.path,
-      gitdir = path.join(root, ".git"),
-      work = path.join(root, name),
-      index = path.join(gitdir, "index"),
-      lock = path.join(gitdir, "index.lock"),
-      recovery = path.join(gitdir, `goga-commit-${randomUUID()}`),
-      privateIndex = path.join(recovery, "index"),
-      candidate = path.join(recovery, "index-ready"),
-      workReady = path.join(recovery, "work-ready");
-    let workPublished = false,
-      indexPublished = false,
-      lockIdentity = "",
-      lockContentHash = "",
-      recoveryIdentity = "",
-      readyWork: File | null = null,
-      publishedWork: File | null = null;
-    const ownLock = () => {
-      try {
-        if (!lockIdentity || !lockContentHash) return false;
-        // Work parents may have changed; .git ownership alone determines whether
-        // our lock can safely be released on a pre-publication refusal.
-        assertParents(t.state.disk.parents.slice(0, 2));
-        const s = stat(lock);
-        return (
-          !!s &&
-          `${s.dev}:${s.ino}` === lockIdentity &&
-          s.nlink === 1n &&
-          hash(regular(lock)!.bytes) === lockContentHash
-        );
-      } catch {
-        return false;
-      }
-    };
-    const journal = {
-      version: 1,
-      kind: "single-conflict-save",
-      scope: t.preview.scope,
-      path: name,
-      root,
-      oldHead: t.state.head,
-      operation: t.state.operation,
-      ownerHash: hash(t.state.owner),
-      parents: t.state.disk.parents,
-      lockIdentity: "",
-      preparedIndexHash: "",
-      publishedWorkIdentity: null as string | null,
-      oldWork: t.state.disk.work?.identity ?? "missing",
-      oldIndex: t.state.disk.index.identity,
-      submittedHash: t.text === null ? null : hash(t.text),
-      canonicalOid: t.oid,
-      mode: t.mode,
-      worktreePublished: false,
-      indexPublished: false,
-      state: "prepared",
-      lockRetained: false,
-    };
-    const writeJournal = () => {
-      if (directory(recovery) !== recoveryIdentity) throw stale();
-      assertParents(t.state.disk.parents);
-      const next = path.join(recovery, `journal-${randomUUID()}`);
-      writeNew(next, JSON.stringify(journal, null, 2));
-      renameSync(next, path.join(recovery, "journal.json"));
-      syncDirectory(recovery);
-    };
-    const expectedMetadata = () => {
-      if (!workPublished) return t.state.disk.metadata;
-      // A selected .gitattributes is itself a metadata row. Admit only our exact
-      // published inode/content delta; every other attribute/metadata row and the
-      // effective normalization policy remain strictly pinned.
-      const rows: [string, string][] = JSON.parse(t.state.disk.metadata);
-      return JSON.stringify(
-        rows.map(([filename, identity]) => [
-          filename,
-          filename === work ? (publishedWork?.identity ?? "missing") : identity,
-        ]),
-      );
-    };
-    const assertDisk = (expectedWork: File | null) => {
-      const fresh = disk(root, name);
-      if (
-        JSON.stringify(fresh.parents) !==
-          JSON.stringify(t.state.disk.parents) ||
-        fresh.metadata !== expectedMetadata() ||
-        fresh.index.identity !== t.state.disk.index.identity ||
-        (fresh.work?.identity ?? "missing") !==
-          (expectedWork?.identity ?? "missing") ||
-        c.root !== root ||
-        c.ownerKey !== t.state.owner ||
-        JSON.stringify(c.scope) !== t.state.scope ||
-        !ownLock()
-      )
-        throw stale();
-      if (directory(recovery) !== recoveryIdentity) throw stale();
-      if (
-        !workPublished &&
-        t.text !== null &&
-        regular(workReady, LIMIT)?.identity !== readyWork?.identity
-      )
-        throw stale();
-    };
-    const verify = async (expectedWork: File | null) => {
-      const actual = await this.capture(c, name, t.state.revision);
-      const expected = {
-        ...t.state,
-        disk: {
-          ...t.state.disk,
-          work: expectedWork,
-          metadata: expectedMetadata(),
-        },
-      };
-      if (stateKey(actual) !== stateKey(expected)) throw stale();
-      if (t.preview.expiresAt <= this.now()) throw stale();
-      assertDisk(expectedWork);
-    };
-    const result = (
-      status: GitConflictSaveResult["status"],
-      message: string,
-      log = "",
-    ): GitConflictSaveResult => ({
-      scope: t.preview.scope,
-      path: name,
-      status,
-      message,
-      log,
-      worktreePublished: workPublished,
-      indexPublished,
-      lockRetained: ownLock(),
-      ...(recoveryIdentity ? { recoveryPath: recovery } : {}),
-    });
+    let result: GitConflictSaveResult | undefined;
+    let finalize: (() => Promise<void>) | undefined;
     try {
-      assertParents(t.state.disk.parents);
-      mkdirSync(recovery, { mode: 0o700 });
-      assertParents(t.state.disk.parents);
-      recoveryIdentity = directory(recovery);
-      writeNew(path.join(recovery, "original-index"), t.state.disk.index.bytes);
-      writeNew(privateIndex, t.state.disk.index.bytes);
-      if (t.state.disk.work)
-        writeNew(path.join(recovery, "original-work"), t.state.disk.work.bytes);
-      if (t.text !== null) {
-        writeNew(path.join(recovery, "submitted-work"), t.text);
-        const originalMode =
-          t.state.disk.work?.mode ?? (t.mode === "100755" ? 0o700 : 0o600);
-        const workMode =
-          t.preview.resolution === "text"
-            ? originalMode
-            : t.mode === "100755"
-              ? originalMode | ((originalMode & 0o444) >> 2)
-              : originalMode & ~0o111;
-        writeNew(workReady, t.text, workMode);
-        readyWork = regular(workReady, LIMIT);
-      }
-      writeJournal();
-      syncDirectory(gitdir);
-      if (t.canonical !== null) {
-        const oid = (
-          await this.git(c, ["hash-object", "--no-filters", "-w", "--stdin"], {
-            stdin: t.canonical,
-          })
-        ).stdout.trim();
-        if (oid !== t.oid) throw stale();
-      }
-      const zeros = "0".repeat(t.oid?.length ?? t.state.head?.length ?? 40);
-      assertParents(t.state.disk.parents);
-      if (
-        directory(recovery) !== recoveryIdentity ||
-        !regular(privateIndex)?.bytes.equals(t.state.disk.index.bytes)
-      )
-        throw stale();
-      await this.git(c, ["update-index", "-z", "--index-info"], {
-        stdin:
-          `0 ${zeros}\t${name}\0` +
-          (t.oid ? `${t.mode} ${t.oid} 0\t${name}\0` : ""),
-        indexFile: privateIndex,
-      });
-      const ready = regular(privateIndex);
-      if (!ready) throw stale();
-      writeNew(candidate, ready.bytes);
-      lockContentHash = hash(ready.bytes);
-      // Hard-link publication is O_EXCL-like and exposes an already complete
-      // valid index, never an empty placeholder. Remove our extra link at once.
-      const s = stat(candidate)!;
-      lockIdentity = `${s.dev}:${s.ino}`;
-      journal.lockIdentity = lockIdentity;
-      journal.preparedIndexHash = lockContentHash;
-      journal.state = "index-prepared";
-      writeJournal();
-      try {
-        linkSync(candidate, lock);
-      } catch (e) {
-        lockIdentity = "";
-        if ((e as NodeJS.ErrnoException).code === "EEXIST")
-          throw Error("Индекс Git занят: чужая index.lock не изменена.");
-        throw e;
-      }
-      unlinkSync(candidate);
-      syncDirectory(gitdir);
-      await verify(t.state.disk.work);
-      this.options.beforePublishWork?.();
-      await verify(t.state.disk.work);
-      journal.state = "publishing-work";
-      writeJournal();
-      assertDisk(t.state.disk.work);
-      if (t.text === null) {
-        if (t.state.disk.work) unlinkSync(work);
-      } else renameSync(workReady, work);
-      workPublished = true;
-      publishedWork = regular(work, LIMIT);
-      // Do not adopt a later writer's first observed bytes as our own publish.
-      // Rename may change timestamps, but must retain the prepared inode, mode,
-      // size and exact bytes. Deletion must still be missing at this boundary.
-      if (
-        t.text === null
-          ? publishedWork !== null
-          : !readyWork ||
-            !publishedWork ||
-            publishedWork.identity.split(":").slice(0, 4).join(":") !==
-              readyWork.identity.split(":").slice(0, 4).join(":") ||
-            !publishedWork.bytes.equals(readyWork.bytes)
-      )
-        throw stale();
-      journal.publishedWorkIdentity = publishedWork?.identity ?? "missing";
-      syncDirectory(path.dirname(work));
-      this.options.afterPublishWork?.();
-      journal.worktreePublished = true;
-      journal.state = "work-published";
-      writeJournal();
-      await verify(publishedWork);
-      this.options.beforePublishIndex?.();
-      await verify(publishedWork);
-      journal.state = "publishing-index";
-      writeJournal();
-      assertDisk(publishedWork);
-      renameSync(lock, index);
-      indexPublished = true;
-      lockIdentity = "";
-      syncDirectory(gitdir);
-      this.options.afterPublishIndex?.();
-      // A subsequent external write is not rolled back or called solved.
-      await c.verify();
-      assertParents(t.state.disk.parents);
-      if (
-        metadata(root, name) !== expectedMetadata() ||
-        (regular(work, LIMIT)?.identity ?? "missing") !==
-          (publishedWork?.identity ?? "missing") ||
-        !regular(index)?.bytes.equals(ready.bytes)
-      )
-        throw stale();
-      journal.indexPublished = true;
-      journal.state = "complete";
-      writeJournal();
-      // Keep the durable journal/backups: recovery is explicit and never automatic.
-      return result(
-        "saved",
-        "Файл сохранён и подготовлен. Другие конфликты и операция Git не завершены.",
+      const contextual = await this.options.context(
+        ticket.preview.scope,
+        async (c) => {
+          const current = await this.capture(
+            c,
+            ticket.preview.path,
+            ticket.state.revision,
+          );
+          if (
+            ticket.preview.expiresAt <= this.now() ||
+            stateKey(current) !== stateKey(ticket.state)
+          )
+            throw stale();
+          result = await this.transact(
+            c,
+            { ...ticket, state: current },
+            (cleanup) => {
+              finalize = cleanup;
+            },
+          );
+          return result;
+        },
       );
+      // Host may sanitize diagnostics or downgrade the result after releasing
+      // its lifecycle lock. Preserve those facts before final recovery cleanup.
+      Object.assign(result!, contextual);
+      if (finalize && result!.status !== "saved") {
+        result!.lockRetained = true; // Native journal still owns its pending fence.
+        return result!;
+      }
+      await finalize?.();
+      return result!;
     } catch (error) {
-      // Once worktree publication succeeds, keep our valid index.lock and all
-      // recovery material. Releasing it could let another Git operation hide the
-      // partial transaction. A foreign/replaced lock is never removed or retained
-      // on our behalf. No automatic restoration ever overwrites newer edits.
-      if (!workPublished && ownLock()) {
-        unlinkSync(lock);
-        lockIdentity = "";
-        syncDirectory(gitdir);
-      }
-      journal.worktreePublished = workPublished;
-      journal.indexPublished = indexPublished;
-      journal.lockRetained = ownLock();
-      journal.state = indexPublished
-        ? "uncertain"
-        : workPublished
-          ? "partial"
-          : "not-saved";
-      try {
-        if (recoveryIdentity) writeJournal();
-      } catch {
-        /* Original durable intent and backups remain; never restore blindly. */
-      }
-      return result(
-        indexPublished ? "uncertain" : workPublished ? "partial" : "not-saved",
-        indexPublished
-          ? "Публикация индекса выполнена, но итоговая проверка не завершена. Проверьте журнал восстановления; не повторяйте автоматически."
-          : workPublished
-            ? "Рабочий файл сохранён, но индекс не опубликован. Конфликт не объявлен решённым; сохранены черновик, резервные копии и собственная блокировка, если она ещё принадлежит операции."
-            : "Файл и индекс не опубликованы. Подтверждение использовано; повторите предпросмотр.",
-        String(error),
-      );
+      if (!result) throw error;
+      return {
+        ...result,
+        status: "uncertain",
+        lockRetained: true,
+        message:
+          "Завершение сохранения не подтверждено. Материалы восстановления сохранены; автоматическое повторение запрещено.",
+        // A throwing context never returned its sanitized diagnostics. Finalize
+        // also runs outside that boundary; never expose raw command/error data.
+        log: "Завершающая проверка сохранения или освобождение контекста завершились ошибкой. Диагностика окружения скрыта.",
+      };
     }
   }
+
+  protected abstract transact(
+    c: GitConflictActionContext,
+    t: GitConflictTicket,
+    onVerified: (cleanup: () => Promise<void>) => void,
+  ): Promise<GitConflictSaveResult>;
 }

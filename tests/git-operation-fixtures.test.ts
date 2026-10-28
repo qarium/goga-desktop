@@ -124,7 +124,7 @@ for (const scenario of scenarios) {
   );
 }
 it.each(["merge-rebase", "apply-rebase"] as const)(
-  "%s metadata proves owner and backend; apply cannot be confused with am",
+  "%s read identity binds physical owner and opaque controls without authorizing replay",
   async (s) => {
     const f = await create(s, 4, [1, 3]);
     const owner = {
@@ -132,7 +132,8 @@ it.each(["merge-rebase", "apply-rebase"] as const)(
       gitCommonDir: path.join(f.root, ".git"),
       branch: f.branch,
     };
-    expect(await readRebaseBinding(owner, f.git)).toMatch(/^[a-f0-9]{64}$/);
+    const binding = await readRebaseBinding(owner, f.git);
+    expect(binding).toMatch(/^[a-f0-9]{64}$/);
     const folder =
       s === "merge-rebase" ? ".git/rebase-merge" : ".git/rebase-apply";
     expect((await f.read(`${folder}/orig-head`)).trim()).toBe(f.original);
@@ -140,7 +141,10 @@ it.each(["merge-rebase", "apply-rebase"] as const)(
     if (s === "apply-rebase") {
       expect(await f.read(`${folder}/rebasing`)).toBe("");
       await f.write(`${folder}/applying`, "");
-      await expect(readRebaseBinding(owner, f.git)).rejects.toThrow();
+      // Display binding is not sequence admission. Opaque changes MUST change
+      // identity; Host refusal to replay changed apply controls is covered by
+      // git-rebase-read-admission (including this exact applying mutation).
+      expect(await readRebaseBinding(owner, f.git)).not.toBe(binding);
     }
   },
 );

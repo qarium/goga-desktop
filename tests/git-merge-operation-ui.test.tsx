@@ -67,6 +67,20 @@ const result = (scope: ScopeRef = "p", action = "continue") => ({
   status: "success",
   changed: true,
   lockRetained: false,
+  retainedLocks: [],
+  uncheckedLocks: [],
+  native: {
+    operationId: "11111111-1111-4111-8111-111111111111",
+    outcome: "completed",
+    exitCode: 0,
+    signal: null,
+    beforeHead: head,
+    afterHead: action === "abort" ? head : "e".repeat(40),
+    conflicts: [],
+    verifiedUnrelatedData: true,
+    processSettled: true,
+    recovery: "removed",
+  },
   message: "Done",
   log: "",
 });
@@ -512,6 +526,18 @@ it("reports overlays only for visible active modal, not footer write progress", 
   expect(overlay).toHaveBeenLastCalledWith("p", true, "p");
 });
 it.each([
+  { native: undefined },
+  { native: { ...result().native, processSettled: false } },
+  { native: { ...result().native, verifiedUnrelatedData: false } },
+  { native: { ...result().native, beforeHead: "f".repeat(40) } },
+  { native: { ...result().native, exitCode: 1 } },
+  {
+    native: {
+      ...result().native,
+      recovery: "retained",
+      recoveryPath: "/fixture/recovery",
+    },
+  },
   { lockRetained: true },
   { retainedLocks: ["index.lock"] },
   { uncheckedLocks: ["HEAD.lock"] },

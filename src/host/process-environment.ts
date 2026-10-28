@@ -1,6 +1,12 @@
 import { isOfflineGitRead } from "./read-scope";
+import { applyNativeGitEnvironment } from "./git-native-policy";
 import path from "node:path";
-import { trustedGitIndex, isPrivateGitIndexWrite } from "./git-index-scope";
+import {
+  trustedGitIndex,
+  isPrivateGitIndexWrite,
+  nativeGitIndex,
+  nativeGitObjects,
+} from "./git-index-scope";
 import {
   isPrivateGitRead,
   isFrozenGitConfig,
@@ -32,7 +38,16 @@ export function childEnvironment(
   for (const key of Object.keys(result))
     if (configInjection(key)) delete result[key];
   for (const key of gitRedirectKeys) delete result[key];
+  // Native defaults must not weaken enclosing offline/private/index scopes.
+  applyNativeGitEnvironment(result);
   const index = trustedGitIndex();
+  const nativeIndex = nativeGitIndex();
+  if (nativeIndex) {
+    if (index || isPrivateGitRead())
+      throw new Error("Несовместимые области индекса Git.");
+    result.GIT_INDEX_FILE = nativeIndex;
+    if (nativeGitObjects()) result.GIT_OBJECT_DIRECTORY = nativeGitObjects();
+  }
   if (index && !isPrivateGitRead()) result.GIT_INDEX_FILE = index;
   if (index && isPrivateGitRead() && isPrivateGitIndexWrite()) {
     result.GIT_INDEX_FILE = index;

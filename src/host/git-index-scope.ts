@@ -24,3 +24,44 @@ export function withTrustedGitIndex<T>(filename: string, action: () => T): T {
   return indexScope.run(filename, action);
 }
 export const trustedGitIndex = () => indexScope.getStore();
+
+const nativeIndexScope = new AsyncLocalStorage<string>();
+/** Only createNativeGitClient mints these private directories. This capability
+ * selects an index for one native command, never for surrounding observations. */
+export function withNativeGitIndex<T>(filename: string, action: () => T): T {
+  if (
+    !path.isAbsolute(filename) ||
+    path.resolve(filename) !== filename ||
+    !/\/goga-native-index-[A-Za-z0-9]+\/index$/.test(filename)
+  )
+    throw new Error("Недопустимый временный индекс штатного Git.");
+  return nativeIndexScope.run(filename, action);
+}
+/** Narrow host-only capability used by the frozen native client's stat refresh.
+ * No caller-supplied index filename: it always addresses this admitted root.
+ * Git alone reads/writes the real index; no binary metadata is copied. */
+export function withNativeGitIndexRefresh<T>(root: string, action: () => T): T {
+  if (
+    !path.isAbsolute(root) ||
+    path.resolve(root) !== root ||
+    root.includes("\0")
+  )
+    throw Error("Недопустимая рабочая папка штатного Git.");
+  return nativeIndexScope.run(path.join(root, ".git/index"), action);
+}
+export const nativeGitIndex = () => nativeIndexScope.getStore();
+
+const nativeObjectScope = new AsyncLocalStorage<string>();
+/** The native client alone supplies the audited source object store while Git
+ * owns a disposable, filter-free metadata directory. No renderer redirects. */
+export function withNativeGitObjects<T>(directory: string, action: () => T): T {
+  if (
+    !nativeGitIndex() ||
+    !path.isAbsolute(directory) ||
+    path.resolve(directory) !== directory ||
+    !directory.endsWith("/.git/objects")
+  )
+    throw Error("Недопустимое хранилище объектов штатного Git.");
+  return nativeObjectScope.run(directory, action);
+}
+export const nativeGitObjects = () => nativeObjectScope.getStore();

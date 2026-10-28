@@ -430,3 +430,43 @@ it("keeps handoff actions in the padded non-shrinking confirmation footer", asyn
   ).toBe(true);
   expect(actions?.closest(".git-merge-operation-details")).toBeNull();
 });
+it.each(["success", "conflict"] as const)(
+  "native handoff has no predicted file list and validates observed %s",
+  async (status) => {
+    const c = { ...candidate(), conflicts: [] };
+    api.prepareGitUpdateHandoff.mockResolvedValue(preview(c));
+    api.executeGitUpdateHandoff.mockResolvedValue({
+      ...result(),
+      status,
+      conflicts: status === "conflict" ? ["file.txt"] : [],
+      lockRetained: false,
+      retainedLocks: [],
+      uncheckedLocks: [],
+      native: {
+        operationId: "11111111-1111-4111-8111-111111111111",
+        outcome: status === "success" ? "completed" : "conflicts",
+        exitCode: status === "success" ? 0 : 1,
+        signal: null,
+        beforeHead: c.targetHead,
+        afterHead: c.sourceOid,
+        conflicts: status === "conflict" ? ["file.txt"] : [],
+        verifiedUnrelatedData: true,
+        processSettled: true,
+        recovery: status === "success" ? "removed" : "retained",
+        ...(status === "conflict" ? { recoveryPath: "/fixture/recovery" } : {}),
+      },
+    });
+    const view = mount(c);
+    fireEvent.click(
+      screen.getByRole("button", { name: "Обновить через Git…" }),
+    );
+    await screen.findByRole("button", { name: "Начать локальное обновление" });
+    expect(screen.queryByText(/операция остановится на конфликте/)).toBeNull();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Начать локальное обновление" }),
+    );
+    await waitFor(() =>
+      expect(view.onChanged).toHaveBeenCalledExactlyOnceWith(scope),
+    );
+  },
+);

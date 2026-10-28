@@ -982,6 +982,24 @@ it("keeps hunk undo history and a following typing event across file remounts", 
   });
   expect(restored.state.doc.toString()).toBe(generated);
 });
+function verifiedAbortFacts() {
+  return {
+    retainedLocks: [],
+    uncheckedLocks: [],
+    native: {
+      operationId: "11111111-1111-4111-8111-111111111111",
+      outcome: "completed",
+      exitCode: 0,
+      signal: null,
+      beforeHead: "b".repeat(40),
+      afterHead: "b".repeat(40),
+      conflicts: [],
+      verifiedUnrelatedData: true,
+      processSettled: true,
+      recovery: "removed",
+    },
+  };
+}
 function mergeBridge() {
   api.prepareGitMergeOperation = vi.fn(async (r: any) => ({
     ...r,
@@ -1064,6 +1082,7 @@ it.each(["success", "error", "uncertain"])(
         action: "abort",
         status,
         changed: status !== "error",
+        ...(status === "success" ? verifiedAbortFacts() : {}),
         lockRetained: false,
         message: "Outcome",
         log: "abort log",
@@ -1170,6 +1189,7 @@ it.each(["write-first", "read-first"])(
       await screen.findByRole("button", { name: "Отменить слияние" }),
     );
     const done = {
+      ...verifiedAbortFacts(),
       scope: "p",
       operation: "merge",
       action: "abort",

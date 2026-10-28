@@ -62,7 +62,17 @@ async function fixture(
     return (
       await runner.command(
         options.gitExecutable ?? "git",
-        ["-c", "core.hooksPath=/dev/null", ...args],
+        [
+          "-c",
+          "core.hooksPath=/dev/null",
+          // Fixture commits must not race read-only assertions with detached
+          // native maintenance. This does not alter production read guards.
+          "-c",
+          "gc.auto=0",
+          "-c",
+          "maintenance.auto=false",
+          ...args,
+        ],
         root,
         { ...env, ...overrides },
       )
@@ -566,6 +576,27 @@ describe("read-only Git workspace", () => {
     ).toBe(expected);
   });
 
+  it("keeps a preview valid when unrelated native objects are added", async () => {
+    const f = await fixture();
+    await f.write("a", "base\n");
+    await f.commit();
+    await f.write("a", "work\n");
+    const before = await f.reader.snapshot();
+    const blob = path.join(f.dir, "unreferenced-blob");
+    await fs.writeFile(blob, "unrelated object " + Date.now());
+    await f.git(["hash-object", "-w", "--", blob]);
+    expect((await f.reader.snapshot()).revision).toBe(before.revision);
+    expect(
+      (
+        await f.reader.diff({
+          scope: "project",
+          path: "a",
+          revision: before.revision,
+        })
+      ).unstaged.text,
+    ).toContain("+work");
+  });
+
   it("reads a source root containing whitespace, Unicode, quotes and a newline without writing objects, index or refs", async () => {
     const f = await fixture({ rootName: 'repo Юникод "quote"\nline' });
     await f.write("a", "base\n");
@@ -708,7 +739,8 @@ describe("read-only Git workspace", () => {
       await f.write("a", "base\n");
       await f.commit();
       await f.write("a", "work\n");
-      await f.git(["config", "--", key, "value"]);
+      // Explicit action preserves the option terminator across Git versions.
+      await f.git(["config", "--add", "--", key, "value"]);
       expect(
         await f.git(["--no-optional-locks", "status", "--porcelain"]),
       ).toBe(" M a\n");
@@ -877,6 +909,16 @@ describe("read-only Git workspace", () => {
       await fs.mkdir(path.join(f.root, ".git", marker));
     else await fs.writeFile(path.join(f.root, ".git", marker), "a".repeat(40));
     expect((await f.reader.snapshot()).operation).toBe(operation);
+  });
+
+  it("does not treat a leftover REBASE_HEAD as a running operation", async () => {
+    const f = await fixture();
+    await f.write("a", "base\n");
+    await f.commit();
+    const head = (await f.git(["rev-parse", "HEAD"])).trim();
+    await f.git(["update-ref", "REBASE_HEAD", head]);
+    expect((await f.reader.snapshot()).operation).toBe("none");
+    expect((await f.git(["rev-parse", "REBASE_HEAD"])).trim()).toBe(head);
   });
 
   it("detects upstream divergence using only local references", async () => {

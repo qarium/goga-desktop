@@ -39,19 +39,25 @@ test("CI and release use pinned actions, read-only builds and explicit native-te
                 "scripts/release-version.mjs --check",
                 "git merge-base --is-ancestor",
               ]
-            : id === "tests"
+            : id === "git-compatibility"
               ? [
                   "npm ci",
-                  "--testTimeout=15000",
-                  "--maxWorkers=1",
+                  "node scripts/test-git-compatibility.mjs",
                   "scripts/test-summary.mjs",
                 ]
-              : [
-                  "npm ci",
-                  "npm run test:release",
-                  "npm run typecheck",
-                  "npm run build",
-                ];
+              : id === "tests"
+                ? [
+                    "npm ci",
+                    "--testTimeout=15000",
+                    "--maxWorkers=1",
+                    "scripts/test-summary.mjs",
+                  ]
+                : [
+                    "npm ci",
+                    "npm run test:release",
+                    "npm run typecheck",
+                    "npm run build",
+                  ];
         for (const command of required)
           assert.ok(commands.includes(command), `${name}: ${command}`);
       }
@@ -170,7 +176,7 @@ test("every native architecture runs all four independent CI shards", async () =
     assert.equal(report.env.TEST_OUTCOME, "${{ steps.tests.outcome }}");
     const build = w.jobs[name === "ci" ? "check" : "build"];
     assert.ok(!build.steps.some((s) => (s.run ?? "").includes("npm test --")));
-    assert.equal(build.needs, "tests");
+    assert.deepEqual(build.needs, ["tests", "git-compatibility"]);
     if (name === "ci") {
       assert.equal(build.if, "always()");
       const gate = build.steps[0];
@@ -255,4 +261,32 @@ test("release reuses successful exact-commit CI and never reruns the full suite"
     "Recheck CI before creating the release",
   );
   assert.equal(w.jobs.publish.permissions.actions, "read");
+});
+
+test("lower Git compatibility is isolated, checksummed and required in addition to every full shard", async () => {
+  const workflow = await load("ci");
+  const j = workflow.jobs["git-compatibility"];
+  assert.ok(j, "Additional lower-Git job required");
+  assert.equal(j["runs-on"], "macos-15");
+  assert.notEqual(j["continue-on-error"], true);
+  const commands = j.steps.map((s) => s.run ?? "").join("\n");
+  assert.match(commands, /git-2\.45\.2\.tar\.xz/);
+  assert.match(
+    commands,
+    /51bfe87eb1c02fed1484051875365eeab229831d30d0cec5d89a14f9e40e9adb/,
+  );
+  assert.match(commands, /shasum -a 256 -c/);
+  assert.match(commands, /\$RUNNER_TEMP/);
+  assert.doesNotMatch(
+    commands,
+    /sudo|brew (?:install|unlink|link)|--retry|continue-on-error/,
+  );
+  assert.match(commands, /node scripts\/test-git-compatibility\.mjs/);
+  assert.deepEqual(workflow.jobs.check.needs, ["tests", "git-compatibility"]);
+  const gate = workflow.jobs.check.steps[0];
+  assert.equal(gate.env.COMPAT_RESULT, "${{ needs.git-compatibility.result }}");
+  assert.match(gate.run, /"\$COMPAT_RESULT" != success/);
+  const report = j.steps.find((s) => s.name === "Compatibility test report");
+  assert.equal(report.if, "always()");
+  assert.match(report.run, /test-summary.mjs work\/git-compatibility.json/);
 });

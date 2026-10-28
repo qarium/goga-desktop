@@ -311,6 +311,7 @@ export class CloneManager {
   private async validate(
     record: WorktreeRecord,
     readStore?: CloneStore,
+    physicalOnly = false,
   ): Promise<{
     state: "ready" | "missing" | "conflict";
     reason?: WorktreeRecord["reason"];
@@ -376,7 +377,10 @@ export class CloneManager {
         return { state: "conflict", reason: "repository" };
       const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"])).trim();
       let operationBinding: string | undefined;
-      if (branch === "HEAD" && readStore)
+      if (physicalOnly) {
+        // Physical ownership is not continuation authority. The caller must
+        // independently admit the durable native journal before any write.
+      } else if (branch === "HEAD" && readStore)
         operationBinding = await readRebaseBinding(record, git);
       else if (branch !== record.branch)
         return { state: "conflict", reason: "branch" };
@@ -403,7 +407,7 @@ export class CloneManager {
       if (remotes.includes("origin"))
         await assertClonePublicationOrigin(this.home, this.runner, record);
       await store.assertOwned(record);
-      if (readStore) {
+      if (readStore && !physicalOnly) {
         if (operationBinding) {
           if (operationBinding !== (await readRebaseBinding(record, git)))
             throw unavailable();
@@ -427,6 +431,20 @@ export class CloneManager {
     if (record.state === "deleting" || record.deletedAt) return record;
     const actual = await this.validate(record);
     assertReadActive();
+    if (
+      !record.preparation &&
+      actual.state === "conflict" &&
+      actual.reason === "branch"
+    ) {
+      const display = await this.validate(record, this.readStore);
+      if (display.state === "ready" && display.operationBinding) {
+        // A stopped rebase is a temporary detached context, not a new owner.
+        // Keep strict launch/save admission unavailable, but do NOT rewrite the
+        // durable registry revision that the native journal is bound to.
+        return { ...record, state: "conflict", reason: "branch" };
+      }
+    }
+
     if (actual.state !== "ready" && record.preparation) {
       actual.state = "conflict";
       actual.reason = "ambiguous-add";
@@ -773,6 +791,52 @@ export class CloneManager {
           : {}),
       };
     });
+  }
+  /** Host-only physical capability. No registry repair and no operation parsing.
+   * Not a resolved launch/save context: native handlers still require a receipt. */
+  async resolveNativeOperationOwner(
+    input: TopicContextRef,
+  ): Promise<WorktreeRecord> {
+    return withOfflineGitReadScope(async () => {
+      const ref = topicContextRefSchema.parse(input);
+      const initial = (await this.readStore.read()).records.find(
+        (r) => r.contextId === ref.contextId,
+      );
+      if (
+        !initial ||
+        !sameIdentity(initial, ref) ||
+        initial.revision !== ref.revision ||
+        initial.preparation ||
+        initial.deletedAt ||
+        !(
+          (initial.state === "ready" && initial.reason === undefined) ||
+          (initial.state === "conflict" && initial.reason === "branch")
+        )
+      )
+        throw unavailable();
+      if (
+        (await this.validate(initial, this.readStore, true)).state !== "ready"
+      )
+        throw unavailable();
+      const current = (await this.readStore.read()).records.find(
+        (r) => r.contextId === ref.contextId,
+      );
+      if (JSON.stringify(current) !== JSON.stringify(initial)) throw changed();
+      await this.readStore.assertOwned(initial);
+      return initial;
+    });
+  }
+  /** Revalidate a previously admitted native owner without Git, registry repair
+   * or registry locks. This is not standalone launch/write authority: callers
+   * retain entry/exit physical Git admission and the durable operation journal. */
+  async assertNativeOperationOwnerRecord(
+    expected: WorktreeRecord,
+  ): Promise<void> {
+    const current = (await this.readStore.read()).records.find(
+      (record) => record.contextId === expected.contextId,
+    );
+    if (JSON.stringify(current) !== JSON.stringify(expected)) throw changed();
+    await this.readStore.assertOwned(expected);
   }
   /** Host-only completion check for an already-authorized operation. This grants
    * no resolved context and never repairs the persisted conflict/branch row. */
