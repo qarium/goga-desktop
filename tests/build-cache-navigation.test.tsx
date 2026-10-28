@@ -135,8 +135,12 @@ beforeEach(() => {
     { id: "q", path: "/fixture/b", topic: "main", branch: "main" },
   ]);
   // Navigation between tabs is tested within one explicit owner.
-  api.listTopicContexts.mockImplementation(async (id: string) => fixture.records.filter(r => r.projectId === id));
-  api.runs.mockResolvedValue([{ ...run, topic: fixture.owner("p").topic, context: fixture.owner("p") }]);
+  api.listTopicContexts.mockImplementation(async (id: string) =>
+    fixture.records.filter((r) => r.projectId === id),
+  );
+  api.runs.mockResolvedValue([
+    { ...run, topic: fixture.owner("p").topic, context: fixture.owner("p") },
+  ]);
   window.goga = api;
 });
 afterEach(() => {
@@ -154,7 +158,15 @@ const change = (name: string | RegExp, value: string) =>
 const draftTab = () => screen.getByRole("tab", { name: /^Новая сборка · / });
 async function openBuild() {
   await openPrototypeLaunch("build");
-  await screen.findByRole("textbox", { name: "План сборки" });
+  // Poll the loading contract cheaply; repeated accessible-name/style walks
+  // over retained project panels can starve the deferred context read in jsdom.
+  await waitFor(() => {
+    const form = [...document.querySelectorAll(".build-form")].find(
+      (item) => !item.closest('[role="tabpanel"][hidden]'),
+    );
+    expect(form?.getAttribute("aria-busy")).toBe("false");
+  });
+  expect(screen.getByRole("textbox", { name: "План сборки" })).toBeTruthy();
   await waitFor(() => executionButton());
 }
 async function mount() {

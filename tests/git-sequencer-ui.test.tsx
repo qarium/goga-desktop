@@ -160,9 +160,13 @@ for (const op of ["cherry-pick", "revert"] as const) {
       Error("fixture read failure"),
     );
     render(view());
-    fireEvent.click(
-      await screen.findByRole("button", { name: `Продолжить ${op}…` }),
-    );
+    const button = await screen.findByRole("button", {
+      name: `Продолжить ${op}…`,
+    });
+    // The operation appears with the snapshot; the read's finally still has to
+    // enable it. A disabled click is intentionally ignored by the component.
+    await waitFor(() => expect(button).toHaveProperty("disabled", false));
+    fireEvent.click(button);
     const dialog = await screen.findByRole("dialog", {
       name: `Результат операции ${op}`,
     });
@@ -179,9 +183,13 @@ for (const op of ["cherry-pick", "revert"] as const) {
       operation: op === "revert" ? "cherry-pick" : "revert",
     }));
     render(view());
-    fireEvent.click(
-      await screen.findByRole("button", { name: `Продолжить ${op}…` }),
-    );
+    const button = await screen.findByRole("button", {
+      name: `Продолжить ${op}…`,
+    });
+    // The operation appears with the snapshot; the read's finally still has to
+    // enable it. A disabled click is intentionally ignored by the component.
+    await waitFor(() => expect(button).toHaveProperty("disabled", false));
+    fireEvent.click(button);
     await screen.findByRole("dialog", { name: `Результат операции ${op}` });
     expect(api.executeGitSequencerOperation).not.toHaveBeenCalled();
   });

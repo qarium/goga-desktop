@@ -56,6 +56,8 @@ test("accepts only the exact successful main CI commit via read-only bounded req
 for (const patch of [
   { head_sha: "b".repeat(40) },
   { event: "pull_request" },
+  { event: "workflow_dispatch", path: ".github/workflows/intel-tests.yml" },
+  { path: ".github/workflows/intel-tests.yml" },
   { head_branch: "feature" },
   { path: ".github/workflows/release.yml" },
   { repository: { full_name: "other/repo" } },

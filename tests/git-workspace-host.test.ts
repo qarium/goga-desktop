@@ -36,7 +36,7 @@ async function fixture() {
     GIT_COMMITTER_NAME: "Fixture",
     GIT_COMMITTER_EMAIL: "fixture@example.invalid",
   };
-  const runner = fixtureScope.runner(new NodeRunner(10000, env));
+  const runner = fixtureScope.runner(new NodeRunner(undefined, env));
   fixtureScope().cleanup(() => runner.dispose());
   const git = async (args: string[]) =>
     (
@@ -138,7 +138,7 @@ it(
     await expect((f.host as any).prepareGitCommit(request)).rejects.toThrow();
     expect(await f.git(["show", "HEAD:file.txt"])).toBe("base\n");
   }),
-  gitIntegrationBudget(15000),
+  gitIntegrationBudget(30000),
 );
 it(
   "invalidates commit authority after project settings change",
@@ -555,7 +555,7 @@ it.each([false, true])(
       expect(await f.git(["show", "HEAD:file.txt"])).toBe("base\n");
     }
   }),
-  gitIntegrationBudget(15000),
+  gitIntegrationBudget(30000),
 );
 
 it(

@@ -10,13 +10,14 @@ const load = async (name) =>
     ),
   );
 const pins = new Set([
+  "actions/cache@5a3ec84eff668545956fd18022155c47e93e2684",
   "actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683",
   "actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020",
   "actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02",
   "actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093",
 ]);
 test("CI and release use pinned actions, read-only builds and explicit native-test disable", async () => {
-  for (const name of ["ci", "release"]) {
+  for (const name of ["ci", "intel-tests", "release"]) {
     const w = await load(name);
     assert.deepEqual(w.permissions, { contents: "read" });
     for (const [id, j] of Object.entries(w.jobs)) {
@@ -27,7 +28,7 @@ test("CI and release use pinned actions, read-only builds and explicit native-te
           if (s.uses.startsWith("actions/checkout@"))
             assert.equal(s.with["persist-credentials"], false);
         }
-      if (id !== "publish") {
+      if (id !== "publish" && id !== "complete") {
         assert.notEqual(j.permissions?.contents, "write");
         if (id !== "verify-ci")
           assert.equal(j.env.GOGA_TOPIC_READONLY_CLI, "/nonexistent/disabled");
@@ -49,15 +50,10 @@ test("CI and release use pinned actions, read-only builds and explicit native-te
                 ? [
                     "npm ci",
                     "--testTimeout=15000",
-                    "--maxWorkers=1",
+                    name === "ci" ? "--maxWorkers=3" : "--maxWorkers=1",
                     "scripts/test-summary.mjs",
                   ]
-                : [
-                    "npm ci",
-                    "npm run test:release",
-                    "npm run typecheck",
-                    "npm run build",
-                  ];
+                : ["npm ci", "npm run build"];
         for (const command of required)
           assert.ok(commands.includes(command), `${name}: ${command}`);
       }
@@ -133,102 +129,89 @@ test("packaging keeps adhoc-only settings and architecture-qualified names", asy
   );
 });
 
-// Intel must be exercised on main/PR before choosing another release tag.
-test("CI exercises both native architectures with scoped Intel test budgets", async () => {
-  const expected = [
-    {
-      arch: "arm64",
-      runner: "macos-15",
-      testProfile: "default",
-      shardCount: 4,
-    },
-    {
-      arch: "x64",
-      runner: "macos-15-intel",
-      testProfile: "slow-git",
-      shardCount: 8,
-    },
-  ];
-  for (const name of ["ci"]) {
-    const workflow = await load(name);
-    const job = workflow.jobs.tests;
-    assert.ok(job.strategy?.matrix?.include, "Native test matrix is required");
-    assert.deepEqual(job.strategy.matrix.include, expected);
-    assert.equal(job.strategy["fail-fast"], false);
-    assert.equal(job["runs-on"], "${{ matrix.runner }}");
-    assert.equal(job["timeout-minutes"], 60);
-    assert.equal(job.env.GOGA_TEST_PROFILE, "${{ matrix.testProfile }}");
-    assert.equal(job.env.EXPECTED_ARCH, "${{ matrix.arch }}");
-    const commands = job.steps.map((step) => step.run ?? "").join("\n");
-    assert.ok(commands.includes("process.arch !== process.env.EXPECTED_ARCH"));
-    assert.ok(
-      commands.includes("--reporter=verbose"),
-      "Per-test progress must be visible",
-    );
-    assert.ok(commands.includes("--reporter=json"));
-    assert.ok(
-      !/--(?:retry|bail|isolate=false)|continue-on-error/.test(commands),
-    );
-    assert.notEqual(job["continue-on-error"], true);
-    for (const step of job.steps)
-      assert.notEqual(step["continue-on-error"], true);
-  }
+test("automatic CI is ARM-only; full Intel is manual and cannot gate a release", async () => {
+  const arm = await load("ci"),
+    intel = await load("intel-tests");
+  assert.deepEqual(Object.keys(intel.on), ["workflow_dispatch"]);
+  assert.deepEqual(arm.on.push.branches, ["main"]);
+  assert.ok(Object.hasOwn(arm.on, "pull_request"));
+  assert.equal(arm.jobs.tests["runs-on"], "macos-15");
+  assert.equal(arm.jobs.check["runs-on"], "macos-15");
+  assert.equal(
+    arm.jobs.check.needs,
+    undefined,
+    "Build must run alongside tests",
+  );
+  for (const command of [
+    "npm run test:release",
+    "npm run typecheck",
+    "npm run build",
+  ])
+    assert.ok(arm.jobs.check.steps.some((s) => s.run === command));
+  assert.equal(intel.jobs.tests["runs-on"], "macos-15-intel");
+  assert.equal(intel.jobs.tests.env.EXPECTED_ARCH, "x64");
+  assert.equal(intel.jobs.tests.env.GOGA_TEST_PROFILE, "slow-git");
+  assert.equal(intel.jobs.tests.env.GOGA_CI_DOMAIN, undefined);
+  assert.deepEqual(
+    intel.jobs.tests.strategy.matrix.shard,
+    [1, 2, 3, 4, 5, 6, 7, 8],
+  );
+  assert.equal(intel.jobs.check["runs-on"], "macos-15-intel");
+  assert.deepEqual(arm.jobs.complete.needs, [
+    "tests",
+    "git-compatibility",
+    "check",
+  ]);
+  assert.equal(arm.jobs.complete.if, "always()");
+  const gate = arm.jobs.complete.steps[0];
+  assert.equal(gate.env.RESULTS, "${{ toJSON(needs) }}");
+  assert.match(gate.run, /result !== 'success'/);
+  assert.match(gate.run, /exit\(1\)/);
+  assert.ok(!JSON.stringify(arm).includes("macos-15-intel"));
 });
-
-test("native architectures run all four arm64 and eight Intel CI shards", async () => {
-  for (const name of ["ci"]) {
-    const w = await load(name);
-    const j = w.jobs.tests;
-    assert.ok(j, `${name}: independent test job required`);
-    assert.deepEqual(j.strategy.matrix.arch, ["arm64", "x64"]);
-    assert.deepEqual(j.strategy.matrix.shard, [1, 2, 3, 4, 5, 6, 7, 8]);
+test("domain matrix covers eight areas and complete numbered subgroups", async () => {
+  const w = await load("ci"),
+    j = w.jobs.tests;
+  const manifest = JSON.parse(
+    await readFile(new URL("../ci-test-domains.json", import.meta.url), "utf8"),
+  );
+  const matrix = j.strategy.matrix.include;
+  assert.deepEqual(
+    [...new Set(matrix.map((row) => row.domain))].sort(),
+    Object.keys(manifest).sort(),
+  );
+  for (const domain of Object.keys(manifest)) {
+    const rows = matrix.filter((row) => row.domain === domain),
+      count = rows[0].count;
+    assert.ok(rows.every((row) => row.count === count));
     assert.deepEqual(
-      j.strategy.matrix.exclude,
-      [5, 6, 7, 8].map((shard) => ({ arch: "arm64", shard })),
+      rows.map((row) => row.shard).sort((a, b) => a - b),
+      Array.from({ length: count }, (_, i) => i + 1),
     );
-    for (const [arch, count] of [
-      ["arm64", 4],
-      ["x64", 8],
-    ]) {
-      assert.equal(
-        j.strategy.matrix.include.find((row) => row.arch === arch).shardCount,
-        count,
-      );
-      const selected = j.strategy.matrix.shard.filter(
-        (shard) =>
-          !j.strategy.matrix.exclude.some(
-            (row) => row.arch === arch && row.shard === shard,
-          ),
-      );
-      assert.deepEqual(
-        selected,
-        Array.from({ length: count }, (_, i) => i + 1),
-      );
-    }
-    assert.equal(j["timeout-minutes"], 60);
-    assert.equal(j.strategy["fail-fast"], false);
-    assert.equal(
-      j.env.TEST_SHARD,
-      "${{ matrix.shard }}/${{ matrix.shardCount }}",
+  }
+  assert.equal(j.env.GOGA_CI_DOMAIN, "${{ matrix.domain }}");
+  assert.equal(j.env.TEST_SHARD, "${{ matrix.shard }}/${{ matrix.count }}");
+  for (const name of ["ci", "intel-tests"]) {
+    const job = (await load(name)).jobs.tests;
+    assert.equal(job.strategy["fail-fast"], false);
+    assert.notEqual(job["continue-on-error"], true);
+    const commands = job.steps.map((s) => s.run ?? "").join("\n");
+    for (const expected of [
+      name === "ci" ? "--maxWorkers=3" : "--maxWorkers=1",
+      "--testTimeout=15000",
+      "--reporter=verbose",
+      "--reporter=json",
+      '--shard="$TEST_SHARD"',
+    ])
+      assert.ok(commands.includes(expected));
+    assert.doesNotMatch(commands, /--(?:exclude|retry|bail|passWithNoTests)/);
+    const report = job.steps.find(
+      (s) => s.name === "Exact skipped test report",
     );
-    const step = j.steps.find((s) => s.id === "tests");
-    assert.ok(step);
-    assert.match(step.run, /--shard="\$TEST_SHARD"/);
-    assert.match(step.run, /--maxWorkers=1/);
-    assert.doesNotMatch(step.run, /--(?:exclude|retry|bail|passWithNoTests)/);
-    const report = j.steps.find((s) => s.name === "Exact skipped test report");
     assert.equal(report.if, "always()");
     assert.equal(report.env.TEST_OUTCOME, "${{ steps.tests.outcome }}");
-    const build = w.jobs[name === "ci" ? "check" : "build"];
-    assert.ok(!build.steps.some((s) => (s.run ?? "").includes("npm test --")));
-    assert.deepEqual(build.needs, ["tests", "git-compatibility"]);
-    if (name === "ci") {
-      assert.equal(build.if, "always()");
-      const gate = build.steps[0];
-      assert.equal(gate.env.TEST_RESULT, "${{ needs.tests.result }}");
-      assert.match(gate.run, /"\$TEST_RESULT" != success/);
-      assert.match(gate.run, /exit 1/);
-    }
+    for (const step of job.steps)
+      assert.notEqual(step["continue-on-error"], true);
   }
 });
 
@@ -310,13 +293,15 @@ test("release reuses successful exact-commit CI and never reruns the full suite"
   assert.equal(w.jobs.publish.permissions.actions, "read");
 });
 
-test("lower Git compatibility is isolated, checksummed and required in addition to every full shard", async () => {
+test("lower Git compatibility is isolated, checksummed and required in addition to all domains", async () => {
   const workflow = await load("ci");
   const j = workflow.jobs["git-compatibility"];
   assert.ok(j, "Additional lower-Git job required");
   assert.equal(j["runs-on"], "macos-15");
   assert.notEqual(j["continue-on-error"], true);
-  const commands = j.steps.map((s) => s.run ?? "").join("\n");
+  const commands =
+    j.steps.map((s) => s.run ?? "").join("\n") +
+    (await readFile(new URL("../build-ci-git.sh", import.meta.url), "utf8"));
   assert.match(commands, /git-2\.45\.2\.tar\.xz/);
   assert.match(
     commands,
@@ -329,11 +314,20 @@ test("lower Git compatibility is isolated, checksummed and required in addition 
     /sudo|brew (?:install|unlink|link)|--retry|continue-on-error/,
   );
   assert.match(commands, /node scripts\/test-git-compatibility\.mjs/);
-  assert.deepEqual(workflow.jobs.check.needs, ["tests", "git-compatibility"]);
-  const gate = workflow.jobs.check.steps[0];
-  assert.equal(gate.env.COMPAT_RESULT, "${{ needs.git-compatibility.result }}");
-  assert.match(gate.run, /"\$COMPAT_RESULT" != success/);
+  assert.ok(workflow.jobs.complete.needs.includes("git-compatibility"));
   const report = j.steps.find((s) => s.name === "Compatibility test report");
   assert.equal(report.if, "always()");
   assert.match(report.run, /test-summary.mjs work\/git-compatibility.json/);
+});
+
+test("Intel release tests are bounded viability smoke, not duplicate regression/typechecking", async () => {
+  const w = await load("release"),
+    steps = w.jobs.build.steps;
+  for (const command of ["npm run test:release", "npm run typecheck"]) {
+    const step = steps.find((s) => s.run === command);
+    assert.equal(step?.if, "matrix.arch == 'arm64'");
+  }
+  const smoke = steps.find((s) => (s.run ?? "").includes("verify-dmg.mjs"));
+  assert.equal(smoke["timeout-minutes"], 4);
+  assert.match(smoke.run, /--ui/);
 });

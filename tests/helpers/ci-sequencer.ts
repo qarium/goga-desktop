@@ -1,16 +1,23 @@
 import { BaseSequencer, type TestSpecification } from "vitest/node";
 import path from "node:path";
+import domains from "../../scripts/ci-test-domains.json";
+import { selectDomainShard } from "../../scripts/ci-test-domains.mjs";
+import armWeights from "../../scripts/ci-test-weights-arm64.json";
 import weights from "../../scripts/ci-test-weights.json";
 import { balanceTestFiles } from "../../scripts/ci-test-shards.mjs";
 
-/** Balance all four complete CI shards instead of concentrating long Git
- * lifecycles in one job. Normal unsharded runs keep Vitest's default ordering. */
+/** Domain ownership is checked against all discovered specs before partitioning.
+ * Manual Intel and local full runs retain complete-suite weighted sharding. */
 export class CiSequencer extends BaseSequencer {
   async shard(
     specifications: TestSpecification[],
   ): Promise<TestSpecification[]> {
     const shard = this.ctx.config.shard;
-    if (!shard) return specifications;
+    if (!shard) {
+      if (process.env.GOGA_CI_DOMAIN)
+        throw Error("CI domain requires an explicit shard");
+      return specifications;
+    }
     const entries = new Map(
       specifications.map((spec) => [
         path
@@ -22,8 +29,19 @@ export class CiSequencer extends BaseSequencer {
     );
     if (entries.size !== specifications.length)
       throw Error("Duplicate test specification");
-    const groups = balanceTestFiles([...entries.keys()], shard.count, weights);
-    const selected = groups[shard.index - 1];
+    const domain = process.env.GOGA_CI_DOMAIN;
+    const selected = domain
+      ? selectDomainShard(
+          [...entries.keys()],
+          domains,
+          domain,
+          shard.index,
+          shard.count,
+          armWeights,
+        )
+      : balanceTestFiles([...entries.keys()], shard.count, weights)[
+          shard.index - 1
+        ];
     if (!selected) throw Error("Invalid shard index");
     return selected.map((file: string) => entries.get(file)!);
   }

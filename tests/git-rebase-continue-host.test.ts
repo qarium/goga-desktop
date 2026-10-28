@@ -33,7 +33,7 @@ async function fixture(kind: "primary" | "managed", long = false) {
     GIT_ALLOW_PROTOCOL: "file",
     GIT_NO_LAZY_FETCH: "1",
   };
-  const runner = fixtureScope.runner(new NodeRunner(10000, env));
+  const runner = fixtureScope.runner(new NodeRunner(undefined, env));
   fixtureScope().cleanup(() => runner.dispose());
   const git = (cwd: string, a: string[]) =>
     runner.command(

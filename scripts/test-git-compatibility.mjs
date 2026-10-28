@@ -11,7 +11,19 @@ export const compatibilityFiles = Object.freeze([
   "tests/git-native-discard.test.ts",
   "tests/git-native-conflict-save.test.ts",
 ]);
-export function runGitCompatibility({ run = spawnSync } = {}) {
+export function runGitCompatibility({ run = spawnSync, shard } = {}) {
+  let files = compatibilityFiles;
+  if (shard !== undefined) {
+    const match = /^([1-9][0-9]*)\/([1-9][0-9]*)$/.exec(shard);
+    if (!match) throw Error("Invalid compatibility subgroup");
+    const index = Number(match[1]),
+      count = Number(match[2]);
+    if (index > count || count > compatibilityFiles.length)
+      throw Error("Invalid compatibility subgroup");
+    files = compatibilityFiles.filter(
+      (_file, position) => position % count === index - 1,
+    );
+  }
   const cwd = fileURLToPath(new URL("../", import.meta.url));
   const version = run("git", ["--version"], {
     cwd,
@@ -27,7 +39,7 @@ export function runGitCompatibility({ run = spawnSync } = {}) {
     [
       "node_modules/vitest/vitest.mjs",
       "run",
-      ...compatibilityFiles,
+      ...files,
       "--maxWorkers=1",
       "--testTimeout=15000",
       "--reporter=verbose",
@@ -48,7 +60,9 @@ if (
   resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
   try {
-    process.exitCode = runGitCompatibility();
+    process.exitCode = runGitCompatibility({
+      shard: process.env.GOGA_COMPAT_SHARD,
+    });
   } catch (error) {
     console.error(error.message);
     process.exitCode = 1;

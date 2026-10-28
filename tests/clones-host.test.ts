@@ -1,3 +1,4 @@
+import { gitIntegrationBudget } from "./helpers/git-integration";
 import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -1146,106 +1147,115 @@ it("excludes expired prepared journals from pending context deletion recovery", 
   expect(await f.manager.contextDeletionRecovery(f.project.id)).toEqual([]);
 }, 30000);
 
-it("switches the primary branch only after trash, pins checkout, then removes the topic", async () => {
-  const { prepareDeletionSwitch } =
-    await import("../src/host/deletion-branch-switch");
-  const f = await setup();
-  try {
-    const row = await f.manager.ensure(f.project, f.identity);
-    await f.git(["switch", row.branch]);
-    const git = async (args: string[]) => (await f.git(args)).stdout;
-    const primarySwitch = await prepareDeletionSwitch(
-      git,
-      f.repo,
-      row.branch,
-      "main",
-    );
-    const plan = await f.manager.prepareContextDeletion(
-      worktreeContextRef(row),
-      { active: false, current: true },
-      false,
-      primarySwitch,
-    );
-    expect((await git(["branch", "--show-current"])).trim()).toBe(row.branch);
-    const events: string[] = [];
-    await f.manager.trashContext(
-      plan.token,
-      { active: false, current: true },
-      {
-        beforeTrash: async () => {
-          events.push("checks");
+it(
+  "switches the primary branch only after trash, pins checkout, then removes the topic",
+  async () => {
+    const { prepareDeletionSwitch } =
+      await import("../src/host/deletion-branch-switch");
+    const f = await setup();
+    try {
+      const row = await f.manager.ensure(f.project, f.identity);
+      await f.git(["switch", row.branch]);
+      const git = async (args: string[]) => (await f.git(args)).stdout;
+      const primarySwitch = await prepareDeletionSwitch(
+        git,
+        f.repo,
+        row.branch,
+        "main",
+      );
+      const plan = await f.manager.prepareContextDeletion(
+        worktreeContextRef(row),
+        { active: false, current: true },
+        false,
+        primarySwitch,
+      );
+      expect((await git(["branch", "--show-current"])).trim()).toBe(row.branch);
+      const events: string[] = [];
+      await f.manager.trashContext(
+        plan.token,
+        { active: false, current: true },
+        {
+          beforeTrash: async () => {
+            events.push("checks");
+          },
+          trashItem: async (root) => {
+            expect((await git(["branch", "--show-current"])).trim()).toBe(
+              row.branch,
+            );
+            await fs.rename(root, path.join(f.root, "trash"));
+            events.push("trash");
+          },
         },
-        trashItem: async (root) => {
-          expect((await git(["branch", "--show-current"])).trim()).toBe(
-            row.branch,
-          );
-          await fs.rename(root, path.join(f.root, "trash"));
-          events.push("trash");
+      );
+      events.push("leave");
+      const result = await f.manager.finishContextDeletion(
+        plan.token,
+        async (latest, validate) => {
+          expect(latest.primarySwitch?.state).toBe("applied");
+          expect((await git(["branch", "--show-current"])).trim()).toBe("main");
+          await validate();
+          events.push("delete");
+          await git(["branch", "-d", row.branch]);
         },
-      },
-    );
-    events.push("leave");
-    const result = await f.manager.finishContextDeletion(
-      plan.token,
-      async (latest, validate) => {
-        expect(latest.primarySwitch?.state).toBe("applied");
-        expect((await git(["branch", "--show-current"])).trim()).toBe("main");
-        await validate();
-        events.push("delete");
-        await git(["branch", "-d", row.branch]);
-      },
-    );
-    expect(result.status).toBe("success");
-    expect(events).toEqual(["checks", "checks", "trash", "leave", "delete"]);
-    expect(
-      (await f.manager.readContextDeletion(plan.token)).primarySwitch?.state,
-    ).toBe("applied");
-    const repeated = vi.fn();
-    await f.manager.finishContextDeletion(plan.token, repeated);
-    expect(repeated).not.toHaveBeenCalled();
-  } finally {
-    await fs.rm(f.root, { recursive: true, force: true });
-  }
-}, 15000);
-it("preserves primary edits made after trash and does not switch or delete", async () => {
-  const { prepareDeletionSwitch } =
-    await import("../src/host/deletion-branch-switch");
-  const f = await setup();
-  try {
-    const row = await f.manager.ensure(f.project, f.identity);
-    await f.git(["switch", row.branch]);
-    const git = async (args: string[]) => (await f.git(args)).stdout;
-    const primarySwitch = await prepareDeletionSwitch(
-      git,
-      f.repo,
-      row.branch,
-      "main",
-    );
-    const plan = await f.manager.prepareContextDeletion(
-      worktreeContextRef(row),
-      { active: false, current: true },
-      false,
-      primarySwitch,
-    );
-    await f.manager.trashContext(
-      plan.token,
-      { active: false, current: true },
-      {
-        beforeTrash: async () => {},
-        trashItem: async (root) => fs.rename(root, path.join(f.root, "trash")),
-      },
-    );
-    await fs.writeFile(path.join(f.repo, "README"), "user edit");
-    const remove = vi.fn();
-    expect(
-      (await f.manager.finishContextDeletion(plan.token, remove)).status,
-    ).toBe("partial");
-    expect(remove).not.toHaveBeenCalled();
-    expect((await git(["branch", "--show-current"])).trim()).toBe(row.branch);
-    expect(await fs.readFile(path.join(f.repo, "README"), "utf8")).toBe(
-      "user edit",
-    );
-  } finally {
-    await fs.rm(f.root, { recursive: true, force: true });
-  }
-}, 15000);
+      );
+      expect(result.status).toBe("success");
+      expect(events).toEqual(["checks", "checks", "trash", "leave", "delete"]);
+      expect(
+        (await f.manager.readContextDeletion(plan.token)).primarySwitch?.state,
+      ).toBe("applied");
+      const repeated = vi.fn();
+      await f.manager.finishContextDeletion(plan.token, repeated);
+      expect(repeated).not.toHaveBeenCalled();
+    } finally {
+      await fs.rm(f.root, { recursive: true, force: true });
+    }
+  },
+  gitIntegrationBudget(15000),
+);
+it(
+  "preserves primary edits made after trash and does not switch or delete",
+  async () => {
+    const { prepareDeletionSwitch } =
+      await import("../src/host/deletion-branch-switch");
+    const f = await setup();
+    try {
+      const row = await f.manager.ensure(f.project, f.identity);
+      await f.git(["switch", row.branch]);
+      const git = async (args: string[]) => (await f.git(args)).stdout;
+      const primarySwitch = await prepareDeletionSwitch(
+        git,
+        f.repo,
+        row.branch,
+        "main",
+      );
+      const plan = await f.manager.prepareContextDeletion(
+        worktreeContextRef(row),
+        { active: false, current: true },
+        false,
+        primarySwitch,
+      );
+      await f.manager.trashContext(
+        plan.token,
+        { active: false, current: true },
+        {
+          beforeTrash: async () => {},
+          trashItem: async (root) =>
+            fs.rename(root, path.join(f.root, "trash")),
+        },
+      );
+      await fs.writeFile(path.join(f.repo, "README"), "user edit");
+      const remove = vi.fn();
+      expect(
+        (await f.manager.finishContextDeletion(plan.token, remove)).status,
+      ).toBe("partial");
+      expect(remove).not.toHaveBeenCalled();
+      expect((await git(["branch", "--show-current"])).trim()).toBe(row.branch);
+      expect(await fs.readFile(path.join(f.repo, "README"), "utf8")).toBe(
+        "user edit",
+      );
+    } finally {
+      await fs.rm(f.root, { recursive: true, force: true });
+    }
+  },
+  gitIntegrationBudget(15000),
+);

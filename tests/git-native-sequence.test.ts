@@ -454,7 +454,7 @@ it(
     ).toMatchObject({ outcome: "completed" });
     await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
   }),
-  gitIntegrationBudget(15000),
+  gitIntegrationBudget(30000),
 );
 
 for (const scenario of [

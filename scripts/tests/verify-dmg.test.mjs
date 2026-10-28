@@ -153,3 +153,37 @@ test("packaged runtime smoke loads the native terminal addon without launching a
   assert.match(script, /terminalNativeLoaded/);
   assert.doesNotMatch(script, /pty\.spawn\(/);
 });
+
+test("timed-out normal detach reserves time for forced detach within the cleanup budget", async () => {
+  const { createDmgCleanup } = await import("../verify-dmg.mjs");
+  let now = 0;
+  const calls = [];
+  const cleanup = createDmgCleanup({
+    now: () => now,
+    run: async (_file, args, options) => {
+      calls.push({ args, timeout: options.timeout });
+      if (!args.includes("-force")) {
+        now += options.timeout + 1000;
+        throw Error("normal detach timed out");
+      }
+      return { stdout: "", stderr: "" };
+    },
+  });
+  await withMountedDmg(
+    "/tmp/synthetic.dmg",
+    "/tmp/synthetic-mount",
+    async () => {},
+    async () => ({}),
+    cleanup,
+  );
+  assert.deepEqual(
+    calls.map((c) => c.timeout),
+    [8000, 10000],
+  );
+  assert.deepEqual(calls[1].args, ["detach", "-force", "/tmp/synthetic-mount"]);
+  now = 20000;
+  await assert.rejects(
+    cleanup("hdiutil", ["detach", "-force", "/tmp/synthetic-mount"]),
+    /deadline/,
+  );
+});

@@ -1,6 +1,6 @@
+import { smokeBudget } from "./smoke-budget.mjs";
 import assert from "node:assert/strict";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
+import { runSmokeCommand } from "./smoke-command.mjs";
 import {
   mkdtemp,
   mkdir,
@@ -15,7 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
 import { versionFromTag } from "./release-version.mjs";
-const execute = promisify(execFile);
+const execute = runSmokeCommand;
 const run = (file, args, options = {}) =>
   execute(file, args, {
     timeout: 90000,
@@ -51,7 +51,13 @@ export function validateMetadata(data, tag, arch) {
     "Developer ID signing is not permitted",
   );
 }
-export async function withMountedDmg(dmg, mountpoint, verify, command = run) {
+export async function withMountedDmg(
+  dmg,
+  mountpoint,
+  verify,
+  command = run,
+  cleanupCommand = command,
+) {
   // Even partial attach failures reach cleanup; no Finder or user application opens here.
   try {
     await command("/usr/bin/hdiutil", [
@@ -66,9 +72,13 @@ export async function withMountedDmg(dmg, mountpoint, verify, command = run) {
     return await verify(mountpoint);
   } finally {
     try {
-      await command("/usr/bin/hdiutil", ["detach", mountpoint]);
+      await cleanupCommand("/usr/bin/hdiutil", ["detach", mountpoint]);
     } catch {
-      await command("/usr/bin/hdiutil", ["detach", "-force", mountpoint]);
+      await cleanupCommand("/usr/bin/hdiutil", [
+        "detach",
+        "-force",
+        mountpoint,
+      ]);
     }
   }
 }
@@ -76,7 +86,19 @@ export async function createVerificationRoot(parent = tmpdir()) {
   // macOS /var and /tmp may be symlink aliases. Keep application path guards intact.
   return mkdtemp(path.join(await realpath(parent), "goga-dmg-verify-"));
 }
+/** Keep normal detach from consuming the forced-detach reserve. */
+export function createDmgCleanup({ run: command = run, now } = {}) {
+  let cleanup;
+  return (file, args) =>
+    (cleanup ??= smokeBudget(20000, { run: command, now })).run(file, args, {
+      timeout: args.includes("-force") ? 10000 : 8000,
+    });
+}
 export async function verifyDmg(dmg, arch, tag, { ui = false } = {}) {
+  const budget = smokeBudget(160000, { run });
+  const command = budget.run;
+  // Cleanup gets 20 seconds total, even after the shared work deadline expires.
+  const cleanupCommand = createDmgCleanup();
   const version = versionFromTag(tag);
   assert.equal(
     process.platform,
@@ -128,21 +150,26 @@ export async function verifyDmg(dmg, arch, tag, { ui = false } = {}) {
           executable = path.join(contents, "MacOS", "Goga Desktop"),
           asar = path.join(contents, "Resources", "app.asar");
         assert.ok((await lstat(asar)).isFile(), "Packaged ASAR is required");
-        await run("/usr/bin/codesign", ["--verify", "--deep", "--strict", app]);
-        const signature = await run("/usr/bin/codesign", [
+        await command("/usr/bin/codesign", [
+          "--verify",
+          "--deep",
+          "--strict",
+          app,
+        ]);
+        const signature = await command("/usr/bin/codesign", [
           "-dv",
           "--verbose=4",
           app,
         ]);
-        const macho = await run("/usr/bin/lipo", ["-archs", executable]);
+        const macho = await command("/usr/bin/lipo", ["-archs", executable]);
         const plist = (key) =>
-          run("/usr/libexec/PlistBuddy", [
+          command("/usr/libexec/PlistBuddy", [
             "-c",
             `Print :${key}`,
             path.join(contents, "Info.plist"),
           ]);
         const runtimeScript = `const fs=require('node:fs'),p=require('node:path');const root=process.env.GOGA_VERIFY_ASAR;const pkg=require(p.join(root,'package.json'));const pty=require(p.join(root,'node_modules','node-pty'));if(typeof pty.spawn!=='function')throw Error('Packaged terminal addon unavailable');const assets=p.join(root,'dist','assets');const texts=fs.readdirSync(assets).filter(n=>n.endsWith('.js')).map(n=>fs.readFileSync(p.join(assets,n),'utf8'));console.log(JSON.stringify({terminalNativeLoaded:true,arch:process.arch,electron:process.versions.electron,version:pkg.version,rendererVersion:texts.some(t=>t.includes(JSON.stringify(pkg.version)))}));`;
-        const runtime = await run(executable, ["-e", runtimeScript], {
+        const runtime = await command(executable, ["-e", runtimeScript], {
           env: { ...env, ELECTRON_RUN_AS_NODE: "1", GOGA_VERIFY_ASAR: asar },
           cwd: root,
         });
@@ -160,7 +187,7 @@ export async function verifyDmg(dmg, arch, tag, { ui = false } = {}) {
           // Dev Electron loads the real packaged ASAR modules; the DMG executable itself
           // was independently executed above. No fixture preload, projects or pipelines.
           const electron = createRequire(import.meta.url)("electron");
-          await run(
+          await command(
             electron,
             [
               fileURLToPath(
@@ -179,6 +206,7 @@ export async function verifyDmg(dmg, arch, tag, { ui = false } = {}) {
             },
           );
         }
+        budget.check();
         const result = {
           version,
           arch,
@@ -192,6 +220,8 @@ export async function verifyDmg(dmg, arch, tag, { ui = false } = {}) {
         console.log(JSON.stringify(result));
         return result;
       },
+      command,
+      cleanupCommand,
     );
   } finally {
     // Do not recursively remove a potentially still-mounted volume after detach failure.

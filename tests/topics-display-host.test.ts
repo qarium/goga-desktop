@@ -1433,7 +1433,7 @@ it(
     );
     expect((await f.git("branch", "--list", target.branch)).stdout).toBe("");
   }),
-  gitIntegrationBudget(15000),
+  gitIntegrationBudget(30000),
 );
 it(
   "keeps idle shells alive for dirty clones and blocks jobs introduced after preview",

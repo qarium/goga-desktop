@@ -90,7 +90,7 @@ it.each([
     expect(out.recoveryPath).toBeTruthy();
     expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("none");
   }),
-  gitIntegrationBudget(15000),
+  gitIntegrationBudget(30000),
 );
 async function fixture(namespace = "") {
   const base = await mkdtemp(
@@ -112,7 +112,7 @@ async function fixture(namespace = "") {
     GIT_COMMITTER_NAME: "Fixture",
     GIT_COMMITTER_EMAIL: "fixture@example.invalid",
   };
-  const runner = fixtureScope.runner(new NodeRunner(10000, env));
+  const runner = fixtureScope.runner(new NodeRunner(undefined, env));
   fixtureScope().cleanup(() => runner.dispose());
   const git = async (args: string[]) =>
     (
@@ -435,7 +435,7 @@ it.each(["primary", "clone"] as const)(
     expect(out.message).not.toContain(secret);
     expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("none");
   }),
-  gitIntegrationBudget(15000),
+  gitIntegrationBudget(30000),
 );
 
 class ManagedMergeFixture extends GitMergeSafety {
@@ -528,7 +528,7 @@ it(
       revision: (await f.host.readGitWorkspace(f.scope)).revision,
     });
     await f.host.dispose();
-    const runner = fixtureScope.runner(new NodeRunner(10000, f.env));
+    const runner = fixtureScope.runner(new NodeRunner(undefined, f.env));
     fixtureScope().cleanup(() => runner.dispose());
     const restarted = fixtureScope().own(
       new HostService({

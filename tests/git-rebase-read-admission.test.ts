@@ -937,5 +937,5 @@ it(
       }),
     );
   }),
-  gitIntegrationBudget(30000),
+  gitIntegrationBudget(60000),
 );

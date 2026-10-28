@@ -73,3 +73,32 @@ test("compatibility runs all selected files once and propagates failures", () =>
     1,
   );
 });
+
+test("compatibility subgroups retain the same six files exactly once and reject malformed input", () => {
+  const selected = [];
+  for (const shard of ["1/3", "2/3", "3/3"]) {
+    runGitCompatibility({
+      shard,
+      run: (_file, args) => {
+        if (args[0] === "--version")
+          return { status: 0, stdout: "git version 2.45.2" };
+        selected.push(...args.filter((a) => a.startsWith("tests/")));
+        return { status: 0 };
+      },
+    });
+  }
+  assert.deepEqual(selected.sort(), [...compatibilityFiles].sort());
+  for (const shard of ["0/3", "4/3", "1/0", "1/7", "bad"]) {
+    let calls = 0;
+    assert.throws(() =>
+      runGitCompatibility({
+        shard,
+        run: () => {
+          calls++;
+          return { status: 0, stdout: "git version 2.45.2" };
+        },
+      }),
+    );
+    assert.equal(calls, 0);
+  }
+});

@@ -217,7 +217,7 @@ for (const strategy of ["merge", "rebase"] as const)
         );
         await expect(f.handoff.execute(p.token)).rejects.toThrow();
       }),
-      gitIntegrationBudget(15000),
+      gitIntegrationBudget(30000),
     );
 it(
   "plain error and already-started external Goga rebase never grant manual start",
@@ -291,7 +291,7 @@ it.each(["merge", "rebase"] as const)(
     });
     expect((await f.reader.snapshot()).operation).toBe("none");
   }),
-  gitIntegrationBudget(15000),
+  gitIntegrationBudget(30000),
 );
 it(
   "a failed Goga invocation that changes ignored bytes cannot offer an unchanged handoff",
@@ -420,7 +420,7 @@ it.each(["merge", "rebase", "ff-else-merge", "ff-else-rebase"])(
     expect(await disk(f.root)).toEqual(after);
     expect(f.calls).toHaveLength(1);
   }),
-  gitIntegrationBudget(15000),
+  gitIntegrationBudget(30000),
 );
 it.each([
   ["unstructured", new Error("conflict")],

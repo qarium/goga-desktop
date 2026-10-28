@@ -66,14 +66,18 @@ function form(drafts = store()) {
   );
 }
 async function loaded() {
+  // Keep polling cheap while async reads settle. getByRole traverses computed
+  // styles; with the full stylesheet that can monopolize jsdom's event loop.
   await waitFor(() =>
     expect(
-      screen
-        .getByRole("button", { name: "Запустить" })
-        .hasAttribute("disabled"),
-    ).toBe(false),
+      document.querySelector(".launch-panel")?.getAttribute("aria-busy"),
+    ).toBe("false"),
   );
+  expect(
+    screen.getByRole("button", { name: "Запустить" }).hasAttribute("disabled"),
+  ).toBe(false);
 }
+
 function disclosure() {
   const summary = screen.getByText("Что нужно сделать?", {
     selector: "summary",

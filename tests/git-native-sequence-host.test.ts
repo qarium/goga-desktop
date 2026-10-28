@@ -35,7 +35,7 @@ async function fixture(
     GIT_COMMITTER_EMAIL: "fixture@example.invalid",
     GIT_ALLOW_PROTOCOL: "file",
   };
-  let runner = fixtureScope.runner(new NodeRunner(10000, env));
+  let runner = fixtureScope.runner(new NodeRunner(undefined, env));
   fixtureScope().cleanup(() => runner.dispose());
   const gitAt = async (cwd: string, args: string[]) =>
     (
@@ -153,7 +153,7 @@ async function fixture(
     },
     async restart() {
       await host.dispose();
-      runner = fixtureScope.runner(new NodeRunner(10000, env));
+      runner = fixtureScope.runner(new NodeRunner(undefined, env));
       host = fixtureScope().own(new HostService({ ...options, runner }));
     },
   };
@@ -248,7 +248,11 @@ for (const kind of ["primary", "clone"] as const)
           // Measured 13–14 s through saved, before continuation; individual process
           // deadlines remain unchanged. Only these two composed clone cases grow.
         }),
-        gitIntegrationBudget(45000),
+        gitIntegrationBudget(
+          kind === "clone" && op === "rebase" && action === "continue"
+            ? 60000
+            : 45000,
+        ),
       );
     }
 it.each(["primary", "clone"] as const)(

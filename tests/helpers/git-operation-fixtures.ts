@@ -1,3 +1,4 @@
+import { RepositorySeeds } from "./repository-seeds";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import * as fs from "node:fs/promises";
@@ -22,6 +23,13 @@ export interface OperationFixture {
   resolve(): Promise<string[]>;
   dispose(): Promise<void>;
 }
+
+const seeds = new RepositorySeeds<{
+  sources: string[];
+  onto: string;
+  original: string;
+  branch: string;
+}>();
 
 /** Independent synthetic repository, never a clone of user data. No inherited
  * Git config/env, external editor, hooks or transport. Every child is awaited
@@ -118,33 +126,40 @@ export async function createOperationFixture(
     const write = (name: string, value: string) =>
       fs.writeFile(path.join(root, name), value);
     const read = (name: string) => fs.readFile(path.join(root, name), "utf8");
-    await git(["init", "-b", "main"]);
-    await git(["config", "user.name", "Fixture Author"]);
-    await git(["config", "user.email", "fixture@example.invalid"]);
-    for (let n = 1; n <= commits; n++) await write(`file-${n}`, "base\n");
-    await write("untouched", "keep\n");
-    await write(".gitignore", "ignored\n");
-    await git(["add", "."]);
-    await git(["commit", "-m", "base"]);
-    await git(["checkout", "-b", "topic"]);
-    const sources: string[] = [];
-    for (let n = 1; n <= commits; n++) {
-      await write(`file-${n}`, `change ${n}\n`);
-      await git(["commit", "-am", `change ${n}`]);
-      sources.push((await git(["rev-parse", "HEAD"])).trim());
-    }
-    if (scenario === "revert") sources.reverse();
-    else await git(["checkout", "main"]);
-    for (const n of conflictAt) {
-      const file = scenario === "revert" ? commits + 1 - n : n;
-      await write(`file-${file}`, `upstream ${file}\n`);
-    }
-    await git(["commit", "-am", "upstream"]);
-    const onto = (await git(["rev-parse", "HEAD"])).trim();
     const rebase = scenario.endsWith("rebase");
-    if (rebase) await git(["checkout", "topic"]);
-    const original = (await git(["rev-parse", "HEAD"])).trim();
-    const branch = (await git(["symbolic-ref", "--short", "HEAD"])).trim();
+    const { sources, onto, original, branch } = await seeds.materialize(
+      JSON.stringify([env.PATH, scenario, commits, conflictAt]),
+      root,
+      async () => {
+        await git(["init", "-b", "main"]);
+        await git(["config", "user.name", "Fixture Author"]);
+        await git(["config", "user.email", "fixture@example.invalid"]);
+        for (let n = 1; n <= commits; n++) await write(`file-${n}`, "base\n");
+        await write("untouched", "keep\n");
+        await write(".gitignore", "ignored\n");
+        await git(["add", "."]);
+        await git(["commit", "-m", "base"]);
+        await git(["checkout", "-b", "topic"]);
+        const sources: string[] = [];
+        for (let n = 1; n <= commits; n++) {
+          await write(`file-${n}`, `change ${n}\n`);
+          await git(["commit", "-am", `change ${n}`]);
+          sources.push((await git(["rev-parse", "HEAD"])).trim());
+        }
+        if (scenario === "revert") sources.reverse();
+        else await git(["checkout", "main"]);
+        for (const n of conflictAt) {
+          const file = scenario === "revert" ? commits + 1 - n : n;
+          await write(`file-${file}`, `upstream ${file}\n`);
+        }
+        await git(["commit", "-am", "upstream"]);
+        const onto = (await git(["rev-parse", "HEAD"])).trim();
+        if (rebase) await git(["checkout", "topic"]);
+        const original = (await git(["rev-parse", "HEAD"])).trim();
+        const branch = (await git(["symbolic-ref", "--short", "HEAD"])).trim();
+        return { sources, onto, original, branch };
+      },
+    );
     const command = rebase ? "rebase" : (scenario as "cherry-pick" | "revert");
     const conflicts = async () =>
       (await git(["diff", "--name-only", "--diff-filter=U", "-z"]))

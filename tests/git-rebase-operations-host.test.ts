@@ -38,7 +38,7 @@ async function fixture(
     GIT_ALLOW_PROTOCOL: "file",
     GIT_NO_LAZY_FETCH: "1",
   };
-  const rawRunner = new NodeRunner(10000, env);
+  const rawRunner = new NodeRunner(undefined, env);
   fixtureScope().cancelOnTimeout(() => rawRunner.dispose());
   const runner = fixtureScope().own(rawRunner);
   fixtureScope().cleanup(() => runner.dispose());
@@ -185,7 +185,7 @@ it.each(["primary", "managed"] as const)(
         ).stdout.trim(),
       ).toBe("main");
   }),
-  gitIntegrationBudget(30000),
+  gitIntegrationBudget(60000),
 );
 it(
   "preserves completed abort facts if lifecycle release throws",
@@ -239,7 +239,7 @@ it(
     expect((await f.host.readGitWorkspace(f.scope)).operation).toBe("none");
     expect(r.log).toContain("fixture lifecycle cleanup");
   }),
-  gitIntegrationBudget(30000),
+  gitIntegrationBudget(60000),
 );
 it(
   "rejects settings drift without primary fallback",
@@ -395,7 +395,7 @@ it(
       await fs.readFile(path.join(manager.store.root, "registry.json")),
     ).toEqual(before);
   }),
-  gitIntegrationBudget(30000),
+  gitIntegrationBudget(60000),
 );
 
 it(

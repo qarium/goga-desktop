@@ -1,8 +1,9 @@
 name: CI
 on:
   push:
-    branches: [main]
-  pull_request:
+    branches:
+      - main
+  pull_request: null
 permissions:
   contents: read
 concurrency:
@@ -13,37 +14,78 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        arch: [arm64, x64]
-        shard: [1, 2, 3, 4, 5, 6, 7, 8]
-        exclude:
-          - { arch: arm64, shard: 5 }
-          - { arch: arm64, shard: 6 }
-          - { arch: arm64, shard: 7 }
-          - { arch: arm64, shard: 8 }
         include:
-          - arch: arm64
-            runner: macos-15
-            testProfile: default
-            shardCount: 4
-          - arch: x64
-            runner: macos-15-intel
-            testProfile: slow-git
-            shardCount: 8
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+          - domain: git-workspace
+            shard: 1
+            count: 2
+          - domain: git-workspace
+            shard: 2
+            count: 2
+          - domain: git-conflicts
+            shard: 1
+            count: 8
+          - domain: git-conflicts
+            shard: 2
+            count: 8
+          - domain: git-conflicts
+            shard: 3
+            count: 8
+          - domain: git-conflicts
+            shard: 4
+            count: 8
+          - domain: git-conflicts
+            shard: 5
+            count: 8
+          - domain: git-conflicts
+            shard: 6
+            count: 8
+          - domain: git-conflicts
+            shard: 7
+            count: 8
+          - domain: git-conflicts
+            shard: 8
+            count: 8
+          - domain: git-safety
+            shard: 1
+            count: 1
+          - domain: topics
+            shard: 1
+            count: 3
+          - domain: topics
+            shard: 2
+            count: 3
+          - domain: topics
+            shard: 3
+            count: 3
+          - domain: terminal
+            shard: 1
+            count: 1
+          - domain: launches
+            shard: 1
+            count: 1
+          - domain: documents
+            shard: 1
+            count: 1
+          - domain: shell
+            shard: 1
+            count: 1
+    runs-on: macos-15
+    timeout-minutes: 15
     env:
-      TEST_SHARD: ${{ matrix.shard }}/${{ matrix.shardCount }}
-      EXPECTED_ARCH: ${{ matrix.arch }}
-      GOGA_TEST_PROFILE: ${{ matrix.testProfile }}
+      TEST_SHARD: ${{ matrix.shard }}/${{ matrix.count }}
+      EXPECTED_ARCH: arm64
+      GOGA_TEST_PROFILE: default
       GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      GOGA_CI_DOMAIN: ${{ matrix.domain }}
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "24"
+          cache: npm
       - name: Assert native runner and Node architecture
         run: |
           case "$EXPECTED_ARCH" in
@@ -57,37 +99,39 @@ jobs:
         id: tests
         run: |
           mkdir -p work
-          npm test -- --maxWorkers=1 --testTimeout=15000 --shard="$TEST_SHARD" --reporter=verbose --reporter=json --outputFile=work/vitest.json
+          npm test -- --maxWorkers=3 --testTimeout=15000 --shard="$TEST_SHARD" --reporter=verbose --reporter=json --outputFile=work/vitest.json
       - name: Exact skipped test report
         if: always()
         env:
           TEST_OUTCOME: ${{ steps.tests.outcome }}
         run: node scripts/test-summary.mjs work/vitest.json
+    name: ${{ matrix.domain }} (${{ matrix.shard }}/${{ matrix.count }})
   git-compatibility:
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 15
     env:
       GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      GOGA_COMPAT_SHARD: ${{ matrix.shard }}/3
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "24"
+          cache: npm
       - run: npm ci
-      - name: Build isolated lower-version Git (system Git stays unchanged)
-        run: |
-          set -eu
-          root="$RUNNER_TEMP/goga-git-compatibility"
-          mkdir -p "$root"
-          cd "$root"
-          curl --fail --location --max-time 120 https://www.kernel.org/pub/software/scm/git/git-2.45.2.tar.xz -o git-2.45.2.tar.xz
-          echo '51bfe87eb1c02fed1484051875365eeab229831d30d0cec5d89a14f9e40e9adb  git-2.45.2.tar.xz' | shasum -a 256 -c -
-          tar -xJf git-2.45.2.tar.xz
-          make -C git-2.45.2 -j2 prefix="$root/install" NO_GETTEXT=YesPlease NO_TCLTK=YesPlease install
-          echo "$root/install/bin" >> "$GITHUB_PATH"
+      - name: Identify native Git build toolchain
+        id: toolchain
+        run: echo "key=$( { sw_vers; xcrun clang --version; uname -m; } | shasum -a 256 | cut -d" " -f1)" >> "$GITHUB_OUTPUT"
+      - name: Cache isolated Git build
+        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684
+        with:
+          path: ${{ runner.temp }}/goga-git-compatibility/install
+          key: git-2.45.2-51bfe87e-${{ runner.os }}-${{ runner.arch }}-${{ steps.toolchain.outputs.key }}-${{ hashFiles('scripts/build-ci-git.sh') }}
+      - name: Build or validate isolated lower-version Git (system Git stays unchanged)
+        run: bash scripts/build-ci-git.sh
       - name: Native Git compatibility
         id: compatibility
         run: |
@@ -100,42 +144,29 @@ jobs:
         env:
           TEST_OUTCOME: ${{ steps.compatibility.outcome }}
         run: node scripts/test-summary.mjs work/git-compatibility.json
-  check:
-    needs: [tests, git-compatibility]
-    if: always()
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - arch: arm64
-            runner: macos-15
-            testProfile: default
-          - arch: x64
-            runner: macos-15-intel
-            testProfile: slow-git
-    runs-on: ${{ matrix.runner }}
-    timeout-minutes: 60
+        shard:
+          - 1
+          - 2
+          - 3
+  check:
+    runs-on: macos-15
+    timeout-minutes: 15
     env:
-      EXPECTED_ARCH: ${{ matrix.arch }}
-      GOGA_TEST_PROFILE: ${{ matrix.testProfile }}
+      EXPECTED_ARCH: arm64
+      GOGA_TEST_PROFILE: default
       GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
     steps:
-      - name: Require all test shards to succeed
-        env:
-          TEST_RESULT: ${{ needs.tests.result }}
-          COMPAT_RESULT: ${{ needs.git-compatibility.result }}
-        run: |
-          if [ "$TEST_RESULT" != success ] || [ "$COMPAT_RESULT" != success ]; then
-            echo "Test verification incomplete or failed: shards=$TEST_RESULT compatibility=$COMPAT_RESULT"
-            exit 1
-          fi
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: "24"
+          cache: npm
       - name: Assert native runner and Node architecture
         run: |
           case "$EXPECTED_ARCH" in
@@ -148,3 +179,16 @@ jobs:
       - run: npm run test:release
       - run: npm run typecheck
       - run: npm run build
+  complete:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    needs:
+      - tests
+      - git-compatibility
+      - check
+    if: always()
+    steps:
+      - name: Require every domain, compatibility group and build
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: node -e "const results=JSON.parse(process.env.RESULTS); if(Object.values(results).some(j=>j.result !== 'success')) { console.error('CI verification incomplete or failed',results); process.exit(1); }"

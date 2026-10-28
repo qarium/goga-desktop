@@ -30,7 +30,9 @@ async function fixture(kind: "primary" | "managed", long = false) {
     GIT_ALLOW_PROTOCOL: "file",
     GIT_NO_LAZY_FETCH: "1",
   };
-  const rawRunner = new NodeRunner(10000, env);
+  // Keep the production finite deadline: a prepared ref transaction includes
+  // all nested owner/snapshot checks, not just one short Git process.
+  const rawRunner = new NodeRunner(undefined, env);
   fixtureScope().cancelOnTimeout(() => rawRunner.dispose());
   const runner = fixtureScope().own(rawRunner);
   fixtureScope().cleanup(() => runner.dispose());

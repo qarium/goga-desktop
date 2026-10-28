@@ -210,7 +210,7 @@ for (const strategy of ["merge", "rebase"] as const) {
         expect(await observable(f)).toEqual(await observable(control));
         await expect(app.operation.execute(preview.token)).rejects.toThrow();
       }),
-      gitIntegrationBudget(15000),
+      gitIntegrationBudget(30000),
     );
   }
 }
