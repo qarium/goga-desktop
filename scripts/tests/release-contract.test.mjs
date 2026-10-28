@@ -46,7 +46,7 @@ test("CI and release use pinned actions, read-only builds and explicit native-te
                   "node scripts/test-git-compatibility.mjs",
                   "scripts/test-summary.mjs",
                 ]
-              : id === "tests"
+              : ["tests", "workspace-tests", "remaining-tests"].includes(id)
                 ? [
                     "npm ci",
                     "--testTimeout=15000",
@@ -137,11 +137,8 @@ test("automatic CI is ARM-only; full Intel is manual and cannot gate a release",
   assert.ok(Object.hasOwn(arm.on, "pull_request"));
   assert.equal(arm.jobs.tests["runs-on"], "macos-15");
   assert.equal(arm.jobs.check["runs-on"], "macos-15");
-  assert.equal(
-    arm.jobs.check.needs,
-    undefined,
-    "Build must run alongside tests",
-  );
+  assert.deepEqual(arm.jobs.check.needs, ["git-compatibility"]);
+  assert.equal(arm.jobs.check.if, "${{ !cancelled() }}");
   for (const command of [
     "npm run test:release",
     "npm run typecheck",
@@ -159,6 +156,8 @@ test("automatic CI is ARM-only; full Intel is manual and cannot gate a release",
   assert.equal(intel.jobs.check["runs-on"], "macos-15-intel");
   assert.deepEqual(arm.jobs.complete.needs, [
     "tests",
+    "workspace-tests",
+    "remaining-tests",
     "git-compatibility",
     "check",
   ]);
@@ -175,7 +174,11 @@ test("domain matrix covers eight areas and complete numbered subgroups", async (
   const manifest = JSON.parse(
     await readFile(new URL("../ci-test-domains.json", import.meta.url), "utf8"),
   );
-  const matrix = j.strategy.matrix.include;
+  const matrix = [
+    j,
+    w.jobs["workspace-tests"],
+    w.jobs["remaining-tests"],
+  ].flatMap((job) => job.strategy.matrix.include);
   assert.deepEqual(
     Object.fromEntries(
       Object.keys(manifest).map((domain) => [
@@ -209,8 +212,13 @@ test("domain matrix covers eight areas and complete numbered subgroups", async (
   }
   assert.equal(j.env.GOGA_CI_DOMAIN, "${{ matrix.domain }}");
   assert.equal(j.env.TEST_SHARD, "${{ matrix.shard }}/${{ matrix.count }}");
-  for (const name of ["ci", "intel-tests"]) {
-    const job = (await load(name)).jobs.tests;
+  for (const [name, id] of [
+    ["ci", "tests"],
+    ["ci", "workspace-tests"],
+    ["ci", "remaining-tests"],
+    ["intel-tests", "tests"],
+  ]) {
+    const job = (await load(name)).jobs[id];
     assert.equal(job.strategy["fail-fast"], false);
     assert.notEqual(job["continue-on-error"], true);
     const commands = job.steps.map((s) => s.run ?? "").join("\n");
@@ -350,4 +358,35 @@ test("Intel release tests are bounded viability smoke, not duplicate regression/
   const smoke = steps.find((s) => (s.run ?? "").includes("verify-dmg.mjs"));
   assert.equal(smoke["timeout-minutes"], 4);
   assert.match(smoke.run, /--ui/);
+});
+
+test("five macOS slots start expensive work before short domains, without skipping them on a failed dependency", async () => {
+  const w = await load("ci"),
+    priority = w.jobs.tests,
+    remaining = w.jobs["remaining-tests"];
+  assert.equal(priority.needs, undefined);
+  assert.deepEqual(
+    priority.strategy.matrix.include.map((row) => row.domain),
+    ["git-conflicts", "git-conflicts", "git-conflicts", "topics"],
+  );
+  assert.equal(priority.env.GOGA_TEST_PROFILE, "slow-git");
+  assert.equal(w.jobs["git-compatibility"].needs, undefined);
+  assert.deepEqual(w.jobs["workspace-tests"].needs, ["git-compatibility"]);
+  assert.equal(w.jobs["workspace-tests"].if, "${{ !cancelled() }}");
+  assert.deepEqual(w.jobs["workspace-tests"].strategy.matrix.include, [
+    { domain: "git-workspace", shard: 1, count: 1 },
+  ]);
+  assert.deepEqual(remaining.needs, ["check"]);
+  assert.equal(remaining.if, "${{ !cancelled() }}");
+  assert.equal(remaining.env.GOGA_TEST_PROFILE, "default");
+  for (const job of [
+    priority,
+    remaining,
+    w.jobs["workspace-tests"],
+    w.jobs["git-compatibility"],
+    w.jobs.check,
+  ]) {
+    assert.equal(job["timeout-minutes"], 15);
+    assert.notEqual(job["continue-on-error"], true);
+  }
 });

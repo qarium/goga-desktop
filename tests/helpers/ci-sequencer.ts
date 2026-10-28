@@ -9,6 +9,26 @@ import { balanceTestFiles } from "../../scripts/ci-test-shards.mjs";
 /** Domain ownership is checked against all discovered specs before partitioning.
  * Manual Intel and local full runs retain complete-suite weighted sharding. */
 export class CiSequencer extends BaseSequencer {
+  async sort(
+    specifications: TestSpecification[],
+  ): Promise<TestSpecification[]> {
+    if (!process.env.GOGA_CI_DOMAIN) return super.sort(specifications);
+    // File size is not the cost of native Git/Host scenarios. Start measured
+    // long files first so they cannot become a serial tail after workers idle.
+    const key = (spec: TestSpecification) =>
+      path
+        .relative(this.ctx.config.root, spec.moduleId)
+        .split(path.sep)
+        .join("/");
+    const weight = (spec: TestSpecification) =>
+      (armWeights as Record<string, number>)[key(spec)] ?? 1;
+    return [...specifications].sort(
+      (a, b) =>
+        weight(b) - weight(a) ||
+        (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0),
+    );
+  }
+
   async shard(
     specifications: TestSpecification[],
   ): Promise<TestSpecification[]> {

@@ -96,7 +96,8 @@ test("real configured Vitest sequencer partitions discovered specs across the AR
   import {createVitest} from 'vitest/node';
   import {readFileSync} from 'node:fs';
   import {parse} from 'yaml';
-  const rows=parse(readFileSync('.github/workflows/ci.yml','utf8')).jobs.tests.strategy.matrix.include;
+  const jobs=parse(readFileSync('.github/workflows/ci.yml','utf8')).jobs;
+  const rows=Object.values(jobs).flatMap(job=>job.strategy?.matrix?.include??[]).filter(row=>row.domain);
   const groups=[];let all;
   for(const row of rows){
    process.env.GOGA_CI_DOMAIN=row.domain;
@@ -104,7 +105,14 @@ test("real configured Vitest sequencer partitions discovered specs across the AR
    try{
     const specs=await ctx.globTestSpecifications();all=specs.map(s=>s.moduleId);
     const sequencer=new ctx.config.sequence.sequencer(ctx);
-    groups.push((await sequencer.shard(specs)).map(s=>s.moduleId));
+    const selected=await sequencer.shard(specs);
+    const sorted=await sequencer.sort(selected);
+    const weights=JSON.parse(readFileSync('scripts/ci-test-weights-arm64.json','utf8'));
+    for(let i=1;i<sorted.length;i++){
+     const key=s=>s.moduleId.slice(ctx.config.root.length+1);
+     if((weights[key(sorted[i-1])]??1)<(weights[key(sorted[i])]??1))throw Error('Domain files must run longest-first');
+    }
+    groups.push(sorted.map(s=>s.moduleId));
    }finally{await ctx.close();}
   }
   console.log(JSON.stringify({all,groups}));

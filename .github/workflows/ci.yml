@@ -15,9 +15,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - domain: git-workspace
-            shard: 1
-            count: 1
           - domain: git-conflicts
             shard: 1
             count: 3
@@ -27,22 +24,7 @@ jobs:
           - domain: git-conflicts
             shard: 3
             count: 3
-          - domain: git-safety
-            shard: 1
-            count: 1
           - domain: topics
-            shard: 1
-            count: 1
-          - domain: terminal
-            shard: 1
-            count: 1
-          - domain: launches
-            shard: 1
-            count: 1
-          - domain: documents
-            shard: 1
-            count: 1
-          - domain: shell
             shard: 1
             count: 1
     runs-on: macos-15
@@ -50,7 +32,7 @@ jobs:
     env:
       TEST_SHARD: ${{ matrix.shard }}/${{ matrix.count }}
       EXPECTED_ARCH: arm64
-      GOGA_TEST_PROFILE: default
+      GOGA_TEST_PROFILE: slow-git
       GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
       GOGA_CI_DOMAIN: ${{ matrix.domain }}
@@ -119,6 +101,54 @@ jobs:
         env:
           TEST_OUTCOME: ${{ steps.compatibility.outcome }}
         run: node scripts/test-summary.mjs work/git-compatibility.json
+  workspace-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - domain: git-workspace
+            shard: 1
+            count: 1
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      TEST_SHARD: ${{ matrix.shard }}/${{ matrix.count }}
+      EXPECTED_ARCH: arm64
+      GOGA_TEST_PROFILE: default
+      GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      GOGA_CI_DOMAIN: ${{ matrix.domain }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Assert native runner and Node architecture
+        run: |
+          case "$EXPECTED_ARCH" in
+            arm64) test "$(uname -m)" = arm64 ;;
+            x64) test "$(uname -m)" = x86_64 ;;
+            *) exit 1 ;;
+          esac
+          node -e 'if(process.platform !== "darwin" || process.arch !== process.env.EXPECTED_ARCH) process.exit(1)'
+      - run: npm ci
+      - name: Tests (native Goga CLI deliberately unavailable)
+        id: tests
+        run: |
+          mkdir -p work
+          npm test -- --maxWorkers=3 --testTimeout=15000 --shard="$TEST_SHARD" --reporter=verbose --reporter=json --outputFile=work/vitest.json
+      - name: Exact skipped test report
+        if: always()
+        env:
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+        run: node scripts/test-summary.mjs work/vitest.json
+    name: ${{ matrix.domain }} (${{ matrix.shard }}/${{ matrix.count }})
+    needs:
+      - git-compatibility
+    if: ${{ !cancelled() }}
   check:
     runs-on: macos-15
     timeout-minutes: 15
@@ -147,11 +177,76 @@ jobs:
       - run: npm run test:release
       - run: npm run typecheck
       - run: npm run build
+    needs:
+      - git-compatibility
+    if: ${{ !cancelled() }}
+  remaining-tests:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - domain: git-safety
+            shard: 1
+            count: 1
+          - domain: terminal
+            shard: 1
+            count: 1
+          - domain: launches
+            shard: 1
+            count: 1
+          - domain: documents
+            shard: 1
+            count: 1
+          - domain: shell
+            shard: 1
+            count: 1
+    runs-on: macos-15
+    timeout-minutes: 15
+    env:
+      TEST_SHARD: ${{ matrix.shard }}/${{ matrix.count }}
+      EXPECTED_ARCH: arm64
+      GOGA_TEST_PROFILE: default
+      GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      GOGA_CI_DOMAIN: ${{ matrix.domain }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: "24"
+          cache: npm
+      - name: Assert native runner and Node architecture
+        run: |
+          case "$EXPECTED_ARCH" in
+            arm64) test "$(uname -m)" = arm64 ;;
+            x64) test "$(uname -m)" = x86_64 ;;
+            *) exit 1 ;;
+          esac
+          node -e 'if(process.platform !== "darwin" || process.arch !== process.env.EXPECTED_ARCH) process.exit(1)'
+      - run: npm ci
+      - name: Tests (native Goga CLI deliberately unavailable)
+        id: tests
+        run: |
+          mkdir -p work
+          npm test -- --maxWorkers=3 --testTimeout=15000 --shard="$TEST_SHARD" --reporter=verbose --reporter=json --outputFile=work/vitest.json
+      - name: Exact skipped test report
+        if: always()
+        env:
+          TEST_OUTCOME: ${{ steps.tests.outcome }}
+        run: node scripts/test-summary.mjs work/vitest.json
+    name: ${{ matrix.domain }} (${{ matrix.shard }}/${{ matrix.count }})
+    needs:
+      - check
+    if: ${{ !cancelled() }}
   complete:
     runs-on: ubuntu-latest
     timeout-minutes: 2
     needs:
       - tests
+      - workspace-tests
+      - remaining-tests
       - git-compatibility
       - check
     if: always()
