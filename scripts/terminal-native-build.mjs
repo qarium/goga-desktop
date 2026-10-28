@@ -128,6 +128,37 @@ async function assertPtyVersion(root) {
   if (installed.version !== "1.1.0")
     throw Error("Unsupported installed node-pty version.");
 }
+/** Electron 44 downloads lazily; a clean npm ci does not create dist.
+ * Invoke only the installed lockfile package's installer with isolated build env,
+ * then keep the existing native-architecture gate before rebuilding node-pty. */
+export async function prepareElectronRuntime(
+  root,
+  arch,
+  env,
+  execute = execFileSync,
+  verify = verifyNativeFiles,
+) {
+  execute(
+    process.execPath,
+    [path.join(root, "node_modules/electron/install.js")],
+    {
+      cwd: root,
+      env,
+      stdio: "inherit",
+      timeout: 180000,
+      killSignal: "SIGTERM",
+    },
+  );
+  await verify(
+    [
+      path.join(
+        root,
+        "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
+      ),
+    ],
+    arch,
+  );
+}
 export async function buildTerminalNative(root = process.cwd()) {
   await assertPtyVersion(root);
   const electronVersion = JSON.parse(
@@ -164,15 +195,7 @@ export async function buildTerminalNative(root = process.cwd()) {
     npm_config_userconfig: "/dev/null",
     npm_config_cache: path.join(cache, "npm-cache"),
   };
-  await verifyNativeFiles(
-    [
-      path.join(
-        root,
-        "node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
-      ),
-    ],
-    process.arch,
-  );
+  await prepareElectronRuntime(root, process.arch, env);
   for (const command of commands)
     execFileSync(command.file, command.args, {
       cwd: root,

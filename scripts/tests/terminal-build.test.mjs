@@ -225,3 +225,77 @@ test("beforePack reads the actual Electron framework version from PlatformPackag
   );
   assert.deepEqual(calls, [["/project", "44.8.0"]]);
 });
+
+test("cold Electron setup installs the locked package before architecture verification", async () => {
+  const { prepareElectronRuntime } =
+    await import("../terminal-native-build.mjs");
+  const calls = [];
+  const env = { HOME: "/temporary/home", PATH: "/bin" };
+  await prepareElectronRuntime(
+    "/synthetic/project",
+    "arm64",
+    env,
+    (file, args, options) => {
+      calls.push("install");
+      assert.equal(file, process.execPath);
+      assert.deepEqual(args, [
+        "/synthetic/project/node_modules/electron/install.js",
+      ]);
+      assert.equal(options.env, env);
+      assert.equal(options.cwd, "/synthetic/project");
+      assert.equal(options.timeout, 180000);
+      assert.equal(options.shell, undefined);
+    },
+    async (files, arch) => {
+      calls.push("verify");
+      assert.equal(arch, "arm64");
+      assert.deepEqual(files, [
+        "/synthetic/project/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron",
+      ]);
+    },
+  );
+  assert.deepEqual(calls, ["install", "verify"]);
+  const source = await readFile(
+    new URL("../terminal-native-build.mjs", import.meta.url),
+    "utf8",
+  );
+  const body = source.slice(
+    source.indexOf("export async function buildTerminalNative"),
+  );
+  assert.ok(
+    body.indexOf("await prepareElectronRuntime(") <
+      body.indexOf("for (const command of commands)"),
+  );
+});
+test("Electron preparation propagates install and native verification failures", async () => {
+  const { prepareElectronRuntime } =
+    await import("../terminal-native-build.mjs");
+  let verified = false;
+  await assert.rejects(
+    prepareElectronRuntime(
+      "/synthetic",
+      "arm64",
+      {},
+      () => {
+        throw Error("download failed");
+      },
+      async () => {
+        verified = true;
+      },
+    ),
+    /download failed/,
+  );
+  assert.equal(verified, false);
+  await assert.rejects(
+    prepareElectronRuntime(
+      "/synthetic",
+      "arm64",
+      {},
+      () => {},
+      async () => {
+        throw Error("wrong architecture");
+      },
+    ),
+    /wrong architecture/,
+  );
+});
