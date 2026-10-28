@@ -140,7 +140,19 @@ describe("durable run process recovery", () => {
   it("rejects foreign owner, foreign cwd and foreign root without touching the owned process", async () => {
     const f = await setup(),
       other = await setup(),
-      launched = await launch(f, "setInterval(()=>{},1000)");
+      marker = path.join(f.cwd, "owned-payload-pid");
+    const launched = await launch(
+      f,
+      `require('fs').writeFileSync(${JSON.stringify(marker)},String(process.pid));setInterval(()=>{},1000)`,
+    );
+    // launch() returns at admission-ready, before the atomic started-lease rewrite.
+    // This ownership test needs a running payload, not a concurrent admission read.
+    const pid = Number(
+      await eventually(
+        () => fs.readFile(marker, "utf8").catch(() => ""),
+        (value) => /^\d+$/.test(value),
+      ),
+    );
     for (const [manager, owner, cwd] of [
       [f.manager, "b".repeat(64), f.cwd],
       [f.manager, ownerHash, other.cwd],
@@ -156,6 +168,7 @@ describe("durable run process recovery", () => {
     expect(
       await f.manager.reconcile(launched.metadata, ownerHash, f.cwd),
     ).toMatchObject({ state: "alive" });
+    expect(process.kill(pid, 0)).toBe(true);
   });
   it("keeps legacy and missing evidence explicit rather than inventing exit", async () => {
     const f = await setup();

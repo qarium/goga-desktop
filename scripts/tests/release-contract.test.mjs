@@ -50,7 +50,7 @@ test("CI and release use pinned actions, read-only builds and explicit native-te
                 ? [
                     "npm ci",
                     "--testTimeout=15000",
-                    name === "ci" ? "--maxWorkers=3" : "--maxWorkers=1",
+                    name === "ci" ? "--maxWorkers=4" : "--maxWorkers=1",
                     "scripts/test-summary.mjs",
                   ]
                 : ["npm ci", "npm run build"];
@@ -223,7 +223,7 @@ test("domain matrix covers eight areas and complete numbered subgroups", async (
     assert.notEqual(job["continue-on-error"], true);
     const commands = job.steps.map((s) => s.run ?? "").join("\n");
     for (const expected of [
-      name === "ci" ? "--maxWorkers=3" : "--maxWorkers=1",
+      name === "ci" ? "--maxWorkers=4" : "--maxWorkers=1",
       "--testTimeout=15000",
       "--reporter=verbose",
       "--reporter=json",
@@ -326,6 +326,7 @@ test("lower Git compatibility is isolated, checksummed and required in addition 
   assert.equal(j.strategy, undefined);
   assert.equal(j.env.GOGA_COMPAT_SHARD, undefined);
   assert.equal(j["runs-on"], "macos-15");
+  assert.equal(j.env.GOGA_TEST_PROFILE, "slow-git");
   assert.notEqual(j["continue-on-error"], true);
   const commands =
     j.steps.map((s) => s.run ?? "").join("\n") +
@@ -373,6 +374,7 @@ test("five macOS slots start expensive work before short domains, without skippi
   assert.equal(w.jobs["git-compatibility"].needs, undefined);
   assert.deepEqual(w.jobs["workspace-tests"].needs, ["git-compatibility"]);
   assert.equal(w.jobs["workspace-tests"].if, "${{ !cancelled() }}");
+  assert.equal(w.jobs["workspace-tests"].env.GOGA_TEST_PROFILE, "slow-git");
   assert.deepEqual(w.jobs["workspace-tests"].strategy.matrix.include, [
     { domain: "git-workspace", shard: 1, count: 1 },
   ]);

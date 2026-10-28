@@ -57,7 +57,7 @@ jobs:
         id: tests
         run: |
           mkdir -p work
-          npm test -- --maxWorkers=3 --testTimeout=15000 --shard="$TEST_SHARD" --reporter=verbose --reporter=json --outputFile=work/vitest.json
+          npm test -- --maxWorkers=4 --testTimeout=15000 --shard="$TEST_SHARD" --reporter=verbose --reporter=json --outputFile=work/vitest.json
       - name: Exact skipped test report
         if: always()
         env:
@@ -70,6 +70,7 @@ jobs:
     env:
       GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
+      GOGA_TEST_PROFILE: slow-git
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -114,7 +115,7 @@ jobs:
     env:
       TEST_SHARD: ${{ matrix.shard }}/${{ matrix.count }}
       EXPECTED_ARCH: arm64
-      GOGA_TEST_PROFILE: default
+      GOGA_TEST_PROFILE: slow-git
       GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
       GOGA_CI_DOMAIN: ${{ matrix.domain }}
@@ -139,7 +140,7 @@ jobs:
         id: tests
         run: |
           mkdir -p work
-          npm test -- --maxWorkers=3 --testTimeout=15000 --shard="$TEST_SHARD" --reporter=verbose --reporter=json --outputFile=work/vitest.json
+          npm test -- --maxWorkers=4 --testTimeout=15000 --shard="$TEST_SHARD" --reporter=verbose --reporter=json --outputFile=work/vitest.json
       - name: Exact skipped test report
         if: always()
         env:
@@ -230,7 +231,7 @@ jobs:
         id: tests
         run: |
           mkdir -p work
-          npm test -- --maxWorkers=3 --testTimeout=15000 --shard="$TEST_SHARD" --reporter=verbose --reporter=json --outputFile=work/vitest.json
+          npm test -- --maxWorkers=4 --testTimeout=15000 --shard="$TEST_SHARD" --reporter=verbose --reporter=json --outputFile=work/vitest.json
       - name: Exact skipped test report
         if: always()
         env:

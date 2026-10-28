@@ -66,6 +66,8 @@
     "tests/git-rebase-operations-contract.test.ts",
     "tests/git-rebase-operations-host.test.ts",
     "tests/git-rebase-operations-preload.test.ts",
+    "tests/git-rebase-read-admission-controls.test.ts",
+    "tests/git-rebase-read-admission-safety.test.ts",
     "tests/git-rebase-read-admission.test.ts",
     "tests/git-sequencer-contract.test.ts",
     "tests/git-sequencer-host.test.ts",
