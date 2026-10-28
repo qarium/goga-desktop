@@ -53,7 +53,7 @@ test("compatibility runs all selected files once and propagates failures", () =>
   assert.equal(calls[1].executable, process.execPath);
   assert.deepEqual(calls[1].args.slice(2, 8), compatibilityFiles);
   const args = calls[1].args.join(" ");
-  assert.match(args, /--maxWorkers=1/);
+  assert.match(args, /--maxWorkers=3/);
   assert.match(args, /--testTimeout=15000/);
   assert.doesNotMatch(
     args,

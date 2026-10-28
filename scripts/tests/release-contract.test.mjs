@@ -177,6 +177,24 @@ test("domain matrix covers eight areas and complete numbered subgroups", async (
   );
   const matrix = j.strategy.matrix.include;
   assert.deepEqual(
+    Object.fromEntries(
+      Object.keys(manifest).map((domain) => [
+        domain,
+        matrix.filter((row) => row.domain === domain).length,
+      ]),
+    ),
+    {
+      "git-workspace": 1,
+      "git-conflicts": 3,
+      "git-safety": 1,
+      topics: 1,
+      terminal: 1,
+      launches: 1,
+      documents: 1,
+      shell: 1,
+    },
+  );
+  assert.deepEqual(
     [...new Set(matrix.map((row) => row.domain))].sort(),
     Object.keys(manifest).sort(),
   );
@@ -297,6 +315,8 @@ test("lower Git compatibility is isolated, checksummed and required in addition 
   const workflow = await load("ci");
   const j = workflow.jobs["git-compatibility"];
   assert.ok(j, "Additional lower-Git job required");
+  assert.equal(j.strategy, undefined);
+  assert.equal(j.env.GOGA_COMPAT_SHARD, undefined);
   assert.equal(j["runs-on"], "macos-15");
   assert.notEqual(j["continue-on-error"], true);
   const commands =

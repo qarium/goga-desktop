@@ -17,46 +17,22 @@ jobs:
         include:
           - domain: git-workspace
             shard: 1
-            count: 2
-          - domain: git-workspace
-            shard: 2
-            count: 2
+            count: 1
           - domain: git-conflicts
             shard: 1
-            count: 8
+            count: 3
           - domain: git-conflicts
             shard: 2
-            count: 8
+            count: 3
           - domain: git-conflicts
             shard: 3
-            count: 8
-          - domain: git-conflicts
-            shard: 4
-            count: 8
-          - domain: git-conflicts
-            shard: 5
-            count: 8
-          - domain: git-conflicts
-            shard: 6
-            count: 8
-          - domain: git-conflicts
-            shard: 7
-            count: 8
-          - domain: git-conflicts
-            shard: 8
-            count: 8
+            count: 3
           - domain: git-safety
             shard: 1
             count: 1
           - domain: topics
             shard: 1
-            count: 3
-          - domain: topics
-            shard: 2
-            count: 3
-          - domain: topics
-            shard: 3
-            count: 3
+            count: 1
           - domain: terminal
             shard: 1
             count: 1
@@ -112,7 +88,6 @@ jobs:
     env:
       GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      GOGA_COMPAT_SHARD: ${{ matrix.shard }}/3
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -144,13 +119,6 @@ jobs:
         env:
           TEST_OUTCOME: ${{ steps.compatibility.outcome }}
         run: node scripts/test-summary.mjs work/git-compatibility.json
-    strategy:
-      fail-fast: false
-      matrix:
-        shard:
-          - 1
-          - 2
-          - 3
   check:
     runs-on: macos-15
     timeout-minutes: 15
