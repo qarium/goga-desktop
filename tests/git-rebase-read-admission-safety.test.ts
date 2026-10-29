@@ -175,6 +175,8 @@ it(
       path.join(f.metadata, "author-script"),
       `touch '${marker}'\n`,
     );
+    // Topic copies intentionally use a template without inherited Git hooks.
+    await mkdir(path.join(f.record.gitCommonDir, "hooks"), { recursive: true });
     await writeFile(
       path.join(f.record.gitCommonDir, "hooks/post-checkout"),
       `#!/bin/sh\ntouch '${marker}'\n`,
