@@ -1032,6 +1032,7 @@ describe("native commit token boundaries", () => {
         /подтверж|токен/i,
       );
     }),
+    gitIntegrationBudget(15000),
   );
   it(
     "rechecks expiry after waiting for serialized context admission",
