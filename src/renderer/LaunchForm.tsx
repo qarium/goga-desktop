@@ -486,7 +486,15 @@ export function LaunchForm({
     key: string | null;
     draft: TaskDraft;
   } | null>(null);
-  useEffect(() => setReloadConfirmation(null), [taskKey, editor.draft]);
+  useEffect(() => {
+    // A delayed scope cleanup must not dismiss a confirmation just opened for
+    // this exact draft after a reread failure became visible.
+    setReloadConfirmation((current) =>
+      current?.key === taskKey && current.draft === editor.draft
+        ? current
+        : null,
+    );
+  }, [taskKey, editor.draft]);
   const task = editor.draft?.text ?? "";
   const emptyReplacement =
     mode === "existing" &&

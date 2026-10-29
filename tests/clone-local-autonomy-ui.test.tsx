@@ -523,7 +523,21 @@ it("reset rereads missing-local metadata atomically for the exact owner and re-b
 });
 it("failed reread retains the local draft, cancelling reread writes nothing, successful reread restores explicit absence", async () => {
   const form = setupForm();
-  render(<LaunchForm {...form} />);
+  let retryDuringErrorCommit = false;
+  render(
+    <React.Profiler id="failed-reread-retry" onRender={() => {
+      // Deliver one rapid retry after the error becomes visible, before passive
+      // effects from that same draft update can invalidate a fresh confirmation.
+      if (!retryDuringErrorCommit && screen.queryByText(/Local read failure/)) {
+        const retry = screen.getByRole<HTMLButtonElement>("button", { name: "Перечитать задачу" });
+        expect(retry.disabled).toBe(false);
+        retryDuringErrorCommit = true;
+        retry.click();
+      }
+    }}>
+      <LaunchForm {...form} />
+    </React.Profiler>,
+  );
   await screen.findByText(formAbsence);
   fireEvent.change(screen.getByLabelText("Что нужно сделать?"), {
     target: { value: "Local draft" },
@@ -541,7 +555,8 @@ it("failed reread retains the local draft, cancelling reread writes nothing, suc
     "value",
     "Local draft",
   );
-  fireEvent.click(screen.getByRole("button", { name: "Перечитать задачу" }));
+  expect(retryDuringErrorCommit).toBe(true);
+  expect(api.readTopicTask).toHaveBeenCalledTimes(2);
   fireEvent.click(
     await screen.findByRole("button", { name: "Перечитать и сбросить" }),
   );
