@@ -1,7 +1,14 @@
 import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, writeFile, unlink, lstat } from "node:fs/promises";
+import {
+  mkdir,
+  readFile,
+  writeFile,
+  unlink,
+  lstat,
+  readdir,
+} from "node:fs/promises";
 import { createHash } from "node:crypto";
 
 export function assertNativeArchitecture(output, arch) {
@@ -159,6 +166,79 @@ export async function prepareElectronRuntime(
     arch,
   );
 }
+async function assertCacheTree(root) {
+  const stack = [root];
+  let count = 0;
+  while (stack.length) {
+    const directory = stack.pop();
+    let entries;
+    try {
+      entries = await readdir(directory, { withFileTypes: true });
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    for (const entry of entries) {
+      if (++count > 100000)
+        throw Error("Isolated build cache exceeds inspection limit");
+      const file = path.join(directory, entry.name);
+      const stat = await lstat(file);
+      if (stat.isSymbolicLink())
+        throw Error(
+          "Symbolic links are not allowed inside restored build caches",
+        );
+      if (stat.isDirectory()) stack.push(file);
+      else if (!stat.isFile() || stat.nlink !== 1)
+        throw Error("Build cache entry must be a regular single-link file");
+    }
+  }
+}
+/** Download caches remain in the disposable build tree; never inherit user HOME
+ * or Electron/Node injection settings. Native binaries are always rebuilt. */
+export async function terminalBuildEnvironment(root, parent = process.env) {
+  if (
+    !path.isAbsolute(root) ||
+    path.normalize(root) !== root ||
+    /[\x00-\x1f\x7f]/.test(root)
+  )
+    throw Error("Invalid isolated build root");
+  const cache = path.join(root, "work/terminal-native-build");
+  const downloads = path.join(cache, "downloads/electron");
+  for (const target of [
+    downloads,
+    ...["home", "tmp", "npm-cache", "home/.electron-gyp"].map((part) =>
+      path.join(cache, part),
+    ),
+  ]) {
+    let cursor = path.parse(target).root;
+    for (const part of target.slice(cursor.length).split(path.sep)) {
+      cursor = path.join(cursor, part);
+      try {
+        if ((await lstat(cursor)).isSymbolicLink())
+          throw Error(
+            "Symbolic links are not allowed in isolated build caches",
+          );
+      } catch (error) {
+        if (error.code !== "ENOENT") throw error;
+      }
+    }
+  }
+  for (const target of [
+    downloads,
+    ...["home", "tmp", "npm-cache"].map((part) => path.join(cache, part)),
+  ])
+    await assertCacheTree(target);
+  return {
+    PATH: parent.PATH ?? "/usr/bin:/bin",
+    HOME: path.join(cache, "home"),
+    TMPDIR: path.join(cache, "tmp"),
+    LANG: "en_US.UTF-8",
+    LC_ALL: "en_US.UTF-8",
+    npm_config_userconfig: "/dev/null",
+    npm_config_cache: path.join(cache, "npm-cache"),
+    electron_config_cache: downloads,
+  };
+}
 export async function buildTerminalNative(root = process.cwd()) {
   await assertPtyVersion(root);
   const electronVersion = JSON.parse(
@@ -175,10 +255,12 @@ export async function buildTerminalNative(root = process.cwd()) {
     electronVersion,
     node: process.execPath,
   });
+  const env = await terminalBuildEnvironment(root);
   const cache = path.join(root, "work/terminal-native-build");
   const out = path.join(root, "dist-electron/native");
   for (const dir of [
     out,
+    env.electron_config_cache,
     ...["home", "tmp", "npm-cache"].map((d) => path.join(cache, d)),
   ])
     await mkdir(dir, { recursive: true });
@@ -186,15 +268,6 @@ export async function buildTerminalNative(root = process.cwd()) {
   await unlink(manifest).catch((e) => {
     if (e.code !== "ENOENT") throw e;
   });
-  const env = {
-    PATH: process.env.PATH ?? "/usr/bin:/bin",
-    HOME: path.join(cache, "home"),
-    TMPDIR: path.join(cache, "tmp"),
-    LANG: "en_US.UTF-8",
-    LC_ALL: "en_US.UTF-8",
-    npm_config_userconfig: "/dev/null",
-    npm_config_cache: path.join(cache, "npm-cache"),
-  };
   await prepareElectronRuntime(root, process.arch, env);
   for (const command of commands)
     execFileSync(command.file, command.args, {

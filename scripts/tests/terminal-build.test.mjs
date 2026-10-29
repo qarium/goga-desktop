@@ -299,3 +299,95 @@ test("Electron preparation propagates install and native verification failures",
     /wrong architecture/,
   );
 });
+
+test("download caches are explicit inside the isolated build root and do not inherit injection", async () => {
+  const { terminalBuildEnvironment } =
+    await import("../terminal-native-build.mjs");
+  assert.equal(typeof terminalBuildEnvironment, "function");
+  const env = await terminalBuildEnvironment("/synthetic/project", {
+    PATH: "/usr/bin:/bin",
+    HOME: "/user/home",
+    NODE_OPTIONS: "--require=untrusted",
+    NODE_PATH: "/user/modules",
+    ELECTRON_OVERRIDE_DIST_PATH: "/foreign/binary",
+    electron_config_cache: "/user/cache",
+    TOKEN: "not-for-build",
+  });
+  assert.equal(env.HOME, "/synthetic/project/work/terminal-native-build/home");
+  assert.equal(
+    env.electron_config_cache,
+    "/synthetic/project/work/terminal-native-build/downloads/electron",
+  );
+  assert.equal(
+    env.npm_config_cache,
+    "/synthetic/project/work/terminal-native-build/npm-cache",
+  );
+  for (const name of [
+    "NODE_OPTIONS",
+    "NODE_PATH",
+    "TOKEN",
+    "ELECTRON_OVERRIDE_DIST_PATH",
+  ])
+    assert.equal(env[name], undefined);
+  assert.equal(env.PATH, "/usr/bin:/bin");
+  for (const root of ["relative", "/project/../other", "/project\nbad"])
+    await assert.rejects(terminalBuildEnvironment(root));
+});
+
+test("isolated build cache refuses symlinked ancestors instead of writing outside the checkout", async (t) => {
+  const { terminalBuildEnvironment } =
+    await import("../terminal-native-build.mjs");
+  const { mkdtemp, mkdir, symlink, rm } = await import("node:fs/promises");
+  const root = await mkdtemp("/private/tmp/goga-build-cache-");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(root + "/foreign");
+  await symlink(root + "/foreign", root + "/work");
+  await assert.rejects(terminalBuildEnvironment(root), /symbolic|symlink/i);
+});
+
+test("all writable isolated build roots reject sibling and cached-header symlinks", async (t) => {
+  const { terminalBuildEnvironment } =
+    await import("../terminal-native-build.mjs");
+  const { mkdtemp, mkdir, symlink, rm } = await import("node:fs/promises");
+  const root = await mkdtemp("/private/tmp/goga-build-leaf-");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(root + "/foreign");
+  for (const leaf of ["home", "tmp", "npm-cache", "home/.electron-gyp"]) {
+    const candidate = root + "/work/terminal-native-build/" + leaf;
+    const path = await import("node:path");
+    await mkdir(path.dirname(candidate), { recursive: true });
+    await symlink(root + "/foreign", candidate);
+    await assert.rejects(
+      terminalBuildEnvironment(root),
+      /symbolic|symlink/i,
+      leaf,
+    );
+    await rm(candidate);
+  }
+});
+
+test("restored nested cache entries cannot redirect subsequent header or cache writes", async (t) => {
+  const { terminalBuildEnvironment } =
+    await import("../terminal-native-build.mjs");
+  const { mkdtemp, mkdir, symlink, rm } = await import("node:fs/promises");
+  const path = await import("node:path");
+  const root = await mkdtemp("/private/tmp/goga-build-nested-");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  await mkdir(root + "/foreign");
+  for (const leaf of [
+    "home/.electron-gyp/44.8.0",
+    "home/.electron-gyp/44.8.0/include/node",
+    "npm-cache/_logs",
+    "downloads/electron/version/archive.zip",
+  ]) {
+    const candidate = root + "/work/terminal-native-build/" + leaf;
+    await mkdir(path.dirname(candidate), { recursive: true });
+    await symlink(root + "/foreign", candidate);
+    await assert.rejects(
+      terminalBuildEnvironment(root),
+      /symbolic|symlink/i,
+      leaf,
+    );
+    await rm(candidate);
+  }
+});

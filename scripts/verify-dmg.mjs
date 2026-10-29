@@ -9,11 +9,15 @@ import {
   realpath,
   rm,
   rmdir,
+  readFile,
+  writeFile,
+  copyFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createRequire } from "node:module";
+import { constants } from "node:fs";
+import { assertReceipt } from "./packaged-app-smoke.mjs";
 import { versionFromTag } from "./release-version.mjs";
 const execute = runSmokeCommand;
 const run = (file, args, options = {}) =>
@@ -94,7 +98,108 @@ export function createDmgCleanup({ run: command = run, now } = {}) {
       timeout: args.includes("-force") ? 10000 : 8000,
     });
 }
-export async function verifyDmg(dmg, arch, tag, { ui = false } = {}) {
+export async function runPackagedUI(
+  executable,
+  root,
+  version,
+  arch,
+  asar,
+  command,
+) {
+  await command(
+    process.execPath,
+    [
+      fileURLToPath(new URL("./packaged-app-smoke.mjs", import.meta.url)),
+      executable,
+      root,
+      version,
+      arch,
+      asar,
+    ],
+    {
+      cwd: root,
+      env: {
+        PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
+        HOME: path.join(root, "home"),
+        CFFIXED_USER_HOME: path.join(root, "home"),
+        TMPDIR: await realpath(tmpdir()),
+        LANG: "en_US.UTF-8",
+        LC_ALL: "en_US.UTF-8",
+      },
+    },
+  );
+  const file = path.join(root, "report/packaged-app-smoke.json");
+  const stat = await lstat(file);
+  assert.ok(
+    stat.isFile() &&
+      !stat.isSymbolicLink() &&
+      stat.nlink === 1 &&
+      stat.size <= 65536,
+    "Invalid packaged smoke receipt",
+  );
+  const receipt = JSON.parse(await readFile(file, "utf8"));
+  assertReceipt(receipt, version, arch);
+  return receipt;
+}
+const diagnosticNames = [
+  "packaged-app-smoke.json",
+  "dmg-verification.json",
+  "app-stdout.log",
+  "app-stderr.log",
+  "failure.png",
+];
+export async function collectSmokeDiagnostics(root, destination) {
+  assert.ok(
+    path.isAbsolute(destination) && path.normalize(destination) === destination,
+    "Absolute diagnostic destination required",
+  );
+  assert.ok(
+    destination !== root && !destination.startsWith(root + path.sep),
+    "Diagnostic destination must survive temporary cleanup",
+  );
+  let cursor = path.parse(destination).root;
+  for (const part of destination.slice(cursor.length).split(path.sep)) {
+    cursor = path.join(cursor, part);
+    try {
+      assert.equal(
+        (await lstat(cursor)).isSymbolicLink(),
+        false,
+        "Diagnostic destination symlink",
+      );
+    } catch (error) {
+      if (error.code !== "ENOENT") throw error;
+    }
+  }
+  await mkdir(destination, { recursive: true });
+  for (const name of diagnosticNames) {
+    const source = path.join(root, "report", name);
+    let stat;
+    try {
+      stat = await lstat(source);
+    } catch (error) {
+      if (error.code === "ENOENT") continue;
+      throw error;
+    }
+    assert.ok(
+      stat.isFile() &&
+        !stat.isSymbolicLink() &&
+        stat.nlink === 1 &&
+        stat.size <= 4 * 1024 * 1024,
+      "Invalid regular diagnostic file",
+    );
+    await copyFile(
+      source,
+      path.join(destination, name),
+      constants.COPYFILE_EXCL,
+    );
+  }
+}
+export async function verifyDmg(
+  dmg,
+  arch,
+  tag,
+  { ui = false, reportDirectory = process.env.GOGA_RELEASE_REPORT_DIR } = {},
+) {
   const budget = smokeBudget(160000, { run });
   const command = budget.run;
   // Cleanup gets 20 seconds total, even after the shared work deadline expires.
@@ -133,8 +238,10 @@ export async function verifyDmg(dmg, arch, tag, { ui = false } = {}) {
   delete env.NODE_OPTIONS;
   delete env.NODE_PATH;
   delete env.ELECTRON_RUN_AS_NODE;
+  const started = performance.now();
+  let verified = false;
   try {
-    return await withMountedDmg(
+    const result = await withMountedDmg(
       path.resolve(dmg),
       mountpoint,
       async (mounted) => {
@@ -183,29 +290,8 @@ export async function verifyDmg(dmg, arch, tag, { ui = false } = {}) {
           signature: signature.stderr + signature.stdout,
         };
         validateMetadata(metadata, tag, arch);
-        if (ui) {
-          // Dev Electron loads the real packaged ASAR modules; the DMG executable itself
-          // was independently executed above. No fixture preload, projects or pipelines.
-          const electron = createRequire(import.meta.url)("electron");
-          await command(
-            electron,
-            [
-              fileURLToPath(
-                new URL("./packaged-ui-smoke.cjs", import.meta.url),
-              ),
-            ],
-            {
-              env: {
-                ...env,
-                GOGA_VERIFY_ASAR: asar,
-                GOGA_VERIFY_VERSION: version,
-                GOGA_VERIFY_ARCH: arch,
-                GOGA_VERIFY_ELECTRON: metadata.electron,
-              },
-              cwd: root,
-            },
-          );
-        }
+        if (ui)
+          await runPackagedUI(executable, root, version, arch, asar, command);
         budget.check();
         const result = {
           version,
@@ -214,24 +300,44 @@ export async function verifyDmg(dmg, arch, tag, { ui = false } = {}) {
           nativeRuntime: true,
           packagedUI: ui,
           uiRuntime: ui
-            ? "same-lockfile development Electron; packaged host/preload/renderer"
+            ? "real packaged executable; production main/preload/renderer, Git, PTY and normal shutdown"
             : "not tested",
         };
-        console.log(JSON.stringify(result));
         return result;
       },
       command,
       cleanupCommand,
     );
+    verified = true;
+    console.log(JSON.stringify(result));
+    return result;
   } finally {
-    // Do not recursively remove a potentially still-mounted volume after detach failure.
     try {
-      await rmdir(mountpoint);
-      await rm(root, { recursive: true, force: true });
-    } catch (error) {
-      console.error(
-        `Verification temporary directory retained for manual cleanup: ${root} (${error.code})`,
-      );
+      if (reportDirectory) {
+        await mkdir(path.join(root, "report"), { recursive: true });
+        await writeFile(
+          path.join(root, "report/dmg-verification.json"),
+          JSON.stringify({
+            version,
+            arch,
+            outcome: verified ? "passed" : "failed",
+            elapsedMs: Math.ceil(performance.now() - started),
+            packagedUI: ui,
+          }) + "\n",
+          { mode: 0o600, flag: "wx" },
+        );
+        await collectSmokeDiagnostics(root, reportDirectory);
+      }
+    } finally {
+      // Do not recursively remove a potentially still-mounted volume after detach failure.
+      try {
+        await rmdir(mountpoint);
+        await rm(root, { recursive: true, force: true });
+      } catch (error) {
+        console.error(
+          `Verification temporary directory retained for manual cleanup: ${root} (${error.code})`,
+        );
+      }
     }
   }
 }

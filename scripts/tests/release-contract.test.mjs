@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { parse } from "yaml";
+import { spawnSync } from "node:child_process";
 const load = async (name) =>
   parse(
     await readFile(
@@ -53,7 +54,12 @@ test("CI and release use pinned actions, read-only builds and explicit native-te
                     name === "ci" ? "--maxWorkers=3" : "--maxWorkers=1",
                     "scripts/test-summary.mjs",
                   ]
-                : ["npm ci", "npm run build"];
+                : name === "release" && id === "build"
+                  ? [
+                      "scripts/release-step.mjs install",
+                      "scripts/release-step.mjs build",
+                    ]
+                  : ["npm ci", "npm run build"];
         for (const command of required)
           assert.ok(commands.includes(command), `${name}: ${command}`);
       }
@@ -68,12 +74,10 @@ test("release gates native two-architecture builds and narrowly scoped publisher
     {
       arch: "arm64",
       runner: "macos-15",
-      testProfile: "default",
     },
     {
       arch: "x64",
       runner: "macos-15-intel",
-      testProfile: "slow-git",
     },
   ]);
   assert.equal(w.jobs.publish.needs, "build");
@@ -88,11 +92,11 @@ test("release gates native two-architecture builds and narrowly scoped publisher
   assert.ok(commands.includes("process.arch"));
   assert.ok(
     commands.indexOf("release-version.mjs --check") <
-      commands.indexOf("npm ci"),
+      commands.indexOf("scripts/release-step.mjs install"),
   );
   assert.ok(
     commands.indexOf("npm run release:version") <
-      commands.indexOf("npm run build"),
+      commands.indexOf("scripts/release-step.mjs build"),
   );
   assert.ok(commands.includes("scripts/verify-dmg.mjs"));
   for (const j of Object.values(w.jobs))
@@ -303,7 +307,7 @@ test("release reuses successful exact-commit CI and never reruns the full suite"
     .flatMap((j) => j.steps.map((s) => s.run ?? ""))
     .join("\n");
   assert.doesNotMatch(all, /npm test|vitest run|--shard/);
-  assert.match(all, /npm run test:release/);
+  assert.doesNotMatch(all, /npm run test:release|npm run typecheck/);
   assert.match(all, /verify-dmg\.mjs.*--ui/);
   const steps = w.jobs.publish.steps;
   const check = steps.findIndex((s) =>
@@ -349,16 +353,37 @@ test("lower Git compatibility is isolated, checksummed and required in addition 
   assert.match(report.run, /test-summary.mjs work\/git-compatibility.json/);
 });
 
-test("Intel release tests are bounded viability smoke, not duplicate regression/typechecking", async () => {
+test("both native releases use only bounded packaged viability smoke, with no repeated regression or types", async () => {
   const w = await load("release"),
     steps = w.jobs.build.steps;
-  for (const command of ["npm run test:release", "npm run typecheck"]) {
-    const step = steps.find((s) => s.run === command);
-    assert.equal(step?.if, "matrix.arch == 'arm64'");
-  }
+  const commands = steps.map((s) => s.run ?? "").join("\n");
+  assert.doesNotMatch(
+    commands,
+    /npm (?:test|run (?:test:release|typecheck))|vitest|--shard/,
+  );
+  assert.equal(w.jobs.build.env.GOGA_TEST_PROFILE, undefined);
+  assert.equal(w.jobs.build["timeout-minutes"], 15);
+  for (const phase of ["install", "build", "package"])
+    assert.ok(commands.includes("node scripts/release-step.mjs " + phase));
   const smoke = steps.find((s) => (s.run ?? "").includes("verify-dmg.mjs"));
+  assert.equal(smoke.if, undefined);
   assert.equal(smoke["timeout-minutes"], 4);
   assert.match(smoke.run, /--ui/);
+  const diagnostics = steps.find(
+    (s) => s.name === "Upload release diagnostics",
+  );
+  assert.equal(diagnostics.if, "always()");
+  assert.equal(diagnostics.with.name, "release-diagnostics-${{ matrix.arch }}");
+  assert.equal(diagnostics.with.path, "work/release-report/");
+  const cache = steps.find((s) => s.name === "Cache verified tool downloads");
+  assert.ok(cache.with.key.includes("runner.arch"));
+  assert.ok(cache.with.key.includes("package-lock.json"));
+  assert.ok(cache.with.key.includes("steps.toolchain.outputs.key"));
+  assert.match(cache.with.path, /downloads\/electron/);
+  assert.match(cache.with.path, /home\/\.electron-gyp/);
+  assert.doesNotMatch(cache.with.path, /node_modules|app\.asar|release-report/);
+  for (const name of ["verify-ci", "publish"])
+    assert.ok(!w.jobs[name].steps.some((s) => s.with?.cache === "npm"));
 });
 
 test("expensive domains start before short domains without skipping checks on a failed dependency", async () => {
@@ -396,5 +421,53 @@ test("expensive domains start before short domains without skipping checks on a 
   ]) {
     assert.equal(job["timeout-minutes"], 15);
     assert.notEqual(job["continue-on-error"], true);
+  }
+});
+
+
+test("manual release validation cannot publish and still requires exact-commit CI", async () => {
+  const w = await load("release");
+  assert.equal(w.on.workflow_dispatch.inputs.validation_tag.required, true);
+  assert.equal(w.on.workflow_dispatch.inputs.validation_tag.type, "string");
+  assert.equal(w.env.RELEASE_TAG, "${{ github.event_name == 'workflow_dispatch' && inputs.validation_tag || github.ref_name }}");
+  assert.equal(w.jobs.publish.if, "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}");
+  assert.equal(w.jobs.build.needs, "verify-ci");
+  for (const name of ["verify-ci", "build"]) {
+    const job = w.jobs[name];
+    assert.equal(job.steps.find(s => s.uses?.startsWith("actions/checkout@")).with.ref, "${{ github.sha }}");
+    assert.equal(job.permissions?.contents ?? w.permissions.contents, "read");
+  }
+  assert.ok(w.jobs["verify-ci"].steps.some(s => s.run === "node scripts/verify-release-ci.mjs"));
+  assert.ok(w.jobs.publish.steps.some(s => s.run === "node scripts/verify-release-ci.mjs"));
+});
+
+test("release admission permits only real tags or non-publishing main validation", async () => {
+  const w = await load("release");
+  const sha = "a".repeat(40);
+  for (const name of ["verify-ci", "build"]) {
+    const admission = w.jobs[name].steps.find(s => s.run?.includes("git merge-base --is-ancestor")).run;
+    const fakeGit = `git() {
+      case "$*" in
+        "rev-parse HEAD") printf '%s\\n' "$GITHUB_SHA";;
+        "rev-parse $RELEASE_TAG^{commit}") printf '%s\\n' "$TAG_SHA";;
+        "merge-base --is-ancestor $GITHUB_SHA origin/main") test "$MAIN_ANCESTRY" = yes;;
+        *) return 88;;
+      esac
+    }
+`;
+    const run = (event, ref, extra = {}) => spawnSync("/bin/bash", ["-e", "-c", fakeGit + admission], {
+      env: {PATH: process.env.PATH, RELEASE_TAG: "v0.1.51", GITHUB_SHA: sha, TAG_SHA: sha,
+        MAIN_ANCESTRY: "yes", GITHUB_EVENT_NAME: event, GITHUB_REF: ref, ...extra},
+      cwd: new URL("../..", import.meta.url), encoding: "utf8",
+    }).status;
+    assert.equal(run("push", "refs/tags/v0.1.51"), 0, name);
+    assert.equal(run("workflow_dispatch", "refs/heads/main"), 0, name);
+    assert.notEqual(run("workflow_dispatch", "refs/heads/other"), 0, name);
+    assert.notEqual(run("workflow_dispatch", "refs/tags/v0.1.51"), 0, name);
+    assert.notEqual(run("push", "refs/heads/main"), 0, name);
+    assert.notEqual(run("pull_request", "refs/heads/main"), 0, name);
+    assert.notEqual(run("push", "refs/tags/v0.1.51", {TAG_SHA: "b".repeat(40)}), 0, name);
+    assert.notEqual(run("workflow_dispatch", "refs/heads/main", {MAIN_ANCESTRY: "no"}), 0, name);
+    assert.notEqual(run("workflow_dispatch", "refs/heads/main", {RELEASE_TAG: "main"}), 0, name);
   }
 });

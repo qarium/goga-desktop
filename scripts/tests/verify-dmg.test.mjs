@@ -91,26 +91,90 @@ test("partial attach failure still attempts detach", async () => {
   );
   assert.deepEqual(calls.at(-1), ["detach", "/tmp/mount"]);
 });
-test("UI smoke is hidden, isolated and loads only packaged production modules", async () => {
-  const { readFile } = await import("node:fs/promises");
-  const script = await readFile(
-    new URL("../packaged-ui-smoke.cjs", import.meta.url),
-    "utf8",
+test("UI smoke invokes the real mounted executable through Node controller and requires its receipt", async (t) => {
+  const { runPackagedUI } = await import("../verify-dmg.mjs");
+  assert.equal(typeof runPackagedUI, "function");
+  const { mkdtemp, mkdir, writeFile, rm } = await import("node:fs/promises");
+  const root = await mkdtemp("/private/tmp/goga-receipt-test-");
+  t.after(() => rm(root, { recursive: true, force: true }));
+  let calls = 0;
+  const command = async (file, args, options) => {
+    calls++;
+    assert.equal(file, process.execPath);
+    assert.ok(
+      options.env,
+      "Node controller must not inherit caller environment",
+    );
+    assert.equal(options.env.NODE_OPTIONS, undefined);
+    assert.equal(options.env.NODE_PATH, undefined);
+    assert.equal(options.env.ELECTRON_RUN_AS_NODE, undefined);
+    assert.equal(options.env.GITHUB_TOKEN, undefined);
+    assert.ok(args[0].endsWith("/scripts/packaged-app-smoke.mjs"));
+    assert.deepEqual(args.slice(1), [
+      "/mounted/Goga Desktop.app/Contents/MacOS/Goga Desktop",
+      root,
+      "1.2.3",
+      "arm64",
+      "/mounted/Goga Desktop.app/Contents/Resources/app.asar",
+    ]);
+    await mkdir(root + "/report");
+    await writeFile(
+      root + "/report/packaged-app-smoke.json",
+      JSON.stringify({
+        schemaVersion: 1,
+        kind: "real-packaged-app",
+        version: "1.2.3",
+        arch: "arm64",
+        outcome: "passed",
+        elapsedMs: 100,
+        exit: { code: 0, signal: null },
+        phases: Object.fromEntries(
+          ["startup", "settings", "git", "terminal", "shutdown"].map((name) => [
+            name,
+            { outcome: "passed", elapsedMs: 10 },
+          ]),
+        ),
+      }),
+    );
+  };
+  await runPackagedUI(
+    "/mounted/Goga Desktop.app/Contents/MacOS/Goga Desktop",
+    root,
+    "1.2.3",
+    "arm64",
+    "/mounted/Goga Desktop.app/Contents/Resources/app.asar",
+    command,
   );
-  for (const marker of [
-    "show: false",
-    "acceptance-host.cjs",
-    "preload.cjs",
-    "GOGA_DESKTOP_DATA_DIR",
-    "External command/pipeline forbidden",
-    "snapshot.version",
-    "snapshot.projects",
-    "snapshot.runs",
-  ])
-    assert.ok(script.includes(marker), marker);
-  assert.ok(
-    script.includes("process.versions.electron"),
-    "UI and packaged native runtime must have the same Electron version",
+  assert.equal(calls, 1);
+  const { unlink } = await import("node:fs/promises");
+  await unlink(root + "/report/packaged-app-smoke.json");
+  await assert.rejects(
+    runPackagedUI("/exe", root, "1.2.3", "arm64", "/asar", async () => {}),
+    /ENOENT|receipt/i,
+  );
+});
+
+test("diagnostics copy only bounded allowlisted regular files, never profiles or repositories", async (t) => {
+  const { collectSmokeDiagnostics } = await import("../verify-dmg.mjs");
+  const { mkdtemp, mkdir, writeFile, readFile, symlink, rm } =
+    await import("node:fs/promises");
+  const dir = await mkdtemp("/private/tmp/goga-diagnostics-test-");
+  t.after(() => rm(dir, { recursive: true, force: true }));
+  const root = dir + "/fixture",
+    dest = dir + "/artifacts";
+  await mkdir(root + "/report", { recursive: true });
+  await writeFile(root + "/report/app-stderr.log", "bounded");
+  await writeFile(root + "/report/credentials.json", "must not upload");
+  await collectSmokeDiagnostics(root, dest);
+  assert.equal(await readFile(dest + "/app-stderr.log", "utf8"), "bounded");
+  await assert.rejects(readFile(dest + "/credentials.json"), /ENOENT/);
+  await symlink(
+    root + "/report/credentials.json",
+    root + "/report/failure.png",
+  );
+  await assert.rejects(
+    collectSmokeDiagnostics(root, dir + "/other"),
+    /regular|symlink|diagnostic/i,
   );
 });
 
