@@ -192,7 +192,7 @@ test("domain matrix covers eight areas and complete numbered subgroups", async (
     ),
     {
       "git-workspace": 1,
-      "git-conflicts": 4,
+      "git-conflicts": 5,
       "git-safety": 1,
       topics: 1,
       terminal: 1,
@@ -394,6 +394,7 @@ test("expensive domains start before short domains without skipping checks on a 
   assert.deepEqual(
     priority.strategy.matrix.include.map((row) => row.domain),
     [
+      "git-conflicts",
       "git-conflicts",
       "git-conflicts",
       "git-conflicts",

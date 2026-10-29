@@ -1547,10 +1547,21 @@ it("persists an explicit picker selection across a fresh App mount", async () =>
   const { readWorkspaceSelection } =
     await import("../src/renderer/topic-display-cache");
   const p = { id: "p", name: "Fixture", path: "/fixture/project" };
+  // The header may render before its asynchronous topic catalog is ready.
+  // Keep the first reply pending until after the picker opens to expose that race.
+  const catalog = { ...board(), year: String(new Date().getFullYear()) };
+  let finishCatalog!: (value: typeof catalog) => void;
+  api.readTopicCatalog = vi.fn().mockResolvedValue(catalog);
+  api.readTopicCatalog.mockImplementationOnce(() => new Promise(resolve => {
+    finishCatalog = resolve;
+  }));
   const first = render(<App />);
   await screen.findByRole("heading", { name: "Fixture" });
+  await waitFor(() => expect(api.readTopicCatalog).toHaveBeenCalledOnce());
   fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
-  fireEvent.click(screen.getByRole("row", { name: /^main/ }));
+  expect(screen.queryByRole("row", { name: /^main/ })).toBeNull();
+  finishCatalog(catalog);
+  fireEvent.click(await screen.findByRole("row", { name: /^main/ }));
   await waitFor(() =>
     expect(readWorkspaceSelection(p)?.contextId).toBe(owner.contextId),
   );
