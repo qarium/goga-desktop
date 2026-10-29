@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { EventEmitter } from "node:events";
+import { EventEmitter, once } from "node:events";
+import { createServer } from "node:http";
 import { mkdtemp, mkdir, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -483,5 +484,38 @@ test("expected EOF cannot mask malformed protocol, oversized messages or fatal e
       ),
       event === "fatal" ? /renderer exception/ : /Invalid CDP protocol message/,
     );
+  }
+});
+
+
+test("cold packaged renderer discovery uses its existing shared deadline, not a shorter request timeout", async () => {
+  const { findTarget } = await cdp();
+  const expectedURL = pathToFileURL("/private/tmp/fixture/app.asar/dist/index.html").href;
+  let port;
+  const timers = new Set();
+  const server = createServer((_request, response) => {
+    const timer = setTimeout(() => {
+      timers.delete(timer);
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify([{
+        type: "page", url: expectedURL,
+        webSocketDebuggerUrl: `ws://127.0.0.1:${port}/devtools/page/fixture`,
+      }]));
+    }, 2300);
+    timers.add(timer);
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  port = server.address().port;
+  try {
+    const target = await findTarget(port, expectedURL, async () => {}, 6000);
+    assert.equal(target.url, expectedURL);
+    assert.equal(target.webSocketDebuggerUrl, `ws://127.0.0.1:${port}/devtools/page/fixture`);
+    // A stalled discovery still has the same finite total budget and must fail.
+    await assert.rejects(findTarget(port, expectedURL, async () => {}, 20), /timeout|timed out/i);
+  } finally {
+    for (const timer of timers) clearTimeout(timer);
+    server.closeAllConnections();
+    await new Promise(resolve => server.close(resolve));
   }
 });

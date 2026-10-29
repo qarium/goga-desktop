@@ -69,8 +69,10 @@ export async function findTarget(
     await assertAlive();
     const response = await fetch(`http://127.0.0.1:${port}/json/list`, {
       redirect: "error",
+      // The first inventory may wait for Chromium's cold renderer startup.
+      // Keep one discovery deadline instead of aborting a healthy slow reply at 2s.
       signal: AbortSignal.timeout(
-        Math.min(2000, Math.max(1, deadline - performance.now())),
+        Math.max(1, Math.ceil(deadline - performance.now())),
       ),
     });
     if (!response.ok) throw Error("CDP inventory request rejected");
