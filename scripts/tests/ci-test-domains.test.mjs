@@ -130,3 +130,11 @@ test("real configured Vitest sequencer partitions discovered specs across the AR
   assert.deepEqual(groups.flat().sort(), all.sort());
   assert.equal(new Set(groups.flat()).size, all.length);
 });
+
+test("native merge/rebase lifecycle contracts use the conflict integration domain", async () => {
+  const manifest = await load();
+  const owners = Object.entries(manifest)
+    .filter(([, files]) => files.includes("tests/git-native-contract.test.ts"))
+    .map(([domain]) => domain);
+  assert.deepEqual(owners, ["git-conflicts"]);
+});

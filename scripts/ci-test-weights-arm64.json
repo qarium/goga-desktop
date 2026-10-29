@@ -85,7 +85,7 @@
   "tests/git-native-completion.test.ts": 1,
   "tests/git-native-conflict-membership.test.ts": 137,
   "tests/git-native-conflict-save.test.ts": 246,
-  "tests/git-native-contract.test.ts": 30,
+  "tests/git-native-contract.test.ts": 90,
   "tests/git-native-discard.test.ts": 37,
   "tests/git-native-engine-boundary.test.ts": 1,
   "tests/git-native-host-routing.test.ts": 1,
