@@ -542,3 +542,16 @@ test("approved Goga application icon is portable and included in packaging and r
       main.indexOf(".whenReady()"),
   );
 });
+
+// CVE-2026-115570: keep the TLS certificate fix in the shipped runtime.
+test("release runtime is pinned to patched Electron in manifest and lockfile", async () => {
+  const p = JSON.parse(
+    await readFile(new URL("../../package.json", import.meta.url), "utf8"),
+  );
+  const lock = JSON.parse(
+    await readFile(new URL("../../package-lock.json", import.meta.url), "utf8"),
+  );
+  assert.equal(p.devDependencies.electron, "44.9.1");
+  assert.equal(lock.packages[""].devDependencies.electron, "44.9.1");
+  assert.equal(lock.packages["node_modules/electron"].version, "44.9.1");
+});
