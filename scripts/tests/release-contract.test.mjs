@@ -471,3 +471,15 @@ test("release admission permits only real tags or non-publishing main validation
     assert.notEqual(run("workflow_dispatch", "refs/heads/main", {RELEASE_TAG: "main"}), 0, name);
   }
 });
+
+test("release cache uses runtime environment, not unsupported runner context in job env", async () => {
+  const w = await load("release");
+  for (const job of Object.values(w.jobs))
+    assert.doesNotMatch(JSON.stringify(job.env ?? {}), /\$\{\{[^}]*\brunner\./);
+  const steps = w.jobs.build.steps;
+  const setup = steps.findIndex(s => s.run?.includes('ELECTRON_BUILDER_CACHE=$RUNNER_TEMP/goga-release-builder-cache'));
+  const cache = steps.findIndex(s => s.uses?.startsWith("actions/cache@"));
+  assert.ok(setup >= 0 && setup < cache);
+  assert.ok(steps[setup].run.includes('>> "$GITHUB_ENV"'));
+  assert.ok(steps[cache].with.path.includes('${{ env.ELECTRON_BUILDER_CACHE }}'));
+});

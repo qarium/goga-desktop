@@ -64,7 +64,6 @@ jobs:
     timeout-minutes: 15
     env:
       EXPECTED_ARCH: ${{ matrix.arch }}
-      ELECTRON_BUILDER_CACHE: ${{ runner.temp }}/goga-release-builder-cache
       GOGA_RELEASE_REPORT_DIR: ${{ github.workspace }}/work/release-report
       CSC_IDENTITY_AUTO_DISCOVERY: "false"
       GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
@@ -99,6 +98,8 @@ jobs:
             *) exit 1 ;;
           esac
           node -e 'if(process.platform !== "darwin" || process.arch !== process.env.EXPECTED_ARCH) process.exit(1)'
+      - name: Set isolated builder download cache
+        run: echo "ELECTRON_BUILDER_CACHE=$RUNNER_TEMP/goga-release-builder-cache" >> "$GITHUB_ENV"
       - name: Identify native download cache toolchain
         id: toolchain
         run: echo "key=$( { sw_vers; xcrun clang --version; uname -m; } | shasum -a 256 | cut -d" " -f1)" >> "$GITHUB_OUTPUT"
