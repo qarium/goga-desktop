@@ -9,6 +9,10 @@ import type {
 } from "./git-history";
 import type {
   GitDiscardRequest,
+  GitDiscardRecovery,
+  GitDiscardRecoveryRequest,
+  GitDiscardRecoveryPreview,
+  GitDiscardRecoveryResult,
   GitDiscardPreview,
   GitDiscardResult,
 } from "./git-discard";
@@ -163,6 +167,11 @@ export interface DesktopAPI {
     request: GitMergeOperationRequest,
   ): Promise<GitMergeOperationPreview>;
   executeGitMergeOperation(token: string): Promise<GitMergeOperationResult>;
+  inspectGitDiscardRecovery(scope: ScopeRef): Promise<GitDiscardRecovery>;
+  prepareGitDiscardRecovery(
+    request: GitDiscardRecoveryRequest,
+  ): Promise<GitDiscardRecoveryPreview>;
+  executeGitDiscardRecovery(token: string): Promise<GitDiscardRecoveryResult>;
   prepareGitDiscard(request: GitDiscardRequest): Promise<GitDiscardPreview>;
   executeGitDiscard(token: string): Promise<GitDiscardResult>;
   prepareGitCommit(request: GitCommitRequest): Promise<GitCommitPreview>;

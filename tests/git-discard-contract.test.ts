@@ -26,3 +26,18 @@ it("accepts only exact scope, freshness and literal unique selected paths", () =
   expect(gitDiscardTokenSchema.safeParse("x").success).toBe(false);
   expect(gitDiscardTokenSchema.parse("b".repeat(64))).toBe("b".repeat(64));
 });
+
+it("admits only a scoped fresh recovery request, not force flags or writable paths", async () => {
+  const contract = await import("../src/shared/git-discard");
+  const schema = (contract as any).gitDiscardRecoveryRequestSchema;
+  expect(schema).toBeDefined();
+  const request = { scope: "p", revision: "a".repeat(64) };
+  expect(schema.parse(request)).toEqual(request);
+  for (const extra of [
+    { force: true },
+    { root: "/other" },
+    { paths: ["other"] },
+    { revision: "old" },
+  ])
+    expect(schema.safeParse({ ...request, ...extra }).success).toBe(false);
+});

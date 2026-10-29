@@ -31,3 +31,11 @@
 .git-discard-confirmation .git-commit-preview {
   padding-bottom: 0;
 }
+
+.git-discard-recovery-details {
+  flex: 1 1 100%;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}

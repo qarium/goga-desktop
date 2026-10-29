@@ -7,6 +7,8 @@ export const READ_BUDGETS = {
   prepareGitRebaseOperation: 30000,
   prepareGitMergeOperation: 30000,
   prepareGitDiscard: 30000,
+  inspectGitDiscardRecovery: 30000,
+  prepareGitDiscardRecovery: 30000,
   prepareGitCommit: 30000,
   prepareGitConflictSave: 30000,
   readGitHistoryRefs: 30000,

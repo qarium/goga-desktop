@@ -492,9 +492,11 @@ function GitWorkspaceOwner({
               rebase.modalOpen
             }
             mutationBlockedReason={
-              rebase.needsRefresh || sequencer.needsRefresh || discard.uncertain
+              rebase.needsRefresh || sequencer.needsRefresh
                 ? "Обновите изменения Git перед изменением веток."
-                : undefined
+                : discard.uncertain
+                  ? "Проверьте состояние прежней отмены в Изменениях."
+                  : undefined
             }
             onChanged={(id) => {
               setRefresh((n) => n + 1);
@@ -923,6 +925,7 @@ function GitWorkspaceOwner({
                       rebaseMutationBlocked
                     }
                     visible={body}
+                    ready={!snapshotPending && !snapshotFailed}
                   />
                 )}
               {snapshot?.operation === "merge" && (

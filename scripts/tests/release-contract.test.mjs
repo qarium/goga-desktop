@@ -487,3 +487,58 @@ test("release cache uses runtime environment, not unsupported runner context in 
   assert.ok(steps[setup].run.includes('>> "$GITHUB_ENV"'));
   assert.ok(steps[cache].with.path.includes('${{ env.ELECTRON_BUILDER_CACHE }}'));
 });
+
+test("approved Goga application icon is portable and included in packaging and runtime builds", async () => {
+  const p = JSON.parse(
+    await readFile(new URL("../../package.json", import.meta.url), "utf8"),
+  );
+  assert.equal(p.build.mac.icon, "resources/icon.icns");
+  assert.equal(p.scripts["icon:generate"], "sh scripts/generate-icon.sh");
+  const generator = await readFile(
+    new URL("../generate-icon.sh", import.meta.url),
+    "utf8",
+  );
+  assert.match(generator, /swiftc -module-cache-path/);
+  assert.match(generator, /trap 'rm -rf/);
+  const png = await readFile(
+    new URL("../../resources/icon.png", import.meta.url),
+  );
+  assert.equal(png.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
+  assert.equal(png.readUInt32BE(16), 1024);
+  assert.equal(png.readUInt32BE(20), 1024);
+  assert.equal(png[25], 6, "PNG must preserve transparent corners");
+  const icns = await readFile(
+    new URL("../../resources/icon.icns", import.meta.url),
+  );
+  assert.equal(icns.toString("ascii", 0, 4), "icns");
+  assert.equal(icns.readUInt32BE(4), icns.length);
+  const svg = await readFile(
+    new URL("../../resources/icon.svg", import.meta.url),
+    "utf8",
+  );
+  assert.match(svg, /viewBox="0 0 1024 1024"/);
+  assert.match(svg, /#20d4bf/);
+  assert.match(svg, /#e4ebf6/);
+  assert.match(svg, /#0d1323/);
+  assert.doesNotMatch(svg, /<text|font-family|<image|href=/);
+  const build = await readFile(
+    new URL("../build-main.mjs", import.meta.url),
+    "utf8",
+  );
+  assert.match(
+    build,
+    /copyFile\("resources\/icon.png", "dist-electron\/assets\/icon.png"\)/,
+  );
+  assert.doesNotMatch(build, /swift|generate-icon/);
+  assert(p.build.files.includes("dist-electron/**"));
+  const main = await readFile(
+    new URL("../../src/main/index.ts", import.meta.url),
+    "utf8",
+  );
+  assert.match(main, /installApplicationIcon\(app, __dirname\)/);
+  assert.match(main, /icon,/);
+  assert(
+    main.indexOf("installApplicationIcon(app, __dirname)") >
+      main.indexOf(".whenReady()"),
+  );
+});

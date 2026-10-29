@@ -11,7 +11,7 @@ import {
   worktreeContextRef,
   type TopicContextIdentity,
 } from "../src/shared/worktrees";
-import type { Runner } from "../src/host/process";
+import { RunnerShutdownError, type Runner } from "../src/host/process";
 const exec = promisify(execFile);
 async function setup() {
   const root = await fs.mkdtemp(
@@ -1253,6 +1253,468 @@ it(
       expect(await fs.readFile(path.join(f.repo, "README"), "utf8")).toBe(
         "user edit",
       );
+    } finally {
+      await fs.rm(f.root, { recursive: true, force: true });
+    }
+  },
+  gitIntegrationBudget(15000),
+);
+
+describe("one-time project Git settings in new topic copies", () => {
+  it(
+    "inherits the approved groups and local includes without copying topology or executable filters",
+    async () => {
+      const f = await setup();
+      try {
+        const settings = [
+          ["user.name", "Project Author"],
+          ["user.email", "project@example.invalid"],
+          ["user.useConfigOnly", "true"],
+          ["user.signingKey", "GPG-FIXTURE-IDENTIFIER"],
+          ["gpg.format", "openpgp"],
+          ["commit.gpgSign", "false"],
+          ["core.sshCommand", "ssh -o IdentitiesOnly=yes"],
+          ["ssh.variant", "ssh"],
+          ["core.autocrlf", "true"],
+          ["core.fileMode", "false"],
+          ["diff.algorithm", "histogram"],
+          ["merge.conflictStyle", "zdiff3"],
+          ["pull.rebase", "true"],
+          ["pull.ff", "only"],
+          ["rebase.autoStash", "true"],
+          ["commit.cleanup", "strip"],
+          ["alias.review", "log --oneline"],
+          ["color.ui", "auto"],
+          ["core.editor", "fixture-editor"],
+          ["core.pager", "cat"],
+          ["merge.tool", "fixture"],
+          ["difftool.fixture.cmd", "fixture-diff $LOCAL $REMOTE"],
+        ];
+        for (const [key, value] of settings)
+          await f.git(["config", "--local", key!, value!]);
+        await fs.writeFile(
+          path.join(f.repo, ".git/team.inc"),
+          "[author]\n name = Included Author\n",
+        );
+        await f.git(["config", "include.path", "team.inc"]);
+        await f.git(["config", "--add", "credential.helper", ""]);
+        await f.git(["config", "--add", "credential.helper", "fixture-helper"]);
+        await f.git(["config", "core.hooksPath", "/not-to-inherit/hooks"]);
+        await f.git(["config", "filter.fixture.process", "not-to-execute"]);
+        await f.git(["config", "merge.fixture.driver", "not-to-execute"]);
+        await f.git([
+          "config",
+          "url.ssh://fixture.invalid/.insteadOf",
+          "https://fixture.invalid/",
+        ]);
+        await f.git(["config", "credential.password", "fixture-not-to-copy"]);
+        const sourceConfig = await fs.readFile(
+          path.join(f.repo, ".git/config"),
+        );
+        const row = await f.manager.ensure(f.project, f.identity);
+        for (const [key, value] of settings)
+          expect(
+            (
+              await f.git(["config", "--local", "--get", key!], row.path)
+            ).stdout.trim(),
+          ).toBe(
+            key === "core.sshCommand" ? `cd '${f.repo}' && ${value}` : value,
+          );
+        expect(
+          (
+            await f.git(["config", "--local", "--get", "author.name"], row.path)
+          ).stdout.trim(),
+        ).toBe("Included Author");
+        expect(
+          (
+            await f.git(
+              ["config", "--local", "--get-all", "credential.helper"],
+              row.path,
+            )
+          ).stdout,
+        ).toBe("\nfixture-helper\n");
+        const clonedConfig = (
+          await f.git(["config", "--local", "--list"], row.path)
+        ).stdout;
+        expect(clonedConfig).not.toMatch(
+          /include\.path|core\.hookspath|filter\.fixture|merge\.fixture\.driver|insteadof|credential\.password/,
+        );
+        expect(
+          (
+            await f.git(["remote", "get-url", "origin"], row.path)
+          ).stdout.trim(),
+        ).toBe(f.repo);
+        expect(await fs.readFile(path.join(row.path, "README"), "utf8")).toBe(
+          "fixture\r\n",
+        );
+        expect(await fs.readFile(path.join(f.repo, ".git/config"))).toEqual(
+          sourceConfig,
+        );
+      } finally {
+        await fs.rm(f.root, { recursive: true, force: true });
+      }
+    },
+    gitIntegrationBudget(20000),
+  );
+
+  it(
+    "anchors file-valued settings and copies local info patterns into the new copy",
+    async () => {
+      const f = await setup();
+      try {
+        const files = [
+          ["commit.template", "message.txt"],
+          ["core.excludesFile", "ignore.rules"],
+          ["core.attributesFile", "attributes.rules"],
+        ];
+        await fs.writeFile(
+          path.join(f.repo, "message.txt"),
+          "Project template\n",
+        );
+        await fs.writeFile(
+          path.join(f.repo, "ignore.rules"),
+          "external-ignore.tmp\n",
+        );
+        await fs.writeFile(
+          path.join(f.repo, "attributes.rules"),
+          "*.data project-attribute\n",
+        );
+        for (const [key, value] of files) await f.git(["config", key!, value!]);
+        await fs.writeFile(
+          path.join(f.repo, ".git/info/exclude"),
+          "local-ignore.tmp\n",
+        );
+        await fs.writeFile(
+          path.join(f.repo, ".git/info/attributes"),
+          "*.data local-attribute\n",
+        );
+        const row = await f.manager.ensure(f.project, f.identity);
+        for (const [key, value] of files)
+          expect(
+            (
+              await f.git(["config", "--local", "--get", key!], row.path)
+            ).stdout.trim(),
+          ).toBe(path.join(f.repo, value!));
+        await fs.writeFile(path.join(row.path, "local-ignore.tmp"), "ignored");
+        await fs.writeFile(
+          path.join(row.path, "external-ignore.tmp"),
+          "ignored",
+        );
+        expect((await f.git(["status", "--porcelain"], row.path)).stdout).toBe(
+          "",
+        );
+        expect(
+          (
+            await f.git(
+              [
+                "check-attr",
+                "project-attribute",
+                "local-attribute",
+                "--",
+                "sample.data",
+              ],
+              row.path,
+            )
+          ).stdout,
+        ).toContain("project-attribute: set");
+        expect(
+          (
+            await f.git(
+              ["check-attr", "local-attribute", "--", "sample.data"],
+              row.path,
+            )
+          ).stdout,
+        ).toContain("local-attribute: set");
+      } finally {
+        await fs.rm(f.root, { recursive: true, force: true });
+      }
+    },
+    gitIntegrationBudget(15000),
+  );
+
+  it(
+    "never resynchronizes a created copy or overwrites its own later settings",
+    async () => {
+      const f = await setup();
+      try {
+        await f.git(["config", "user.name", "First Project Author"]);
+        const row = await f.manager.ensure(f.project, f.identity);
+        expect(
+          (
+            await f.git(["config", "--local", "--get", "user.name"], row.path)
+          ).stdout.trim(),
+        ).toBe("First Project Author");
+        await f.git(["config", "user.name", "Later Project Author"]);
+        await f.git(["config", "user.email", "own@example.invalid"], row.path);
+        const before = await fs.readFile(path.join(row.path, ".git/config"));
+        await new CloneManager(f.home, f.runner).ensure(f.project, f.identity);
+        expect(await fs.readFile(path.join(row.path, ".git/config"))).toEqual(
+          before,
+        );
+        expect(
+          (await f.git(["config", "user.name"], row.path)).stdout.trim(),
+        ).toBe("First Project Author");
+      } finally {
+        await fs.rm(f.root, { recursive: true, force: true });
+      }
+    },
+    gitIntegrationBudget(15000),
+  );
+});
+
+it(
+  "new topic copies use the project's actual SSH signing key and author without copying key files",
+  async () => {
+    const f = await setup();
+    try {
+      await fs.mkdir(path.join(f.repo, "ssh-keys"));
+      await exec("/usr/bin/ssh-keygen", [
+        "-q",
+        "-t",
+        "ed25519",
+        "-N",
+        "",
+        "-f",
+        path.join(f.repo, "ssh-keys/id"),
+      ]);
+      const pub = await fs.readFile(
+        path.join(f.repo, "ssh-keys/id.pub"),
+        "utf8",
+      );
+      await fs.writeFile(
+        path.join(f.repo, "ssh-keys/allowed"),
+        "project@example.invalid " + pub,
+      );
+      for (const [key, value] of [
+        ["user.name", "Local Author"],
+        ["user.email", "project@example.invalid"],
+        ["user.signingKey", "ssh-keys/id"],
+        ["gpg.format", "ssh"],
+        ["commit.gpgSign", "true"],
+        ["gpg.ssh.allowedSignersFile", "ssh-keys/allowed"],
+      ])
+        await f.git(["config", key!, value!]);
+      const row = await f.manager.create(f.project, {
+        year: "2026",
+        branch: "new-topic",
+        baseRef: "main",
+      });
+      await f.runner.command(
+        "git",
+        [
+          "-c",
+          "core.hooksPath=/dev/null",
+          "commit",
+          "--allow-empty",
+          "-m",
+          "signed fixture",
+        ],
+        row.path,
+        {
+          GIT_AUTHOR_NAME: undefined,
+          GIT_AUTHOR_EMAIL: undefined,
+          GIT_COMMITTER_NAME: undefined,
+          GIT_COMMITTER_EMAIL: undefined,
+        },
+      );
+      expect(
+        (
+          await f.git(["log", "-1", "--format=%an|%ae|%cn|%ce"], row.path)
+        ).stdout.trim(),
+      ).toBe(
+        "Local Author|project@example.invalid|Local Author|project@example.invalid",
+      );
+      expect(
+        (await f.git(["log", "-1", "--format=%G?"], row.path)).stdout.trim(),
+      ).toBe("G");
+      await expect(
+        fs.lstat(path.join(row.path, "ssh-keys")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(f.root, { recursive: true, force: true });
+    }
+  },
+  gitIntegrationBudget(15000),
+);
+
+it(
+  "topic copies use the local SSH command without connecting to a real server",
+  async () => {
+    const f = await setup();
+    try {
+      const script = path.join(f.root, "fixture-ssh"),
+        marker = path.join(f.root, "ssh-called");
+      await fs.writeFile(
+        script,
+        `#!/bin/sh\nprintf called > '${marker}'\nexit 1\n`,
+        { mode: 0o700 },
+      );
+      await f.git(["config", "core.sshCommand", script]);
+      await f.git(["config", "ssh.variant", "ssh"]);
+      const row = await f.manager.ensure(f.project, f.identity);
+      await expect(
+        f.git(["ls-remote", "ssh://fixture.invalid/repo"], row.path),
+      ).rejects.toThrow();
+      expect(await fs.readFile(marker, "utf8")).toBe("called");
+    } finally {
+      await fs.rm(f.root, { recursive: true, force: true });
+    }
+  },
+  gitIntegrationBudget(15000),
+);
+
+it.each(["exclude", "attributes"])(
+  "refuses a linked local info/%s before starting a clone",
+  async (name) => {
+    const f = await setup();
+    try {
+      const outside = path.join(f.root, "do-not-copy");
+      await fs.writeFile(outside, "private fixture data");
+      const file = path.join(f.repo, ".git/info", name);
+      await fs.rm(file, { force: true });
+      await fs.symlink(outside, file);
+      await expect(f.manager.ensure(f.project, f.identity)).rejects.toThrow(
+        /настройки Git/,
+      );
+      expect(f.calls.filter((c) => c.args.includes("clone"))).toHaveLength(0);
+      expect(await fs.readFile(outside, "utf8")).toBe("private fixture data");
+    } finally {
+      await fs.rm(f.root, { recursive: true, force: true });
+    }
+  },
+  gitIntegrationBudget(15000),
+);
+
+it(
+  "keeps bare booleans and multiline settings without converting empty strings to true",
+  async () => {
+    const f = await setup();
+    try {
+      await fs.appendFile(
+        path.join(f.repo, ".git/config"),
+        '\n[user]\n useConfigOnly\n[alias]\n message = "!printf \\\"first\\\\nsecond\\\""\n',
+      );
+      const row = await f.manager.ensure(f.project, f.identity);
+      expect(
+        (
+          await f.git(["config", "--type=bool", "user.useConfigOnly"], row.path)
+        ).stdout.trim(),
+      ).toBe("true");
+      expect((await f.git(["config", "alias.message"], row.path)).stdout).toBe(
+        (await f.git(["config", "alias.message"])).stdout,
+      );
+    } finally {
+      await fs.rm(f.root, { recursive: true, force: true });
+    }
+  },
+  gitIntegrationBudget(15000),
+);
+
+it(
+  "keeps a project-relative SSH command working without copying its private resources",
+  async () => {
+    const f = await setup();
+    try {
+      const repo = f.repo + " ' space";
+      await fs.rename(f.repo, repo);
+      const project = { ...f.project, path: repo };
+      await fs.mkdir(path.join(repo, "ssh-tools"));
+      const script = path.join(repo, "ssh-tools/connect"),
+        marker = path.join(f.root, "relative-ssh-called");
+      await fs.writeFile(script, `#!/bin/sh\npwd > '${marker}'\nexit 1\n`, {
+        mode: 0o700,
+      });
+      await f.git(["config", "core.sshCommand", "./ssh-tools/connect"], repo);
+      await f.git(["config", "ssh.variant", "ssh"], repo);
+      const row = await f.manager.ensure(project, f.identity);
+      await expect(
+        f.git(["ls-remote", "ssh://fixture.invalid/repo"], row.path),
+      ).rejects.toThrow();
+      expect((await fs.readFile(marker, "utf8")).trim()).toBe(repo);
+      await expect(
+        fs.lstat(path.join(row.path, "ssh-tools")),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      await fs.rm(f.root, { recursive: true, force: true });
+    }
+  },
+  gitIntegrationBudget(15000),
+);
+
+it(
+  "rejects an oversized settings snapshot without creating a copy or leaking values",
+  async () => {
+    const f = await setup();
+    try {
+      const value = "fixture-private-value".repeat(4000);
+      await f.git(["config", "alias.big", value]);
+      const failure = await f.manager
+        .ensure(f.project, f.identity)
+        .catch((e) => e);
+      expect(failure).toBeInstanceOf(Error);
+      expect(failure.message).toMatch(/значения настроек скрыты/);
+      expect(failure.message).not.toContain("fixture-private-value");
+      expect(f.calls.filter((c) => c.args.includes("clone"))).toHaveLength(0);
+      expect((await f.manager.store.read()).records).toHaveLength(0);
+    } finally {
+      await fs.rm(f.root, { recursive: true, force: true });
+    }
+  },
+  gitIntegrationBudget(15000),
+);
+
+it(
+  "preserves real shutdown rejection during source-settings capture without reserving a copy",
+  async () => {
+    const f = await setup();
+    try {
+      const stopped = new RunnerShutdownError("closing");
+      const manager = new CloneManager(f.home, {
+        command: async (...args) => {
+          if (args[1].includes("--local") && args[1].includes("--list"))
+            throw stopped;
+          return f.runner.command(...args);
+        },
+      });
+      await expect(manager.ensure(f.project, f.identity)).rejects.toBe(stopped);
+      expect(f.calls.filter((c) => c.args.includes("clone"))).toHaveLength(0);
+      expect((await manager.store.read()).records).toHaveLength(0);
+    } finally {
+      await fs.rm(f.root, { recursive: true, force: true });
+    }
+  },
+  gitIntegrationBudget(15000),
+);
+
+it(
+  "refuses changing settings before reservation and allows a fresh stable attempt",
+  async () => {
+    const f = await setup();
+    try {
+      await f.git(["config", "user.name", "first"]);
+      let reads = 0;
+      const manager = new CloneManager(f.home, {
+        command: async (...args) => {
+          if (
+            args[1].includes("--local") &&
+            args[1].includes("--list") &&
+            ++reads === 2
+          )
+            await f.git(["config", "user.name", "stable second"]);
+          return f.runner.command(...args);
+        },
+      });
+      await expect(manager.ensure(f.project, f.identity)).rejects.toThrow(
+        /настройки Git/,
+      );
+      expect((await manager.store.read()).records).toHaveLength(0);
+      const row = await manager.ensure(f.project, f.identity);
+      expect(
+        (
+          await f.git(["config", "--local", "user.name"], row.path)
+        ).stdout.trim(),
+      ).toBe("stable second");
+      expect(f.calls.filter((c) => c.args.includes("clone"))).toHaveLength(1);
     } finally {
       await fs.rm(f.root, { recursive: true, force: true });
     }

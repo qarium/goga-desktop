@@ -59,6 +59,127 @@ const resultSchema = z
   })
   .strict()
   .nullable();
+const discardFailureStepSchema = z.enum([
+  "discard-preview",
+  "discard-owner",
+  "discard-worktree",
+  "discard-index",
+  "discard-result",
+]);
+const diagnosticSchema = z
+  .object({
+    stage: z.enum(["run", "after-settled", "capture", "verify", "finalize"]),
+    kind: z.enum([
+      "spawn",
+      "timeout",
+      "output-limit",
+      "aborted",
+      "shutdown",
+      "descendants",
+      "process-unsettled",
+      "protocol",
+      "verification",
+      "unknown",
+    ]),
+    step: discardFailureStepSchema.optional(),
+  })
+  .strict();
+export type NativeGitJournalDiagnostic = z.infer<typeof diagnosticSchema>;
+export interface NativeGitDiscardRecovery {
+  id: string;
+  fingerprint: string;
+  snapshot: NativeGitState;
+  intentFingerprint: string;
+  intentDetails?: string;
+  state: "uncertain" | "completed" | "rejected";
+  result: NativeGitOperationResult;
+  diagnostic?: NativeGitJournalDiagnostic;
+}
+function diagnosticFor(
+  stage: NativeGitJournalDiagnostic["stage"],
+  error: unknown,
+  failureStep?: () => unknown,
+): NativeGitJournalDiagnostic {
+  const kind = diagnosticSchema.shape.kind.safeParse(
+    error instanceof ByteCommandError ? error.reason : "unknown",
+  );
+  const diagnostic: NativeGitJournalDiagnostic = {
+    stage,
+    kind: kind.success ? kind.data : "unknown",
+  };
+  try {
+    const step = discardFailureStepSchema.safeParse(failureStep?.());
+    if (step.success) diagnostic.step = step.data;
+  } catch {
+    /* A diagnostic provider must not mask primary command facts. */
+  }
+  return diagnostic;
+}
+const pendingSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    pid: z.number().int().min(1).max(2147483647),
+    nonce: z.string().uuid(),
+  })
+  .strict();
+const discardRecoveryModeSchema = z.enum([
+  "retry-unchanged",
+  "preserve-current",
+]);
+export type NativeGitDiscardRecoveryMode = z.infer<
+  typeof discardRecoveryModeSchema
+>;
+const legacyArchiveSchema = z
+  .object({
+    schemaVersion: z.literal(1),
+    kind: z.literal("discard-recovery"),
+    recordRaw: z.string(),
+    recordIdentity: z.string().min(1).max(1024),
+    pendingRaw: z.string().max(1024),
+    pendingIdentity: z.string().min(1).max(1024),
+    directoryIdentity: z.string().min(1).max(1024),
+    fingerprint: hash,
+    intentDetails: z.string().max(65536),
+    mode: discardRecoveryModeSchema,
+    current: z.unknown(),
+  })
+  .strict();
+// Only a crash witness, not a content backup. Deleted once retirement settles.
+const retirementReceiptSchema = z
+  .object({
+    schemaVersion: z.literal(2),
+    kind: z.literal("discard-retirement"),
+    recordHash: hash,
+    recordIdentity: z.string().min(1).max(1024),
+    pendingRaw: z.string().max(1024),
+    pendingIdentity: z.string().min(1).max(1024),
+    directoryIdentity: z.string().min(1).max(1024),
+    fingerprint: hash,
+    intentFingerprint: hash,
+    mode: discardRecoveryModeSchema,
+    currentRevision: hash,
+  })
+  .strict();
+const archiveSchema = z.discriminatedUnion("schemaVersion", [
+  legacyArchiveSchema,
+  retirementReceiptSchema,
+]);
+class PrivateFileEncodingError extends Error {}
+type PinnedFile = { raw: string; identity: string; preparedTwin?: string };
+const discardFingerprint = (
+  record: PinnedFile,
+  pending: PinnedFile,
+  directory: string,
+) =>
+  digest(
+    JSON.stringify([
+      record.raw,
+      record.identity,
+      pending.raw,
+      pending.identity,
+      directory,
+    ]),
+  );
 const recordSchema = z
   .object({
     schemaVersion: z.literal(1),
@@ -84,6 +205,7 @@ const recordSchema = z
     checkpoint: z.unknown(),
     attemptRecovery: z.unknown(),
     result: resultSchema,
+    diagnostic: diagnosticSchema.optional(),
     // Original stopped outcome survives an uncertain child resolution.
     resolutionParentResult: resultSchema.optional(),
     resolvedModes: z
@@ -459,7 +581,9 @@ export class NativeGitJournal {
         identity(before) !== identity(visible)
       )
         throw blocked();
-      const raw = buffer.subarray(0, offset).toString("utf8");
+      const raw = new TextDecoder("utf-8", { fatal: true }).decode(
+        buffer.subarray(0, offset),
+      );
       const value = this.parse(raw);
       if (
         value.repositoryKey !== nativeGitRepositoryKey(snapshot) ||
@@ -508,6 +632,681 @@ export class NativeGitJournal {
     const written = await this.read(snapshot);
     if (!written || digest(written.raw) !== digest(raw)) throw blocked();
     return written;
+  }
+  /** Read private append-only evidence without following links or trusting a PID. */
+  private async readPrivateFile(
+    filename: string,
+    limit: number,
+    allowPreparedTwin = false,
+  ): Promise<PinnedFile | null> {
+    await noSymlinks(filename);
+    let handle;
+    try {
+      handle = await fs.open(
+        filename,
+        constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    try {
+      const before = await handle.stat({ bigint: true });
+      const identity = (s: typeof before) =>
+        [
+          s.dev,
+          s.ino,
+          s.mode,
+          s.uid,
+          s.gid,
+          s.nlink,
+          s.size,
+          s.mtimeNs,
+          s.ctimeNs,
+        ].join(":");
+      if (
+        !before.isFile() ||
+        (before.nlink !== 1n && !(allowPreparedTwin && before.nlink === 2n)) ||
+        before.size > BigInt(limit) ||
+        (before.mode & 0o077n) !== 0n ||
+        (process.getuid && before.uid !== BigInt(process.getuid()))
+      )
+        throw blocked();
+      const buffer = Buffer.alloc(Number(before.size) + 1);
+      let offset = 0;
+      while (offset < buffer.length) {
+        const { bytesRead } = await handle.read(
+          buffer,
+          offset,
+          buffer.length - offset,
+          offset,
+        );
+        if (!bytesRead) break;
+        offset += bytesRead;
+      }
+      await noSymlinks(filename);
+      const preparedTwin =
+        before.nlink === 2n ? filename + ".prepared" : undefined;
+      if (preparedTwin) {
+        await noSymlinks(preparedTwin);
+        // Publication's only permitted second name is its exact prepared twin.
+        // Reads never remove it and never infer safety from a dead process.
+        if (
+          identity(before) !==
+          identity(await fs.lstat(preparedTwin, { bigint: true }))
+        )
+          throw blocked();
+      }
+      if (
+        offset !== Number(before.size) ||
+        identity(before) !== identity(await handle.stat({ bigint: true })) ||
+        identity(before) !==
+          identity(await fs.lstat(filename, { bigint: true }))
+      )
+        throw blocked();
+      let raw: string;
+      try {
+        raw = new TextDecoder("utf-8", { fatal: true }).decode(
+          buffer.subarray(0, offset),
+        );
+      } catch {
+        throw new PrivateFileEncodingError();
+      }
+      return {
+        raw,
+        identity: identity(before),
+        ...(preparedTwin ? { preparedTwin } : {}),
+      };
+    } finally {
+      await handle.close();
+    }
+  }
+  private discardRetirementPath(
+    binding: Binding,
+    record: PinnedFile & { value: RecordValue },
+  ) {
+    return (
+      this.recordPath(binding) +
+      `.discard-recovery-${record.value.id}-${digest(JSON.stringify([record.raw, record.identity]))}.json`
+    );
+  }
+  private discardSelection(record: RecordValue, intentDetails: string) {
+    if (
+      Buffer.byteLength(intentDetails) > 65536 ||
+      digest(intentDetails) !== record.intentFingerprint
+    )
+      throw blocked();
+    const [, selected] = z
+      .tuple([
+        z.literal("discard"),
+        z.array(gitFilePathSchema).min(1).max(4096),
+        z.array(z.unknown()).max(4096),
+      ])
+      .parse(JSON.parse(intentDetails));
+    if (
+      new Set(selected).size !== selected.length ||
+      selected.some(
+        (name) => !record.recovery!.files.some((f) => f.path === name),
+      )
+    )
+      throw blocked();
+    return selected;
+  }
+  private assertDiscardCurrent(
+    record: RecordValue,
+    current: NativeGitState,
+    mode: NativeGitDiscardRecoveryMode,
+  ) {
+    const baseline = record.recovery!;
+    validateNativeGitState(current);
+    if (
+      nativeGitOwnerKey(current) !== record.ownerKey ||
+      record.controlFingerprint !== baseline.controlFingerprint ||
+      baseline.files.some(
+        (f) => !current.files.some((now) => now.path === f.path),
+      )
+    )
+      throw blocked();
+    if (mode === "retry-unchanged") assertNativeGitState(baseline, current);
+    // preserve-current is a separate, fresh host-authorized acknowledgement:
+    // HEAD/refs/index/policy and user bytes may have changed since the old run.
+    // Their revision is checked as CURRENT, never adopted as successful old-operation
+    // verification. This operation itself does not touch any Git/user bytes.
+  }
+  private async discardEvidence(root: string, owner: NativeGitOwner) {
+    const binding = { root, owner, ...(await nativeGitPhysicalIdentity(root)) };
+    let directoryIdentity: string;
+    try {
+      directoryIdentity = await this.storage(binding, false);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    const record = await this.read(binding, true);
+    const pending = await this.readPrivateFile(
+      this.recordPath(binding) + ".pending",
+      1024,
+    );
+    if (!record) {
+      if (pending) throw blocked();
+      return null;
+    }
+    const value = record.value;
+    if (
+      ["completed", "rejected"].includes(value.state) &&
+      value.recovery === null &&
+      !pending
+    )
+      return null;
+    if (
+      value.operation !== "discard" ||
+      !["uncertain", "completed", "rejected"].includes(value.state) ||
+      !value.recovery ||
+      !value.result ||
+      value.result.outcome !== value.state ||
+      !value.result.processSettled ||
+      value.resolutionParentResult ||
+      value.attemptRecovery
+    )
+      throw blocked();
+    let proof = pending;
+    if (!proof) {
+      // A durable receipt (or legacy archive) is the sole witness after an interrupted
+      // pending-first retirement. A missing fence alone never grants authority.
+      const witness = (
+        await this.discardRetirementWitnesses(
+          binding,
+          record,
+          directoryIdentity,
+        )
+      )[0];
+      if (!witness) throw blocked();
+      proof = {
+        raw: witness.archive.pendingRaw,
+        identity: witness.archive.pendingIdentity,
+      };
+    }
+    pendingSchema.parse(JSON.parse(proof.raw));
+    const physical = await nativeGitPhysicalIdentity(root);
+    if (
+      physical.physicalRoot !== binding.physicalRoot ||
+      physical.physicalGit !== binding.physicalGit
+    )
+      throw blocked();
+    if ((await this.storage(binding, false)) !== directoryIdentity)
+      throw blocked();
+    return {
+      binding,
+      directoryIdentity,
+      record,
+      pending: proof,
+      pendingPresent: !!pending,
+      fingerprint: discardFingerprint(record, proof, directoryIdentity),
+    };
+  }
+  /** Read-only inspection. This never reclaims a lock or retires recovery. */
+  async readDiscardRecovery(
+    root: string,
+    owner: NativeGitOwner,
+  ): Promise<NativeGitDiscardRecovery | null> {
+    const found = await this.discardEvidence(root, owner);
+    if (!found) return null;
+    const r = found.record.value;
+    return {
+      id: r.id,
+      fingerprint: found.fingerprint,
+      snapshot: r.recovery!,
+      intentFingerprint: r.intentFingerprint,
+      ...(r.intentDetails === undefined
+        ? {}
+        : { intentDetails: r.intentDetails }),
+      state: z.enum(["uncertain", "completed", "rejected"]).parse(r.state),
+      result: r.result!,
+      ...(r.diagnostic ? { diagnostic: r.diagnostic } : {}),
+    };
+  }
+  private async syncStorage() {
+    await noSymlinks(this.options.directory);
+    const handle = await fs.open(
+      this.options.directory,
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+  private async writeExclusive(
+    filename: string,
+    raw: string,
+    binding: Binding,
+    directoryIdentity: string,
+  ) {
+    if ((await this.storage(binding, false)) !== directoryIdentity)
+      throw blocked();
+    await noSymlinks(filename);
+    const handle = await fs.open(
+      filename,
+      constants.O_WRONLY |
+        constants.O_CREAT |
+        constants.O_EXCL |
+        constants.O_NOFOLLOW,
+      0o600,
+    );
+    try {
+      await handle.writeFile(raw);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    await this.syncStorage();
+    const written = await this.readPrivateFile(
+      filename,
+      MAX_RECORD * 2 + 65536,
+    );
+    if (
+      !written ||
+      written.raw !== raw ||
+      (await this.storage(binding, false)) !== directoryIdentity
+    )
+      throw blocked();
+  }
+  /** Only published .json names are witnesses. A failed private .prepared file
+   * is retained but grants no authority. Legacy incomplete canonical JSON is also
+   * retained; a fresh explicit acknowledgement may publish a complete alternate. */
+  private async discardRetirementWitnesses(
+    binding: Binding,
+    record: PinnedFile & { value: RecordValue },
+    directoryIdentity: string,
+    pending?: PinnedFile,
+  ) {
+    if ((await this.storage(binding, false)) !== directoryIdentity)
+      throw blocked();
+    const base = path.basename(this.discardRetirementPath(binding, record));
+    const entries = await fs.readdir(this.options.directory);
+    if (entries.length > 16384) throw blocked();
+    const names = entries
+      .filter(
+        (name) =>
+          name === base ||
+          (name.startsWith(base + ".") &&
+            name.endsWith(".json") &&
+            z
+              .string()
+              .uuid()
+              .safeParse(name.slice(base.length + 1, -5)).success),
+      )
+      .sort();
+    if (names.length > 128) throw blocked();
+    const valid: {
+      receiptPath: string;
+      file: PinnedFile;
+      archive: z.infer<typeof archiveSchema>;
+    }[] = [];
+    for (const name of names) {
+      const receiptPath = path.join(this.options.directory, name);
+      // Metadata/ownership/link violations are NOT a partial-write fallback.
+      let file: PinnedFile | null;
+      try {
+        file = await this.readPrivateFile(
+          receiptPath,
+          MAX_RECORD * 2 + 65536,
+          true,
+        );
+      } catch (error) {
+        if (error instanceof PrivateFileEncodingError) continue;
+        throw error;
+      }
+      if (!file) continue;
+      try {
+        const archive = archiveSchema.parse(JSON.parse(file.raw));
+        const proof = {
+          raw: archive.pendingRaw,
+          identity: archive.pendingIdentity,
+        };
+        pendingSchema.parse(JSON.parse(proof.raw));
+        if (
+          (archive.schemaVersion === 1
+            ? archive.recordRaw !== record.raw
+            : archive.recordHash !== digest(record.raw)) ||
+          archive.recordIdentity !== record.identity ||
+          archive.directoryIdentity !== directoryIdentity ||
+          discardFingerprint(record, proof, directoryIdentity) !==
+            archive.fingerprint ||
+          (pending &&
+            (proof.raw !== pending.raw || proof.identity !== pending.identity))
+        )
+          continue;
+        if (archive.schemaVersion === 1) {
+          this.discardSelection(record.value, archive.intentDetails);
+          this.assertDiscardCurrent(
+            record.value,
+            validateNativeGitState(archive.current),
+            archive.mode,
+          );
+        } else if (
+          archive.intentFingerprint !== record.value.intentFingerprint ||
+          (archive.mode === "retry-unchanged" &&
+            archive.currentRevision !== record.value.recovery!.revision)
+        ) {
+          continue;
+        }
+        valid.push({ receiptPath, file, archive });
+      } catch {
+        // Never overwrite/unlink malformed or unsupported historical evidence.
+        // Only independently complete, matching proof may retire this record.
+      }
+    }
+    if ((await this.storage(binding, false)) !== directoryIdentity)
+      throw blocked();
+    return valid;
+  }
+  private async finishReceiptPublication(
+    receiptPath: string,
+    expected: PinnedFile,
+    binding: Binding,
+    directoryIdentity: string,
+  ) {
+    if ((await this.storage(binding, false)) !== directoryIdentity)
+      throw blocked();
+    // Also makes a publication that survived a pre-fsync crash durable now.
+    await this.syncStorage();
+    const current = await this.readPrivateFile(
+      receiptPath,
+      MAX_RECORD * 2 + 65536,
+      true,
+    );
+    if (
+      !current ||
+      current.raw !== expected.raw ||
+      current.identity !== expected.identity
+    )
+      throw blocked();
+    if (current.preparedTwin) {
+      // current's identity includes nlink=2 and the exact same-inode twin; the
+      // final comparison remains subject to the existing same-user unlink race.
+      await noSymlinks(current.preparedTwin);
+      const pinned = await this.readPrivateFile(
+        receiptPath,
+        MAX_RECORD * 2 + 65536,
+        true,
+      );
+      if (pinned?.identity !== current.identity || pinned.raw !== current.raw)
+        throw blocked();
+      await fs.unlink(current.preparedTwin);
+      await this.syncStorage();
+    }
+    const complete = await this.readPrivateFile(
+      receiptPath,
+      MAX_RECORD * 2 + 65536,
+    );
+    if (
+      !complete ||
+      complete.raw !== expected.raw ||
+      complete.identity.split(":").slice(0, 2).join(":") !==
+        expected.identity.split(":").slice(0, 2).join(":") ||
+      (await this.storage(binding, false)) !== directoryIdentity
+    )
+      throw blocked();
+  }
+  private async publishRetirementReceipt(
+    base: string,
+    raw: string,
+    binding: Binding,
+    directoryIdentity: string,
+  ) {
+    const receiptPath = base + `.${randomUUID()}.json`,
+      candidate = receiptPath + ".prepared";
+    // Canonical names are NEVER opened for writing: the exclusive hard link can
+    // publish only complete, fsynced and read-back-verified bytes. A failed stage
+    // remains under its unique .prepared name and cannot poison the next try.
+    await this.writeExclusive(candidate, raw, binding, directoryIdentity);
+    const prepared = await this.readPrivateFile(
+      candidate,
+      MAX_RECORD * 2 + 65536,
+    );
+    if (
+      !prepared ||
+      prepared.raw !== raw ||
+      (await this.storage(binding, false)) !== directoryIdentity
+    )
+      throw blocked();
+    await noSymlinks(receiptPath);
+    await fs.link(candidate, receiptPath);
+    await this.syncStorage();
+    const published = await this.readPrivateFile(
+      receiptPath,
+      MAX_RECORD * 2 + 65536,
+      true,
+    );
+    if (
+      !published ||
+      published.raw !== raw ||
+      published.identity.split(":").slice(0, 2).join(":") !==
+        prepared.identity.split(":").slice(0, 2).join(":")
+    )
+      throw blocked();
+    await this.finishReceiptPublication(
+      receiptPath,
+      published,
+      binding,
+      directoryIdentity,
+    );
+    return receiptPath;
+  }
+  private async assertNoDiscardControls(root: string) {
+    for (const name of [
+      "MERGE_HEAD",
+      "CHERRY_PICK_HEAD",
+      "REVERT_HEAD",
+      "rebase-merge",
+      "rebase-apply",
+      "sequencer",
+      "MERGE_AUTOSTASH",
+    ]) {
+      try {
+        await fs.lstat(path.join(root, ".git", name));
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      throw blocked();
+    }
+    // ORIG_HEAD and a residual REBASE_HEAD are not operation lifetimes.
+  }
+  /** Caller holds the owner mutation guard and has consumed a fresh explicit
+   * confirmation. This retires the old record without keeping a content archive;
+   * a temporary content-free crash receipt never repeats Git or installs
+   * old bytes in the worktree/index. Portable Node retains the same-user hostile
+   * unlink race boundary documented by owned-lock. */
+  async retireDiscardRecovery(options: {
+    root: string;
+    owner: NativeGitOwner;
+    fingerprint: string;
+    expectedCurrent: NativeGitState;
+    intentDetails: string;
+    mode: NativeGitDiscardRecoveryMode;
+    capture(): Promise<NativeGitState>;
+  }): Promise<void> {
+    hash.parse(options.fingerprint);
+    discardRecoveryModeSchema.parse(options.mode);
+    const expected = validateNativeGitState(options.expectedCurrent);
+    const initial = await this.discardEvidence(options.root, options.owner);
+    if (
+      !initial ||
+      initial.fingerprint !== options.fingerprint ||
+      nativeGitOwnerKey(expected) !== nativeGitOwnerKey(initial.binding)
+    )
+      throw blocked();
+    // Never infer permission from a stale/dead PID, including this repo lease.
+    const lease = await acquireOwnedLock(
+      this.recordPath(initial.binding) + ".lock",
+      { attempts: 1, reclaim: false },
+    );
+    let released = false,
+      removedRecord = false;
+    try {
+      const found = await this.discardEvidence(options.root, options.owner);
+      if (
+        !found ||
+        found.fingerprint !== options.fingerprint ||
+        found.directoryIdentity !== initial.directoryIdentity
+      )
+        throw blocked();
+      this.discardSelection(found.record.value, options.intentDetails);
+      await assertNoNativeGitLocks(options.root);
+      await this.assertNoDiscardControls(options.root);
+      const current = validateNativeGitState(await options.capture());
+      assertNativeGitState(expected, current);
+      this.assertDiscardCurrent(found.record.value, current, options.mode);
+      const raw = JSON.stringify({
+        schemaVersion: 2,
+        kind: "discard-retirement",
+        recordHash: digest(found.record.raw),
+        recordIdentity: found.record.identity,
+        pendingRaw: found.pending.raw,
+        pendingIdentity: found.pending.identity,
+        directoryIdentity: found.directoryIdentity,
+        fingerprint: found.fingerprint,
+        intentFingerprint: found.record.value.intentFingerprint,
+        mode: options.mode,
+        currentRevision: current.revision,
+      });
+      if (Buffer.byteLength(raw) > 8192) throw blocked();
+      const witnesses = await this.discardRetirementWitnesses(
+        found.binding,
+        found.record,
+        found.directoryIdentity,
+        found.pending,
+      );
+      const reusable = witnesses.find((entry) => entry.file.raw === raw);
+      if (reusable) {
+        await this.finishReceiptPublication(
+          reusable.receiptPath,
+          reusable.file,
+          found.binding,
+          found.directoryIdentity,
+        );
+      } else {
+        await this.publishRetirementReceipt(
+          this.discardRetirementPath(found.binding, found.record),
+          raw,
+          found.binding,
+          found.directoryIdentity,
+        );
+      }
+      // Recheck evidence and current state after durable receipt publication and
+      // before each journal unlink. No old/current content is copied into it.
+      const revalidate = async () => {
+        const actual = await this.discardEvidence(options.root, options.owner);
+        if (
+          !actual ||
+          actual.fingerprint !== found.fingerprint ||
+          actual.directoryIdentity !== found.directoryIdentity
+        )
+          throw blocked();
+        await assertNoNativeGitLocks(options.root);
+        await this.assertNoDiscardControls(options.root);
+        assertNativeGitState(expected, await options.capture());
+      };
+      await revalidate();
+      if (found.pendingPresent) {
+        await fs.unlink(this.recordPath(found.binding) + ".pending");
+        await this.syncStorage();
+      }
+      await revalidate();
+      removedRecord = true; // An unlink transport fault may follow a successful syscall.
+      await fs.unlink(this.recordPath(found.binding));
+      await this.syncStorage();
+      if (
+        (await this.storage(found.binding, false)) !==
+          found.directoryIdentity ||
+        (await this.readPrivateFile(
+          this.recordPath(found.binding),
+          MAX_RECORD,
+        )) ||
+        (await this.readPrivateFile(
+          this.recordPath(found.binding) + ".pending",
+          1024,
+        ))
+      )
+        throw blocked();
+      // Only new, exact-match receipts are disposable. Historical v1 archives
+      // may contain the sole copy of user edits and are never blindly removed.
+      const receipts = await this.discardRetirementWitnesses(
+        found.binding,
+        found.record,
+        found.directoryIdentity,
+        found.pending,
+      );
+      for (const receipt of receipts) {
+        if (receipt.archive.schemaVersion !== 2) continue;
+        await this.finishReceiptPublication(
+          receipt.receiptPath,
+          receipt.file,
+          found.binding,
+          found.directoryIdentity,
+        );
+        const pinned = await this.readPrivateFile(receipt.receiptPath, 8192);
+        if (
+          !pinned ||
+          pinned.raw !== receipt.file.raw ||
+          pinned.identity.split(":").slice(0, 2).join(":") !==
+            receipt.file.identity.split(":").slice(0, 2).join(":")
+        )
+          throw blocked();
+        await fs.unlink(receipt.receiptPath);
+        await this.syncStorage();
+      }
+      released = true;
+      await lease.release();
+      if (
+        await this.readPrivateFile(
+          this.recordPath(found.binding) + ".lock",
+          1024,
+        )
+      )
+        throw blocked();
+      return;
+    } catch (error) {
+      if (removedRecord) {
+        // A final sync/release fault must not silently admit a new writer. Do not
+        // overwrite a replacement. Restore the original journal, not an archive.
+        const surviving = await this.readPrivateFile(
+          this.recordPath(initial.binding),
+          MAX_RECORD,
+        ).catch(() => null);
+        if (!surviving) {
+          try {
+            await this.writeExclusive(
+              this.recordPath(initial.binding),
+              initial.record.raw,
+              initial.binding,
+              initial.directoryIdentity,
+            );
+          } catch {
+            /* Never overwrite a replacement. */
+          }
+          try {
+            await this.writeExclusive(
+              this.recordPath(initial.binding) + ".pending",
+              initial.pending.raw,
+              initial.binding,
+              initial.directoryIdentity,
+            );
+          } catch {
+            /* A surviving/foreign fence stays blocked. */
+          }
+        }
+      }
+      throw error;
+    } finally {
+      if (!released) {
+        released = true;
+        await lease.release();
+      }
+    }
   }
   /** Host-wide admission for mutation handlers not yet migrated. No Git command
    * or synthetic status is needed to refuse a known uncertain writer. A pending
@@ -571,6 +1370,8 @@ export class NativeGitJournal {
     /** Journalled native inspection (e.g. public edit-todo) before the first seal.
      * A failed inspection retains the real primary command facts and recovery. */
     afterSettled?(command: ByteCommandResult): Promise<void>;
+    /** Finite host-owned discard phase only; never an error message/path. */
+    failureStep?(): z.infer<typeof discardFailureStepSchema>;
     /** Keep the durable fence and recovery until the outer host context releases
      * its leases. Failure before finalization stays blocked across restart. */
     deferRecoveryCleanup?(
@@ -696,6 +1497,7 @@ export class NativeGitJournal {
         recovery: "retained",
         recoveryPath: this.recordPath(snapshot),
       };
+      let stage: NativeGitJournalDiagnostic["stage"] = "run";
       let primaryReturned = false;
       let resolvedMode: number | null | undefined;
       try {
@@ -705,7 +1507,9 @@ export class NativeGitJournal {
         result.signal = command.signal;
         result.processSettled = command.processSettled;
         if (command.processSettled) {
+          stage = "after-settled";
           await options.afterSettled?.(command);
+          stage = "capture";
           const after = await options.capture();
           if (
             nativeGitOwnerKey(after) !== nativeGitOwnerKey(snapshot) ||
@@ -713,6 +1517,7 @@ export class NativeGitJournal {
           )
             throw blocked();
           result.afterHead = after.head;
+          stage = "verify";
           const verified = await options.verify(snapshot, after, command);
           result.conflicts = [...verified.conflicts];
           result.verifiedUnrelatedData = verified.verifiedUnrelatedData;
@@ -782,6 +1587,7 @@ export class NativeGitJournal {
             record.checkpoint = after;
         }
       } catch (error) {
+        record.diagnostic = diagnosticFor(stage, error, options.failureStep);
         if (error instanceof ByteCommandError) {
           // Follow-up inspections have their own child processes. Their failure
           // cannot replace the native mutation's observed exit/signal, but an
@@ -837,7 +1643,7 @@ export class NativeGitJournal {
           await fence.release();
           await this.assertNoPending(snapshot);
           return settled;
-        } catch {
+        } catch (error) {
           const failed = {
             ...result,
             outcome: "uncertain" as const,
@@ -849,7 +1655,16 @@ export class NativeGitJournal {
           try {
             current = await this.write(
               snapshot,
-              { ...record, state: "uncertain", result: failed },
+              {
+                ...record,
+                state: "uncertain",
+                result: failed,
+                diagnostic: diagnosticFor(
+                  "finalize",
+                  error,
+                  options.failureStep,
+                ),
+              },
               current,
               directoryIdentity,
             );
@@ -863,9 +1678,14 @@ export class NativeGitJournal {
       // lease before dropping that recovery; failed release must not erase it.
       try {
         await release();
-      } catch {
+      } catch (error) {
         result.outcome = "uncertain";
-        record = { ...record, state: "uncertain", result: { ...result } };
+        record = {
+          ...record,
+          state: "uncertain",
+          result: { ...result },
+          diagnostic: diagnosticFor("finalize", error, options.failureStep),
+        };
         try {
           await this.write(snapshot, record, current, directoryIdentity);
         } catch {

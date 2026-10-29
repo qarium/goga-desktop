@@ -1,5 +1,14 @@
 import path from "node:path";
 import {
+  createDiscardGuard,
+  GitDiscardRecoveryActions,
+} from "./git-discard-recovery";
+import type { ScopeRef } from "../shared/context";
+import type {
+  GitDiscardRequest,
+  GitDiscardPreview,
+} from "../shared/git-discard";
+import {
   constants,
   openSync,
   closeSync,
@@ -22,7 +31,7 @@ import {
 import type { GitCommitContext } from "./git-workspace-actions";
 import type { NativeGitOperationResult } from "../shared/git-native-operation";
 import type { GitDiscardResult } from "../shared/git-discard";
-import { nativeGitGuard, nativeIntent } from "./git-native-context";
+import { nativeIntent } from "./git-native-context";
 import {
   assertNativeGitState,
   assertNoNativeGitLocks,
@@ -75,6 +84,35 @@ function syncDirectory(name: string) {
 /** Shared admission/preview, new writer only. No binary index backup, serializer,
  * object publication or native-to-legacy fallback. Used by Host; no legacy execution path. */
 export class NativeGitDiscardActions extends GitDiscardActions {
+  private recoveryActions?: GitDiscardRecoveryActions;
+  private recovery() {
+    return (this.recoveryActions ??= new GitDiscardRecoveryActions(
+      this.options.context,
+      () => this.now(),
+    ));
+  }
+  inspectRecovery(scope: ScopeRef) {
+    return this.recovery().inspect(scope);
+  }
+  prepareRecovery(input: unknown) {
+    return this.recovery().prepare(input);
+  }
+  executeRecovery(token: string) {
+    return this.recovery().execute(token);
+  }
+  override async prepare(input: GitDiscardRequest): Promise<GitDiscardPreview> {
+    const preview = await super.prepare(input);
+    if (
+      Buffer.byteLength(
+        JSON.stringify(["discard", preview.paths, preview.items]),
+      ) > 65536
+    )
+      throw Error(
+        "Слишком большой список для безопасного восстановления отмены. Выберите меньше файлов и подтвердите их отдельно.",
+      );
+    const message = await this.recovery().bindDiscard(preview);
+    return message ? { ...preview, recoveryMessage: message } : preview;
+  }
   protected override async transact(
     c: GitCommitContext,
     t: GitDiscardTicket,
@@ -92,40 +130,8 @@ export class NativeGitDiscardActions extends GitDiscardActions {
         ]),
       ]),
     ].sort();
-    const configuration = (
-      await this.git(c, ["config", "--null", "--list"])
-    ).stdout
-      .split("\0")
-      .filter(Boolean)
-      .map((row) => {
-        const i = row.indexOf("\n");
-        return [
-          i < 0 ? row : row.slice(0, i),
-          i < 0 ? "" : row.slice(i + 1),
-        ] as const;
-      });
-    const guard = await nativeGitGuard({
-      root: c.root,
-      capability: c.native,
-      paths: protectedPaths,
-      configuration,
-      recoverIndex: true,
-      verify: () => c.verify(),
-      admittedStatus: async () => {
-        const current = await c.snapshot();
-        return {
-          data: Buffer.from(JSON.stringify(current.files)),
-          headRef: current.branch ? `refs/heads/${current.branch}` : null,
-        };
-      },
-      policy: async () =>
-        nativeIntent([
-          (await this.git(c, ["config", "--null", "--list"])).stdout,
-          (await this.git(c, ["ls-files", "-v", "-z"])).stdout
-            .split("\0")
-            .filter((row) => row && !names.includes(row.slice(2))),
-        ]),
-    });
+    await this.recovery().retireForDiscard(c, t.preview.token);
+    const guard = await createDiscardGuard(c, names, protectedPaths);
     const before = await guard.capture(),
       sources = await this.sources(c, s);
     if (
@@ -136,9 +142,18 @@ export class NativeGitDiscardActions extends GitDiscardActions {
       throw stale();
     assertNativeGitState(before, await guard.capture());
     const intent = nativeIntent(["discard", names, t.preview.items]);
-    const token = guard.journal.prepare("discard", before, intent);
+    const details = JSON.stringify(["discard", names, t.preview.items]);
+    if (Buffer.byteLength(details) > 65536)
+      throw Error("Слишком большой список: выберите меньше файлов для отмены.");
+    const token = guard.journal.prepare("discard", before, intent, details);
     const changedPaths: string[] = [],
       trashedPaths: string[] = [];
+    let failureStep:
+      | "discard-preview"
+      | "discard-owner"
+      | "discard-worktree"
+      | "discard-index"
+      | "discard-result" = "discard-preview";
     let worktreePublished = false,
       indexPublished = false,
       log = "",
@@ -199,6 +214,7 @@ export class NativeGitDiscardActions extends GitDiscardActions {
     };
     let finalize: (() => Promise<NativeGitOperationResult>) | undefined;
     const result = await guard.journal.execute({
+      failureStep: () => failureStep,
       deferRecoveryCleanup: (finish) => {
         finalize = finish;
       },
@@ -256,7 +272,9 @@ export class NativeGitDiscardActions extends GitDiscardActions {
               t.fingerprint
             )
               throw stale();
+            failureStep = "discard-owner";
             assertNativeGitState(confirmed, await guard.capture());
+            failureStep = "discard-worktree";
             this.options.beforePublishWork?.();
             assertDisk();
             assertActive();
@@ -297,6 +315,7 @@ export class NativeGitDiscardActions extends GitDiscardActions {
             const afterWork = await guard.capture();
             preserved(confirmed, afterWork);
             if (afterWork.index !== confirmed.index) throw stale();
+            failureStep = "discard-index";
             this.options.beforePublishIndex?.();
             assertDisk();
             assertActive();
@@ -335,29 +354,44 @@ export class NativeGitDiscardActions extends GitDiscardActions {
           },
         });
         log += ref.stdout.toString() + ref.stderr.toString();
-        if (ref.exitCode === 0 && ref.processSettled && ref.signal === null) {
-          for (const item of t.preview.items)
-            if (item.action === "trash" && s.work.get(item.path)) {
-              assertDisk();
-              await c.verify();
-              const saved = originals.get(item.path)!,
-                actual = regular(saved),
-                original = s.work.get(item.path)!;
-              if (
-                !actual ||
-                !actual.bytes.equals(original.bytes) ||
-                !this.options.trashItem
-              )
-                throw stale();
-              await this.options.trashItem(saved);
-              if (regular(saved)) throw stale();
-              trashedPaths.push(item.path);
-            }
-          worktreePublished = true;
+        try {
+          if (ref.exitCode === 0 && ref.processSettled && ref.signal === null) {
+            for (const item of t.preview.items)
+              if (item.action === "trash" && s.work.get(item.path)) {
+                assertDisk();
+                await c.verify();
+                const saved = originals.get(item.path)!,
+                  actual = regular(saved),
+                  original = s.work.get(item.path)!;
+                if (
+                  !actual ||
+                  !actual.bytes.equals(original.bytes) ||
+                  !this.options.trashItem
+                )
+                  throw stale();
+                await this.options.trashItem(saved);
+                if (regular(saved)) throw stale();
+                trashedPaths.push(item.path);
+              }
+            worktreePublished = true;
+          }
+        } catch (error) {
+          // Git already returned its settled result. A rejected Trash/filesystem
+          // step must not erase those facts or become an eternally live writer.
+          throw new ByteCommandError(
+            "verification",
+            ref.processSettled &&
+              (!(error instanceof ByteCommandError) || error.processSettled),
+            ref.stdout,
+            ref.stderr,
+            ref.exitCode,
+            ref.signal,
+          );
         }
         return ref;
       },
       verify: async (a, b, command) => {
+        failureStep = "discard-result";
         if (command.exitCode === 0 && command.stderr.length) throw stale();
         await assertNoNativeGitLocks(c.root);
         preserved(a, b);
@@ -402,6 +436,16 @@ export class NativeGitDiscardActions extends GitDiscardActions {
       },
     });
     const success = result.outcome === "completed";
+    if (result.outcome === "uncertain") {
+      const steps = {
+        "discard-preview": "проверка выбранных файлов до записи",
+        "discard-owner": "проверка владельца рабочей папки",
+        "discard-worktree": "восстановление рабочих файлов",
+        "discard-index": "обновление индекса",
+        "discard-result": "проверка результата",
+      };
+      log += `\nОтмена остановилась на шаге: ${steps[failureStep]}. Состояние будет проверено без повторного выполнения отмены.`;
+    }
     if (finalize)
       onVerified(async () => {
         // Do not release the durable fence before staging and outer-owner cleanup.

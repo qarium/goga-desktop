@@ -29,6 +29,7 @@ import {
 } from "../shared/worktrees";
 import { RunnerShutdownError, type Runner } from "./process";
 import { CloneStore, managedCloneLocation } from "./clone-store";
+import { withCloneGitSettings } from "./clone-git-settings";
 import { noSymlinks } from "./settings";
 import { assertReadActive, withOfflineGitReadScope } from "./read-scope";
 import { readRebaseBinding } from "./git-rebase-read-binding";
@@ -507,67 +508,83 @@ export class CloneManager {
       preparation: "pending",
       revision: randomUUID(),
     };
-    await this.store.reserve(pending);
-    try {
-      await this.store.assertOwned(pending, false);
-      await this.git(
-        [
-          "clone",
-          "--no-local",
-          "--no-hardlinks",
-          "--no-checkout",
-          "--origin",
-          "desktop-source",
-          ...(!isNew ? ["--branch", identity.branch] : []),
-          "--",
-          repository.projectPath,
-          pending.path,
-        ],
-        repository.projectPath,
-      );
-      await this.store.assertOwned(pending, false);
-      await this.store.claimGit(pending);
-      // desktop-source is transport-only, never a publication destination.
-      await this.git(
-        ["config", "--local", "remote.desktop-source.pushurl", "/dev/null"],
-        pending.path,
-        pending,
-      );
-      await this.git(
-        ["remote", "add", "origin", repository.projectPath],
-        pending.path,
-        pending,
-      );
-      if (isNew)
-        await this.git(
-          ["checkout", "--no-track", "-b", identity.branch, oid, "--"],
-          pending.path,
-          pending,
-        );
-      else {
-        const actual = (
+    return withCloneGitSettings(
+      {
+        root: repository.projectPath,
+        gitDir: repository.sourceCommonDir,
+        git: (args) => this.git(args, repository.projectPath),
+      },
+      async (settings) => {
+        await this.store.reserve(pending);
+        try {
+          await this.store.assertOwned(pending, false);
+          await settings.verify();
           await this.git(
-            ["rev-parse", "--verify", `refs/heads/${identity.branch}^{commit}`],
+            [
+              "clone",
+              ...settings.args,
+              "--no-local",
+              "--no-hardlinks",
+              "--no-checkout",
+              "--origin",
+              "desktop-source",
+              ...(!isNew ? ["--branch", identity.branch] : []),
+              "--",
+              repository.projectPath,
+              pending.path,
+            ],
+            repository.projectPath,
+          );
+          await this.store.assertOwned(pending, false);
+          await this.store.claimGit(pending);
+          // desktop-source is transport-only, never a publication destination.
+          await this.git(
+            ["config", "--local", "remote.desktop-source.pushurl", "/dev/null"],
             pending.path,
             pending,
-          )
-        ).trim();
-        if (actual !== oid) throw changed();
-        await this.git(
-          ["checkout", identity.branch, "--"],
-          pending.path,
-          pending,
-        );
-      }
-    } catch {
-      const reconciled = await this.refresh(pending);
-      if (reconciled.state === "ready") return reconciled;
-      throw ambiguous();
-    }
-    const ready = await this.refresh(pending);
-    if (ready.state !== "ready") throw unavailable();
-    return ready;
+          );
+          await this.git(
+            ["remote", "add", "origin", repository.projectPath],
+            pending.path,
+            pending,
+          );
+          if (isNew)
+            await this.git(
+              ["checkout", "--no-track", "-b", identity.branch, oid, "--"],
+              pending.path,
+              pending,
+            );
+          else {
+            const actual = (
+              await this.git(
+                [
+                  "rev-parse",
+                  "--verify",
+                  `refs/heads/${identity.branch}^{commit}`,
+                ],
+                pending.path,
+                pending,
+              )
+            ).trim();
+            if (actual !== oid) throw changed();
+            await this.git(
+              ["checkout", identity.branch, "--"],
+              pending.path,
+              pending,
+            );
+          }
+        } catch {
+          const reconciled = await this.refresh(pending);
+          if (reconciled.state === "ready") return reconciled;
+          throw ambiguous();
+        }
+        const ready = await this.refresh(pending);
+        if (ready.state !== "ready") throw unavailable();
+        return ready;
+      },
+    );
   }
+
   async ensure(
     project: Project,
     input: TopicContextIdentity,

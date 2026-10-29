@@ -39,6 +39,12 @@ const api: DesktopAPI = {
   readGitWorkspace: (scope) => invoke("read-git-workspace", scope),
   readGitConflict: (request) => invoke("read-git-conflict", request),
   readGitDiff: (request) => invoke("read-git-diff", request),
+  inspectGitDiscardRecovery: (scope) =>
+    invoke("inspect-git-discard-recovery", scope),
+  prepareGitDiscardRecovery: (request) =>
+    invoke("prepare-git-discard-recovery", request),
+  executeGitDiscardRecovery: (token) =>
+    invoke("execute-git-discard-recovery", token),
   prepareGitDiscard: (request) => invoke("prepare-git-discard", request),
   executeGitDiscard: (token) => invoke("execute-git-discard", token),
   prepareGitCommit: (request) => invoke("prepare-git-commit", request),

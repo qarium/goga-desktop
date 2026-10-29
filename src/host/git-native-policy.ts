@@ -2,11 +2,21 @@ import { AsyncLocalStorage } from "node:async_hooks";
 
 export type NativeGitPolicy =
   "local-read" | "local-write" | "remote" | "rebase-plan";
-const scope = new AsyncLocalStorage<NativeGitPolicy>();
+const scope = new AsyncLocalStorage<NativeGitPolicy | undefined>();
 export const withNativeGitPolicy = <T>(
   policy: NativeGitPolicy,
   action: () => T,
 ): T => scope.run(policy, action);
+
+/** Restore only the caller's native Git policy for application verification.
+ * Do not bind every AsyncLocalStorage context: the transport installs a fresh
+ * read deadline and child-command tracker when it invokes this callback. */
+export function bindNativeGitVerification(
+  action: (assertActive: () => void) => Promise<void>,
+): (assertActive: () => void) => Promise<void> {
+  const callerPolicy = scope.getStore();
+  return (assertActive) => scope.run(callerPolicy, () => action(assertActive));
+}
 
 /** Per-child baseline. Stronger enclosing read/index capabilities apply last.
  * Ordinary Goga commands and terminals are unaffected.

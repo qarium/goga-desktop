@@ -4,6 +4,7 @@ import * as nativeFs from "node:fs";
 import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { NodeRunner } from "../src/host/process";
+import { GitDiscardActions as DiscardAdmission } from "../src/host/git-discard-actions";
 import { GitWorkspaceReader } from "../src/host/git-workspace-reader";
 import { NativeGitDiscardActions as GitDiscardActions } from "../src/host/git-native-discard";
 import {
@@ -26,6 +27,7 @@ afterEach(async () => {
 });
 async function fixture(
   extra: Partial<ConstructorParameters<typeof GitDiscardActions>[0]> = {},
+  globalConfig?: string,
 ) {
   const dir = await fs.mkdtemp("/private/tmp/goga-discard-test-");
   cleanup.push(() => fs.rm(dir, { recursive: true, force: true }));
@@ -36,7 +38,9 @@ async function fixture(
   const env: NodeJS.ProcessEnv = {
     HOME: home,
     XDG_CONFIG_HOME: home,
-    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_GLOBAL: globalConfig
+      ? path.join(home, ".gitconfig")
+      : "/dev/null",
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_TERMINAL_PROMPT: "0",
     GIT_NO_LAZY_FETCH: "1",
@@ -44,6 +48,8 @@ async function fixture(
   };
   for (const key of Object.keys(process.env))
     if (key.startsWith("GIT_") && !(key in env)) env[key] = undefined;
+  if (globalConfig)
+    await fs.writeFile(path.join(home, ".gitconfig"), globalConfig);
   const runner = new NodeRunner(10000, env);
   cleanup.push(() => runner.dispose());
   const git = (args: string[], stdin?: string) =>
@@ -153,6 +159,121 @@ describe("native selected discard", () => {
       ),
     ).toEqual([]);
   });
+  it("restores selected files on a packed nested branch without mistaking own ref-lock directories for a state change", async () => {
+    const f = await fixture();
+    await f.git(["checkout", "-b", "release/2.1.0"]);
+    await f.git(["pack-refs", "--all", "--prune"]);
+    const refs = path.join(f.root, ".git/refs");
+    await expect(
+      fs.lstat(path.join(refs, "heads/release")),
+    ).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await f.write("selected", "staged\n");
+    await f.git(["add", "selected"]);
+    await f.write("selected", "work\n");
+    await f.write("other", "other staged\n");
+    await f.git(["add", "other"]);
+    await f.write("other", "other work\n");
+    const beforeRefs = (await f.git(["show-ref"])).stdout;
+    const packed = await fs.readFile(path.join(f.root, ".git/packed-refs"));
+    const result = await f.actions.execute((await f.prepare()).token);
+    expect(result).toMatchObject({
+      status: "discarded",
+      indexPublished: true,
+      worktreePublished: true,
+      changedPaths: ["selected"],
+    });
+    expect(result.recoveryPath).toBeUndefined();
+    expect(await fs.readFile(path.join(f.root, "selected"), "utf8")).toBe(
+      "base\n",
+    );
+    expect((await f.git(["show", ":selected"])).stdout).toBe("base\n");
+    expect((await f.git(["show", ":other"])).stdout).toBe("other staged\n");
+    expect(await fs.readFile(path.join(f.root, "other"), "utf8")).toBe(
+      "other work\n",
+    );
+    expect((await f.git(["show-ref"])).stdout).toBe(beforeRefs);
+    expect((await f.git(["symbolic-ref", "HEAD"])).stdout).toBe(
+      "refs/heads/release/2.1.0\n",
+    );
+    expect(await fs.readFile(path.join(f.root, ".git/packed-refs"))).toEqual(
+      packed,
+    );
+    expect(await fs.readdir(path.join(refs, "heads/release"))).toEqual([]);
+    expect(
+      (await fs.readdir(path.join(f.root, ".git"))).filter((n) =>
+        n.startsWith("goga-"),
+      ),
+    ).toEqual([]);
+  });
+  it.each([
+    "real ref",
+    "foreign lock",
+    "symlink",
+    "physical Git owner",
+    "nonempty ref directory",
+  ])(
+    "still refuses a changed %s on a packed nested branch before publishing files",
+    async (change) => {
+      const f = await fixture();
+      await f.git(["checkout", "-b", "release/2.1.0"]);
+      await f.git(["pack-refs", "--all", "--prune"]);
+      // Keep a loose unrelated ref so nonempty directory ownership is pinned.
+      const head = (await f.git(["rev-parse", "HEAD"])).stdout.trim();
+      await f.git(["update-ref", "refs/heads/unrelated", head]);
+      await f.write("selected", "work\n");
+      const oldIndex = await f.index();
+      const preview = await f.prepare();
+      const gd = path.join(f.root, ".git");
+      if (change === "real ref") {
+        const tree = (await f.git(["rev-parse", "HEAD^{tree}"])).stdout.trim();
+        const otherHead = (
+          await f.git(["commit-tree", tree, "-p", head], "unrelated\n")
+        ).stdout.trim();
+        await fs.mkdir(path.join(gd, "refs/heads/release"), {
+          recursive: true,
+        });
+        await fs.writeFile(
+          path.join(gd, "refs/heads/release/foreign"),
+          `${otherHead}\n`,
+        );
+      } else if (change === "foreign lock") {
+        await fs.mkdir(path.join(gd, "refs/heads/release"), {
+          recursive: true,
+        });
+        await fs.writeFile(
+          path.join(gd, "refs/heads/release/2.1.0.lock"),
+          "foreign",
+        );
+      } else if (change === "symlink") {
+        const outside = path.join(f.home, "outside");
+        await fs.mkdir(outside);
+        await fs.symlink(outside, path.join(gd, "refs/heads/release"));
+      } else {
+        const target =
+          change === "physical Git owner" ? gd : path.join(gd, "refs/heads");
+        const saved = path.join(f.home, "saved-metadata");
+        await fs.rename(target, saved);
+        await fs.cp(saved, target, {
+          recursive: true,
+          preserveTimestamps: true,
+        });
+      }
+      await expect(f.actions.execute(preview.token)).rejects.toThrow();
+      expect(await f.index()).toEqual(oldIndex);
+      expect(await fs.readFile(path.join(f.root, "selected"), "utf8")).toBe(
+        "work\n",
+      );
+      if (change === "foreign lock")
+        expect(
+          await fs.readFile(
+            path.join(gd, "refs/heads/release/2.1.0.lock"),
+            "utf8",
+          ),
+        ).toBe("foreign");
+    },
+  );
   it("trashes new files including rename endpoints and restores the selected source", async () => {
     const f = await fixture();
     await f.git(["mv", "selected", "renamed\nЮ"]);
@@ -217,6 +338,35 @@ it("keeps portable originals on Trash failure and never rolls back newer edits",
   expect(
     saved.files.find((file: { path: string }) => file.path === "new").data,
   ).toBe(Buffer.from("recover me").toString("base64"));
+  const assessment = await f.actions.inspectRecovery("project");
+  expect(assessment.state).toBe("partial");
+  const preview = await f.actions.prepareRecovery({
+    scope: "project",
+    revision: (await f.reader.snapshot()).revision,
+  });
+  const index = await f.index();
+  const acknowledged = await f.actions.executeRecovery(preview.token);
+  expect(acknowledged.status).toBe("recovered");
+  expect(await f.index()).toEqual(index);
+  await expect(fs.stat(path.join(f.root, "new"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  expect(acknowledged).not.toHaveProperty("archivePath");
+  expect(await fs.readdir(path.join(f.home, "journal"))).toEqual([]);
+  const stages = (await fs.readdir(path.join(f.root, ".git"))).filter((n) =>
+    n.startsWith("goga-native-files-"),
+  );
+  expect(stages).toHaveLength(1);
+  const stage = JSON.parse(
+    await fs.readFile(
+      path.join(f.root, ".git", stages[0], "snapshot.json"),
+      "utf8",
+    ),
+  );
+  const original = stage.originals.find(
+    ([name]: [string]) => name === "new",
+  )[1];
+  expect(await fs.readFile(original, "utf8")).toBe("recover me");
 });
 it("preserves a later edit after work publication failure", async () => {
   const f = await fixture({
@@ -643,6 +793,32 @@ it("retains verified discard originals and fences writes if cleanup fails", asyn
       "utf8",
     ),
   ).toBe("saved edits");
+  vi.mocked(nativeFs.rmSync).mockRestore();
+  const assessment = await f.actions.inspectRecovery("project");
+  expect(assessment).toMatchObject({
+    state: "partial",
+    paths: [{ path: "selected", state: "restored" }],
+  });
+  const preview = await f.actions.prepareRecovery({
+    scope: "project",
+    revision: (await f.reader.snapshot()).revision,
+  });
+  const index = await f.index();
+  const acknowledged = await f.actions.executeRecovery(preview.token);
+  expect(acknowledged.status).toBe("recovered");
+  expect(await f.index()).toEqual(index);
+  expect(await fs.readFile(path.join(f.root, "selected"), "utf8")).toBe(
+    "base\n",
+  );
+  expect(acknowledged).not.toHaveProperty("archivePath");
+  expect(await fs.readdir(path.join(f.home, "journal"))).toEqual([]);
+  // A sole surviving original is not disposable merely because its fence retired.
+  expect(
+    await fs.readFile(
+      original.originals.find(([name]: [string]) => name === "selected")[1],
+      "utf8",
+    ),
+  ).toBe("saved edits");
 });
 
 it("retains discard recovery on a native ref cleanup warning", async () => {
@@ -753,4 +929,75 @@ it("does not claim discard completion if deferred journal finalization is unknow
   await expect(
     journal.assertAdmission(f.root, record.recovery.owner),
   ).rejects.toThrow();
+});
+
+it("refuses an oversized selection proof before confirmation rather than creating an unrecoverable journal", async () => {
+  const f = await fixture();
+  const paths = Array.from({ length: 400 }, (_, i) => `${i}-${"x".repeat(90)}`);
+  const preview = {
+    token: "a".repeat(64),
+    scope: "project",
+    root: f.root,
+    branch: "main",
+    head: "b".repeat(40),
+    paths,
+    items: paths.map((path) => ({ path, action: "restore" as const })),
+    expiresAt: Date.now() + 300000,
+  };
+  const prepare = vi
+    .spyOn(DiscardAdmission.prototype, "prepare")
+    .mockResolvedValueOnce(preview);
+  try {
+    await expect(
+      f.actions.prepare({ scope: "project", revision: "c".repeat(64), paths }),
+    ).rejects.toThrow(/меньше|больш|предел/);
+  } finally {
+    prepare.mockRestore();
+  }
+  await expect(fs.stat(path.join(f.home, "journal"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+});
+
+it("discards with a real project global configuration unchanged across the prepared native transaction", async () => {
+  const f = await fixture(
+    {},
+    "[diff]\n algorithm = histogram\n[color]\n ui = auto\n",
+  );
+  await f.write("selected", "yesterday draft\n");
+  const globalBefore = await fs.readFile(path.join(f.home, ".gitconfig"));
+  const result = await f.actions.execute((await f.prepare()).token);
+  expect(result.status).toBe("discarded");
+  expect(await fs.readFile(path.join(f.root, "selected"), "utf8")).toBe(
+    "base\n",
+  );
+  expect(await fs.readFile(path.join(f.home, ".gitconfig"))).toEqual(
+    globalBefore,
+  );
+});
+
+it("does not discard after global policy really changes while the native transaction is prepared", async () => {
+  const f = await fixture({}, "[diff]\n algorithm = histogram\n");
+  await f.write("selected", "keep this draft\n");
+  const run = f.runner.commandBytes.bind(f.runner);
+  vi.spyOn(f.runner, "commandBytes").mockImplementation((command) => {
+    if (!command.verifyPrepared) return run(command);
+    const verify = command.verifyPrepared;
+    return run({
+      ...command,
+      verifyPrepared: async (active) => {
+        await fs.writeFile(
+          path.join(f.home, ".gitconfig"),
+          "[diff]\n algorithm = patience\n",
+        );
+        return verify(active);
+      },
+    });
+  });
+  const result = await f.actions.execute((await f.prepare()).token);
+  expect(result.status).toBe("uncertain");
+  expect(result.worktreePublished).toBe(false);
+  expect(await fs.readFile(path.join(f.root, "selected"), "utf8")).toBe(
+    "keep this draft\n",
+  );
 });

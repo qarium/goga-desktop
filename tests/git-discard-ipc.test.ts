@@ -67,3 +67,68 @@ it("authorizes exact scoped previews and token-only writes, never write via read
   ).toThrow();
   expect(service.executeGitDiscard).toHaveBeenCalledTimes(1);
 });
+
+it("routes recovery inspection and preview as scoped reads and acknowledgement as a token-only write", async () => {
+  const service = {
+    inspectGitDiscardRecovery: vi.fn(async (scope) => ({ scope })),
+    prepareGitDiscardRecovery: vi.fn(async (request) => request),
+    executeGitDiscardRecovery: vi.fn(async (token) => token),
+  };
+  const handlers = new Map<string, Function>();
+  registerIPC(
+    { handle: (name: string, fn: Function) => handlers.set(name, fn) } as any,
+    {
+      service,
+      settings: {},
+      window: { webContents: { id: 1 } },
+      shellURL: trusted.senderFrame.url,
+    } as any,
+  );
+  expect(handlers.get("goga:inspect-git-discard-recovery")).toBeTypeOf(
+    "function",
+  );
+  const request = { scope: "p", revision: "a".repeat(64) };
+  expect(
+    await handlers.get("goga:read-request")!(
+      trusted,
+      "inspect-recovery",
+      "inspectGitDiscardRecovery",
+      ["p"],
+    ),
+  ).toEqual({ scope: "p" });
+  expect(
+    await handlers.get("goga:read-request")!(
+      trusted,
+      "preview-recovery",
+      "prepareGitDiscardRecovery",
+      [request],
+    ),
+  ).toEqual(request);
+  const token = "c".repeat(64);
+  expect(
+    await handlers.get("goga:execute-git-discard-recovery")!(trusted, token),
+  ).toBe(token);
+  expect(() =>
+    handlers.get("goga:read-request")!(
+      trusted,
+      "bad-recovery",
+      "executeGitDiscardRecovery",
+      [token],
+    ),
+  ).toThrow();
+  expect(() =>
+    handlers.get("goga:prepare-git-discard-recovery")!(trusted, {
+      ...request,
+      force: true,
+    }),
+  ).toThrow();
+  expect(() =>
+    handlers.get("goga:execute-git-discard-recovery")!(
+      { ...trusted, sender: { id: 2 } },
+      token,
+    ),
+  ).toThrow();
+  expect((IPC_SCOPES as any)["execute-git-discard-recovery"]).toBe(
+    "owner-ticket",
+  );
+});

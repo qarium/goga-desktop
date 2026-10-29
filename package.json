@@ -13,6 +13,7 @@
     "dev": "npm run build && electron .",
     "package": "npm run build && CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dir dmg --publish never",
     "format": "prettier --write src tests scripts *.json *.ts",
+    "icon:generate": "sh scripts/generate-icon.sh",
     "smoke:host": "node scripts/smoke-host.mjs",
     "smoke:preferences": "npm run build && node scripts/smoke-preferences.mjs",
     "smoke:ui": "npm run build && node scripts/smoke-ui.mjs",
@@ -71,6 +72,7 @@
       "!**/[dD][oO][cC][sS]/**"
     ],
     "mac": {
+      "icon": "resources/icon.icns",
       "category": "public.app-category.developer-tools",
       "identity": null,
       "target": [

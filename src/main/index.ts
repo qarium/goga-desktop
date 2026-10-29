@@ -21,6 +21,7 @@ import { TopicPopup } from "./topic-popup";
 import { DashboardViews } from "./views";
 import { registerIPC } from "./ipc";
 import { loadShell } from "./load-shell";
+import { installApplicationIcon } from "./app-icon";
 
 // Finder does not inherit a shell's PATH. No login shell/eval is executed.
 process.env.PATH = [
@@ -43,12 +44,14 @@ if (!app.requestSingleInstanceLock()) {
     .whenReady()
     .then(async () => {
       nativeTheme.themeSource = "dark";
+      const icon = installApplicationIcon(app, __dirname);
       const win = new BrowserWindow({
         width: 1320,
         height: 900,
         minWidth: 920,
         minHeight: 700,
         title: "Goga Desktop",
+        icon,
         titleBarStyle: "hiddenInset",
         backgroundColor: "#0a0e1a",
         webPreferences: {

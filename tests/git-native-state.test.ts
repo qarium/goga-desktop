@@ -398,3 +398,34 @@ it("refuses changing staged recovery flags during capture", async () => {
     }),
   ).rejects.toThrow();
 });
+
+it("canonicalizes owner fields before hashing without changing validated snapshot keys", async () => {
+  const f = await fixture();
+  const snapshot = await captureNativeGitState(f.options);
+  const { scope, registryRevision, projectPath } = snapshot.owner;
+  const legacyKey = hash(
+    JSON.stringify([
+      hash(
+        JSON.stringify([
+          snapshot.root,
+          snapshot.physicalRoot,
+          snapshot.physicalGit,
+        ]),
+      ),
+      snapshot.owner,
+    ]),
+  );
+  expect(nativeGitOwnerKey(snapshot)).toBe(legacyKey);
+  expect(
+    nativeGitOwnerKey({
+      ...snapshot,
+      owner: { projectPath, scope, registryRevision },
+    }),
+  ).toBe(legacyKey);
+  expect(
+    nativeGitOwnerKey({
+      ...snapshot,
+      owner: { scope: "other", registryRevision, projectPath },
+    }),
+  ).not.toBe(legacyKey);
+});

@@ -5,6 +5,7 @@ import {
 } from "../shared/git-history";
 import {
   gitDiscardRequestSchema,
+  gitDiscardRecoveryRequestSchema,
   gitDiscardTokenSchema,
 } from "../shared/git-discard";
 import {
@@ -395,6 +396,17 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
     d.service.executeGitMergeOperation(
       gitMergeOperationTokenSchema.parse(token),
     ),
+  );
+  handle("inspect-git-discard-recovery", (scope) =>
+    d.service.inspectGitDiscardRecovery(scopeRefSchema.parse(scope)),
+  );
+  handle("prepare-git-discard-recovery", (request) =>
+    d.service.prepareGitDiscardRecovery(
+      gitDiscardRecoveryRequestSchema.parse(request),
+    ),
+  );
+  handle("execute-git-discard-recovery", (token) =>
+    d.service.executeGitDiscardRecovery(gitDiscardTokenSchema.parse(token)),
   );
   handle("prepare-git-discard", (request) =>
     d.service.prepareGitDiscard(gitDiscardRequestSchema.parse(request)),

@@ -128,12 +128,38 @@ function audit(root: string) {
   visit(path.join(gd, "info"), 0);
 }
 function stableMetadata(root: string) {
-  // Native read-only HEAD transactions add transient ref lock files. These are
-  // locks, not repository state; HEAD/ref contents remain pinned independently.
+  // Validate the entire tree first, including links and lock file types. Native
+  // read-only HEAD transactions can create both ref locks and previously absent
+  // parent directories for packed refs. Empty ref directories are bookkeeping,
+  // not state; retain the refs root, nonempty directory identities and every
+  // real ref/packed-refs identity. Native admission still rejects foreign locks.
   const rows: [string, string][] = JSON.parse(metadata(root));
   const refs = path.join(root, ".git/refs") + path.sep;
+  const directories = new Set<string>(),
+    contentParents = new Set<string>();
+  for (const [name, id] of rows) {
+    if (!name.startsWith(refs) || name.endsWith(".lock")) continue;
+    if (stat(name)?.isDirectory()) {
+      if (directory(name) !== id) throw stale();
+      directories.add(name);
+    } else {
+      for (
+        let parent = path.dirname(name);
+        parent.startsWith(refs);
+        parent = path.dirname(parent)
+      )
+        contentParents.add(parent);
+    }
+  }
   return JSON.stringify(
-    rows.filter(([name]) => !(name.startsWith(refs) && name.endsWith(".lock"))),
+    rows.filter(
+      ([name]) =>
+        !(
+          name.startsWith(refs) &&
+          (name.endsWith(".lock") ||
+            (directories.has(name) && !contentParents.has(name)))
+        ),
+    ),
   );
 }
 function assertRawRestore(p: Policy) {

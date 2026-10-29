@@ -1,6 +1,8 @@
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { buildTerminalNative } from "./terminal-native-build.mjs";
 import { build } from "esbuild";
+await mkdir("dist-electron/assets", { recursive: true });
+await copyFile("resources/icon.png", "dist-electron/assets/icon.png");
 await build({
   entryPoints: [
     "src/main/index.ts",

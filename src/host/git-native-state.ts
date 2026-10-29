@@ -201,7 +201,9 @@ export function nativeGitRepositoryKey(
 export function nativeGitOwnerKey(
   s: Pick<NativeGitState, "root" | "physicalRoot" | "physicalGit" | "owner">,
 ) {
-  return digest(JSON.stringify([nativeGitRepositoryKey(s), s.owner]));
+  return digest(
+    JSON.stringify([nativeGitRepositoryKey(s), ownerSchema.parse(s.owner)]),
+  );
 }
 export function assertNativeGitState(
   expected: NativeGitState,

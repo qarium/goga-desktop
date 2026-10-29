@@ -366,3 +366,270 @@ it("separates the destructive confirmation action from the explanation", async (
     button.parentElement?.classList.contains("git-discard-confirm-actions"),
   ).toBe(true);
 });
+
+const recovery = (
+  state: "clear" | "unchanged" | "partial" | "blocked",
+  scope = "p",
+  rev = revision,
+) => ({
+  scope,
+  revision: rev,
+  state,
+  message: `Проверка: ${state}`,
+  paths: [
+    { path: "one.txt", state: "restored" as const },
+    { path: "other.txt", state: "changed" as const },
+  ],
+});
+const recoveryPreview = () => ({
+  token: "2".repeat(64),
+  scope: "p",
+  root: "/fixture/p",
+  revision,
+  paths: recovery("partial").paths,
+  message: "Прежняя отмена завершилась частично",
+  expiresAt: Date.now() + 300000,
+});
+function recoveryApi(value = recovery("partial")) {
+  api.inspectGitDiscardRecovery = vi.fn(async () => value);
+  api.prepareGitDiscardRecovery = vi.fn(async () => recoveryPreview());
+  api.executeGitDiscardRecovery = vi.fn(async () => ({
+    scope: "p",
+    status: "recovered",
+    message: "Текущее состояние сохранено",
+  }));
+}
+it("automatically inspects visible Changes and permits unchanged previous discard without refresh or extra write", async () => {
+  recoveryApi(recovery("unchanged"));
+  render(<View />);
+  await waitFor(() =>
+    expect(api.inspectGitDiscardRecovery).toHaveBeenCalledExactlyOnceWith("p"),
+  );
+  await waitFor(() => expect(state.locked).toBe(false));
+  expect(screen.getByText("Проверка: unchanged")).toBeTruthy();
+  await prepare();
+  expect(api.executeGitDiscardRecovery).not.toHaveBeenCalled();
+});
+it("partial recovery requires a dismissible explicit confirmation and token-only write without clearing selection", async () => {
+  recoveryApi();
+  render(<View />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Оставить текущее состояние…" }),
+  );
+  expect(
+    await screen.findByRole("dialog", { name: "Оставить текущее состояние" }),
+  ).toBeTruthy();
+  expect(screen.getByText(/Файлы, индекс и HEAD не изменятся/)).toBeTruthy();
+  expect(screen.getByText(/Прежняя отмена не будет повторена/)).toBeTruthy();
+  expect(api.prepareGitDiscardRecovery).toHaveBeenCalledExactlyOnceWith({
+    scope: "p",
+    revision,
+  });
+  expect(api.executeGitDiscardRecovery).not.toHaveBeenCalled();
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Закрыть подтверждение текущего состояния",
+    }),
+  );
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(api.executeGitDiscardRecovery).not.toHaveBeenCalled();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Оставить текущее состояние…" }),
+  );
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: "Оставить текущее состояние и продолжить",
+    }),
+  );
+  await waitFor(() => expect(changed).toHaveBeenCalledExactlyOnceWith([]));
+  expect(api.executeGitDiscardRecovery).toHaveBeenCalledExactlyOnceWith(
+    "2".repeat(64),
+  );
+  expect(api.executeGitDiscard).not.toHaveBeenCalled();
+});
+it("automatically reinspects after uncertain completion without a manual refresh", async () => {
+  recoveryApi(recovery("clear"));
+  api.executeGitDiscard.mockRejectedValueOnce(Error("IPC interrupted"));
+  render(<View />);
+  await waitFor(() => expect(state.locked).toBe(false));
+  await prepare();
+  api.inspectGitDiscardRecovery.mockResolvedValueOnce(recovery("unchanged"));
+  fireEvent.click(
+    screen.getByRole("button", { name: "Отменить выбранные изменения" }),
+  );
+  await waitFor(() =>
+    expect(api.inspectGitDiscardRecovery).toHaveBeenCalledTimes(2),
+  );
+  await waitFor(() => expect(state.uncertain).toBe(false));
+  expect(changed).toHaveBeenCalledExactlyOnceWith([]);
+});
+it("inspection error never clears uncertain outcome and retry is explicit, not an infinite read loop", async () => {
+  recoveryApi(recovery("clear"));
+  api.executeGitDiscard.mockRejectedValueOnce(Error("IPC interrupted"));
+  render(<View />);
+  await waitFor(() => expect(state.locked).toBe(false));
+  await prepare();
+  api.inspectGitDiscardRecovery.mockRejectedValueOnce(
+    Error("Чтение недоступно"),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: "Отменить выбранные изменения" }),
+  );
+  await screen.findByText(/Чтение недоступно/);
+  expect(state.uncertain).toBe(true);
+  expect(state.locked).toBe(true);
+  expect(api.inspectGitDiscardRecovery).toHaveBeenCalledTimes(2);
+  act(() => state.manualRefresh());
+  expect(state.locked).toBe(true);
+  fireEvent.click(
+    screen.getByRole("button", { name: "Повторить проверку отмены" }),
+  );
+  await waitFor(() => expect(state.uncertain).toBe(false));
+});
+it("ignores late inspections after scope and revision changes", async () => {
+  const old = deferred<ReturnType<typeof recovery>>();
+  recoveryApi(recovery("clear", "q"));
+  api.inspectGitDiscardRecovery.mockReturnValueOnce(old.promise);
+  const v = render(<View />);
+  v.rerender(<View scope="q" />);
+  await waitFor(() =>
+    expect(api.inspectGitDiscardRecovery).toHaveBeenCalledTimes(2),
+  );
+  await act(async () => old.resolve(recovery("partial")));
+  expect(
+    screen.queryByRole("button", { name: "Оставить текущее состояние…" }),
+  ).toBeNull();
+  const second = deferred<ReturnType<typeof recovery>>();
+  api.inspectGitDiscardRecovery.mockReturnValueOnce(second.promise);
+  v.rerender(
+    <View scope="q" data={{ ...snapshot("q"), revision: "c".repeat(64) }} />,
+  );
+  await act(async () => second.resolve(recovery("partial", "q")));
+  expect(state.locked).toBe(true);
+  expect(
+    screen.queryByRole("button", { name: "Оставить текущее состояние…" }),
+  ).toBeNull();
+});
+it("recovery preparation has a finite deadline and dismissible error without writing", async () => {
+  recoveryApi();
+  render(<View />);
+  const action = await screen.findByRole("button", {
+    name: "Оставить текущее состояние…",
+  });
+  api.prepareGitDiscardRecovery.mockImplementationOnce(
+    () => new Promise(() => {}),
+  );
+  vi.useFakeTimers();
+  fireEvent.click(action);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30001);
+  });
+  expect(state.pending).toBeNull();
+  expect(screen.getByText(/Превышено время ожидания/)).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Закрыть результат отмены" }),
+  );
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(api.executeGitDiscardRecovery).not.toHaveBeenCalled();
+});
+it("ignores recovery preparation that finishes after a replacement revision", async () => {
+  recoveryApi();
+  const pending = deferred<ReturnType<typeof recoveryPreview>>();
+  api.prepareGitDiscardRecovery.mockReturnValueOnce(pending.promise);
+  const v = render(<View />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Оставить текущее состояние…" }),
+  );
+  api.inspectGitDiscardRecovery.mockResolvedValue(
+    recovery("clear", "p", "c".repeat(64)),
+  );
+  v.rerender(<View data={{ ...snapshot(), revision: "c".repeat(64) }} />);
+  await act(async () => pending.resolve(recoveryPreview()));
+  expect(state.recoveryPreview).toBeNull();
+  expect(api.executeGitDiscardRecovery).not.toHaveBeenCalled();
+  await waitFor(() => expect(state.locked).toBe(false));
+});
+it("does not execute an open discard confirmation while a renewed recovery inspection is pending", async () => {
+  recoveryApi(recovery("clear"));
+  const v = render(<View />);
+  await waitFor(() => expect(state.locked).toBe(false));
+  await prepare();
+  v.rerender(<View visible={false} />);
+  const pending = deferred<ReturnType<typeof recovery>>();
+  api.inspectGitDiscardRecovery.mockReturnValueOnce(pending.promise);
+  v.rerender(<View />);
+  const confirm = screen.getByRole<HTMLButtonElement>("button", {
+    name: "Отменить выбранные изменения",
+  });
+  expect(confirm.disabled).toBe(true);
+  await act(async () => state.execute());
+  expect(api.executeGitDiscard).not.toHaveBeenCalled();
+});
+it("inspection times out finitely with retry rather than a loader or unsafe unlocked discard", async () => {
+  recoveryApi();
+  api.inspectGitDiscardRecovery.mockImplementationOnce(
+    () => new Promise(() => {}),
+  );
+  vi.useFakeTimers();
+  render(<View />);
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(30001);
+  });
+  expect(state.inspecting).toBe(false);
+  expect(state.locked).toBe(true);
+  expect(screen.getByText(/Превышено время ожидания/)).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Повторить проверку отмены" }),
+  ).toBeTruthy();
+  expect(api.inspectGitDiscardRecovery).toHaveBeenCalledTimes(1);
+});
+it("blocked recovery shows evidence and retry without offering archive or preventing dismissal", async () => {
+  recoveryApi(recovery("blocked"));
+  const v = render(<View />);
+  await screen.findByText("Проверка: blocked");
+  expect(screen.getByText("one.txt")).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Повторить проверку отмены" }),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: "Оставить текущее состояние…" }),
+  ).toBeNull();
+  expect(state.locked).toBe(true);
+  v.rerender(<View scope="q" />);
+  expect(api.executeGitDiscardRecovery).not.toHaveBeenCalled();
+});
+it("recovery write errors end pending state, keep selection and allow result dismissal", async () => {
+  recoveryApi();
+  api.executeGitDiscardRecovery.mockRejectedValueOnce(
+    Error("Не удалось завершить проверку"),
+  );
+  render(<View />);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Оставить текущее состояние…" }),
+  );
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: "Оставить текущее состояние и продолжить",
+    }),
+  );
+  await screen.findByText("Не удалось завершить проверку");
+  expect(state.pending).toBeNull();
+  expect(changed).toHaveBeenCalledExactlyOnceWith([]);
+  expect(state.uncertain).toBe(true);
+  fireEvent.click(
+    screen.getByRole("button", { name: "Закрыть результат отмены" }),
+  );
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(api.executeGitDiscard).not.toHaveBeenCalled();
+});
+it("does not globally lock unrelated Git operations before Changes has requested its first inspection", () => {
+  recoveryApi();
+  render(<View visible={false} />);
+  expect(api.inspectGitDiscardRecovery).not.toHaveBeenCalled();
+  expect(state.locked).toBe(false);
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", {
+      name: "Отменить изменения…",
+    }).disabled,
+  ).toBe(true);
+});

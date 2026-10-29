@@ -20,7 +20,12 @@ import {
 } from "../src/host/git-native-context";
 
 const fixtureScope = installGitFixtureScope();
-async function fixture(unborn = false, format = "sha1", deadline?: number) {
+async function fixture(
+  unborn = false,
+  format = "sha1",
+  deadline?: number,
+  globalConfig?: string,
+) {
   const dir = await fs.mkdtemp("/private/tmp/goga-native-commit-");
   fixtureScope().cleanup(() => fs.rm(dir, { recursive: true, force: true }));
   const root = path.join(dir, "repo"),
@@ -32,9 +37,13 @@ async function fixture(unborn = false, format = "sha1", deadline?: number) {
     HOME: home,
     XDG_CONFIG_HOME: home,
     GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_GLOBAL: globalConfig
+      ? path.join(home, ".gitconfig")
+      : "/dev/null",
     GIT_TERMINAL_PROMPT: "0",
   };
+  if (globalConfig)
+    await fs.writeFile(path.join(home, ".gitconfig"), globalConfig);
   const runner = fixtureScope.runner(new NodeRunner(deadline, env));
   const privateIndexes = new Set<string>();
   fixtureScope().cleanup(async () => {
@@ -1229,4 +1238,25 @@ it(
       "committed work\n",
     );
   }),
+);
+
+it(
+  "commits with real global settings through frozen-index and live prepared verification",
+  fixtureScope.run(async () => {
+    const f = await fixture(
+      false,
+      "sha1",
+      undefined,
+      "[diff]\n algorithm = histogram\n[color]\n ui = auto\n",
+    );
+    await f.write("selected", "changed\n");
+    const globalBefore = await fs.readFile(path.join(f.home, ".gitconfig"));
+    const result = await f.actions.execute((await f.prepare()).token);
+    expect(result.status).toBe("committed");
+    expect((await f.git(["show", "HEAD:selected"])).stdout).toBe("changed\n");
+    expect(await fs.readFile(path.join(f.home, ".gitconfig"))).toEqual(
+      globalBefore,
+    );
+  }),
+  gitIntegrationBudget(15000),
 );

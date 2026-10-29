@@ -274,6 +274,7 @@
     "tests/yaml-editor.test.tsx"
   ],
   "shell": [
+    "tests/app-icon.test.ts",
     "tests/close-confirm.test.ts",
     "tests/copy-polish.test.tsx",
     "tests/desktop-state.test.ts",

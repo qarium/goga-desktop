@@ -13,6 +13,7 @@ import { ByteCommandError } from "./process";
 import {
   nativeGitArguments,
   withNativeGitPolicy,
+  bindNativeGitVerification,
   type NativeGitRequest,
   type NativeGitPolicy,
 } from "./git-native-policy";
@@ -202,6 +203,10 @@ export async function createNativeGitClient(
         request: NativeGitRequest,
         initializing = false,
       ) => {
+        const verifyPrepared =
+          "verifyPrepared" in request && request.verifyPrepared
+            ? bindNativeGitVerification(request.verifyPrepared)
+            : undefined;
         try {
           let result: ByteCommandResult;
           if (!frozen) result = await base.run(request);
@@ -233,9 +238,7 @@ export async function createNativeGitClient(
                   ),
                 ],
                 stdin: request.stdin && Buffer.from(request.stdin),
-                ...("verifyPrepared" in request && request.verifyPrepared
-                  ? { verifyPrepared: request.verifyPrepared }
-                  : {}),
+                ...(verifyPrepared ? { verifyPrepared } : {}),
               }),
             );
           }
@@ -500,6 +503,10 @@ export async function createNativeGitClient(
       }
     },
     async run(request: NativeGitRequest): Promise<ByteCommandResult> {
+      const verifyPrepared =
+        "verifyPrepared" in request && request.verifyPrepared
+          ? bindNativeGitVerification(request.verifyPrepared)
+          : undefined;
       const args = nativeGitArguments(request, config),
         started = performance.now();
       const stdin = request.stdin && Buffer.from(request.stdin);
@@ -511,9 +518,7 @@ export async function createNativeGitClient(
             env,
             args,
             stdin,
-            ...("verifyPrepared" in request && request.verifyPrepared
-              ? { verifyPrepared: request.verifyPrepared }
-              : {}),
+            ...(verifyPrepared ? { verifyPrepared } : {}),
           }),
         );
         report(request, started, result);

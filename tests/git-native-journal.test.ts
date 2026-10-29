@@ -2,6 +2,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import { ByteCommandError } from "../src/host/process";
 import { NativeGitJournal } from "../src/host/git-native-journal";
 import { captureNativeGitState } from "../src/host/git-native-state";
@@ -13,7 +14,13 @@ vi.mock("../src/host/owned-lock", async (original) => {
 });
 vi.mock("node:fs/promises", async (original) => {
   const actual = await original<typeof fs>();
-  return { ...actual, rename: vi.fn(actual.rename), open: vi.fn(actual.open) };
+  return {
+    ...actual,
+    rename: vi.fn(actual.rename),
+    open: vi.fn(actual.open),
+    unlink: vi.fn(actual.unlink),
+    link: vi.fn(actual.link),
+  };
 });
 const cleanup: string[] = [];
 afterEach(async () => {
@@ -23,6 +30,8 @@ afterEach(async () => {
   vi.mocked(acquireOwnedLock).mockRestore();
   vi.mocked(fs.open).mockRestore();
   vi.mocked(fs.rename).mockRestore();
+  vi.mocked(fs.unlink).mockRestore();
+  vi.mocked(fs.link).mockRestore();
   for (const d of cleanup.splice(0))
     await fs.rm(d, { recursive: true, force: true });
 });
@@ -1337,6 +1346,7 @@ it.each(["retained", "removed"] as const)(
     const restarted = new NativeGitJournal({ directory: f.directory });
     expect(await restarted.inspect(f.snapshot)).toMatchObject({
       state: "uncertain",
+      diagnostic: { stage: "finalize", kind: "unknown" },
       recovery: {
         revision: f.snapshot.revision,
         files: [
@@ -1562,3 +1572,1057 @@ it("resolution rejects a changed parent receipt between preparation and executio
   ).rejects.toThrow();
   expect(f.run).toHaveBeenCalledTimes(n);
 });
+
+async function discardRecoveryFixture(old = false) {
+  const f = await fixture();
+  await fs.writeFile(path.join(f.root, "b"), "unrelated");
+  const observation = {
+    head: "a".repeat(40),
+    headRef: "refs/heads/main",
+    index: Buffer.from(
+      `100644 ${"a".repeat(40)} 0\ta\0` + `100644 ${"b".repeat(40)} 0\tb\0`,
+    ),
+    refs: Buffer.from("refs"),
+    status: Buffer.from(" M a"),
+    policyFingerprint: hash("policy"),
+    controlFingerprint: hash("none"),
+  };
+  const owner = { ...f.snapshot.owner };
+  const paths = ["a", "b"];
+  const capture = () =>
+    captureNativeGitState({
+      root: f.root,
+      paths,
+      owner: async () => owner,
+      observe: async () => observation,
+    });
+  const snapshot = await capture();
+  const intentDetails = JSON.stringify(["discard", ["a"], [{ path: "a" }]]);
+  const token = f.journal.prepare(
+    "discard",
+    snapshot,
+    hash(intentDetails),
+    old ? undefined : intentDetails,
+  );
+  await f.journal.execute({
+    token,
+    operation: "discard",
+    intentFingerprint: hash(intentDetails),
+    capture,
+    run: async () => {
+      throw new ByteCommandError(
+        "verification",
+        true,
+        Buffer.alloc(0),
+        Buffer.from("PRIVATE STDERR"),
+        1,
+      );
+    },
+    verify: f.verify,
+  });
+  const recordPath = f.journal.recordPath(snapshot);
+  const read = () => f.journal.readDiscardRecovery(f.root, owner);
+  const retire = async (
+    fingerprint: string,
+    expectedCurrent?: Awaited<ReturnType<typeof capture>>,
+    mode: "retry-unchanged" | "preserve-current" = "retry-unchanged",
+  ) =>
+    f.journal.retireDiscardRecovery({
+      root: f.root,
+      owner,
+      fingerprint,
+      expectedCurrent: expectedCurrent ?? (await capture()),
+      intentDetails,
+      capture,
+      mode,
+    });
+  return {
+    ...f,
+    snapshot,
+    capture,
+    paths,
+    owner,
+    observation,
+    intentDetails,
+    recordPath,
+    read,
+    retire,
+  };
+}
+it("reads settled uncertain discard recovery without writes or process liveness guesses", async () => {
+  const f = await discardRecoveryFixture();
+  const entries = await fs.readdir(f.directory),
+    raw = await fs.readFile(f.recordPath, "utf8"),
+    pending = await fs.readFile(f.recordPath + ".pending", "utf8");
+  const locks = vi.mocked(acquireOwnedLock).mock.calls.length;
+  const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+    throw Error("must not probe PID");
+  });
+  expect(await f.read()).toMatchObject({
+    snapshot: f.snapshot,
+    intentDetails: f.intentDetails,
+    state: "uncertain",
+    result: { processSettled: true },
+    diagnostic: { stage: "run", kind: "verification" },
+  });
+  expect(await fs.readdir(f.directory)).toEqual(entries);
+  expect(await fs.readFile(f.recordPath, "utf8")).toBe(raw);
+  expect(await fs.readFile(f.recordPath + ".pending", "utf8")).toBe(pending);
+  expect(vi.mocked(acquireOwnedLock).mock.calls.length).toBe(locks);
+  expect(kill).not.toHaveBeenCalled();
+  expect(raw).not.toContain("PRIVATE STDERR");
+});
+it.each([false, true])(
+  "retires original snapshot without archiving old/current bytes or mutating files (old=%s)",
+  async (old) => {
+    const f = await discardRecoveryFixture(old);
+    const recovery = (await f.read())!;
+    await fs.writeFile(path.join(f.root, "a"), "partially discarded");
+    f.observation.index = Buffer.from(
+      `100644 ${"c".repeat(40)} 0\ta\0` + `100644 ${"b".repeat(40)} 0\tb\0`,
+    );
+    const current = await f.capture(),
+      calls = f.run.mock.calls.length;
+    await f.retire(recovery.fingerprint, current, "preserve-current");
+    expect(await fs.readdir(f.directory)).toEqual([]);
+    expect(f.run).toHaveBeenCalledTimes(calls);
+    expect(await fs.readFile(path.join(f.root, "a"), "utf8")).toBe(
+      "partially discarded",
+    );
+    expect(await f.read()).toBeNull();
+    await f.journal.assertAdmission(f.root, f.owner);
+  },
+);
+it.each([
+  "running",
+  "unsettled",
+  "other-operation",
+  "foreign",
+  "missing-pending",
+  "orphan-pending",
+  "tampered-pending",
+  "unsupported",
+])("blocks invalid discard recovery: %s", async (kind) => {
+  const f = await discardRecoveryFixture();
+  const raw = JSON.parse(await fs.readFile(f.recordPath, "utf8"));
+  if (kind === "running") raw.state = "running";
+  if (kind === "unsettled") raw.result.processSettled = false;
+  if (kind === "other-operation") raw.operation = "merge";
+  if (kind === "unsupported") raw.schemaVersion = 99;
+  if (["running", "unsettled", "other-operation", "unsupported"].includes(kind))
+    await fs.writeFile(f.recordPath, JSON.stringify(raw));
+  if (kind === "foreign") f.owner.registryRevision = "2";
+  if (kind === "missing-pending") await fs.unlink(f.recordPath + ".pending");
+  if (kind === "orphan-pending") await fs.unlink(f.recordPath);
+  if (kind === "tampered-pending")
+    await fs.writeFile(f.recordPath + ".pending", "{}");
+  await expect(f.read()).rejects.toThrow();
+  await expect(f.journal.assertAdmission(f.root, f.owner)).rejects.toThrow();
+});
+it.each([
+  "owner",
+  "head",
+  "headRef",
+  "refs",
+  "policy",
+  "control",
+  "unrelated-file",
+  "unrelated-index",
+  "intent",
+  "record",
+  "pending",
+  "after-preview",
+])("refuses discard retirement drift: %s", async (kind) => {
+  const f = await discardRecoveryFixture();
+  const recovery = (await f.read())!,
+    preview = await f.capture();
+  if (kind === "owner") f.owner.registryRevision = "2";
+  if (kind === "head") f.observation.head = "b".repeat(40);
+  if (kind === "headRef") f.observation.headRef = "refs/heads/other";
+  if (kind === "refs") f.observation.refs = Buffer.from("changed");
+  if (kind === "policy") f.observation.policyFingerprint = hash("changed");
+  if (kind === "control") f.observation.controlFingerprint = hash("changed");
+  if (kind === "unrelated-file")
+    await fs.writeFile(path.join(f.root, "b"), "changed");
+  if (kind === "unrelated-index")
+    f.observation.index = Buffer.from(
+      `100644 ${"a".repeat(40)} 0\ta\0` + `100644 ${"c".repeat(40)} 0\tb\0`,
+    );
+  if (kind === "record")
+    await fs.writeFile(
+      f.recordPath,
+      (await fs.readFile(f.recordPath, "utf8")) + " ",
+    );
+  if (kind === "pending")
+    await fs.writeFile(
+      f.recordPath + ".pending",
+      (await fs.readFile(f.recordPath + ".pending", "utf8")) + " ",
+    );
+  if (kind === "after-preview")
+    await fs.writeFile(path.join(f.root, "a"), "late edit");
+  await expect(
+    f.journal.retireDiscardRecovery({
+      root: f.root,
+      owner: f.owner,
+      fingerprint: recovery.fingerprint,
+      expectedCurrent: kind === "after-preview" ? preview : await f.capture(),
+      intentDetails:
+        kind === "intent"
+          ? JSON.stringify(["discard", ["b"], []])
+          : f.intentDetails,
+      capture: f.capture,
+      mode: "retry-unchanged",
+    }),
+  ).rejects.toThrow();
+  expect(await fs.readFile(f.recordPath, "utf8")).toContain('"uncertain"');
+  await expect(f.journal.assertAdmission(f.root, f.owner)).rejects.toThrow();
+});
+
+it("has no discard recovery after a verified completed receipt", async () => {
+  const f = await fixture();
+  await f.journal.execute({
+    token: f.token,
+    operation: "merge",
+    intentFingerprint: hash("fixture-intent"),
+    capture: f.capture,
+    run: f.run,
+    verify: f.verify,
+  });
+  expect(
+    await f.journal.readDiscardRecovery(f.root, f.snapshot.owner),
+  ).toBeNull();
+});
+it.each([
+  "archive-create",
+  "archive-write",
+  "archive-sync",
+  "archive-readback",
+  "pending-unlink",
+  "record-unlink",
+  "record-unlink-after",
+  "final-sync",
+  "lease-release",
+])("fails closed on discard retirement receipt fault: %s", async (fault) => {
+  const f = await discardRecoveryFixture(),
+    recovery = (await f.read())!;
+  const actual = await vi.importActual<typeof fs>("node:fs/promises");
+  let archiveWritten = false,
+    pendingRemoved = false,
+    recordRemoved = false,
+    injected = false;
+  const fail = () => {
+    injected = true;
+    throw Object.assign(Error("injected recovery fault"), { code: "EIO" });
+  };
+  vi.mocked(fs.unlink).mockImplementation(async (filename) => {
+    if (String(filename) === f.recordPath + ".pending") {
+      if (fault === "pending-unlink" && !injected) fail();
+      await actual.unlink(filename);
+      pendingRemoved = true;
+      return;
+    }
+    if (String(filename) === f.recordPath) {
+      if (fault === "record-unlink" && !injected) fail();
+      await actual.unlink(filename);
+      recordRemoved = true;
+      if (fault === "record-unlink-after" && !injected) fail();
+      return;
+    }
+    return actual.unlink(filename);
+  });
+  vi.mocked(fs.open).mockImplementation(async (...args) => {
+    const filename = String(args[0]),
+      flags = args[1];
+    const isArchive = filename.includes(".discard-recovery-");
+    if (
+      isArchive &&
+      typeof flags === "number" &&
+      flags & constants.O_CREAT &&
+      fault === "archive-create" &&
+      !injected
+    )
+      fail();
+    if (
+      isArchive &&
+      archiveWritten &&
+      fault === "archive-readback" &&
+      !injected
+    )
+      fail();
+    const handle = await actual.open(...args);
+    if (isArchive && typeof flags === "number" && flags & constants.O_CREAT) {
+      const write = handle.writeFile.bind(handle),
+        sync = handle.sync.bind(handle);
+      handle.writeFile = (async (...a: Parameters<typeof handle.writeFile>) => {
+        if (fault === "archive-write" && !injected) fail();
+        await write(...a);
+        archiveWritten = true;
+      }) as typeof handle.writeFile;
+      handle.sync = async () => {
+        if (fault === "archive-sync" && !injected) fail();
+        await sync();
+      };
+    }
+    if (filename === f.directory && fault === "final-sync") {
+      const sync = handle.sync.bind(handle);
+      handle.sync = async () => {
+        if (recordRemoved && !injected) fail();
+        await sync();
+      };
+    }
+    return handle;
+  });
+  if (fault === "lease-release") {
+    const { acquireOwnedLock: acquire } = await vi.importActual<
+      typeof import("../src/host/owned-lock")
+    >("../src/host/owned-lock");
+    vi.mocked(acquireOwnedLock).mockImplementation(async (file, options) => {
+      const lease = await acquire(file, options);
+      return {
+        release: async () => {
+          await lease.release();
+          if (!injected) fail();
+        },
+      };
+    });
+  }
+  await expect(f.retire(recovery.fingerprint)).rejects.toThrow();
+  expect(injected).toBe(true);
+  vi.mocked(fs.open).mockRestore();
+  vi.mocked(fs.unlink).mockRestore();
+  vi.mocked(acquireOwnedLock).mockRestore();
+  await expect(f.journal.assertAdmission(f.root, f.owner)).rejects.toThrow();
+  expect(await fs.readFile(path.join(f.root, "a"), "utf8")).toBe("draft");
+  if (pendingRemoved && fault !== "lease-release")
+    expect(
+      (await fs.readdir(f.directory)).some((name) =>
+        name.includes(".discard-recovery-"),
+      ),
+    ).toBe(true);
+  if (fault === "lease-release") {
+    const restored = JSON.parse(await fs.readFile(f.recordPath, "utf8"));
+    expect(restored.recovery).toEqual(f.snapshot);
+    expect(await fs.readFile(f.recordPath + ".pending", "utf8")).toBeTruthy();
+  }
+});
+it("resumes explicit retirement from durable receipt witness after pending-first interruption", async () => {
+  const f = await discardRecoveryFixture(),
+    recovery = (await f.read())!;
+  const actual = await vi.importActual<typeof fs>("node:fs/promises");
+  vi.mocked(fs.unlink).mockImplementation(async (filename) => {
+    if (String(filename) === f.recordPath)
+      throw Error("crash before original record removal");
+    return actual.unlink(filename);
+  });
+  await expect(f.retire(recovery.fingerprint)).rejects.toThrow();
+  vi.mocked(fs.unlink).mockRestore();
+  await expect(fs.lstat(f.recordPath + ".pending")).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  expect((await f.read())!.fingerprint).toBe(recovery.fingerprint);
+  await expect(f.journal.assertAdmission(f.root, f.owner)).rejects.toThrow();
+  await fs.writeFile(path.join(f.root, "a"), "current kept after restart");
+  const current = await f.capture();
+  await f.retire(recovery.fingerprint, current, "preserve-current");
+  expect(await f.capture()).toEqual(current);
+  expect(await fs.readdir(f.directory)).toEqual([]);
+  expect(await f.read()).toBeNull();
+});
+it("keeps blocked when a missing-pending archive witness is tampered", async () => {
+  const f = await discardRecoveryFixture(),
+    recovery = (await f.read())!;
+  const actual = await vi.importActual<typeof fs>("node:fs/promises");
+  vi.mocked(fs.unlink).mockImplementation(async (filename) => {
+    if (String(filename) === f.recordPath) throw Error("interrupted");
+    return actual.unlink(filename);
+  });
+  await expect(f.retire(recovery.fingerprint)).rejects.toThrow();
+  vi.mocked(fs.unlink).mockRestore();
+  const name = (await fs.readdir(f.directory)).find((name) =>
+    name.includes(".discard-recovery-"),
+  )!;
+  const filename = path.join(f.directory, name),
+    archive = JSON.parse(await fs.readFile(filename, "utf8"));
+  archive.pendingRaw = archive.pendingRaw + " ";
+  await fs.writeFile(filename, JSON.stringify(archive));
+  await expect(f.read()).rejects.toThrow();
+  await expect(f.retire(recovery.fingerprint)).rejects.toThrow();
+});
+it("does not remove a foreign repo lease, even when its PID is dead", async () => {
+  const f = await discardRecoveryFixture(),
+    recovery = (await f.read())!;
+  const filename = f.recordPath + ".lock",
+    raw = JSON.stringify({
+      schemaVersion: 1,
+      pid: 2147483647,
+      nonce: "00000000-0000-4000-8000-000000000001",
+    });
+  await fs.writeFile(filename, raw, { mode: 0o600 });
+  const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+    throw Object.assign(Error("dead"), { code: "ESRCH" });
+  });
+  await expect(f.retire(recovery.fingerprint)).rejects.toThrow();
+  expect(kill).not.toHaveBeenCalled();
+  expect(await fs.readFile(filename, "utf8")).toBe(raw);
+});
+it("blocks real Git locks without deleting them during discard archival", async () => {
+  const f = await discardRecoveryFixture(),
+    recovery = (await f.read())!;
+  const filename = path.join(f.root, ".git/index.lock");
+  await fs.writeFile(filename, "foreign");
+  await expect(f.retire(recovery.fingerprint)).rejects.toThrow();
+  expect(await fs.readFile(filename, "utf8")).toBe("foreign");
+});
+
+it("preserve-current retires observed drift without claiming old success, archiving bytes or writing Git", async () => {
+  const f = await discardRecoveryFixture(),
+    recovery = (await f.read())!;
+  f.observation.head = "c".repeat(40);
+  f.observation.headRef = "refs/heads/new";
+  f.observation.refs = Buffer.from("new refs");
+  f.observation.policyFingerprint = hash("new policy");
+  f.observation.index = Buffer.from(`100644 ${"d".repeat(40)} 0\tb\0`);
+  await fs.writeFile(path.join(f.root, "b"), "edited unrelated");
+  await fs.writeFile(path.join(f.root, "new"), "new draft");
+  f.paths.push("new");
+  const current = await f.capture();
+  await expect(
+    f.retire(recovery.fingerprint, current, "retry-unchanged"),
+  ).rejects.toThrow();
+  await f.retire(recovery.fingerprint, current, "preserve-current");
+  expect(await fs.readdir(f.directory)).toEqual([]);
+  expect(await f.capture()).toEqual(current);
+  expect(await f.read()).toBeNull();
+});
+it.each(["owner", "physical", "control", "pathset"])(
+  "preserve-current still rejects %s drift",
+  async (kind) => {
+    const f = await discardRecoveryFixture(),
+      recovery = (await f.read())!;
+    if (kind === "owner") f.owner.registryRevision = "changed";
+    if (kind === "physical") {
+      await fs.rename(
+        path.join(f.root, ".git"),
+        path.join(f.root, ".git-saved"),
+      );
+      await fs.mkdir(path.join(f.root, ".git"));
+    }
+    if (kind === "control")
+      await fs.writeFile(path.join(f.root, ".git/MERGE_HEAD"), "active");
+    if (kind === "pathset") f.paths.splice(1, 1);
+    await expect(
+      f.retire(recovery.fingerprint, await f.capture(), "preserve-current"),
+    ).rejects.toThrow();
+    expect(await fs.readFile(f.recordPath, "utf8")).toContain('"uncertain"');
+  },
+);
+
+it("preserve-current accepts stable residual ORIG_HEAD and REBASE_HEAD without removing them", async () => {
+  const f = await discardRecoveryFixture(),
+    recovery = (await f.read())!;
+  await fs.writeFile(path.join(f.root, ".git/ORIG_HEAD"), "old head");
+  await fs.writeFile(path.join(f.root, ".git/REBASE_HEAD"), "residual head");
+  f.observation.controlFingerprint = hash("new residual control fingerprint");
+  const current = await f.capture();
+  await f.retire(recovery.fingerprint, current, "preserve-current");
+  expect(await f.capture()).toEqual(current);
+  expect(await fs.readFile(path.join(f.root, ".git/ORIG_HEAD"), "utf8")).toBe(
+    "old head",
+  );
+  expect(await fs.readFile(path.join(f.root, ".git/REBASE_HEAD"), "utf8")).toBe(
+    "residual head",
+  );
+});
+it.each([
+  "MERGE_HEAD",
+  "CHERRY_PICK_HEAD",
+  "REVERT_HEAD",
+  "rebase-merge",
+  "rebase-apply",
+  "sequencer",
+  "MERGE_AUTOSTASH",
+])(
+  "preserve-current rejects active Git control %s without deleting it",
+  async (control) => {
+    const f = await discardRecoveryFixture(),
+      recovery = (await f.read())!;
+    const filename = path.join(f.root, ".git", control);
+    if (["rebase-merge", "rebase-apply", "sequencer"].includes(control))
+      await fs.mkdir(filename);
+    else await fs.writeFile(filename, "active");
+    await expect(
+      f.retire(recovery.fingerprint, await f.capture(), "preserve-current"),
+    ).rejects.toThrow();
+    expect(await fs.lstat(filename)).toBeDefined();
+    await expect(f.journal.assertAdmission(f.root, f.owner)).rejects.toThrow();
+  },
+);
+it.each(["after-settled", "verify"])(
+  "retains only finite safe diagnostics at %s",
+  async (stage) => {
+    const f = await fixture();
+    const fail = async () => {
+      throw Error("PRIVATE PATH /secret and stderr env=config");
+    };
+    await f.journal.execute({
+      token: f.token,
+      operation: "merge",
+      intentFingerprint: hash("fixture-intent"),
+      capture: f.capture,
+      run: f.run,
+      ...(stage === "after-settled" ? { afterSettled: fail } : {}),
+      verify: stage === "verify" ? fail : f.verify,
+    });
+    const raw = await fs.readFile(f.journal.recordPath(f.snapshot), "utf8");
+    expect(JSON.parse(raw).diagnostic).toEqual({ stage, kind: "unknown" });
+    expect(raw).not.toContain("PRIVATE PATH");
+    expect(raw).not.toContain("env=config");
+  },
+);
+
+it("records only validated finite discard failure steps", async () => {
+  const f = await fixture();
+  await f.journal.execute({
+    token: f.token,
+    operation: "merge",
+    intentFingerprint: hash("fixture-intent"),
+    capture: f.capture,
+    failureStep: () => "discard-index",
+    run: async () => {
+      throw new ByteCommandError(
+        "verification",
+        true,
+        Buffer.alloc(0),
+        Buffer.alloc(0),
+      );
+    },
+    verify: f.verify,
+  });
+  expect((await f.journal.inspect(f.snapshot))?.diagnostic).toEqual({
+    stage: "run",
+    kind: "verification",
+    step: "discard-index",
+  });
+});
+it.each(["throw", "raw-string"])(
+  "invalid failure step %s never hides primary command facts or leaks details",
+  async (kind) => {
+    const f = await fixture();
+    await f.journal.execute({
+      token: f.token,
+      operation: "merge",
+      intentFingerprint: hash("fixture-intent"),
+      capture: f.capture,
+      failureStep: (() => {
+        if (kind === "throw") throw Error("PRIVATE DETAILS");
+        return "PRIVATE DETAILS";
+      }) as never,
+      run: async () => {
+        throw new ByteCommandError(
+          "timeout",
+          true,
+          Buffer.alloc(0),
+          Buffer.alloc(0),
+          1,
+        );
+      },
+      verify: f.verify,
+    });
+    const raw = await fs.readFile(f.journal.recordPath(f.snapshot), "utf8");
+    expect(JSON.parse(raw).diagnostic).toEqual({
+      stage: "run",
+      kind: "timeout",
+    });
+    expect(JSON.parse(raw).result).toMatchObject({
+      exitCode: 1,
+      processSettled: true,
+    });
+    expect(raw).not.toContain("PRIVATE DETAILS");
+  },
+);
+
+it("discard inspection remains empty and read-only before any journal exists", async () => {
+  const f = await fixture();
+  expect(
+    await f.journal.readDiscardRecovery(f.root, f.snapshot.owner),
+  ).toBeNull();
+  await expect(fs.lstat(f.directory)).rejects.toMatchObject({ code: "ENOENT" });
+});
+it("discard inspection rejects a physical repository replacement during the read", async () => {
+  const f = await discardRecoveryFixture();
+  const { open } = await vi.importActual<typeof fs>("node:fs/promises");
+  let replaced = false;
+  vi.mocked(fs.open).mockImplementation(async (...args) => {
+    if (String(args[0]) === f.recordPath + ".pending" && !replaced) {
+      replaced = true;
+      await fs.rename(
+        path.join(f.root, ".git"),
+        path.join(f.root, ".git-saved"),
+      );
+      await fs.mkdir(path.join(f.root, ".git"));
+    }
+    return open(...args);
+  });
+  await expect(f.read()).rejects.toThrow();
+  expect(replaced).toBe(true);
+});
+
+it("does not publish recovery bytes into a replaced journal directory", async () => {
+  const f = await discardRecoveryFixture(),
+    recovery = (await f.read())!,
+    current = await f.capture();
+  let replaced = false;
+  await expect(
+    f.journal.retireDiscardRecovery({
+      root: f.root,
+      owner: f.owner,
+      fingerprint: recovery.fingerprint,
+      expectedCurrent: current,
+      intentDetails: f.intentDetails,
+      mode: "retry-unchanged",
+      capture: async () => {
+        if (!replaced) {
+          replaced = true;
+          await fs.rename(f.directory, f.directory + "-saved");
+          await fs.mkdir(f.directory, { mode: 0o700 });
+          await fs.writeFile(path.join(f.directory, "foreign"), "preserve");
+        }
+        return f.capture();
+      },
+    }),
+  ).rejects.toThrow();
+  expect(await fs.readdir(f.directory)).toEqual(["foreign"]);
+  expect(await fs.readFile(path.join(f.directory, "foreign"), "utf8")).toBe(
+    "preserve",
+  );
+  expect(
+    await fs.readFile(
+      path.join(f.directory + "-saved", path.basename(f.recordPath)),
+      "utf8",
+    ),
+  ).toContain('"uncertain"');
+});
+
+it.each(["completed", "rejected"] as const)(
+  "exposes settled %s discard retained before deferred cleanup as recoverable",
+  async (outcome) => {
+    const f = await fixture(),
+      intentDetails = JSON.stringify(["discard", ["a"], []]);
+    const token = f.journal.prepare(
+      "discard",
+      f.snapshot,
+      hash(intentDetails),
+      intentDetails,
+    );
+    let cleanup: (() => Promise<unknown>) | undefined;
+    const result = await f.journal.execute({
+      token,
+      operation: "discard",
+      intentFingerprint: hash(intentDetails),
+      capture: f.capture,
+      run: async () => {
+        if (outcome === "completed")
+          await fs.writeFile(path.join(f.root, "a"), "restored content");
+        return {
+          stdout: Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          exitCode: outcome === "completed" ? 0 : 1,
+          signal: null,
+          processSettled: true,
+        };
+      },
+      verify: async () => ({
+        outcome,
+        afterHead: f.snapshot.head,
+        conflicts: [],
+        verifiedUnrelatedData: true,
+      }),
+      deferRecoveryCleanup: (finish) => {
+        cleanup = finish;
+      },
+    });
+    expect(cleanup).toBeTypeOf("function");
+    expect(result).toMatchObject({
+      outcome,
+      recovery: "retained",
+      processSettled: true,
+    });
+    const recovery = await f.journal.readDiscardRecovery(
+      f.root,
+      f.snapshot.owner,
+    );
+    expect(recovery).toMatchObject({
+      state: outcome,
+      snapshot: f.snapshot,
+      result: { outcome },
+    });
+    await expect(
+      f.journal.assertAdmission(f.root, f.snapshot.owner),
+    ).rejects.toThrow();
+    const current = await f.capture();
+    await f.journal.retireDiscardRecovery({
+      root: f.root,
+      owner: f.snapshot.owner,
+      fingerprint: recovery!.fingerprint,
+      expectedCurrent: current,
+      intentDetails,
+      mode: outcome === "completed" ? "preserve-current" : "retry-unchanged",
+      capture: f.capture,
+    });
+    expect(await fs.readdir(f.directory)).toEqual([]);
+    expect(await f.capture()).toEqual(current);
+    expect(
+      await f.journal.readDiscardRecovery(f.root, f.snapshot.owner),
+    ).toBeNull();
+  },
+);
+
+it.each([
+  "partial-write",
+  "canonical-link-before",
+  "canonical-link-after",
+  "prepared-unlink",
+] as const)(
+  "a healthy explicit retry recovers receipt publication fault %s without removing failed candidates",
+  async (fault) => {
+    const f = await discardRecoveryFixture(),
+      recovery = (await f.read())!;
+    const actual = await vi.importActual<typeof fs>("node:fs/promises");
+    let injected = false;
+    const fail = () => {
+      injected = true;
+      throw Object.assign(Error("publication fault"), { code: "EIO" });
+    };
+    vi.mocked(fs.open).mockImplementation(async (...args) => {
+      const handle = await actual.open(...args);
+      if (
+        fault === "partial-write" &&
+        String(args[0]).includes(".discard-recovery-") &&
+        typeof args[1] === "number" &&
+        args[1] & constants.O_CREAT
+      ) {
+        const write = handle.writeFile.bind(handle);
+        handle.writeFile = (async (
+          data: Parameters<typeof handle.writeFile>[0],
+        ) => {
+          if (!injected) {
+            await write(String(data).slice(0, 17));
+            fail();
+          }
+          await write(data);
+        }) as typeof handle.writeFile;
+      }
+      return handle;
+    });
+    vi.mocked(fs.link).mockImplementation(async (source, destination) => {
+      if (String(destination).includes(".discard-recovery-") && !injected) {
+        if (fault === "canonical-link-before") fail();
+        if (fault === "canonical-link-after") {
+          await actual.link(source, destination);
+          fail();
+        }
+      }
+      return actual.link(source, destination);
+    });
+    vi.mocked(fs.unlink).mockImplementation(async (filename) => {
+      if (
+        fault === "prepared-unlink" &&
+        String(filename).includes(".discard-recovery-") &&
+        String(filename).endsWith(".prepared") &&
+        !injected
+      )
+        fail();
+      return actual.unlink(filename);
+    });
+    await expect(f.retire(recovery.fingerprint)).rejects.toThrow();
+    expect(injected).toBe(true);
+    vi.mocked(fs.open).mockRestore();
+    vi.mocked(fs.link).mockRestore();
+    vi.mocked(fs.unlink).mockRestore();
+    await expect(f.journal.assertAdmission(f.root, f.owner)).rejects.toThrow();
+    const failed = (await fs.readdir(f.directory)).filter((name) =>
+      name.includes(".discard-recovery-"),
+    );
+    const retained = new Map(
+      await Promise.all(
+        failed.map(
+          async (name) =>
+            [
+              name,
+              await fs.readFile(path.join(f.directory, name), "utf8"),
+            ] as const,
+        ),
+      ),
+    );
+    expect((await f.read())!.fingerprint).toBe(recovery.fingerprint);
+    expect(await fs.readdir(f.directory)).toContain(
+      path.basename(f.recordPath) + ".pending",
+    );
+    await f.retire(recovery.fingerprint);
+    // Failed unlinked candidates contain metadata only. Valid published receipts
+    // and their exact hard-link twins are removed after successful retirement.
+    const remaining = await fs.readdir(f.directory);
+    expect(remaining.filter((name) => name.endsWith(".json"))).toEqual([]);
+    if (fault === "partial-write")
+      for (const [name, raw] of retained)
+        expect(await fs.readFile(path.join(f.directory, name), "utf8")).toBe(
+          raw,
+        );
+    expect(await f.read()).toBeNull();
+    expect(await fs.readFile(path.join(f.root, "a"), "utf8")).toBe("draft");
+  },
+);
+it("retains a legacy incomplete canonical witness while publishing a complete alternate on healthy retry", async () => {
+  const f = await discardRecoveryFixture(),
+    recovery = (await f.read())!;
+  const raw = await fs.readFile(f.recordPath, "utf8"),
+    s = await fs.lstat(f.recordPath, { bigint: true });
+  const identity = [
+    s.dev,
+    s.ino,
+    s.mode,
+    s.nlink,
+    s.size,
+    s.mtimeNs,
+    s.ctimeNs,
+  ].join(":");
+  const canonical =
+    f.recordPath +
+    `.discard-recovery-${recovery.id}-${hash(JSON.stringify([raw, identity]))}.json`;
+  await fs.writeFile(canonical, '{"schemaVersion":', { mode: 0o600 });
+  expect((await f.read())!.fingerprint).toBe(recovery.fingerprint);
+  await f.retire(recovery.fingerprint);
+  expect(await fs.readdir(f.directory)).toEqual([path.basename(canonical)]);
+  expect(await fs.readFile(canonical, "utf8")).toBe('{"schemaVersion":');
+  expect(await f.read()).toBeNull();
+});
+
+it("reads a complete nlink-two receipt witness after interruption without cleaning its pinned prepared twin", async () => {
+  const f = await discardRecoveryFixture(),
+    recovery = (await f.read())!;
+  const actual = await vi.importActual<typeof fs>("node:fs/promises");
+  let archivePath = "";
+  vi.mocked(fs.link).mockImplementation(async (source, destination) => {
+    await actual.link(source, destination);
+    if (String(destination).includes(".discard-recovery-")) {
+      archivePath = String(destination);
+      throw Error("crash immediately after exclusive publication");
+    }
+  });
+  await expect(f.retire(recovery.fingerprint)).rejects.toThrow();
+  vi.mocked(fs.link).mockRestore();
+  expect((await fs.lstat(archivePath)).nlink).toBe(2);
+  await fs.unlink(f.recordPath + ".pending"); // Restart after a pending-first retirement.
+  const entries = await fs.readdir(f.directory),
+    stageRaw = await fs.readFile(archivePath + ".prepared", "utf8");
+  vi.mocked(fs.unlink).mockClear();
+  expect((await f.read())!.fingerprint).toBe(recovery.fingerprint);
+  expect(await fs.readdir(f.directory)).toEqual(entries);
+  expect(await fs.readFile(archivePath + ".prepared", "utf8")).toBe(stageRaw);
+  expect(fs.unlink).not.toHaveBeenCalled();
+  await expect(f.journal.assertAdmission(f.root, f.owner)).rejects.toThrow();
+  await f.retire(recovery.fingerprint);
+  await expect(fs.lstat(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(fs.lstat(archivePath + ".prepared")).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  expect(await f.read()).toBeNull();
+});
+it("rejects a published receipt with an unexpected third hard link and never removes it", async () => {
+  const f = await discardRecoveryFixture(),
+    recovery = (await f.read())!;
+  const actual = await vi.importActual<typeof fs>("node:fs/promises");
+  let archivePath = "";
+  vi.mocked(fs.link).mockImplementation(async (source, destination) => {
+    await actual.link(source, destination);
+    if (String(destination).includes(".discard-recovery-")) {
+      archivePath = String(destination);
+      throw Error("publication interruption");
+    }
+  });
+  await expect(f.retire(recovery.fingerprint)).rejects.toThrow();
+  vi.mocked(fs.link).mockRestore();
+  const foreign = path.join(f.directory, "foreign-link");
+  await fs.link(archivePath, foreign);
+  const raw = await fs.readFile(foreign, "utf8");
+  await fs.unlink(f.recordPath + ".pending");
+  await expect(f.read()).rejects.toThrow();
+  await expect(f.retire(recovery.fingerprint)).rejects.toThrow();
+  expect((await fs.stat(foreign)).nlink).toBe(3);
+  expect(await fs.readFile(foreign, "utf8")).toBe(raw);
+});
+it("retains invalid UTF-8 legacy canonical bytes without treating them as recovery proof", async () => {
+  const f = await discardRecoveryFixture(),
+    recovery = (await f.read())!;
+  const raw = await fs.readFile(f.recordPath, "utf8"),
+    s = await fs.lstat(f.recordPath, { bigint: true });
+  const identity = [
+    s.dev,
+    s.ino,
+    s.mode,
+    s.nlink,
+    s.size,
+    s.mtimeNs,
+    s.ctimeNs,
+  ].join(":");
+  const canonical =
+      f.recordPath +
+      `.discard-recovery-${recovery.id}-${hash(JSON.stringify([raw, identity]))}.json`,
+    bytes = Buffer.from([0x7b, 0x22, 0xe2, 0x82]);
+  await fs.writeFile(canonical, bytes, { mode: 0o600 });
+  expect((await f.read())!.fingerprint).toBe(recovery.fingerprint);
+  await f.retire(recovery.fingerprint);
+  expect(await fs.readdir(f.directory)).toEqual([path.basename(canonical)]);
+  expect(await fs.readFile(canonical)).toEqual(bytes);
+  expect(await f.read()).toBeNull();
+});
+
+it("settled discard retirement leaves no persistent content archives", async () => {
+  const f = await discardRecoveryFixture();
+  const recovery = (await f.read())!;
+  const before = await f.capture();
+  await f.retire(recovery.fingerprint);
+  expect(await fs.readdir(f.directory)).toEqual([]);
+  expect(await f.capture()).toEqual(before);
+  expect(await f.read()).toBeNull();
+  await f.journal.assertAdmission(f.root, f.owner);
+});
+
+it("interrupted retirement persists only bounded metadata, never old or current file/index bytes", async () => {
+  const f = await discardRecoveryFixture();
+  const recovery = (await f.read())!;
+  await fs.writeFile(path.join(f.root, "a"), "CURRENT-PRIVATE-CONTENT");
+  const current = await f.capture();
+  const actual = await vi.importActual<typeof fs>("node:fs/promises");
+  vi.mocked(fs.unlink).mockImplementation(async (filename) => {
+    if (String(filename) === f.recordPath)
+      throw Error("interrupted retirement");
+    return actual.unlink(filename);
+  });
+  await expect(
+    f.retire(recovery.fingerprint, current, "preserve-current"),
+  ).rejects.toThrow();
+  vi.mocked(fs.unlink).mockRestore();
+  const names = (await fs.readdir(f.directory)).filter((n) =>
+    n.includes(".discard-recovery-"),
+  );
+  expect(names).toHaveLength(1);
+  const raw = await fs.readFile(path.join(f.directory, names[0]), "utf8");
+  expect(raw.length).toBeLessThan(4096);
+  expect(JSON.parse(raw)).toMatchObject({
+    schemaVersion: 2,
+    kind: "discard-retirement",
+    currentRevision: current.revision,
+  });
+  for (const snapshot of [f.snapshot, current]) {
+    expect(raw).not.toContain(snapshot.indexData);
+    for (const file of snapshot.files)
+      if (file.data) expect(raw).not.toContain(file.data);
+  }
+  expect(raw).not.toContain("CURRENT-PRIVATE-CONTENT");
+  expect((await f.read())!.fingerprint).toBe(recovery.fingerprint);
+});
+
+it("resumes a legacy content archive witness without copying or deleting its sole historical bytes", async () => {
+  const f = await discardRecoveryFixture();
+  const recovery = (await f.read())!;
+  const recordRaw = await fs.readFile(f.recordPath, "utf8");
+  const actual = await vi.importActual<typeof fs>("node:fs/promises");
+  vi.mocked(fs.unlink).mockImplementation(async (filename) => {
+    if (String(filename) === f.recordPath)
+      throw Error("interrupted retirement");
+    return actual.unlink(filename);
+  });
+  await expect(f.retire(recovery.fingerprint)).rejects.toThrow();
+  vi.mocked(fs.unlink).mockRestore();
+  const name = (await fs.readdir(f.directory)).find((n) =>
+    n.includes(".discard-recovery-"),
+  )!;
+  const filename = path.join(f.directory, name);
+  const receipt = JSON.parse(await fs.readFile(filename, "utf8"));
+  const legacy = JSON.stringify({
+    schemaVersion: 1,
+    kind: "discard-recovery",
+    recordRaw,
+    recordIdentity: receipt.recordIdentity,
+    pendingRaw: receipt.pendingRaw,
+    pendingIdentity: receipt.pendingIdentity,
+    directoryIdentity: receipt.directoryIdentity,
+    fingerprint: receipt.fingerprint,
+    intentDetails: f.intentDetails,
+    mode: receipt.mode,
+    current: f.snapshot,
+  });
+  await fs.writeFile(filename, legacy);
+  expect((await f.read())!.fingerprint).toBe(recovery.fingerprint);
+  await f.retire(recovery.fingerprint);
+  expect(await fs.readdir(f.directory)).toEqual([name]);
+  expect(await fs.readFile(filename, "utf8")).toBe(legacy);
+  expect(await f.read()).toBeNull();
+  await f.journal.assertAdmission(f.root, f.owner);
+});
+
+it.each(["before", "after"])(
+  "retirement receipt cleanup fault %s unlink retains the original fence and permits a fresh verified retry",
+  async (when) => {
+    const f = await discardRecoveryFixture();
+    const recovery = (await f.read())!;
+    const actual = await vi.importActual<typeof fs>("node:fs/promises");
+    let injected = false;
+    vi.mocked(fs.unlink).mockImplementation(async (filename) => {
+      if (
+        String(filename).includes(".discard-recovery-") &&
+        String(filename).endsWith(".json") &&
+        !injected
+      ) {
+        injected = true;
+        if (when === "after") await actual.unlink(filename);
+        throw Error("receipt cleanup failed");
+      }
+      return actual.unlink(filename);
+    });
+    await expect(f.retire(recovery.fingerprint)).rejects.toThrow();
+    vi.mocked(fs.unlink).mockRestore();
+    expect(injected).toBe(true);
+    await expect(f.journal.assertAdmission(f.root, f.owner)).rejects.toThrow();
+    expect(
+      JSON.parse(await fs.readFile(f.recordPath, "utf8")).recovery,
+    ).toEqual(f.snapshot);
+    expect(await fs.readFile(path.join(f.root, "a"), "utf8")).toBe("draft");
+    const fresh = (await f.read())!;
+    await f.retire(fresh.fingerprint);
+    expect(await f.read()).toBeNull();
+    await f.journal.assertAdmission(f.root, f.owner);
+    // No old/current bytes can survive in a disposable receipt left by a fault.
+    for (const n of await fs.readdir(f.directory)) {
+      const raw = await fs.readFile(path.join(f.directory, n), "utf8");
+      expect(raw.length).toBeLessThan(8192);
+      expect(raw).not.toContain(Buffer.from("draft").toString("base64"));
+    }
+  },
+);
+
+it.each(["recordHash", "intentFingerprint", "currentRevision"])(
+  "does not authorize pending-less retirement from a tampered retry receipt %s",
+  async (field) => {
+    const f = await discardRecoveryFixture();
+    const recovery = (await f.read())!;
+    const actual = await vi.importActual<typeof fs>("node:fs/promises");
+    vi.mocked(fs.unlink).mockImplementation(async (filename) => {
+      if (String(filename) === f.recordPath) throw Error("interruption");
+      return actual.unlink(filename);
+    });
+    await expect(f.retire(recovery.fingerprint)).rejects.toThrow();
+    vi.mocked(fs.unlink).mockRestore();
+    const name = (await fs.readdir(f.directory)).find((n) =>
+      n.includes(".discard-recovery-"),
+    )!;
+    const filename = path.join(f.directory, name);
+    const value = JSON.parse(await fs.readFile(filename, "utf8"));
+    value[field] = "0".repeat(64);
+    await fs.writeFile(filename, JSON.stringify(value));
+    await expect(f.read()).rejects.toThrow();
+    await expect(f.retire(recovery.fingerprint)).rejects.toThrow();
+    expect(await fs.readFile(path.join(f.root, "a"), "utf8")).toBe("draft");
+  },
+);

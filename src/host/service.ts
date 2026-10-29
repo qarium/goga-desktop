@@ -404,7 +404,7 @@ export class HostService extends EventEmitter {
     this.personalSettings = options.settings ?? new SettingsStore(this.home);
     this.trashItem = options.trashItem;
     this.gitDiscardActions = new NativeGitDiscardActions({
-      context: (scope, action) => this.gitCommitContext(scope, action),
+      context: (scope, action) => this.gitCommitContext(scope, action, true),
       trashItem: this.trashItem,
     });
     this.dataDir = options.dataDir;
@@ -1816,6 +1816,17 @@ export class HostService extends EventEmitter {
   async readGitSummary(scope: ScopeRef): Promise<GitWorkspaceSummary> {
     return this.gitWorkspaceRead(scope, (reader) => reader.summary());
   }
+  inspectGitDiscardRecovery(scope: ScopeRef) {
+    return this.gitDiscardActions.inspectRecovery(this.parseScope(scope));
+  }
+  prepareGitDiscardRecovery(input: unknown) {
+    return this.gitDiscardActions.prepareRecovery(input);
+  }
+  async executeGitDiscardRecovery(input: string) {
+    this.assertLaunchAllowed();
+    const token = gitDiscardTokenSchema.parse(input);
+    return this.operation(() => this.gitDiscardActions.executeRecovery(token));
+  }
   async readGitWorkspace(scope: ScopeRef): Promise<GitWorkspaceSnapshot> {
     return this.gitWorkspaceRead(scope, (reader) => reader.snapshot());
   }
@@ -1941,13 +1952,18 @@ export class HostService extends EventEmitter {
       // publication, not only during the final Git-based clone validation.
       ...[
         path.join(binding.projectPath, ".git"),
-        ...["commondir", "gitdir", "objects/info/alternates", "objects/info/http-alternates"]
-          .map((name) => path.join(binding.sourceCommonDir!, name)),
+        ...[
+          "commondir",
+          "gitdir",
+          "objects/info/alternates",
+          "objects/info/http-alternates",
+        ].map((name) => path.join(binding.sourceCommonDir!, name)),
       ].map((file) => [
-        "source-topology", file,
+        "source-topology",
+        file,
         conflictStat(file)?.isDirectory()
           ? conflictDirectory(file)
-          : conflictRegular(file, 65536)?.identity ?? "missing",
+          : (conflictRegular(file, 65536)?.identity ?? "missing"),
       ]),
       ...[binding.projectPath, binding.sourceCommonDir].map((dir) => [
         "directory",
@@ -2155,6 +2171,7 @@ export class HostService extends EventEmitter {
   private async gitCommitContext<T>(
     scope: ScopeRef,
     action: (context: GitCommitContext) => Promise<T>,
+    discardRecovery = false,
   ): Promise<T> {
     const owner = this.parseScope(scope);
     return this.context.exit(() =>
@@ -2237,15 +2254,16 @@ export class HostService extends EventEmitter {
               };
               const run = async () => {
                 await verify();
-                await this.nativeGitJournal.assertAdmission(root, {
-                  scope: owner,
-                  registryRevision: nativeIntent([
-                    settings.document.version,
-                    binding ? worktreeContextRef(binding) : null,
-                    ...(binding ? [physicalOwner] : []),
-                  ]),
-                  projectPath: await realpath(project.path),
-                });
+                if (!discardRecovery)
+                  await this.nativeGitJournal.assertAdmission(root, {
+                    scope: owner,
+                    registryRevision: nativeIntent([
+                      settings.document.version,
+                      binding ? worktreeContextRef(binding) : null,
+                      ...(binding ? [physicalOwner] : []),
+                    ]),
+                    projectPath: await realpath(project.path),
+                  });
                 const reader = new GitWorkspaceReader({
                   scope: owner,
                   root,

@@ -243,3 +243,64 @@ it("renders a one-MiB newline file with a bounded DOM and an explicit complete l
   fireEvent.click(screen.getByRole("button", { name: "Следующие строки" }));
   expect(screen.getByText("Строки 501–1000 из 1048577")).toBeTruthy();
 });
+it("detects yesterday's partial discard when Changes opens and completes explicit recovery without Refresh", async () => {
+  api.prepareGitDiscard = vi.fn();
+  api.executeGitDiscard = vi.fn();
+  let recovered = false;
+  api.inspectGitDiscardRecovery = vi.fn(async () => ({
+    scope: "p",
+    revision: snapshot().revision,
+    state: recovered ? "clear" : "partial",
+    message: recovered
+      ? "Прежняя отмена проверена"
+      : "Прежняя отмена завершилась частично",
+    paths: [{ path: "file.txt", state: "restored" }],
+  }));
+  api.prepareGitDiscardRecovery = vi.fn(async () => ({
+    token: "2".repeat(64),
+    scope: "p",
+    root: snapshot().root,
+    revision: snapshot().revision,
+    paths: [{ path: "file.txt", state: "restored" }],
+    message: "Завершить проверку без создания архива",
+    expiresAt: Date.now() + 300000,
+  }));
+  api.executeGitDiscardRecovery = vi.fn(async () => {
+    recovered = true;
+    return {
+      scope: "p",
+      status: "recovered",
+      message: "Готово",
+    };
+  });
+  const v = render(view("p", false));
+  await waitFor(() => expect(api.readGitWorkspace).toHaveBeenCalled());
+  expect(api.inspectGitDiscardRecovery).not.toHaveBeenCalled();
+  v.rerender(view());
+  const action = await screen.findByRole("button", {
+    name: "Оставить текущее состояние…",
+  });
+  await waitFor(() =>
+    expect((action as HTMLButtonElement).disabled).toBe(false),
+  );
+  expect(api.inspectGitDiscardRecovery).toHaveBeenCalledTimes(2);
+  fireEvent.click(action);
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: "Оставить текущее состояние и продолжить",
+    }),
+  );
+  await screen.findByText("Прежняя отмена проверена");
+  expect(api.executeGitDiscardRecovery).toHaveBeenCalledExactlyOnceWith(
+    "2".repeat(64),
+  );
+  expect(api.executeGitDiscard).not.toHaveBeenCalled();
+  expect(api.readGitWorkspace).toHaveBeenCalledTimes(3);
+  expect(
+    screen.queryByRole("button", { name: "Оставить текущее состояние…" }),
+  ).toBeNull();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Закрыть результат отмены" }),
+  );
+  expect(screen.queryByRole("dialog")).toBeNull();
+});

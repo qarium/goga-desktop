@@ -31,6 +31,7 @@ export interface GitDiscardPreview {
   paths: string[];
   items: { path: string; action: "restore" | "trash" }[];
   expiresAt: number;
+  recoveryMessage?: string;
 }
 export interface GitDiscardResult {
   scope: ScopeRef;
@@ -44,4 +45,33 @@ export interface GitDiscardResult {
   message: string;
   log: string;
   recoveryPath?: string;
+}
+
+/** Read-only, owner-scoped assessment. It grants no write authority. */
+export interface GitDiscardRecovery {
+  scope: ScopeRef;
+  revision: string;
+  state: "clear" | "unchanged" | "partial" | "blocked";
+  message: string;
+  paths: { path: string; state: "unchanged" | "restored" | "changed" }[];
+}
+export const gitDiscardRecoveryRequestSchema = z
+  .object({ scope: scopeRefSchema, revision: gitRevisionSchema })
+  .strict();
+export type GitDiscardRecoveryRequest = z.infer<
+  typeof gitDiscardRecoveryRequestSchema
+>;
+export interface GitDiscardRecoveryPreview {
+  token: string;
+  scope: ScopeRef;
+  root: string;
+  revision: string;
+  paths: GitDiscardRecovery["paths"];
+  message: string;
+  expiresAt: number;
+}
+export interface GitDiscardRecoveryResult {
+  scope: ScopeRef;
+  status: "recovered";
+  message: string;
 }

@@ -406,3 +406,63 @@ it("refuses a replaced frozen-index directory before native init can write", asy
     await fs.rm(parent, { recursive: true, force: true });
   }
 });
+
+it("keeps prepared verification in its caller Git environment without dropping the transport read deadline", async () => {
+  const { withReadScope, readSignal } = await import("../src/host/read-scope");
+  const controller = new AbortController();
+  const nativeEnvironments: NodeJS.ProcessEnv[] = [];
+  const callerEnvironments: NodeJS.ProcessEnv[] = [];
+  const inherited = {
+    HOME: "/fixture/home",
+    GIT_CONFIG_GLOBAL: "/fixture/home/.gitconfig",
+    GIT_EDITOR: "fixture-editor",
+  };
+  let insideReadSignal: AbortSignal | undefined;
+  const commandBytes = vi.fn(async (command: ByteCommand) => {
+    nativeEnvironments.push(childEnvironment(inherited, {}, command.env));
+    if (command.verifyPrepared) {
+      await withReadScope(controller.signal, () =>
+        command.verifyPrepared!(() => {}),
+      );
+      nativeEnvironments.push(childEnvironment(inherited, {}, command.env));
+    }
+    return ok(
+      command.args.includes("--version")
+        ? Buffer.from("git version 2.55.0\n")
+        : Buffer.alloc(0),
+    );
+  });
+  const client = await createNativeGitClient({
+    runner: { commandBytes },
+    executable: "/fixture/git",
+    root: "/fixture/repo",
+  });
+  await client.run({
+    policy: "local-write",
+    command: "update-ref",
+    args: ["--stdin"],
+    stdin: Buffer.from("start\n"),
+    verifyPrepared: async () => {
+      insideReadSignal = readSignal();
+      callerEnvironments.push(childEnvironment(inherited));
+      await client.run({
+        policy: "local-read",
+        command: "rev-parse",
+        args: ["HEAD"],
+      });
+      callerEnvironments.push(childEnvironment(inherited));
+    },
+  });
+  expect(insideReadSignal).toBe(controller.signal);
+  expect(
+    nativeEnvironments.every((e) => e.GIT_CONFIG_GLOBAL === "/dev/null"),
+  ).toBe(true);
+  expect(callerEnvironments.map((e) => e.GIT_CONFIG_GLOBAL)).toEqual([
+    inherited.GIT_CONFIG_GLOBAL,
+    inherited.GIT_CONFIG_GLOBAL,
+  ]);
+  expect(callerEnvironments.map((e) => e.GIT_EDITOR)).toEqual([
+    "fixture-editor",
+    "fixture-editor",
+  ]);
+});
