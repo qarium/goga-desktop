@@ -17,19 +17,28 @@ jobs:
         include:
           - domain: git-conflicts
             shard: 1
-            count: 5
+            count: 8
           - domain: git-conflicts
             shard: 2
-            count: 5
+            count: 8
           - domain: git-conflicts
             shard: 3
-            count: 5
+            count: 8
           - domain: git-conflicts
             shard: 4
-            count: 5
+            count: 8
           - domain: git-conflicts
             shard: 5
-            count: 5
+            count: 8
+          - domain: git-conflicts
+            shard: 6
+            count: 8
+          - domain: git-conflicts
+            shard: 7
+            count: 8
+          - domain: git-conflicts
+            shard: 8
+            count: 8
           - domain: topics
             shard: 1
             count: 1
