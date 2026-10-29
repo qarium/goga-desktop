@@ -200,7 +200,19 @@ describe("native selected discard", () => {
     expect(await fs.readFile(path.join(f.root, ".git/packed-refs"))).toEqual(
       packed,
     );
-    expect(await fs.readdir(path.join(refs, "heads/release"))).toEqual([]);
+    // Git may prune its own now-empty ref-lock parents. Both layouts are safe;
+    // an existing path must still be a real empty directory, never a link or lock.
+    const refDirectory = path.join(refs, "heads/release");
+    const refStat = await fs
+      .lstat(refDirectory)
+      .catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== "ENOENT") throw error;
+        return undefined;
+      });
+    if (refStat) {
+      expect(refStat.isDirectory()).toBe(true);
+      expect(await fs.readdir(refDirectory)).toEqual([]);
+    }
     expect(
       (await fs.readdir(path.join(f.root, ".git"))).filter((n) =>
         n.startsWith("goga-"),
