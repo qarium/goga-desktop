@@ -1,3 +1,4 @@
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import React from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -196,6 +197,7 @@ it("refreshes topic inventory after a repository operation without changing work
 });
 async function mount() {
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Исполняемый файл");
   await screen.findByRole("button", { name: "Без топика" });
 }
@@ -1552,9 +1554,12 @@ it("persists an explicit picker selection across a fresh App mount", async () =>
   const catalog = { ...board(), year: String(new Date().getFullYear()) };
   let finishCatalog!: (value: typeof catalog) => void;
   api.readTopicCatalog = vi.fn().mockResolvedValue(catalog);
-  api.readTopicCatalog.mockImplementationOnce(() => new Promise(resolve => {
-    finishCatalog = resolve;
-  }));
+  api.readTopicCatalog.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finishCatalog = resolve;
+      }),
+  );
   const first = render(<App />);
   await screen.findByRole("heading", { name: "Fixture" });
   await waitFor(() => expect(api.readTopicCatalog).toHaveBeenCalledOnce());

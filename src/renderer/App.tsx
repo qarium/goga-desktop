@@ -1,3 +1,5 @@
+import { Boxes, FolderOpen, SquareTerminal, Layers } from "lucide-react";
+import { ProjectOverview } from "./overview/ProjectOverview";
 import { GitHistory } from "./GitHistory";
 import { GitUpdateHandoff } from "./GitUpdateHandoff";
 import { useGitUpdateHandoff } from "./useGitUpdateHandoff";
@@ -165,6 +167,9 @@ export function App() {
     });
   const repositoryPopupAnchor = useRef<HTMLDivElement>(null);
   const repositoryActions = useRepositoryActionController();
+  const overviewCloseStates = useRef(
+    new Map<string, { paths: string[]; busy: boolean }>(),
+  );
   const [gitRevision, setGitRevision] = useState<Record<string, number>>({});
   const [gitModals, setGitModals] = useState<ReadonlyMap<string, string>>(
     new Map(),
@@ -195,6 +200,7 @@ export function App() {
     [runs, setRuns] = useState<Run[]>([]),
     [selected, setSelected] = useState<string | null>(null),
     [page, setPage] = useState<
+      | "overview"
       | "project"
       | "launch"
       | "settings"
@@ -206,7 +212,7 @@ export function App() {
       | "context-preparation"
       | "changes"
       | "commits"
-    >("project-settings"),
+    >("overview"),
     [error, setError] = useState(""),
     [viewErrors, setViewErrors] = useState<Record<string, string>>({});
   const [gitStage, setGitStage] = useState<HTMLDivElement | null>(null);
@@ -816,9 +822,11 @@ export function App() {
       // The native picker may finish after settings edits or a save begin.
       // Keep the added project, but let the current guard decide navigation.
       navigateRef.current(() => {
+        const saved = projectNavigation.current.get(p.id);
         setProjectId(p.id);
-        setSelected(null);
-        setPage("project-settings");
+        setSelected(saved?.selected ?? null);
+        setPage(saved?.page ?? "overview");
+        setActiveDraft(saved?.activeDraft ?? "");
       });
     } catch (e) {
       setError(message(e));
@@ -1204,7 +1212,7 @@ export function App() {
                 navigate(() => {
                   const saved = projectNavigation.current.get(p.id);
                   setProjectId(p.id);
-                  setPage(saved?.page ?? "project-settings");
+                  setPage(saved?.page ?? "overview");
                   setSelected(saved?.selected ?? null);
                   setActiveDraft(saved?.activeDraft ?? "");
                   setError("");
@@ -1321,14 +1329,15 @@ export function App() {
                     selectedContextRef.current = record;
                     setSelected(null);
                     setPage(
-                      pageRef.current === "changes" ||
+                      pageRef.current === "overview" ||
+                        pageRef.current === "project-settings" ||
+                        pageRef.current === "topics" ||
+                        pageRef.current === "changes" ||
                         pageRef.current === "commits"
                         ? pageRef.current
                         : pageRef.current === "terminal"
                           ? "terminal"
-                          : pageRef.current === "project-settings"
-                            ? "project-settings"
-                            : "context-runs",
+                          : "context-runs",
                     );
                     setError("");
                   })
@@ -1343,7 +1352,10 @@ export function App() {
                     selectedContextRef.current = null;
                     setSelected(null);
                     setPage(
-                      pageRef.current === "changes" ||
+                      pageRef.current === "overview" ||
+                        pageRef.current === "project-settings" ||
+                        pageRef.current === "topics" ||
+                        pageRef.current === "changes" ||
                         pageRef.current === "commits"
                         ? pageRef.current
                         : pageRef.current === "terminal"
@@ -1435,7 +1447,7 @@ export function App() {
           </TopicModal>
         )}
         <RetainedViews activeKey={page === "settings" ? "settings" : null}>
-          <div className="scroll-area">
+          <div className="scroll-area global-settings-scroll-area">
             <Settings
               documents={settingsDocuments}
               onBack={() => navigate(() => setPage("project-settings"))}
@@ -1448,10 +1460,23 @@ export function App() {
               <button
                 type="button"
                 className="topics-nav"
+                aria-pressed={page === "overview"}
+                disabled={settingsBusy}
+                onClick={() => navigate(() => setPage("overview"))}
+              >
+                <Boxes size={16} aria-hidden="true" />
+                Обзор
+              </button>
+            )}
+            {project && (
+              <button
+                type="button"
+                className="topics-nav"
                 aria-pressed={page === "project-settings"}
                 disabled={settingsBusy}
                 onClick={() => navigate(() => setPage("project-settings"))}
               >
+                <FolderOpen size={16} aria-hidden="true" />
                 Проект
               </button>
             )}
@@ -1463,6 +1488,7 @@ export function App() {
                 disabled={settingsBusy}
                 onClick={() => navigate(() => setPage("terminal"))}
               >
+                <SquareTerminal size={16} aria-hidden="true" />
                 Терминал
               </button>
             )}
@@ -1474,6 +1500,7 @@ export function App() {
                 disabled={settingsBusy}
                 onClick={() => navigate(() => setPage("topics"))}
               >
+                <Layers size={16} aria-hidden="true" />
                 Топики
               </button>
             )}
@@ -1885,6 +1912,54 @@ export function App() {
             className="scroll-area"
             hidden={page === "changes" || page === "commits"}
           >
+            <RetainedViews
+              activeKey={page === "overview" ? sectionKey("overview") : null}
+              retain={retainProjectView}
+            >
+              {project && (
+                <ProjectOverview
+                  scope={displayOwner ? contextRef(displayOwner) : project.id}
+                  workspacePath={
+                    displayOwner ? displayOwner.path : project.path
+                  }
+                  onMutation={() => {
+                    const owner = documentScopeId(
+                      displayOwner ? contextRef(displayOwner) : project.id,
+                    );
+                    setGitRevision((v) => ({
+                      ...v,
+                      [owner]: (v[owner] ?? 0) + 1,
+                    }));
+                  }}
+                  onCloseState={(paths, busy) => {
+                    const key = sectionKey("overview")!;
+                    overviewCloseStates.current.set(key, {
+                      paths: paths.map(
+                        (p) =>
+                          project.name +
+                          " · " +
+                          (displayOwner?.topic ?? "Без топика") +
+                          " · " +
+                          p,
+                      ),
+                      busy,
+                    });
+                    const entries = [...overviewCloseStates.current.values()];
+                    void window.goga
+                      .reportOverviewCloseState?.(
+                        entries.flatMap((e) => e.paths).length > 500
+                          ? [
+                              ...entries.flatMap((e) => e.paths).slice(0, 499),
+                              "И другие несохранённые файлы",
+                            ]
+                          : entries.flatMap((e) => e.paths),
+                        entries.some((e) => e.busy),
+                      )
+                      .catch(() => {});
+                  }}
+                />
+              )}
+            </RetainedViews>
             {page === "project" && run?.recoveryMessage && (
               <p className="hint" role="status">
                 {run.recoveryMessage}
@@ -2322,7 +2397,8 @@ export function App() {
                 />
               )}
             </RetainedViews>
-            {page === "launch" ||
+            {(page === "overview" && project) ||
+            page === "launch" ||
             page === "terminal" ||
             page === "topics" ||
             (project &&

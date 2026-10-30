@@ -580,3 +580,158 @@ it("retains selected subsection, editor DOM and its draft across project navigat
   fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
   expect(screen.getByRole("button", { name: "Открыть редактор" })).toBe(button);
 });
+
+it("reconciles stale project-wide settings after another scope saved without losing either edit", async () => {
+  let current = settings(a);
+  api.readProjectSettings.mockImplementation(async (scope: ScopeRef) => ({
+    ...structuredClone(current),
+    profiles: settings(scope).profiles,
+  }));
+  api.saveProjectSettings.mockImplementation(
+    async (scope: ScopeRef, value: any, version: string) => {
+      if (version !== current.version)
+        throw Error(
+          "Error invoking remote method 'goga:save-project-settings': Error: Настройки изменены извне. Откройте их заново.",
+        );
+      current = { ...settings(scope, "registry-v3"), value };
+      return structuredClone(current);
+    },
+  );
+  const view = render(panel(a));
+  await ready();
+  edit("my-executable");
+  view.rerender(panel(b));
+  await ready();
+  current = {
+    ...settings(b, "registry-v2"),
+    value: { ...settings(b).value, startupTimeoutMinutes: 37 },
+  } as any;
+  view.rerender(panel(a));
+  await ready();
+  fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await screen.findByText(
+    "Сохранено. Изменения применятся к следующим запускам.",
+  );
+  expect(current.value).toMatchObject({
+    executable: "my-executable",
+    startupTimeoutMinutes: 37,
+  });
+  expect(api.saveProjectSettings).toHaveBeenCalledTimes(2);
+  expect(guard.current?.dirty).toBe(false);
+});
+
+it.each(["Оставить мои значения", "Использовать актуальные значения"])(
+  "offers explicit field conflict resolution: %s",
+  async (choice) => {
+    let current = settings(a);
+    api.readProjectSettings.mockImplementation(async () =>
+      structuredClone(current),
+    );
+    api.saveProjectSettings.mockImplementation(
+      async (scope: ScopeRef, value: any, version: string) => {
+        if (version !== current.version)
+          throw Error(
+            "Error invoking remote method 'goga:save-project-settings': Error: Настройки изменены извне. Откройте их заново.",
+          );
+        current = { ...settings(scope, "registry-v3"), value };
+        return structuredClone(current);
+      },
+    );
+    render(panel(a));
+    await ready();
+    edit("my-private-executable");
+    fireEvent.change(screen.getByLabelText("Тайм-аут запуска конвейера"), {
+      target: { value: "37" },
+    });
+    current = {
+      ...settings(a, "registry-v2"),
+      value: {
+        ...settings(a).value,
+        executable: "external-private-executable",
+      },
+    };
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    const resolution = await screen.findByRole("button", { name: choice });
+    expect(api.saveProjectSettings).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole("alert").textContent).toContain("Исполняемый файл");
+    expect(screen.getByRole("alert").textContent).not.toMatch(
+      /private-executable|Error invoking/,
+    );
+    fireEvent.click(resolution);
+    fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+    await screen.findByText(
+      "Сохранено. Изменения применятся к следующим запускам.",
+    );
+    expect(current.value).toMatchObject({
+      executable:
+        choice === "Оставить мои значения"
+          ? "my-private-executable"
+          : "external-private-executable",
+      startupTimeoutMinutes: 37,
+    });
+  },
+);
+
+it("merges environment additions/removals and retains explicit runtime flags without leaking values", async () => {
+  const { reconcileProjectSettings } =
+    await import("../src/renderer/project-settings-save");
+  const row = (key: string, value: string, runtime = false) => ({
+    key,
+    value,
+    runtime,
+    secret: true,
+  });
+  const base = {
+    ...settings(a).value,
+    env: [row("REMOVE", "secret-1"), row("KEEP", "secret-2")],
+  };
+  const draft = {
+    ...base,
+    env: [row("KEEP", "secret-2"), row("NEW", "secret-3", true)],
+  };
+  const latest = { ...base, env: [...base.env, row("OTHER", "secret-4")] };
+  const merged = reconcileProjectSettings(base, draft, latest);
+  expect(merged.fields).toEqual([]);
+  expect(merged.mine.env).toEqual([
+    row("KEEP", "secret-2"),
+    row("OTHER", "secret-4"),
+    row("NEW", "secret-3", true),
+  ]);
+  const conflict = reconcileProjectSettings(base, draft, {
+    ...base,
+    env: [row("REMOVE", "secret-changed"), row("KEEP", "secret-2")],
+  });
+  expect(conflict.fields).toEqual(["Переменная REMOVE"]);
+  expect(conflict.mine.env.some((r) => r.key === "REMOVE")).toBe(false);
+  expect(conflict.current.env.find((r) => r.key === "REMOVE")?.value).toBe(
+    "secret-changed",
+  );
+});
+
+it("re-reads between CAS races, bounds retry and never retries unrelated save failures", async () => {
+  const { saveProjectSettingsReconciled } =
+    await import("../src/renderer/project-settings-save");
+  const base = settings(a);
+  const api = {
+    readProjectSettings: vi.fn(async () => ({ ...base, version: "fresh" })),
+    saveProjectSettings: vi.fn(async () => {
+      throw Error("Настройки изменены извне. Откройте их заново.");
+    }),
+  };
+  await expect(
+    saveProjectSettingsReconciled(api, a, base, {
+      ...base.value,
+      executable: "new",
+    }),
+  ).rejects.toThrow(/Ваш ввод сохранён/);
+  expect(api.saveProjectSettings).toHaveBeenCalledTimes(3);
+  expect(api.readProjectSettings).toHaveBeenCalledTimes(3);
+  api.saveProjectSettings.mockClear();
+  api.readProjectSettings.mockClear();
+  api.saveProjectSettings.mockRejectedValue(Error("Storage is read only"));
+  await expect(
+    saveProjectSettingsReconciled(api, a, base, base.value),
+  ).rejects.toThrow("read only");
+  expect(api.saveProjectSettings).toHaveBeenCalledTimes(1);
+  expect(api.readProjectSettings).not.toHaveBeenCalled();
+});

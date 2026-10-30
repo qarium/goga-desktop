@@ -1,3 +1,5 @@
+import { openCatalog, selectCatalog } from "./helpers/select-catalog";
+import "./helpers/overview-browser-fixture";
 import {
   installPrototypeContextFixture,
   openPrototypeLaunch,
@@ -412,9 +414,7 @@ it("refreshes App launch discovery only after successful save and rejects a pend
   );
   let stale!: (v: any) => void;
   api.preview.mockImplementationOnce(() => new Promise((r) => (stale = r)));
-  fireEvent.change(screen.getByLabelText("Рабочий процесс"), {
-    target: { value: "file:existing" },
-  });
+  selectCatalog(screen.getByLabelText("Рабочий процесс"), "file:existing");
   await waitFor(() => expect(api.preview).toHaveBeenCalledTimes(2));
   await openSettings();
   await create("new-flow");
@@ -445,13 +445,14 @@ it("refreshes App launch discovery only after successful save and rejects a pend
   expect((retainedExecutionButton() as HTMLButtonElement).disabled).toBe(true);
   expect(screen.queryByText("Obsolete")).toBeNull();
   await act(async () => discover(fresh));
+  openCatalog(await screen.findByRole("combobox", { name: "Рабочий процесс" }));
   await screen.findByRole("option", { name: /new-flow/ });
   await waitFor(() => expect(screen.queryByText("проверяем…")).toBeNull());
   expect(
     screen.queryByRole("checkbox", { name: /Подтверждаю.*запуск/ }),
   ).toBeNull();
   expect(
-    (screen.getByLabelText("Рабочий процесс") as HTMLSelectElement).value,
+    (screen.getByLabelText("Рабочий процесс") as HTMLButtonElement).value,
   ).toBe("file:existing");
   expect(api.readTopicTask).toHaveBeenCalledTimes(1);
   click("Запустить");
@@ -655,6 +656,9 @@ it.each(["success", "failure"])(
     click("Сохранить");
     await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
     await openPrototypeLaunch();
+    openCatalog(
+      await screen.findByRole("combobox", { name: "Рабочий процесс" }),
+    );
     await screen.findByRole("option", { name: /new-flow/ });
     await act(async () => {
       if (outcome === "success") finish(original);
@@ -716,5 +720,6 @@ it("supersedes an older Reset discovery when workflow saving starts a refresh", 
   await act(async () =>
     refresh({ ...original, workflows: ["existing", "new-flow"] }),
   );
+  openCatalog(await screen.findByRole("combobox", { name: "Рабочий процесс" }));
   await screen.findByRole("option", { name: /new-flow/ });
 });

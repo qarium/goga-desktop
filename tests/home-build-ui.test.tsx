@@ -1,3 +1,4 @@
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import React from "react";
 import { afterEach, beforeEach, it, expect, vi } from "vitest";
@@ -18,7 +19,21 @@ beforeEach(() => {
   HTMLDialogElement.prototype.close = function () {
     this.open = false;
   };
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
+    },
+  );
   api = {
+    listOverviewDirectory: vi.fn(async (_scope, path) => ({
+      path,
+      entries: [],
+      truncated: false,
+    })),
+    readOverviewSchema: vi.fn(async () => []),
     listProjects: vi.fn(async () => [
       { id: "p", name: "Alpha", path: "/fixture" },
     ]),
@@ -36,16 +51,23 @@ beforeEach(() => {
   };
   window.goga = api;
 });
-afterEach(cleanup);
-it("opens the existing project editors as first Home tab before Topics, without duplicate project heading", async () => {
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
+it("keeps existing Project editors after Overview and before Topics, without duplicate project heading", async () => {
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   expect(await screen.findByRole("heading", { name: "Проект" })).toBeTruthy();
   const tabs = screen.getByRole("tablist", { name: "Разделы проекта" });
   expect(
     within(tabs)
       .getAllByRole("button")
       .map((x) => x.textContent),
-  ).toEqual(["Проект", "Топики"]);
+  ).toEqual(["Обзор", "Проект", "Топики"]);
+  for (const button of within(tabs).getAllByRole("button")) {
+    expect(button.querySelector('svg[aria-hidden="true"]')).toBeTruthy();
+  }
   expect(await screen.findByLabelText("Исполняемый файл")).toBeTruthy();
   expect(screen.queryByText("ПРОЕКТ / Alpha")).toBeNull();
   expect(screen.getByRole("button", { name: "Запуски" })).toBeTruthy();
@@ -53,6 +75,7 @@ it("opens the existing project editors as first Home tab before Topics, without 
 });
 it("guards dirty Home edits before opening another project section", async () => {
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   fireEvent.change(await screen.findByLabelText("Исполняемый файл"), {
     target: { value: "/changed" },
   });
@@ -102,4 +125,71 @@ it("build run shows live output without Dashboard budget and can repeat independ
     await screen.findByRole("heading", { name: "Сборка выполняется" }),
   ).toBeTruthy();
   expect(api.selectRun).not.toHaveBeenCalledWith("b2");
+});
+
+it("enters the first project through Overview without eagerly loading Project settings", async () => {
+  render(<App />);
+  await screen.findByRole("button", { name: "Обзор" });
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("button", { name: "Обзор" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true"),
+  );
+  expect(
+    await screen.findByRole("region", { name: "Обзор проекта" }),
+  ).toBeTruthy();
+  expect(api.readOverviewSchema).toHaveBeenCalledWith("p");
+  expect(api.readProjectSettings).not.toHaveBeenCalled();
+});
+it("enters unseen and added projects through Overview, but retains the last section of visited projects", async () => {
+  const q = { id: "q", name: "Beta", path: "/fixture/beta" };
+  api.listProjects.mockResolvedValue([
+    { id: "p", name: "Alpha", path: "/fixture" },
+    q,
+  ]);
+  api.chooseProject = vi.fn(async () => ({
+    id: "r",
+    name: "Gamma",
+    path: "/fixture/gamma",
+  }));
+  render(<App />);
+  await screen.findByRole("button", { name: "Alpha" });
+  fireEvent.click(screen.getByRole("button", { name: "Проект" }));
+  await screen.findByLabelText("Исполняемый файл");
+  fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("button", { name: "Обзор" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+  expect(
+    screen.getByRole("button", { name: "Проект" }).getAttribute("aria-pressed"),
+  ).toBe("true");
+  fireEvent.click(screen.getByRole("button", { name: "Добавить проект" }));
+  await screen.findByRole("button", { name: "Gamma" });
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("button", { name: "Обзор" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true"),
+  );
+  api.chooseProject.mockResolvedValueOnce({
+    id: "p",
+    name: "Alpha",
+    path: "/fixture",
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Добавить проект" }));
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("button", { name: "Проект" })
+        .getAttribute("aria-pressed"),
+    ).toBe("true"),
+  );
 });

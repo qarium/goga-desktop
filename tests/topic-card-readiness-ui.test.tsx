@@ -1,3 +1,4 @@
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import React from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -456,6 +457,7 @@ it.each(["current-header", "selector", "board"])(
   "opens the failed clone card from %s with exact owner and no repair",
   async (entry) => {
     render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
     await screen.findByLabelText("Исполняемый файл");
     await waitFor(() => expect(api.listTopicContexts).toHaveBeenCalled());
     if (entry === "selector" || entry === "current-header") {

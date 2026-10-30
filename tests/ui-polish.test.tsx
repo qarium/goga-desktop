@@ -1,3 +1,4 @@
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import React from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -50,6 +51,7 @@ it("keeps a compact project header with Runs and Launch actions and settings in 
   expect(
     within(header).queryByRole("button", { name: "Настройки" }),
   ).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Проект" }));
   expect(await screen.findByRole("heading", { name: "Проект" })).toBeTruthy();
   const home = screen.getByRole("button", { name: "Проект" });
   home.focus();

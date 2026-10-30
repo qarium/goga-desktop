@@ -1,3 +1,4 @@
+import { selectCatalog } from "./helpers/select-catalog";
 import { retainedButton } from "./loading-test-helpers";
 // @vitest-environment jsdom
 import React from "react";
@@ -75,8 +76,12 @@ const edit = () =>
   screen.getByRole("textbox", {
     name: "Что нужно сделать?",
   }) as HTMLTextAreaElement;
-const change = (name: string, value: string) =>
-  fireEvent.change(field(name), { target: { value } });
+const change = (name: string, value: string) => {
+  const control = field(name);
+  if (control.getAttribute("role") === "combobox")
+    selectCatalog(control, value);
+  else fireEvent.change(control, { target: { value } });
+};
 const reset = () => fireEvent.click(retainedButton("Сбросить"));
 const confirm = () =>
   fireEvent.click(screen.getByRole("button", { name: "Сбросить изменения" }));

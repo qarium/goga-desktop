@@ -1,3 +1,4 @@
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import React from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -119,6 +120,7 @@ beforeEach(() => {
 afterEach(cleanup);
 async function openRun() {
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Исполняемый файл");
   await act(async () => focusRun("old-run"));
   await screen.findByText("Synthetic old output");

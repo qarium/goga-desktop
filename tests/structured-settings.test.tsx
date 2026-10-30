@@ -1,3 +1,4 @@
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import {
   installPrototypeContextFixture,
@@ -514,4 +515,26 @@ it("supports keyboard folder expansion and keeps manual state across tool select
       .getByRole("button", { name: "Папка env" })
       .getAttribute("aria-expanded"),
   ).toBe("false");
+});
+
+it("places configuration and personal profiles inside the constrained retained settings viewport", async () => {
+  render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Настройки" }));
+  const settings = screen
+    .getByRole("heading", { name: "Общие настройки" })
+    .closest(".settings-panel")!;
+  const viewport = settings.closest(".scroll-area")!;
+  expect(viewport.classList.contains("global-settings-scroll-area")).toBe(true);
+  const retained = viewport.closest(".retained-view")!;
+  expect(retained.parentElement?.classList.contains("main-area")).toBe(true);
+  expect(
+    screen
+      .getByRole("region", { name: "Конфигурация Goga" })
+      .closest(".scroll-area"),
+  ).toBe(viewport);
+  fireEvent.click(screen.getByRole("button", { name: "Профили" }));
+  await screen.findByRole("button", { name: "personal" });
+  expect(
+    screen.getByRole("region", { name: "personal" }).closest(".scroll-area"),
+  ).toBe(viewport);
 });

@@ -20,6 +20,8 @@ import {
   type DraftStore,
   type TaskDraft,
 } from "./task-drafts";
+import { SearchablePicker } from "./SearchablePicker";
+import "./LaunchForm.css";
 import { SplitLaunchButton } from "./SplitLaunchButton";
 import { BranchLaunchConfirmation } from "./BranchLaunchConfirmation";
 import { TaskReloadConfirmation } from "./TaskReloadConfirmation";
@@ -1060,28 +1062,34 @@ export function LaunchForm({
           </div>
         ) : (
           <fieldset disabled={launching || suspended || settingsRefreshing}>
-            <label>
-              Конвейер
-              <select
-                value={pipeline}
-                onChange={(e) =>
-                  resetComposition(() => setPipeline(e.target.value))
-                }
-              >
-                {pipeline && !data.pipelines.some((p) => p.id === pipeline) && (
-                  <option value={pipeline}>
-                    {pipeline} · не найден — выберите другой конвейер
-                  </option>
-                )}
-                {!pipeline && <option value="">Выберите конвейер</option>}
-                {data.pipelines.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.id}
-                    {p.project ? " · проектный" : ""}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <SearchablePicker
+              label="Конвейер"
+              placeholder="Выберите конвейер"
+              emptyLabel="Выберите конвейер"
+              searchLabel="Поиск конвейера"
+              searchPlaceholder="Найти конвейер…"
+              listLabel="Конвейеры"
+              value={pipeline}
+              disabled={launching || suspended || settingsRefreshing}
+              onChange={(value) => resetComposition(() => setPipeline(value))}
+              entries={[
+                ...(pipeline && !data.pipelines.some((p) => p.id === pipeline)
+                  ? [
+                      {
+                        value: pipeline,
+                        label: `${pipeline} · не найден — выберите другой конвейер`,
+                      },
+                    ]
+                  : []),
+                ...(!pipeline
+                  ? [{ value: "", label: "Выберите конвейер" }]
+                  : []),
+                ...data.pipelines.map((p) => ({
+                  value: p.id,
+                  label: p.id + (p.project ? " · проектный" : ""),
+                })),
+              ]}
+            />
             {pipeline && !data.pipelines.some((p) => p.id === pipeline) && (
               <p className="error" role="alert">
                 Выбранный конвейер отсутствует в обновлённом каталоге. Выберите
@@ -1193,32 +1201,39 @@ export function LaunchForm({
                         </button>
                       )}
                     </label>
-                    <label>
-                      Исходная ветка
-                      <select
-                        value={baseRef}
-                        onChange={(e) => {
-                          setBaseRef(e.target.value);
-                        }}
-                      >
-                        <option value="HEAD">
-                          {data.currentBranch || "HEAD без ветки"} — текущая
-                        </option>
-                        {data.baseRef && (
-                          <option value={data.baseRef}>
-                            {data.baseRef} — базовая
-                          </option>
-                        )}
-                        {data.branches
+                    <SearchablePicker
+                      label="Исходная ветка"
+                      placeholder="Выберите исходную ветку"
+                      emptyLabel="Нет доступных веток"
+                      searchLabel="Поиск исходной ветки"
+                      searchPlaceholder="Найти ветку…"
+                      listLabel="Исходные ветки"
+                      value={baseRef}
+                      disabled={launching || suspended || settingsRefreshing}
+                      onChange={setBaseRef}
+                      entries={[
+                        {
+                          value: "HEAD",
+                          label: `${data.currentBranch || "HEAD без ветки"} — текущая`,
+                        },
+                        ...(data.baseRef
+                          ? [
+                              {
+                                value: data.baseRef,
+                                label: `${data.baseRef} — базовая`,
+                              },
+                            ]
+                          : []),
+                        ...data.branches
                           .filter((b) => b !== data.baseRef)
-                          .map((b) => (
-                            <option key={b} value={b}>
-                              {b}
-                              {b === data.currentBranch ? " — текущая" : ""}
-                            </option>
-                          ))}
-                      </select>
-                    </label>
+                          .map((b) => ({
+                            value: b,
+                            label:
+                              b +
+                              (b === data.currentBranch ? " — текущая" : ""),
+                          })),
+                      ]}
+                    />
                   </div>
                 )}
                 <div
@@ -1262,7 +1277,9 @@ export function LaunchForm({
             )}
             {blocked && (
               <p className="error" role="status">
-                {typeof blocked === "string" ? blocked : "Запуск в этой рабочей копии временно недоступен."}
+                {typeof blocked === "string"
+                  ? blocked
+                  : "Запуск в этой рабочей копии временно недоступен."}
               </p>
             )}
             <details
@@ -1372,67 +1389,75 @@ export function LaunchForm({
             )}
             <div className="form-divider" />
             <div className="form-grid">
-              <label>
-                Рабочий процесс
-                <select
-                  value={workflow}
-                  onChange={(e) =>
-                    resetComposition(() => setWorkflow(e.target.value))
-                  }
-                >
-                  <option value="auto">
-                    Автоматически — по имени конвейера
-                  </option>
-                  <option value="none">Без рабочего процесса</option>
-                  {data.workflows.map((w) => (
-                    <option key={w} value={`file:${w}`}>
-                      {w}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Профиль
-                <select
-                  value={profile}
-                  onChange={(e) =>
-                    resetComposition(() => setProfile(e.target.value))
-                  }
-                >
-                  {data.projectSettings ? (
-                    <>
-                      <option value="">
-                        По умолчанию проекта —{" "}
-                        {data.projectSettings.profile || "автоматически"}
-                        {data.projectSettings.profile &&
-                        !data.profiles.some(
-                          (item) => item.name === data.projectSettings!.profile,
-                        )
-                          ? " · не найден"
-                          : ""}
-                      </option>
-                      <option value="__auto__">
-                        Автоматически — окружение / рабочий процесс
-                      </option>
-                    </>
-                  ) : (
-                    <option value="">
-                      Автоматически — окружение / рабочий процесс
-                    </option>
-                  )}
-                  {profile &&
-                    profile !== "__auto__" &&
-                    !data.profiles.some((p) => p.name === profile) && (
-                      <option value={profile}>{profile} · не найден</option>
-                    )}
-                  {data.profiles.map((p) => (
-                    <option key={p.name} value={p.name}>
-                      {p.name} ·{" "}
-                      {p.source === "project" ? "проектный" : "личный"}
-                    </option>
-                  ))}
-                </select>
-              </label>
+              <SearchablePicker
+                label="Рабочий процесс"
+                placeholder="Выберите рабочий процесс"
+                emptyLabel="Нет рабочих процессов"
+                searchLabel="Поиск рабочего процесса"
+                searchPlaceholder="Найти рабочий процесс…"
+                listLabel="Рабочие процессы"
+                value={workflow}
+                disabled={launching || suspended || settingsRefreshing}
+                onChange={(value) => resetComposition(() => setWorkflow(value))}
+                entries={[
+                  {
+                    value: "auto",
+                    label: "Автоматически — по имени конвейера",
+                  },
+                  { value: "none", label: "Без рабочего процесса" },
+                  ...data.workflows.map((w) => ({
+                    value: `file:${w}`,
+                    label: w,
+                  })),
+                ]}
+              />
+              <SearchablePicker
+                label="Профиль"
+                placeholder="Выберите профиль"
+                emptyLabel="Нет профилей"
+                searchLabel="Поиск профиля"
+                searchPlaceholder="Найти профиль…"
+                listLabel="Профили"
+                value={profile}
+                disabled={launching || suspended || settingsRefreshing}
+                onChange={(value) => resetComposition(() => setProfile(value))}
+                entries={[
+                  ...(data.projectSettings
+                    ? [
+                        {
+                          value: "",
+                          label: `По умолчанию проекта — ${data.projectSettings.profile || "автоматически"}${
+                            data.projectSettings.profile &&
+                            !data.profiles.some(
+                              (item) =>
+                                item.name === data.projectSettings!.profile,
+                            )
+                              ? " · не найден"
+                              : ""
+                          }`,
+                        },
+                        {
+                          value: "__auto__",
+                          label: "Автоматически — окружение / рабочий процесс",
+                        },
+                      ]
+                    : [
+                        {
+                          value: "",
+                          label: "Автоматически — окружение / рабочий процесс",
+                        },
+                      ]),
+                  ...(profile &&
+                  profile !== "__auto__" &&
+                  !data.profiles.some((p) => p.name === profile)
+                    ? [{ value: profile, label: `${profile} · не найден` }]
+                    : []),
+                  ...data.profiles.map((p) => ({
+                    value: p.name,
+                    label: `${p.name} · ${p.source === "project" ? "проектный" : "личный"}`,
+                  })),
+                ]}
+              />
             </div>
             <p className="applied">
               Рабочий процесс:{" "}

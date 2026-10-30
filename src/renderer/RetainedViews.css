@@ -20,3 +20,12 @@
 .retained-content {
   display: contents;
 }
+
+/* General settings owns an inner scroller. Its retained parent must inherit
+ * the available main-area height, not grow from the measured editor content. */
+.retained-view:has(> .retained-content > .global-settings-scroll-area) {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}

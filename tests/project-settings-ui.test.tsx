@@ -1,3 +1,5 @@
+import { openCatalog, selectCatalog } from "./helpers/select-catalog";
+import "./helpers/overview-browser-fixture";
 import {
   installPrototypeContextFixture,
   openPrototypeLaunch,
@@ -131,6 +133,7 @@ it("opens during an active run and returns to the same native run without reload
     },
   ]);
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByRole("heading", { name: "Проект" });
   act(() => focusRun("run"));
   await screen.findByRole("tab", { name: "build · topic · main" });
@@ -157,6 +160,15 @@ it("masks persisted secret values and keeps independent secret/runtime choices",
   expect(
     (screen.getByLabelText("Скрывать значение 2") as HTMLInputElement).checked,
   ).toBe(false);
+  expect(
+    (screen.getByLabelText("Передавать в runtime 2") as HTMLInputElement)
+      .checked,
+  ).toBe(true);
+  expect(
+    (screen.getByLabelText("Передавать в runtime 1") as HTMLInputElement)
+      .checked,
+  ).toBe(false);
+  fireEvent.click(screen.getByLabelText("Передавать в runtime 2"));
   expect(
     (screen.getByLabelText("Передавать в runtime 2") as HTMLInputElement)
       .checked,
@@ -235,9 +247,7 @@ it("preserves launch composition and task draft, then refreshes discovery and pr
   render(<App />);
   await openPrototypeLaunch();
   await screen.findByRole("checkbox", { name: /Stage B/ });
-  fireEvent.change(screen.getByLabelText("Рабочий процесс"), {
-    target: { value: "file:quality" },
-  });
+  selectCatalog(screen.getByLabelText("Рабочий процесс"), "file:quality");
   await waitFor(() =>
     expect(api.preview).toHaveBeenLastCalledWith(
       expect.objectContaining({ workflow: "file:quality" }),
@@ -272,14 +282,13 @@ it("preserves launch composition and task draft, then refreshes discovery and pr
   ).toBe("keep my draft");
   expect(api.readTopicTask).toHaveBeenCalledTimes(1);
   expect(
-    (screen.getByLabelText("Рабочий процесс") as HTMLSelectElement).value,
+    (screen.getByLabelText("Рабочий процесс") as HTMLButtonElement).value,
   ).toBe("file:quality");
+  openCatalog(screen.getByRole("combobox", { name: "Профиль" }));
   expect(
     screen.getByRole("option", { name: /По умолчанию проекта.*fast/ }),
   ).toBeTruthy();
-  fireEvent.change(screen.getByLabelText("Профиль"), {
-    target: { value: "__auto__" },
-  });
+  selectCatalog(screen.getByLabelText("Профиль"), "__auto__");
   await waitFor(() =>
     expect(api.preview).toHaveBeenLastCalledWith(
       expect.objectContaining({ profile: "", profileMode: "auto" }),
@@ -401,7 +410,7 @@ it("blocks stale launch and composition edits until refreshed project settings a
     (retainedButton("Сохранить и запустить") as HTMLButtonElement).disabled,
   ).toBe(true);
   expect(
-    (screen.getByLabelText("Рабочий процесс") as HTMLSelectElement).closest(
+    (screen.getByLabelText("Рабочий процесс") as HTMLButtonElement).closest(
       "fieldset",
     )?.disabled,
   ).toBe(true);
@@ -413,7 +422,7 @@ it("blocks stale launch and composition edits until refreshed project settings a
   );
   await waitFor(() =>
     expect(
-      (screen.getByLabelText("Рабочий процесс") as HTMLSelectElement).closest(
+      (screen.getByLabelText("Рабочий процесс") as HTMLButtonElement).closest(
         "fieldset",
       )?.disabled,
     ).toBe(false),
@@ -721,7 +730,7 @@ it("recovers an initial failed catalog after fixing the executable without inven
   );
   await openPrototypeLaunch();
   expect(
-    ((await screen.findByLabelText("Конвейер")) as HTMLSelectElement).value,
+    ((await screen.findByLabelText("Конвейер")) as HTMLButtonElement).value,
   ).toBe("build");
   expect(await screen.findByRole("checkbox", { name: /Stage B/ })).toBeTruthy();
   expect(screen.queryByText("Executable not found")).toBeNull();
@@ -760,10 +769,11 @@ it("publishes replacement pipelines while retaining a missing selection and draf
     "Сохранено. Изменения применятся к следующим запускам.",
   );
   await openPrototypeLaunch();
+  openCatalog(await screen.findByRole("combobox", { name: "Конвейер" }));
   expect(
     await screen.findByRole("option", { name: "new-pipeline · проектный" }),
   ).toBeTruthy();
-  expect((screen.getByLabelText("Конвейер") as HTMLSelectElement).value).toBe(
+  expect((screen.getByLabelText("Конвейер") as HTMLButtonElement).value).toBe(
     "build",
   );
   expect(screen.getByRole("option", { name: /build.*не найден/ })).toBeTruthy();
@@ -774,9 +784,7 @@ it("publishes replacement pipelines while retaining a missing selection and draf
   expect(
     (screen.getByLabelText("Что нужно сделать?") as HTMLTextAreaElement).value,
   ).toBe("keep draft");
-  fireEvent.change(screen.getByLabelText("Конвейер"), {
-    target: { value: "new-pipeline" },
-  });
+  selectCatalog(screen.getByLabelText("Конвейер"), "new-pipeline");
   await waitFor(() =>
     expect(api.preview).toHaveBeenLastCalledWith(
       expect.objectContaining({ pipeline: "new-pipeline" }),

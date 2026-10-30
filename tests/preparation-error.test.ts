@@ -30,3 +30,18 @@ it("strips the actual read-request IPC envelope without stripping host details",
   const unknown = `Error invoking remote method 'goga:read-request-other': Error: ${reason}`;
   expect(preparationErrorMessage(Error(unknown))).toBe(unknown);
 });
+
+it.each(["read-overview-schema", "read-overview-contract"])(
+  "removes the known direct Overview %s envelope but not the host reason",
+  (channel) => {
+    const reason =
+      "Команда «goga schema» завершилась с кодом 1. Error: host detail";
+    expect(
+      preparationErrorMessage(
+        Error(
+          `Error invoking remote method 'goga:${channel}': Error: ${reason}`,
+        ),
+      ),
+    ).toBe(reason);
+  },
+);

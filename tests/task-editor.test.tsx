@@ -1,3 +1,5 @@
+import { selectCatalog } from "./helpers/select-catalog";
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import {
   installPrototypeContextFixture,
@@ -281,9 +283,7 @@ it("standalone new-topic draft including name and source survives cancellation w
   fireEvent.change(screen.getByLabelText("Имя нового топика"), {
     target: { value: "new/work" },
   });
-  fireEvent.change(screen.getByLabelText("Исходная ветка"), {
-    target: { value: "other" },
-  });
+  selectCatalog(screen.getByLabelText("Исходная ветка"), "other");
   fireEvent.change(edit(), { target: { value: "new unsaved task" } });
   fireEvent.click(screen.getByRole("button", { name: "Закрыть форму" }));
   fireEvent.click(screen.getByRole("button", { name: "Открыть форму" }));
@@ -292,7 +292,7 @@ it("standalone new-topic draft including name and source survives cancellation w
     (screen.getByLabelText("Имя нового топика") as HTMLInputElement).value,
   ).toBe("new/work");
   expect(
-    (screen.getByLabelText("Исходная ветка") as HTMLSelectElement).value,
+    (screen.getByLabelText("Исходная ветка") as HTMLButtonElement).value,
   ).toBe("other");
   expect(api.launch).not.toHaveBeenCalled();
 });

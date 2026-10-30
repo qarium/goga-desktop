@@ -124,6 +124,26 @@ const api: DesktopAPI = {
   listProjectPipelines: (id) => invoke("list-project-pipelines", id),
   listProjectWorkflows: (id) => invoke("list-project-workflows", id),
   listWorkflowSuggestions: (id) => invoke("list-workflow-suggestions", id),
+  reportOverviewCloseState: (paths, busy) =>
+    invoke("overview-close-state", paths, busy),
+  listOverviewDirectory: (scope, path) =>
+    invoke("list-overview-directory", scope, path),
+  searchOverviewFiles: (scope, path, query) =>
+    invoke("search-overview-files", scope, path, query),
+  readOverviewFile: (scope, path) => invoke("read-overview-file", scope, path),
+  saveOverviewFile: (scope, path, text, version) =>
+    invoke("save-overview-file", scope, path, text, version),
+  createOverviewEntry: (scope, path, kind, text) =>
+    invoke("create-overview-entry", scope, path, kind, text),
+  prepareOverviewFileAction: (scope, request) =>
+    invoke("prepare-overview-file-action", scope, request),
+  executeOverviewFileAction: (token) =>
+    invoke("execute-overview-file-action", token),
+  revealOverviewEntry: (scope, path) =>
+    invoke("reveal-overview-entry", scope, path),
+  readOverviewSchema: (scope) => invoke("read-overview-schema", scope),
+  readOverviewContract: (scope, cell) =>
+    invoke("read-overview-contract", scope, cell),
   readProjectDocument: (id, target) =>
     invoke("read-project-document", id, target),
   saveProjectDocument: (id, target, text, version) =>

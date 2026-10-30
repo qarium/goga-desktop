@@ -1,3 +1,4 @@
+import { selectCatalog } from "./helpers/select-catalog";
 // @vitest-environment jsdom
 import React from "react";
 import { afterEach, beforeEach, it, expect, vi } from "vitest";
@@ -248,9 +249,7 @@ it("context change while checking checkout prevents launch and preserves draft",
 it("new branch approval captures base, task and ordinary mode only once", async () => {
   await setup();
   await newBranch();
-  fireEvent.change(screen.getByLabelText("Исходная ветка"), {
-    target: { value: "other" },
-  });
+  selectCatalog(screen.getByLabelText("Исходная ветка"), "other");
   fireEvent.change(screen.getByLabelText("Что нужно сделать?"), {
     target: { value: "new task" },
   });
@@ -345,12 +344,8 @@ it.each(["clean", "branch", "settings"])(
       fireEvent.click(screen.getByLabelText("Начать с чистого состояния"));
     }
     if (kind === "branch") {
-      fireEvent.change(screen.getByLabelText("Исходная ветка"), {
-        target: { value: "other" },
-      });
-      fireEvent.change(screen.getByLabelText("Исходная ветка"), {
-        target: { value: "HEAD" },
-      });
+      selectCatalog(screen.getByLabelText("Исходная ветка"), "other");
+      selectCatalog(screen.getByLabelText("Исходная ветка"), "HEAD");
     }
     if (kind === "settings")
       for (const revision of ["new", undefined])
@@ -387,14 +382,15 @@ it.each([
     await setup();
     const select = screen.getByRole("combobox", {
       name: "Конвейер",
-    }) as HTMLSelectElement;
-    const option = [...select.options].find(
-      (option) => option.value === pipeline.id,
-    )!;
+    }) as HTMLButtonElement;
+    fireEvent.click(select);
+    const option = screen
+      .getAllByRole("option")
+      .find((option) => (option as HTMLButtonElement).value === pipeline.id)!;
     expect(option.textContent).toBe(
       pipeline.id + (pipeline.project ? " · проектный" : ""),
     );
-    fireEvent.change(select, { target: { value: pipeline.id } });
+    fireEvent.click(option);
     await waitFor(() =>
       expect(api.preview).toHaveBeenLastCalledWith(
         expect.objectContaining({ pipeline: pipeline.id }),

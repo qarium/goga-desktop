@@ -1,3 +1,4 @@
+import { isOverviewPath } from "../shared/project-overview";
 import path from "node:path";
 import { validateYaml } from "./yaml-validation";
 import { constants, type Stats } from "node:fs";
@@ -32,7 +33,8 @@ import type {
 
 import type { DeletionResult, TrashItem } from "../shared/document-deletion";
 import { isPersonalProfileName } from "../shared/document-deletion";
-type SourceDocumentTarget = ProjectDocumentTarget;
+type SourceDocumentTarget =
+  ProjectDocumentTarget | { kind: "source"; path: string };
 
 const MAX_BYTES = 1024 * 1024;
 const MAX_DEPTH = 16;
@@ -76,6 +78,10 @@ function isFlatDocument(
 const flatDirectory = (kind: FlatDocumentKind) => `.goga/${kind}s`;
 
 function relativePath(target: SourceDocumentTarget): string {
+  if (target?.kind === "source") {
+    if (!isOverviewPath(target.path)) throw Error("Недопустимый путь файла");
+    return target.path;
+  }
   if (!target || typeof target !== "object")
     throw new Error("Недопустимый документ проекта");
   if (target.kind === "dockerfile") {
@@ -329,14 +335,19 @@ function validateText(
     Buffer.from(text).toString("utf8") !== text
   )
     throw new Error("Нужен UTF-8 документ не более 1 МиБ");
-  decode(Buffer.from(text), isFlatDocument(target));
+  decode(Buffer.from(text), isFlatDocument(target) || target.kind === "source");
   // Goga owns workflow rendering and pipeline header/body semantics. Never parse
   // or normalize either raw source format in Desktop.
   if (target.kind === "profile") {
     validateYaml(text, "profile");
     return;
   }
-  if (isFlatDocument(target) || target.kind === "dockerfile") return;
+  if (
+    isFlatDocument(target) ||
+    target.kind === "dockerfile" ||
+    target.kind === "source"
+  )
+    return;
   const docs = parseAllDocuments(text, { uniqueKeys: true });
   if (docs.some((doc) => doc.errors.length))
     throw new Error("Некорректный синтаксис YAML");
@@ -385,7 +396,7 @@ async function saveSourceDocument(
       root,
       relative,
       target.kind !== "tool",
-      isFlatDocument(target),
+      isFlatDocument(target) || target.kind === "source",
     );
     if (initial.document.version !== expectedVersion) throw changed();
     await beforeMutation?.();
@@ -419,6 +430,7 @@ async function saveSourceDocument(
         temporary = await handle.stat();
         await verifyDirectories(parent.identities);
         await handle.writeFile(text, "utf8");
+        if (initial.info) await handle.chmod(initial.info.mode & 0o777);
         await handle.sync();
         temporary = await handle.stat();
       } finally {
@@ -436,7 +448,7 @@ async function saveSourceDocument(
         root,
         relative,
         target.kind !== "tool",
-        isFlatDocument(target),
+        isFlatDocument(target) || target.kind === "source",
       );
       if (current.document.version !== expectedVersion) throw changed();
       const staged = await lstat(tmp);
@@ -453,7 +465,12 @@ async function saveSourceDocument(
         await unlink(tmp);
       }
       await verifyDirectories(parent.identities);
-      const saved = await read(root, relative, false, isFlatDocument(target));
+      const saved = await read(
+        root,
+        relative,
+        false,
+        isFlatDocument(target) || target.kind === "source",
+      );
       if (
         saved.document.text !== text ||
         !sameIdentity(saved.info!, temporary!)
@@ -776,7 +793,12 @@ export async function prepareSourceDeletion(
     const parent = await directories(root, path.dirname(relative));
     await verifyDirectories(parent.identities);
     await assertSourceSpelling(root, relative);
-    const initial = await read(root, relative, false, isFlatDocument(target));
+    const initial = await read(
+      root,
+      relative,
+      false,
+      isFlatDocument(target) || target.kind === "source",
+    );
     await verifyDirectories(parent.identities);
     if (
       expectedVersion !== undefined &&
@@ -868,3 +890,31 @@ async function createSourceDirectories(
     await directories(root, prefix);
   }
 }
+
+/** Source editor reuses byte-preserving document safety, without YAML semantics. */
+export async function readSourceFile(
+  root: string,
+  relative: string,
+): Promise<ProjectDocument> {
+  if (!isOverviewPath(relative)) throw Error("Недопустимый путь файла");
+  return (await read(root, relative, false, true)).document;
+}
+export function saveSourceFile(
+  root: string,
+  relative: string,
+  text: string,
+  version: string,
+  guard?: () => Promise<void>,
+) {
+  return saveSourceDocument(
+    root,
+    { kind: "source", path: relative },
+    text,
+    version,
+    guard,
+  );
+}
+export {
+  directories as sourceDirectories,
+  verifyDirectories as verifySourceDirectories,
+};

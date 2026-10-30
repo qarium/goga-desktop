@@ -1,3 +1,5 @@
+import { openCatalog, selectCatalog } from "./helpers/select-catalog";
+import "./helpers/overview-browser-fixture";
 import {
   installPrototypeContextFixture,
   openPrototypeLaunch,
@@ -429,9 +431,7 @@ it.each(["success", "failure"])(
           staleFailure = reject;
         }),
     );
-    fireEvent.change(screen.getByLabelText("Рабочий процесс"), {
-      target: { value: "file:existing" },
-    });
+    selectCatalog(screen.getByLabelText("Рабочий процесс"), "file:existing");
     await waitFor(() => expect(api.preview).toHaveBeenCalledTimes(2));
     await openSettings();
     await create("new-flow");
@@ -482,13 +482,14 @@ it.each(["success", "failure"])(
     ).toBe(true);
     expect(screen.queryByText("Obsolete")).toBeNull();
     await act(async () => discover(fresh));
+    openCatalog(await screen.findByRole("combobox", { name: "Конвейер" }));
     await screen.findByRole("option", { name: /new-flow/ });
     await waitFor(() => expect(screen.queryByText("проверяем…")).toBeNull());
     expect(
       screen.queryByRole("checkbox", { name: /Подтверждаю.*запуск/ }),
     ).toBeNull();
     expect(
-      (screen.getByLabelText("Рабочий процесс") as HTMLSelectElement).value,
+      (screen.getByLabelText("Рабочий процесс") as HTMLButtonElement).value,
     ).toBe("file:existing");
     expect(api.readTopicTask).toHaveBeenCalledTimes(1);
     expect(
@@ -711,6 +712,7 @@ it.each(["success", "failure"])(
     click("Сохранить");
     await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
     await openPrototypeLaunch();
+    openCatalog(await screen.findByRole("combobox", { name: "Конвейер" }));
     await screen.findByRole("option", { name: /new-flow/ });
     await act(async () => {
       if (outcome === "success") finish(original);
@@ -804,6 +806,7 @@ it.each(["success", "failure"])(
         ],
       }),
     );
+    openCatalog(await screen.findByRole("combobox", { name: "Конвейер" }));
     await screen.findByRole("option", { name: /new-flow/ });
   },
 );
@@ -1010,7 +1013,7 @@ it("blocks a removed selected pipeline and preserves edited task until another p
   await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
   await openPrototypeLaunch();
   await screen.findByText(/Выбранный конвейер отсутствует/);
-  expect((screen.getByLabelText("Конвейер") as HTMLSelectElement).value).toBe(
+  expect((screen.getByLabelText("Конвейер") as HTMLButtonElement).value).toBe(
     "run",
   );
   expect(
@@ -1019,9 +1022,7 @@ it("blocks a removed selected pipeline and preserves edited task until another p
   expect(
     (screen.getByLabelText("Что нужно сделать?") as HTMLTextAreaElement).value,
   ).toBe("unsaved task edit");
-  fireEvent.change(screen.getByLabelText("Конвейер"), {
-    target: { value: "replacement" },
-  });
+  selectCatalog(screen.getByLabelText("Конвейер"), "replacement");
   await waitFor(() => expect(screen.queryByText("проверяем…")).toBeNull());
   click("Сохранить и запустить");
   await waitFor(() =>
@@ -1209,9 +1210,7 @@ it("preserves standalone new-topic fields, profile, workflow and skip selection 
   fireEvent.change(screen.getByLabelText("Имя нового топика"), {
     target: { value: "new-topic" },
   });
-  fireEvent.change(screen.getByLabelText("Исходная ветка"), {
-    target: { value: "develop" },
-  });
+  selectCatalog(screen.getByLabelText("Исходная ветка"), "develop");
   await waitFor(() =>
     expect(
       (screen.getByLabelText("Что нужно сделать?") as HTMLTextAreaElement)
@@ -1221,12 +1220,8 @@ it("preserves standalone new-topic fields, profile, workflow and skip selection 
   fireEvent.change(screen.getByLabelText("Что нужно сделать?"), {
     target: { value: "new task draft" },
   });
-  fireEvent.change(screen.getByLabelText("Рабочий процесс"), {
-    target: { value: "file:existing" },
-  });
-  fireEvent.change(screen.getByLabelText("Профиль"), {
-    target: { value: "custom" },
-  });
+  selectCatalog(screen.getByLabelText("Рабочий процесс"), "file:existing");
+  selectCatalog(screen.getByLabelText("Профиль"), "custom");
   await screen.findByRole("checkbox", { name: /Two/ });
   fireEvent.click(screen.getByRole("checkbox", { name: /Two/ }));
   await waitFor(() =>
@@ -1244,20 +1239,20 @@ it("preserves standalone new-topic fields, profile, workflow and skip selection 
   await waitFor(() =>
     expect(screen.queryAllByText("проверяем…")).toHaveLength(0),
   );
-  expect((screen.getByLabelText("Конвейер") as HTMLSelectElement).value).toBe(
+  expect((screen.getByLabelText("Конвейер") as HTMLButtonElement).value).toBe(
     "run",
   );
   expect(
-    (screen.getByLabelText("Рабочий процесс") as HTMLSelectElement).value,
+    (screen.getByLabelText("Рабочий процесс") as HTMLButtonElement).value,
   ).toBe("file:existing");
-  expect((screen.getByLabelText("Профиль") as HTMLSelectElement).value).toBe(
+  expect((screen.getByLabelText("Профиль") as HTMLButtonElement).value).toBe(
     "custom",
   );
   expect(
     (screen.getByLabelText("Имя нового топика") as HTMLInputElement).value,
   ).toBe("new-topic");
   expect(
-    (screen.getByLabelText("Исходная ветка") as HTMLSelectElement).value,
+    (screen.getByLabelText("Исходная ветка") as HTMLButtonElement).value,
   ).toBe("develop");
   expect(
     (screen.getByLabelText("Что нужно сделать?") as HTMLTextAreaElement).value,

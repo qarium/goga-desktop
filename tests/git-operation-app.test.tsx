@@ -1,3 +1,4 @@
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import React from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -84,6 +85,7 @@ beforeEach(() => {
 afterEach(cleanup);
 async function open() {
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByText("Fixture settings");
 }
 function repositoryDisabled() {
@@ -131,6 +133,7 @@ it("a late result refreshes the issuing scope, not the newly active project", as
   await open();
   const changed = fixture.props.get("p").onChanged;
   fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+  fireEvent.click(screen.getByRole("button", { name: "Проект" }));
   await screen.findByText("Fixture settings");
   const revision = fixture.props.get("q").revision;
   await act(async () => changed("p", topic));

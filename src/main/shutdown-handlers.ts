@@ -15,6 +15,7 @@ export function installShutdownHandlers(options: {
   window: ExitEmitter;
   shutdown: Pick<ShutdownCoordinator, "close">;
   isExiting(): boolean;
+  beforeClose?(): Promise<boolean>;
   report(result: ShutdownResult): Promise<void>;
 }): () => void {
   let pending = false;
@@ -25,6 +26,7 @@ export function installShutdownHandlers(options: {
     pending = true;
     void Promise.resolve()
       .then(async () => {
+        if (options.beforeClose && !(await options.beforeClose())) return;
         const result = await options.shutdown.close();
         if (result.status === "failed" || result.status === "partial")
           await options.report(result);

@@ -1,3 +1,5 @@
+import { selectCatalog } from "./helpers/select-catalog";
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import {
   installPrototypeContextFixture,
@@ -168,6 +170,7 @@ async function mountReadyOwner() {
       }),
   );
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByRole("heading", { name: "Проект" });
   await waitFor(() => expect(resolveInventory).toBeTypeOf("function"));
   await act(async () => {
@@ -184,9 +187,7 @@ it("keeps a clickable launch tab and the same draft across Home, Topics and a ru
   click("Проект");
   const input = await launch();
   fireEvent.change(input, { target: { value: "retained task" } });
-  fireEvent.change(screen.getByRole("combobox", { name: "Конвейер" }), {
-    target: { value: "other" },
-  });
+  selectCatalog(screen.getByRole("combobox", { name: "Конвейер" }), "other");
   await screen.findByRole("textbox", { name: "Что нужно сделать?" });
   click("Проект");
   const tab = screen.getByRole("tab", { name: /^Новый конвейер · / });
@@ -197,7 +198,7 @@ it("keeps a clickable launch tab and the same draft across Home, Topics and a ru
   ).toBe(input);
   expect(input.value).toBe("retained task");
   expect(
-    (screen.getByRole("combobox", { name: "Конвейер" }) as HTMLSelectElement)
+    (screen.getByRole("combobox", { name: "Конвейер" }) as HTMLButtonElement)
       .value,
   ).toBe("other");
   click("Топики");
@@ -238,9 +239,7 @@ it("isolates full launch preparation values and DOM between projects", async () 
   click("Проект");
   const alpha = await launch();
   fireEvent.change(alpha, { target: { value: "alpha task" } });
-  fireEvent.change(screen.getByRole("combobox", { name: "Конвейер" }), {
-    target: { value: "other" },
-  });
+  selectCatalog(screen.getByRole("combobox", { name: "Конвейер" }), "other");
   await screen.findByRole("textbox", { name: "Что нужно сделать?" });
   fireEvent.click(screen.getByRole("button", { name: /Beta/ }));
   const beta = await launch();
@@ -256,7 +255,7 @@ it("isolates full launch preparation values and DOM between projects", async () 
     expect.objectContaining({ projectId: "p", topic: "main", branch: "main" }),
   );
   expect(
-    (screen.getByRole("combobox", { name: "Конвейер" }) as HTMLSelectElement)
+    (screen.getByRole("combobox", { name: "Конвейер" }) as HTMLButtonElement)
       .value,
   ).toBe("other");
   fireEvent.click(screen.getByRole("button", { name: /Beta/ }));

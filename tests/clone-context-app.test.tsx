@@ -1,3 +1,4 @@
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import React from "react";
 import { afterEach, beforeEach, it, expect, vi } from "vitest";
@@ -233,6 +234,7 @@ async function mountContexts(
     },
   ]);
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Исполняемый файл");
   await screen.findByRole("button", { name: "Выбрать другой топик" });
 }

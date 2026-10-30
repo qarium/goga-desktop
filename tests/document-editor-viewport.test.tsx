@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { render, cleanup, screen, act } from "@testing-library/react";
 import { SettingsDocument } from "../src/renderer/SettingsDocument";
@@ -144,3 +145,57 @@ it("reserves additional footer space when ResizeObserver reports an error or wra
     vi.unstubAllGlobals();
   }
 });
+
+// jsdom does not perform layout, but these computed styles protect the flex
+// boundary whose missing constraints made ResizeObserver grow the native editor.
+it.each([
+  { kind: "config" as const, title: "Конфигурация Goga" },
+  { kind: "profile" as const, name: "personal", title: "personal" },
+])(
+  "keeps the retained home $kind viewport shrinkable without stretching unrelated retained views",
+  ({ title, ...homeSource }) => {
+    const styles = document.createElement("style");
+    styles.textContent = readFileSync(
+      `${process.cwd()}/src/renderer/RetainedViews.css`,
+      "utf8",
+    );
+    document.head.appendChild(styles);
+    try {
+      const view = render(
+        <main className="main-area">
+          <RetainedViews activeKey="settings">
+            <div className="scroll-area global-settings-scroll-area">
+              <SettingsDocument
+                store={store}
+                source={{ scope: "home", ...homeSource }}
+                title={title}
+                path="synthetic/settings.yml"
+                description="Synthetic home settings"
+              />
+            </div>
+          </RetainedViews>
+          <RetainedViews activeKey="unrelated">
+            <div>Unrelated content</div>
+          </RetainedViews>
+        </main>,
+      );
+      const scroller = view.container.querySelector(
+        ".global-settings-scroll-area",
+      )!;
+      const wrapper = scroller.closest(".retained-view")!;
+      expect(wrapper.parentElement?.classList.contains("main-area")).toBe(true);
+      const retained = getComputedStyle(wrapper);
+      expect(retained.display).toBe("flex");
+      expect(retained.flexDirection).toBe("column");
+      expect(retained.flexGrow).toBe("1");
+      expect(retained.minHeight).toBe("0");
+      expect(
+        getComputedStyle(
+          view.container.querySelectorAll("main > .retained-view")[1],
+        ).display,
+      ).not.toBe("flex");
+    } finally {
+      styles.remove();
+    }
+  },
+);

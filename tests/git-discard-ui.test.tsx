@@ -617,7 +617,7 @@ it("recovery write errors end pending state, keep selection and allow result dis
   expect(changed).toHaveBeenCalledExactlyOnceWith([]);
   expect(state.uncertain).toBe(true);
   fireEvent.click(
-    screen.getByRole("button", { name: "Закрыть результат отмены" }),
+    await screen.findByRole("button", { name: "Закрыть результат отмены" }),
   );
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(api.executeGitDiscard).not.toHaveBeenCalled();

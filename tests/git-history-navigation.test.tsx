@@ -1,3 +1,4 @@
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import React, { useEffect, useState } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -144,6 +145,7 @@ beforeEach(() => {
 });
 it("embeds commits beside changes, preserving project draft, terminal, file and scroll across projects", async () => {
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Fixture draft");
   click("Терминал");
   fireEvent.change(screen.getByLabelText("Fixture terminal"), {
@@ -175,6 +177,7 @@ it("embeds commits beside changes, preserving project draft, terminal, file and 
     75,
   );
   click("Beta");
+  click("Проект");
   await screen.findByLabelText("Fixture draft");
   click("Коммиты");
   await screen.findByRole("button", { name: /Commit q/ });
@@ -340,6 +343,7 @@ it("updates the current HEAD history when the shared branch indicator observes a
     nextOffset: null,
   }));
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Fixture draft");
   await waitFor(() => expect(api.readGitSummary).toHaveBeenCalled());
   click("Коммиты");

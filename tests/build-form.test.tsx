@@ -1,3 +1,4 @@
+import { selectCatalog } from "./helpers/select-catalog";
 // @vitest-environment jsdom
 import React from "react";
 import { beforeEach, afterEach, it, expect, vi } from "vitest";
@@ -83,6 +84,65 @@ function mount(props = {}) {
     />,
   );
 }
+it("searches shared build catalogs by label and submits their exact values", async () => {
+  mount();
+  await screen.findByText("План доступен");
+  const workflow = screen.getByRole("combobox", { name: "Рабочий процесс" });
+  expect(workflow.tagName).toBe("BUTTON");
+  expect(workflow.textContent).toContain("Из конфигурации");
+  const profile = screen.getByRole("combobox", { name: "Профиль" });
+  expect((profile as HTMLButtonElement).value).toBe("__project__");
+  expect(profile.textContent).toContain("Из настроек проекта");
+  fireEvent.click(workflow);
+  fireEvent.change(
+    screen.getByRole("searchbox", { name: "Поиск рабочего процесса" }),
+    {
+      target: { value: "QUALITY" },
+    },
+  );
+  fireEvent.click(screen.getByRole("option", { name: "quality" }));
+  await waitFor(() =>
+    expect(api.buildContext).toHaveBeenLastCalledWith("p", {
+      workflow: "quality",
+      profile: undefined,
+      env: [],
+    }),
+  );
+  await screen.findByText("План доступен");
+  fireEvent.click(screen.getByRole("combobox", { name: "Профиль" }));
+  fireEvent.change(screen.getByRole("searchbox", { name: "Поиск профиля" }), {
+    target: { value: "fast" },
+  });
+  fireEvent.click(screen.getByRole("option", { name: "fast" }));
+  await waitFor(() =>
+    expect(api.buildContext).toHaveBeenLastCalledWith("p", {
+      workflow: "quality",
+      profile: "fast",
+      env: [],
+    }),
+  );
+  await screen.findByText("План доступен");
+  fireEvent.click(
+    screen.getByRole("combobox", { name: "База сравнения", hidden: true }),
+  );
+  fireEvent.change(
+    screen.getByRole("searchbox", {
+      name: "Поиск базы сравнения",
+      hidden: true,
+    }),
+    {
+      target: { value: "ORIGIN" },
+    },
+  );
+  fireEvent.click(
+    screen.getByRole("option", { name: "origin/dev", hidden: true }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+  await waitFor(() => expect(api.launchBuild).toHaveBeenCalledTimes(1));
+  expect(api.launchBuild.mock.calls[0][0]).toMatchObject({
+    options: { workflow: "quality", profile: "fast", baseRef: "origin/dev" },
+  });
+});
 it("loads history plan, uses review switch and keeps clean always visible; plain launch has no update or dry-run", async () => {
   mount();
   await screen.findByDisplayValue(context.historyPlan.path);
@@ -155,9 +215,7 @@ it("project chooser starts root; cancellation preserves previous plan and select
 it("keeps review drafts while skipped but excludes them from request, then restores on toggle", async () => {
   mount();
   await screen.findByText("План доступен");
-  fireEvent.change(screen.getByLabelText("База сравнения"), {
-    target: { value: "origin/dev" },
-  });
+  selectCatalog(screen.getByLabelText("База сравнения"), "origin/dev");
   fireEvent.change(screen.getByLabelText("Повторные раунды без изменений"), {
     target: { value: "3" },
   });
@@ -227,7 +285,28 @@ it("does not silently ignore a project profile on older CLI", async () => {
     (screen.getByRole("button", { name: "Запустить" }) as HTMLButtonElement)
       .disabled,
   ).toBe(true);
-  fireEvent.change(screen.getByLabelText("Профиль"), { target: { value: "" } });
+  const workflow = screen.getByRole("combobox", { name: "Рабочий процесс" });
+  fireEvent.click(workflow);
+  const unsupportedWorkflow = screen.getByRole("option", {
+    name: "quality",
+  }) as HTMLButtonElement;
+  expect(unsupportedWorkflow.disabled).toBe(true);
+  fireEvent.click(unsupportedWorkflow);
+  expect((workflow as HTMLButtonElement).value).toBe("");
+  fireEvent.keyDown(
+    screen.getByRole("searchbox", { name: "Поиск рабочего процесса" }),
+    { key: "Escape" },
+  );
+  fireEvent.click(screen.getByRole("combobox", { name: "Профиль" }));
+  const unsupportedProfile = screen.getByRole("option", {
+    name: "fast",
+  }) as HTMLButtonElement;
+  expect(unsupportedProfile.disabled).toBe(true);
+  fireEvent.click(unsupportedProfile);
+  expect((screen.getByLabelText("Профиль") as HTMLButtonElement).value).toBe(
+    "__project__",
+  );
+  selectCatalog(screen.getByLabelText("Профиль"), "");
   api.buildContext.mockResolvedValue({
     ...context,
     capabilities: context.capabilities.filter(

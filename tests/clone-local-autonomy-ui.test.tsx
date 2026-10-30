@@ -1,3 +1,4 @@
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import React from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -297,6 +298,7 @@ it.each(["current-header", "selector", "board"])(
       typeof scope === "string" ? board : missingBoard,
     );
     render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
     await screen.findByLabelText("Исполняемый файл");
     if (entry === "selector" || entry === "current-header") {
       fireEvent.click(
@@ -525,16 +527,24 @@ it("failed reread retains the local draft, cancelling reread writes nothing, suc
   const form = setupForm();
   let retryDuringErrorCommit = false;
   render(
-    <React.Profiler id="failed-reread-retry" onRender={() => {
-      // Deliver one rapid retry after the error becomes visible, before passive
-      // effects from that same draft update can invalidate a fresh confirmation.
-      if (!retryDuringErrorCommit && screen.queryByText(/Local read failure/)) {
-        const retry = screen.getByRole<HTMLButtonElement>("button", { name: "Перечитать задачу" });
-        expect(retry.disabled).toBe(false);
-        retryDuringErrorCommit = true;
-        retry.click();
-      }
-    }}>
+    <React.Profiler
+      id="failed-reread-retry"
+      onRender={() => {
+        // Deliver one rapid retry after the error becomes visible, before passive
+        // effects from that same draft update can invalidate a fresh confirmation.
+        if (
+          !retryDuringErrorCommit &&
+          screen.queryByText(/Local read failure/)
+        ) {
+          const retry = screen.getByRole<HTMLButtonElement>("button", {
+            name: "Перечитать задачу",
+          });
+          expect(retry.disabled).toBe(false);
+          retryDuringErrorCommit = true;
+          retry.click();
+        }
+      }}
+    >
       <LaunchForm {...form} />
     </React.Profiler>,
   );

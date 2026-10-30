@@ -1,3 +1,4 @@
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import React, { useEffect, useState } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -99,6 +100,7 @@ const click = (name: string | RegExp) =>
   fireEvent.click(screen.getByRole("button", { name }));
 it("opens changes in place, does not add a main tab, and restores the exact project draft", async () => {
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   fireEvent.change(await screen.findByLabelText("Fixture draft"), {
     target: { value: "not saved" },
   });
@@ -118,6 +120,7 @@ it("opens changes in place, does not add a main tab, and restores the exact proj
 });
 it("retains terminal screen and context-specific Git selection across projects", async () => {
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Fixture draft");
   click("Терминал");
   fireEvent.change(screen.getByLabelText("Fixture terminal"), {
@@ -135,6 +138,7 @@ it("retains terminal screen and context-specific Git selection across projects",
     ),
   );
   click("Beta");
+  click("Проект");
   await screen.findByLabelText("Fixture draft");
   click(/^Изменения/);
   click(
@@ -163,6 +167,7 @@ it("retains terminal screen and context-specific Git selection across projects",
 });
 it("preserves busy navigation guards even for the read-only changes view", async () => {
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   fireEvent.change(await screen.findByLabelText("Fixture draft"), {
     target: { value: "busy" },
   });

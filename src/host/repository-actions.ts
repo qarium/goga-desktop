@@ -26,6 +26,11 @@ interface Dependencies {
     ref: TopicContextRef,
     onDiagnostic: (stdout: string, stderr: string) => void,
   ): Promise<ContextSyncState>;
+  mergeTopic?(
+    ref: TopicContextRef,
+    source: string,
+    verifySource: () => Promise<void>,
+  ): Promise<{ outcome: string; log: string; lockRetained?: boolean }>;
   git(args: string[], cwd: string): Promise<{ stdout: string; stderr: string }>;
   goga(args: string[]): Promise<{ stdout: string; stderr: string }>;
   gogaUpdate?(
@@ -117,7 +122,7 @@ export class RepositoryActions {
     if (output) this.lines.push(result.stdout, result.stderr);
     return result.stdout;
   }
-  private async verify() {
+  private async verify(nativeOwnerAdmitted = false) {
     await this.deps.verify();
     const project = await this.deps.project();
     if (
@@ -156,7 +161,7 @@ export class RepositoryActions {
           "Владелец топика изменился или неоднозначен. Обновите карточку и выберите рабочую копию заново.",
         );
     }
-    if (this.owner) {
+    if (this.owner && !nativeOwnerAdmitted) {
       const current = await this.deps.resolve(worktreeContextRef(this.owner));
       if (JSON.stringify(current) !== JSON.stringify(this.owner))
         throw changed();
@@ -299,6 +304,7 @@ export class RepositoryActions {
       expected?: string;
       guard?: () => Promise<void>;
     },
+    allowLocalBase = false,
   ) {
     const branchLabel = source ? "ветки топика" : "базовой ветки";
     const cwd = source?.cwd ?? this.project.path;
@@ -376,9 +382,28 @@ export class RepositoryActions {
     const tracking = source
       ? [base.ref, source.remote, source.ref]
       : await upstream();
-    if (!tracking?.[1] || !tracking[2]?.startsWith("refs/heads/"))
+    const localBase = async () => {
+      await verifyOwner();
+      await assertIdle();
+      if ((await this.directBranch(base.branch, cwd)).oid !== base.oid)
+        throw changed();
+      this.lines.push(
+        `Используется локальная база ${base.branch}; публикация ветки на remote не требуется.`,
+      );
+      return base;
+    };
+    if (!tracking?.[1] || !tracking[2]) {
+      if (allowLocalBase) return localBase();
+      throw Error(`У ветки ${base.branch} отсутствует однозначный upstream.`);
+    }
+    if (!tracking[2].startsWith("refs/heads/"))
       throw Error(`У ветки ${base.branch} отсутствует однозначный upstream.`);
     await git(["check-ref-format", tracking[2]]);
+    if (
+      allowLocalBase &&
+      !(await git(["remote"])).trim().split("\n").includes(tracking[1])
+    )
+      return localBase();
     const endpoint = await this.remote(tracking[1], false, cwd);
     const verify = async () => {
       await verifyOwner();
@@ -392,6 +417,33 @@ export class RepositoryActions {
         throw changed();
     };
     await verify();
+    if (allowLocalBase) {
+      try {
+        const rows = (
+          await git([
+            "ls-remote",
+            "--exit-code",
+            "--refs",
+            tracking[1],
+            tracking[2],
+          ])
+        )
+          .trim()
+          .split("\n")
+          .map((row) => row.split("\t"));
+        const match = rows.find(([, ref]) => ref === tracking[2]);
+        if (!match) throw changed();
+        oid(match[0]);
+      } catch (error) {
+        // Git documents exit 2 specifically for an absent matching ref.
+        // Authentication, transport, cancellation and malformed output remain failures.
+        if (!(error instanceof CommandExitError) || error.exitCode !== 2)
+          throw error;
+        await verify();
+        return localBase();
+      }
+      await verify();
+    }
     const fetched = `refs/desktop/repository-actions/${randomUUID()}`;
     await git(
       [
@@ -495,6 +547,101 @@ export class RepositoryActions {
         : `Базовая ветка ${base.branch} обновлена.`,
     );
     return { ...base, oid: next };
+  }
+  /** Manual sync receives only the same named local branch, never base_ref or server origin. */
+  private async receiveTopicBranch() {
+    const owner = this.owner!;
+    const sourceRef = `refs/heads/${owner.branch}`;
+    await this.git(["check-ref-format", sourceRef]);
+    const sourceRows = (
+      await this.git(["for-each-ref", "--format=%(refname)", sourceRef])
+    )
+      .trim()
+      .split("\n");
+    if (!sourceRows.includes(sourceRef)) {
+      this.lines.push(
+        "Одноимённой ветки в исходном проекте пока нет; будет передана ветка копии.",
+      );
+      return;
+    }
+    const source = await this.directBranch(owner.branch);
+    const head = oid(
+      await this.git(["rev-parse", "--verify", "HEAD^{commit}"], owner.path),
+    );
+    const verifySource = async (nativeOwnerAdmitted = false) => {
+      // Native context already holds and verifies the clone lifecycle lock.
+      // Do not re-enter the ordinary resolving/repairing clone path under it.
+      await this.verify(nativeOwnerAdmitted);
+      if (
+        (await this.directBranch(owner.branch)).oid !== source.oid ||
+        (await this.currentBranch(owner.path)) !== owner.branch ||
+        !(await assertLocalOrigin(owner, (args, cwd) => this.git(args, cwd)))
+      )
+        throw changed();
+    };
+    await verifySource();
+    this.lines.push("Получение одноимённой ветки: исходный проект → копия…");
+    // Object-only fetch: no FETCH_HEAD or persistent scratch/tracking references.
+    // The original direct ref is pinned/rechecked; native Git seals the exact OID.
+    await this.git(
+      [
+        "-c",
+        "protocol.allow=never",
+        "-c",
+        "protocol.file.allow=always",
+        "fetch",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--no-recurse-submodules",
+        "--refmap=",
+        "origin",
+        source.ref,
+      ],
+      owner.path,
+      true,
+    );
+    await verifySource();
+    if (
+      (await this.git(["cat-file", "-t", source.oid], owner.path)).trim() !==
+        "commit" ||
+      oid(
+        await this.git(["rev-parse", "--verify", "HEAD^{commit}"], owner.path),
+      ) !== head
+    )
+      throw changed();
+    try {
+      await this.git(
+        ["merge-base", "--is-ancestor", source.oid, head],
+        owner.path,
+      );
+      this.lines.push(
+        "Копия уже содержит коммиты исходной ветки; её файлы не изменялись.",
+      );
+      return;
+    } catch (error) {
+      if (!(error instanceof CommandExitError) || error.exitCode !== 1)
+        throw error;
+    }
+    if (!this.deps.mergeTopic)
+      throw Error(
+        "Безопасное получение коммитов недоступно; экспорт не выполнялся.",
+      );
+    const merged = await this.deps.mergeTopic(
+      worktreeContextRef(owner),
+      source.oid,
+      () => verifySource(true),
+    );
+    this.lines.push(merged.log);
+    if (merged.outcome === "conflicts")
+      throw Error(
+        "В копии возникли конфликты. Решите их в разделе «Изменения» и завершите слияние, затем повторите синхронизацию. Обратная передача не выполнялась.",
+      );
+    if (merged.outcome !== "completed" || merged.lockRetained)
+      throw Error(
+        "Получение коммитов требует проверки результата; обратная передача не выполнялась.",
+      );
+    await verifySource();
+    this.lines.push("Коммиты исходной ветки включены в копию.");
   }
   private async updateCloneTracking(branch: string, next: string) {
     const ref = `refs/remotes/origin/${branch}`;
@@ -661,15 +808,32 @@ export class RepositoryActions {
         this.lines.push(
           `Получение ветки ${branch} из origin оригинального проекта…`,
         );
-        const endpoint = await this.remote("origin", false);
-        const original = await this.refreshBase(branch, {
-          remote: "origin",
-          ref: `refs/heads/${branch}`,
-          guard: async () => {
-            if ((await this.remote("origin", false)) !== endpoint)
-              throw changed();
+        const hasOrigin = (await this.git(["remote"]))
+          .trim()
+          .split("\n")
+          .includes("origin");
+        const endpoint = hasOrigin
+          ? await this.remote("origin", false)
+          : undefined;
+        const assertOriginalOrigin = async () => {
+          if (
+            (await this.git(["remote"]))
+              .trim()
+              .split("\n")
+              .includes("origin") !== hasOrigin ||
+            (hasOrigin && (await this.remote("origin", false)) !== endpoint)
+          )
+            throw changed();
+        };
+        const original = await this.refreshBase(
+          branch,
+          {
+            remote: "origin",
+            ref: `refs/heads/${branch}`,
+            guard: assertOriginalOrigin,
           },
-        });
+          true,
+        );
         await this.verify();
         if (
           !(await assertLocalOrigin(this.owner, (args, cwd) =>
@@ -686,14 +850,12 @@ export class RepositoryActions {
           cwd: this.owner.path,
           expected: original.oid,
           guard: async () => {
-            if (
-              (await this.remote("origin", false)) !== endpoint ||
-              (await this.directBranch(branch)).oid !== original.oid
-            )
+            await assertOriginalOrigin();
+            if ((await this.directBranch(branch)).oid !== original.oid)
               throw changed();
           },
         });
-        this.lines.push("Топик обновлён из remote без публикации.");
+        this.lines.push("Топик обновлён из исходного проекта без публикации.");
       } else if (request.action === "update-base") {
         if (!this.owner)
           throw Error("Обновление из базовой ветки доступно только в топике.");
@@ -714,7 +876,11 @@ export class RepositoryActions {
           throw Error(
             "В эффективной конфигурации topics отсутствует base_ref или неверен тип/стратегия update.",
           );
-        const base = await this.refreshBase(parsed.data.base_ref);
+        const base = await this.refreshBase(
+          parsed.data.base_ref,
+          undefined,
+          true,
+        );
         await this.verify();
         if (
           !(await assertLocalOrigin(this.owner, (args, cwd) =>
@@ -778,6 +944,7 @@ export class RepositoryActions {
           "Обновление топика завершено.",
         );
       } else if (this.owner) {
+        if (request.action === "sync") await this.receiveTopicBranch();
         this.lines.push("Синхронизация топика в локальный origin…");
         const result = await this.deps.sync(
           this.project,

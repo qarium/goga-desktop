@@ -116,6 +116,16 @@ export class RunnerShutdownError extends Error {
     this.name = "RunnerShutdownError";
   }
 }
+/** OS launch failure, distinct from a command that started and exited nonzero. */
+export class CommandSpawnError extends Error {
+  readonly name = "CommandSpawnError";
+  constructor(
+    message: string,
+    readonly code: string,
+  ) {
+    super(message);
+  }
+}
 /** Structured process outcome; public message stays sanitized and unchanged. */
 export class CommandExitError extends Error {
   constructor(
@@ -713,7 +723,7 @@ export class NodeRunner implements Runner {
         )
           interrupted = true;
       });
-      const fail = (message: string) => {
+      const fail = (message: string, spawnCode?: string) => {
         if (done) return;
         done = true;
         this.pendingCommands.delete(child);
@@ -721,7 +731,9 @@ export class NodeRunner implements Runner {
         signal?.removeEventListener("abort", abort);
         const error = interrupted
           ? new RunnerShutdownError("interrupted")
-          : new Error(message);
+          : spawnCode
+            ? new CommandSpawnError(message, spawnCode)
+            : new Error(message);
         void this.kill(child).then(
           () => reject(error),
           (failure) => {
@@ -748,9 +760,10 @@ export class NodeRunner implements Runner {
         err += chunk;
         if (err.length > 1024 * 1024) err = err.slice(-1024 * 1024);
       });
-      child.on("error", () =>
+      child.on("error", (error: NodeJS.ErrnoException) =>
         fail(
           `Не удалось запустить ${exe.includes("git") ? "Git" : "Goga"}. Проверьте установку и PATH.`,
+          error.code ?? "UNKNOWN",
         ),
       );
       child.on("close", (code) => {

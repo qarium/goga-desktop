@@ -1,3 +1,28 @@
+import {
+  overviewFileActionRequestSchema,
+  overviewFileActionTokenSchema,
+  type OverviewFileActionRequest,
+  type OverviewFileActionResult,
+} from "../shared/project-overview";
+import {
+  OverviewFileActionTickets,
+  prepareOverviewAction,
+  checkedOverviewEntry,
+} from "./overview-file-actions";
+import { withNativeGitCompletion } from "./git-native-completion";
+import { NativeGitSequence } from "./git-native-sequence";
+import { createGogaPathReader, gogaEnvironment } from "./goga-environment";
+import {
+  CommandSpawnError,
+  CommandExitError,
+  RunnerShutdownError,
+} from "./process";
+import * as overviewFiles from "./project-overview-files";
+import {
+  readOverviewSchema,
+  readOverviewContract,
+  buildArchitectureIndex,
+} from "./project-overview-architecture";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
@@ -282,6 +307,11 @@ interface SavedPreview {
   created: number;
 }
 export class HostService extends EventEmitter {
+  private overviewSchemaIssued = new Map<string, number>();
+  private overviewSchemas = new Map<
+    string,
+    ReturnType<typeof buildArchitectureIndex>
+  >();
   private bindings = new WeakMap<Project, WorktreeRecord>();
   private clones: CloneManager;
   private exchange: ContextExchangeManager;
@@ -300,6 +330,7 @@ export class HostService extends EventEmitter {
   private buildRequests = new Map<string, BuildRequest>();
   private topicDomain = new TopicsDomain();
   private deletionTickets = new DocumentDeletionTickets();
+  private overviewFileActionTickets = new OverviewFileActionTickets();
   private historyPruner = new HistoryPruner();
   private gitUpdateHandoff = new NativeGitUpdateHandoff({
     context: (scope, action) => this.gitUpdateContext(scope, action),
@@ -346,6 +377,7 @@ export class HostService extends EventEmitter {
   private personalSettings: SettingsStore;
   private gitDiscardActions: NativeGitDiscardActions;
   private trashItem?: TrashItem;
+  private showItemInFolder?: (absolutePath: string) => void;
   private terminalLeases = new Map<string, number>();
   private operationTail: Promise<unknown> = Promise.resolve();
   private catalogEpoch = 0;
@@ -354,6 +386,7 @@ export class HostService extends EventEmitter {
   private home: string;
   private dataDir: string;
   private goga: string;
+  private shellPath?: () => Promise<string>;
   private runner: Runner;
   private state: DesktopStateStore;
   private context = new AsyncLocalStorage<{
@@ -391,9 +424,11 @@ export class HostService extends EventEmitter {
     home?: string;
     dataDir: string;
     goga?: string;
+    shellPath?: () => Promise<string>;
     runner?: Runner;
     settings?: SettingsStore;
     trashItem?: TrashItem;
+    showItemInFolder?: (absolutePath: string) => void;
     recovery?: RunRecoveryManager;
   }) {
     super();
@@ -403,6 +438,7 @@ export class HostService extends EventEmitter {
     });
     this.personalSettings = options.settings ?? new SettingsStore(this.home);
     this.trashItem = options.trashItem;
+    this.showItemInFolder = options.showItemInFolder;
     this.gitDiscardActions = new NativeGitDiscardActions({
       context: (scope, action) => this.gitCommitContext(scope, action, true),
       trashItem: this.trashItem,
@@ -411,6 +447,11 @@ export class HostService extends EventEmitter {
     this.goga = options.goga ?? "goga";
     this.state = new DesktopStateStore(this.home, this.dataDir);
     this.runner = options.runner ?? new NodeRunner(120000, { HOME: this.home });
+    this.shellPath =
+      options.shellPath ??
+      (!options.runner
+        ? createGogaPathReader(this.home, this.runner)
+        : undefined);
     this.recovery =
       options.recovery ??
       (this.runner instanceof NodeRunner
@@ -434,7 +475,7 @@ export class HostService extends EventEmitter {
           childEnvironment(
             process.env,
             { HOME: this.home },
-            this.invocation(await this.project(ref)).env,
+            (await this.invocation(await this.project(ref))).env,
           ),
         ),
     });
@@ -614,7 +655,7 @@ export class HostService extends EventEmitter {
         "Настройки проекта изменились. Предпросмотр устарел; обновите данные перед запуском.",
       );
   }
-  private invocation(p: Project) {
+  private async invocation(p: Project) {
     const doc = this.context.getStore();
     if (!doc || doc.projectId !== p.id)
       throw new Error("Нет снимка настроек проекта");
@@ -622,7 +663,7 @@ export class HostService extends EventEmitter {
     if (this.bindings.has(p)) assertContextEnvironment(value.env);
     return {
       executable: value.executable === "goga" ? this.goga : value.executable,
-      env: Object.fromEntries(value.env.map((e) => [e.key, e.value])),
+      env: await gogaEnvironment(value.env, this.shellPath),
       value,
     };
   }
@@ -633,7 +674,7 @@ export class HostService extends EventEmitter {
       return (await this.runner.command("git", args, this.root(project)))
         .stdout;
     await this.assertSettings(project.id);
-    const call = this.invocation(project);
+    const call = await this.invocation(project);
     try {
       return (
         await this.runner.command(
@@ -653,9 +694,24 @@ export class HostService extends EventEmitter {
         throw new Error(
           "Эта версия Goga не поддерживает --profile. Выбор профиля не был проигнорирован.",
         );
-      throw new Error(
-        "Не удалось выполнить команду Goga. Проверьте исполняемый файл, PATH и конфигурацию проекта. Значения окружения скрыты.",
-      );
+      assertReadActive();
+      if (error instanceof RunnerShutdownError) throw error;
+      const label = [path.basename(call.executable), ...args]
+        .map((word) =>
+          /^[\p{L}\p{N}_./+@=-]+$/u.test(word) ? word : JSON.stringify(word),
+        )
+        .join(" ");
+      const reason =
+        error instanceof CommandExitError
+          ? `завершилась с кодом ${error.exitCode ?? "signal"}. Проверьте конфигурацию проекта.`
+          : error instanceof CommandSpawnError
+            ? error.code === "ENOENT"
+              ? "не запущена: исполняемый файл или его интерпретатор не найден. Укажите абсолютный путь или PATH в настройках проекта."
+              : error.code === "EACCES"
+                ? "не запущена: нет прав на выполнение исполняемого файла."
+                : "не запущена. Проверьте исполняемый файл и его интерпретатор."
+            : "не выполнена. Проверьте исполняемый файл, PATH и конфигурацию проекта. Значения окружения скрыты.";
+      throw new Error(`Команда «${label}» ${reason}`);
     }
   }
   private async profiles(p: Project) {
@@ -876,6 +932,203 @@ export class HostService extends EventEmitter {
         await this.project(id),
       );
       return { relativePath, configured };
+    });
+  }
+  private overviewRead<T>(
+    scope: ScopeRef,
+    action: (project: Project) => Promise<T>,
+  ) {
+    this.check();
+    return this.snapshot(scope, async () => {
+      const project = await this.project(scope);
+      return action(project);
+    });
+  }
+  listOverviewDirectory(scope: ScopeRef, p: string) {
+    return this.overviewRead(scope, (project) =>
+      overviewFiles.listOverviewDirectory(this.root(project), p),
+    );
+  }
+  searchOverviewFiles(scope: ScopeRef, p: string, query: string) {
+    return this.overviewRead(scope, (project) =>
+      overviewFiles.searchOverviewFiles(this.root(project), p, query),
+    );
+  }
+  readOverviewFile(scope: ScopeRef, p: string) {
+    return this.overviewRead(scope, (project) =>
+      overviewFiles.readOverviewFile(this.root(project), p),
+    );
+  }
+  private overviewWrite<T>(
+    scope: ScopeRef,
+    action: (root: string, guard: () => Promise<void>) => Promise<T>,
+  ) {
+    this.assertLaunchAllowed();
+    return this.operation(() =>
+      this.exclusive(scopeProjectId(scope), () =>
+        this.overviewRead(scope, async (project) => {
+          const epoch = this.catalogEpoch;
+          const guard = async () => {
+            this.assertLaunchAllowed();
+            assertReadActive();
+            this.assertCatalog(epoch);
+            this.assertScopeWritable(project);
+            await this.validateBinding(project);
+            await this.assertSettings(project.id);
+          };
+          await guard();
+          const result = await action(this.root(project), guard);
+          await guard();
+          return result;
+        }),
+      ),
+    );
+  }
+  saveOverviewFile(scope: ScopeRef, p: string, text: string, version: string) {
+    return this.overviewWrite(scope, (root, guard) =>
+      overviewFiles.saveOverviewFile(root, p, text, version, guard),
+    );
+  }
+  createOverviewEntry(
+    scope: ScopeRef,
+    p: string,
+    kind: "file" | "directory",
+    text = "",
+  ) {
+    return this.overviewWrite(scope, (root, guard) =>
+      overviewFiles.createOverviewEntry(root, p, kind, text, guard),
+    );
+  }
+  async prepareOverviewFileAction(
+    scope: ScopeRef,
+    request: OverviewFileActionRequest,
+  ) {
+    this.assertLaunchAllowed();
+    const selected = structuredClone(this.parseScope(scope));
+    const parsed = overviewFileActionRequestSchema.parse(request);
+    return this.overviewRead(selected, async (project) => {
+      this.assertScopeWritable(project);
+      await this.validateBinding(project);
+      const root = this.root(project);
+      const prepared = await prepareOverviewAction(root, parsed);
+      await this.assertSettings(project.id);
+      return this.overviewFileActionTickets.issue({
+        scope: selected,
+        root,
+        settingsVersion: this.context.getStore()!.document.version,
+        prepared,
+      });
+    });
+  }
+  async executeOverviewFileAction(
+    token: string,
+  ): Promise<OverviewFileActionResult> {
+    // Consume before entering the host queue; neither duplicate nor stale calls retry.
+    const pending = overviewFileActionTokenSchema.safeParse(token).success
+      ? this.overviewFileActionTickets.take(token)
+      : undefined;
+    const notDone = (): OverviewFileActionResult => ({
+      status: "not-done",
+      completedPaths: [],
+      message:
+        "Подтверждение устарело или уже использовано. Обновите список и подтвердите действие заново.",
+    });
+    if (!pending) return notDone();
+    let observed: OverviewFileActionResult | undefined;
+    try {
+      return await this.overviewWrite(pending.scope, async (root, guard) => {
+        const verify = async () => {
+          await guard();
+          if (
+            !this.overviewFileActionTickets.isCurrent(pending) ||
+            root !== pending.root ||
+            this.context.getStore()!.document.version !==
+              pending.settingsVersion
+          )
+            throw Error("Предпросмотр устарел");
+        };
+        await verify();
+        observed = await pending.prepared.perform(verify, this.trashItem);
+        return observed;
+      });
+    } catch {
+      return observed
+        ? {
+            ...observed,
+            status: "uncertain",
+            message:
+              "Результат не подтверждён. Проверьте каталог и Корзину; автоматического повтора не будет.",
+          }
+        : notDone();
+    }
+  }
+  revealOverviewEntry(scope: ScopeRef, p: string): Promise<void> {
+    return this.overviewRead(scope, async (project) => {
+      const entry = await checkedOverviewEntry(this.root(project), p);
+      await this.validateBinding(project);
+      await this.assertSettings(project.id);
+      await entry.verify();
+      if (!this.showItemInFolder) throw Error("Показ в Finder недоступен.");
+      this.showItemInFolder(path.join(this.root(project), p));
+    });
+  }
+  async readOverviewSchema(scope: ScopeRef) {
+    let key = "",
+      issued = 0;
+    const data = await this.overviewRead(scope, async (project) => {
+      const call = await this.invocation(project);
+      key = JSON.stringify([
+        scope,
+        this.root(project),
+        this.context.getStore()!.document.version,
+      ]);
+      issued = (this.overviewSchemaIssued.get(key) ?? 0) + 1;
+      this.overviewSchemaIssued.set(key, issued);
+      return readOverviewSchema(
+        this.runner,
+        call.executable,
+        this.root(project),
+        call.env,
+      );
+    });
+    if (this.overviewSchemaIssued.get(key) === issued) {
+      this.overviewSchemas.set(key, buildArchitectureIndex(data));
+      if (this.overviewSchemas.size > 16) {
+        const oldest = this.overviewSchemas.keys().next().value!;
+        this.overviewSchemas.delete(oldest);
+        this.overviewSchemaIssued.delete(oldest);
+      }
+    }
+    return data;
+  }
+  readOverviewContract(scope: ScopeRef, cell: string) {
+    return this.overviewRead(scope, async (project) => {
+      const call = await this.invocation(project),
+        root = this.root(project);
+      const key = JSON.stringify([
+        scope,
+        root,
+        this.context.getStore()!.document.version,
+      ]);
+      let index = this.overviewSchemas.get(key);
+      if (!index)
+        index = buildArchitectureIndex(
+          await readOverviewSchema(
+            this.runner,
+            call.executable,
+            root,
+            call.env,
+          ),
+        );
+      if (!Object.hasOwn(index.cells, cell))
+        throw Error("Папка отсутствует в текущей схеме");
+      return readOverviewContract(
+        this.runner,
+        call.executable,
+        root,
+        cell,
+        call.env,
+      );
     });
   }
   async readProjectDocument(id: ScopeRef, target: ProjectDocumentTarget) {
@@ -1979,6 +2232,7 @@ export class HostService extends EventEmitter {
     scope: ScopeRef,
     action: (context: GitMergeContext) => Promise<T>,
     readOnlyProbe = false,
+    projectAlreadySerialized = false,
   ): Promise<T> {
     const owner = this.parseScope(scope);
     return this.context.exit(() =>
@@ -2162,7 +2416,7 @@ export class HostService extends EventEmitter {
             );
           }
         };
-        return readOnlyProbe
+        return readOnlyProbe || projectAlreadySerialized
           ? admit()
           : this.exclusive(scopeProjectId(owner), admit);
       }),
@@ -2707,7 +2961,7 @@ export class HostService extends EventEmitter {
               const scoped = await this.project(
                 request.context ?? request.projectId,
               );
-              const call = this.invocation(scoped);
+              const call = await this.invocation(scoped);
               secrets = call.value.env
                 .map((entry) => entry.value)
                 .filter(Boolean);
@@ -2723,6 +2977,7 @@ export class HostService extends EventEmitter {
                   call.env,
                 );
               };
+              const repositorySnapshot = this.context.getStore()!;
               const actions = new RepositoryActions({
                 project: async () => {
                   this.check();
@@ -2734,6 +2989,32 @@ export class HostService extends EventEmitter {
                 },
                 resolve: (ref) => this.resolveTopicContext(ref),
                 inventory: () => this.clones.list(request.projectId),
+                mergeTopic: (ref, source, verifySource) =>
+                  withNativeGitCompletion(() =>
+                    this.gitNativeSequenceContext(
+                      ref,
+                      async (context) => {
+                        if (
+                          this.contextActive(ref.contextId) ||
+                          this.terminalDeletionBlocked(ref)
+                        )
+                          throw Error(
+                            "Для получения коммитов остановите запуск и активные команды в терминале топика. Экспорт не выполнялся.",
+                          );
+                        const engine = new NativeGitSequence({
+                          context: async (_scope, action) => action(context),
+                        });
+                        const preview = await engine.prepareStart(ref, {
+                          operation: "merge",
+                          source,
+                        });
+                        await verifySource();
+                        return engine.execute(preview.token);
+                      },
+                      false,
+                      true,
+                    ),
+                  ),
                 sync: (project, ref, onDiagnostic) =>
                   this.sync.request(
                     project,
@@ -2745,8 +3026,14 @@ export class HostService extends EventEmitter {
                   ),
                 verify: async () => {
                   this.check();
-                  await this.assertSettings(request.projectId);
-                  this.assertCatalog(this.context.getStore()!.catalogEpoch);
+                  if (
+                    (await this.state.read(request.projectId)).version !==
+                    repositorySnapshot.document.version
+                  )
+                    throw Error(
+                      "Настройки проекта изменились; повторите действие.",
+                    );
+                  this.assertCatalog(repositorySnapshot.catalogEpoch);
                 },
                 git: (args, cwd) =>
                   this.runner.command(
@@ -3292,7 +3579,7 @@ export class HostService extends EventEmitter {
       goga: async (args, stdin) => {
         await this.assertSettings(scopeProjectId(id));
         await this.validateBinding(project);
-        const call = this.invocation(project);
+        const call = await this.invocation(project);
         beforeCommand?.();
         try {
           const invoke = async () =>
@@ -3418,7 +3705,7 @@ export class HostService extends EventEmitter {
             await this.assertSettings(projectId);
             await this.validateBinding(project);
             assertReadActive();
-            const call = this.invocation(project);
+            const call = await this.invocation(project);
             try {
               return (
                 await this.runner.command(
@@ -3602,7 +3889,7 @@ export class HostService extends EventEmitter {
   private async historyPruneAccess(projectId: string): Promise<PruneAccess> {
     this.assertHistoryPrimary(projectId);
     const project = await this.project(projectId);
-    const call = this.invocation(project);
+    const call = await this.invocation(project);
     const snapshot = this.context.getStore()!;
     return {
       root: project.path,
@@ -4137,7 +4424,7 @@ export class HostService extends EventEmitter {
     return this.snapshot(id, async () => {
       const p = await this.project(id);
       const before = await this.fingerprint(p);
-      const call = this.invocation(p);
+      const call = await this.invocation(p);
       const [help, branch, refs, workflows, profiles] = await Promise.all([
         this.cmd(p, ["build", "--help"]),
         this.cmd(p, ["branch", "--show-current"], true),
@@ -4318,7 +4605,7 @@ export class HostService extends EventEmitter {
     const plan = await readPlan(this.root(p), request.planPath);
     if (plan.version !== request.planVersion)
       throw new Error("План изменился. Откройте его заново перед сборкой.");
-    const invocation = this.invocation(p);
+    const invocation = await this.invocation(p);
     const options: BuildOptions = {
       ...request.options,
       profile: request.options.profile ?? invocation.value.profile,
@@ -4618,8 +4905,8 @@ export class HostService extends EventEmitter {
     return {
       projectSettings: {
         version: this.context.getStore()!.document.version,
-        profile: this.invocation(p).value.profile,
-        executable: this.invocation(p).executable,
+        profile: (await this.invocation(p)).value.profile,
+        executable: (await this.invocation(p)).executable,
       },
       pipelines: parseCatalog(catalog),
       topics,
@@ -4667,7 +4954,7 @@ export class HostService extends EventEmitter {
       await this.cmd(p, ["branch", "--show-current"], true),
       process.env.GOGA_PROFILE ?? "",
       (await this.state.read(p.id)).version,
-      JSON.stringify(this.invocation(p).value),
+      JSON.stringify((await this.invocation(p)).value),
     ];
     const walk = async (dir: string, depth = 0) => {
       if (depth > 8) throw new Error("Слишком глубокие определения Goga");
@@ -4721,7 +5008,9 @@ export class HostService extends EventEmitter {
     }
     const explicit =
       r.profile ||
-      (r.profileMode === "auto" ? "" : this.invocation(p).value.profile);
+      (r.profileMode === "auto"
+        ? ""
+        : (await this.invocation(p)).value.profile);
     // Goga only resolves profiles when a workflow is active.
     if (
       workflow &&
@@ -5297,7 +5586,7 @@ export class HostService extends EventEmitter {
         );
       await assertBranch(branch);
       await this.assertSettings(p.id);
-      const invocation = this.invocation(p);
+      const invocation = await this.invocation(p);
       const effective =
         r.profile || (r.profileMode === "auto" ? "" : invocation.value.profile);
       const run: Run = {

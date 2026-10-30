@@ -2,6 +2,12 @@ import { useEffect, useLayoutEffect, useId, useRef, useState } from "react";
 
 import "./SearchablePicker.css";
 
+export interface PickerOption {
+  value: string;
+  label: string;
+  disabled?: boolean;
+}
+
 /** Shared local filtering and keyboard interaction for catalog selectors. */
 export function SearchablePicker({
   entries,
@@ -29,7 +35,7 @@ export function SearchablePicker({
   className?: string;
   loading?: boolean;
   onOpen?(): void;
-  entries: string[];
+  entries: (string | PickerOption)[];
   value: string;
   disabled: boolean;
   onChange(value: string): void;
@@ -78,15 +84,22 @@ export function SearchablePicker({
       document.removeEventListener("scroll", place, true);
     };
   }, [open]);
-  const filtered = entries.filter((e) =>
-    e.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
+  const options = entries.map((e) =>
+    typeof e === "string" ? { value: e, label: e } : e,
   );
+  const selected = options.find((e) => e.value === value);
+  const filtered = options.filter((e) =>
+    e.label.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()),
+  );
+  const blocked = () => disabled || !!trigger.current?.matches(":disabled");
   const close = (focus = false) => {
     setOpen(false);
     if (focus) trigger.current?.focus();
   };
-  const choose = (entry: string) => {
-    onChange(entry);
+  const choose = (entry: PickerOption) => {
+    if (blocked() || entry.disabled) return;
+    // Match native select semantics: reselecting must not invalidate a ready form.
+    if (entry.value !== value) onChange(entry.value);
     close(true);
   };
   useEffect(() => {
@@ -107,6 +120,7 @@ export function SearchablePicker({
       ?.scrollIntoView?.({ block: "nearest" });
   }, [cursor]);
   const show = () => {
+    if (blocked()) return;
     setQuery("");
     setCursor(-1);
     setOpen(true);
@@ -127,6 +141,7 @@ export function SearchablePicker({
       <button
         ref={trigger}
         type="button"
+        value={value}
         role="combobox"
         aria-labelledby={`${id}-label`}
         aria-expanded={open}
@@ -142,12 +157,13 @@ export function SearchablePicker({
         }}
       >
         <span>
-          {value ||
-            (loading
-              ? "Загружаем…"
-              : entries.length
-                ? placeholder
-                : emptyLabel)}
+          {selected?.label ??
+            (value ||
+              (loading
+                ? "Загружаем…"
+                : entries.length
+                  ? placeholder
+                  : emptyLabel))}
         </span>
         <span aria-hidden="true">⌄</span>
       </button>
@@ -176,7 +192,9 @@ export function SearchablePicker({
             value={query}
             aria-controls={`${id}-list`}
             aria-activedescendant={
-              cursor >= 0 ? `${id}-option-${cursor}` : undefined
+              cursor >= 0 && cursor < filtered.length
+                ? `${id}-option-${cursor}`
+                : undefined
             }
             onChange={(e) => {
               setQuery(e.target.value);
@@ -185,22 +203,27 @@ export function SearchablePicker({
             onKeyDown={(e) => {
               if (e.key === "ArrowDown" || e.key === "ArrowUp") {
                 e.preventDefault();
-                setCursor((i) =>
-                  filtered.length
-                    ? i < 0
-                      ? e.key === "ArrowDown"
-                        ? 0
-                        : filtered.length - 1
-                      : (i +
-                          (e.key === "ArrowDown" ? 1 : -1) +
-                          filtered.length) %
-                        filtered.length
-                    : -1,
-                );
+                const direction = e.key === "ArrowDown" ? 1 : -1;
+                setCursor((i) => {
+                  for (let step = 1; step <= filtered.length; step++) {
+                    const next =
+                      i < 0
+                        ? direction > 0
+                          ? step - 1
+                          : filtered.length - step
+                        : (i + direction * step + filtered.length) %
+                          filtered.length;
+                    if (!filtered[next].disabled) return next;
+                  }
+                  return -1;
+                });
               }
               if (e.key === "Enter") {
                 e.preventDefault();
-                const entry = filtered[cursor >= 0 ? cursor : 0];
+                const entry =
+                  cursor >= 0
+                    ? filtered[cursor]
+                    : filtered.find((e) => !e.disabled);
                 if (entry) choose(entry);
               }
             }}
@@ -211,12 +234,14 @@ export function SearchablePicker({
                 type="button"
                 role="option"
                 id={`${id}-option-${i}`}
-                key={entry}
-                aria-selected={entry === value}
+                key={entry.value}
+                value={entry.value}
+                disabled={entry.disabled}
+                aria-selected={entry.value === value}
                 data-cursor={cursor === i}
                 onClick={() => choose(entry)}
               >
-                {entry}
+                {entry.label}
               </button>
             ))}
           </div>

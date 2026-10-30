@@ -1,3 +1,4 @@
+import { selectCatalog } from "./helpers/select-catalog";
 // @vitest-environment jsdom
 import React from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -106,8 +107,12 @@ function mount(nextSeed = seed, nextOwner: typeof owner | undefined = owner) {
     />,
   );
 }
-const change = (label: string, value: string) =>
-  fireEvent.change(screen.getByLabelText(label), { target: { value } });
+const change = (label: string, value: string) => {
+  const control = screen.getByLabelText(label);
+  if (control.getAttribute("role") === "combobox")
+    selectCatalog(control, value);
+  else fireEvent.change(control, { target: { value } });
+};
 function showDetails() {
   document.querySelectorAll("details").forEach((detail) => {
     detail.open = true;

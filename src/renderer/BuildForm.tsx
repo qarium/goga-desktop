@@ -18,6 +18,7 @@ import type {
 import { buildPlanProblem, validateBuildOptions } from "../shared/build";
 import "../shared/bridge";
 import { EnvironmentValueInput } from "./ProjectSettings";
+import { SearchablePicker } from "./SearchablePicker";
 import { SplitLaunchButton } from "./SplitLaunchButton";
 import { TopicModal, TopicSwitch } from "./TopicsCommon";
 import "./BuildForm.css";
@@ -625,59 +626,71 @@ export function BuildForm({
             </button>
           </div>
           <div className="build-grid">
-            <label>
-              Рабочий процесс
-              <select
-                value={draft.workflow}
-                disabled={loading}
-                onChange={(e) => edit({ workflow: e.target.value })}
-              >
-                <option value="">Из конфигурации</option>
-                {draft.workflow &&
-                  !context?.workflows.includes(draft.workflow) && (
-                    <option value={draft.workflow}>
-                      {draft.workflow} · недоступен
-                    </option>
-                  )}
-                {context?.workflows.map((w) => (
-                  <option key={w} disabled={unsupported("workflow")}>
-                    {w}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Профиль
-              <select
-                value={draft.profile}
-                disabled={loading}
-                onChange={(e) => edit({ profile: e.target.value })}
-              >
-                <option value="__project__">
-                  Из настроек проекта
-                  {context?.defaults.profile
-                    ? " · " + context.defaults.profile
-                    : ""}
-                </option>
-                <option value="">Автоматически</option>
-                {draft.profile !== "__project__" &&
-                  draft.profile &&
-                  !context?.profiles.some((p) => p.name === draft.profile) && (
-                    <option value={draft.profile}>
-                      {draft.profile} · недоступен
-                    </option>
-                  )}
-                {context?.profiles.map((p) => (
-                  <option
-                    key={p.name}
-                    value={p.name}
-                    disabled={unsupported("profile")}
-                  >
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <SearchablePicker
+              label="Рабочий процесс"
+              placeholder="Выберите рабочий процесс"
+              emptyLabel="Нет рабочих процессов"
+              searchLabel="Поиск рабочего процесса"
+              searchPlaceholder="Найти рабочий процесс…"
+              listLabel="Рабочие процессы"
+              value={draft.workflow}
+              disabled={busy || suspended || loading}
+              onChange={(value) => edit({ workflow: value })}
+              entries={[
+                { value: "", label: "Из конфигурации" },
+                ...(draft.workflow &&
+                !context?.workflows.includes(draft.workflow)
+                  ? [
+                      {
+                        value: draft.workflow,
+                        label: `${draft.workflow} · недоступен`,
+                      },
+                    ]
+                  : []),
+                ...(context?.workflows.map((w) => ({
+                  value: w,
+                  label: w,
+                  disabled: unsupported("workflow"),
+                })) ?? []),
+              ]}
+            />
+            <SearchablePicker
+              label="Профиль"
+              placeholder="Выберите профиль"
+              emptyLabel="Нет профилей"
+              searchLabel="Поиск профиля"
+              searchPlaceholder="Найти профиль…"
+              listLabel="Профили"
+              value={draft.profile}
+              disabled={busy || suspended || loading}
+              onChange={(value) => edit({ profile: value })}
+              entries={[
+                {
+                  value: "__project__",
+                  label:
+                    "Из настроек проекта" +
+                    (context?.defaults.profile
+                      ? " · " + context.defaults.profile
+                      : ""),
+                },
+                { value: "", label: "Автоматически" },
+                ...(draft.profile !== "__project__" &&
+                draft.profile &&
+                !context?.profiles.some((p) => p.name === draft.profile)
+                  ? [
+                      {
+                        value: draft.profile,
+                        label: `${draft.profile} · недоступен`,
+                      },
+                    ]
+                  : []),
+                ...(context?.profiles.map((p) => ({
+                  value: p.name,
+                  label: p.name,
+                  disabled: unsupported("profile"),
+                })) ?? []),
+              ]}
+            />
           </div>
           {(unsupported("workflow") || unsupported("profile")) && (
             <p className="hint">
@@ -769,33 +782,36 @@ export function BuildForm({
                 </p>
               )}
               <div className="build-grid">
-                <label>
-                  База сравнения
-                  <select
-                    disabled={skip || loading}
-                    aria-label="База сравнения"
+                <div className="build-catalog-field">
+                  <SearchablePicker
+                    label="База сравнения"
+                    placeholder="Выберите базу сравнения"
+                    emptyLabel="Нет доступных веток"
+                    searchLabel="Поиск базы сравнения"
+                    searchPlaceholder="Найти ветку…"
+                    listLabel="Базы сравнения"
+                    disabled={skip || busy || suspended || loading}
                     value={draft.baseRef}
-                    onChange={(e) => edit({ baseRef: e.target.value })}
-                  >
-                    <option value="">Из конфигурации проекта</option>
-                    {draft.baseRef &&
-                      !context?.branches.includes(draft.baseRef) && (
-                        <option
-                          aria-label="База сравнения"
-                          value={draft.baseRef}
-                        >
-                          {draft.baseRef} · недоступна
-                        </option>
-                      )}
-                    {context?.branches.map((b) => (
-                      <option key={b}>{b}</option>
-                    ))}
-                  </select>
+                    onChange={(value) => edit({ baseRef: value })}
+                    entries={[
+                      { value: "", label: "Из конфигурации проекта" },
+                      ...(draft.baseRef &&
+                      !context?.branches.includes(draft.baseRef)
+                        ? [
+                            {
+                              value: draft.baseRef,
+                              label: `${draft.baseRef} · недоступна`,
+                            },
+                          ]
+                        : []),
+                      ...(context?.branches ?? []),
+                    ]}
+                  />
                   <small>
                     Ветка, относительно которой сравниваются изменения. Список
                     без fetch.
                   </small>
-                </label>
+                </div>
                 <label>
                   Повторные раунды без изменений
                   <input
@@ -1050,7 +1066,9 @@ export function BuildForm({
           </div>
           {blocked && (
             <p className="hint">
-              {typeof blocked === "string" ? blocked : "В этой рабочей копии уже выполняется сборка."}
+              {typeof blocked === "string"
+                ? blocked
+                : "В этой рабочей копии уже выполняется сборка."}
             </p>
           )}
         </fieldset>

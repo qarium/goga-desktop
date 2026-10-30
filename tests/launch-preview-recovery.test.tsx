@@ -1,3 +1,4 @@
+import { selectCatalog } from "./helpers/select-catalog";
 // @vitest-environment jsdom
 import React from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -107,12 +108,12 @@ for (const context of [undefined, owner]) {
       await waitFor(() => expect(api.preview).toHaveBeenCalled());
       // Accessible roles exclude hidden/inert form controls: this is the reported dead end.
       const select = await screen.findByRole("combobox", { name: label });
-      expect((select as HTMLSelectElement).disabled).toBe(false);
+      expect((select as HTMLButtonElement).disabled).toBe(false);
       expect(screen.getByRole("alert").textContent).toBe(reason);
       expect(launchButton().disabled).toBe(true);
       const task = screen.getByRole("textbox", { name: "Что нужно сделать?" });
       fireEvent.change(task, { target: { value: "unsaved task" } });
-      fireEvent.change(select, { target: { value } });
+      selectCatalog(select, value);
       await waitFor(() => expect(launchButton().disabled).toBe(false));
       expect(screen.queryByText(reason)).toBeNull();
       expect(screen.getByDisplayValue("unsaved task")).toBe(task);
@@ -141,9 +142,7 @@ it("settings refresh with a valid catalog and invalid composition remains correc
   rejectComposition = true;
   view.rerender(form(owner, "v2"));
   await screen.findByText(reason);
-  fireEvent.change(screen.getByRole("combobox", { name: "Профиль" }), {
-    target: { value: "__auto__" },
-  });
+  selectCatalog(screen.getByRole("combobox", { name: "Профиль" }), "__auto__");
   await waitFor(() => expect(launchButton().disabled).toBe(false));
   expect(screen.getByDisplayValue("retained draft")).toBeTruthy();
 });
@@ -152,9 +151,10 @@ it("failed preview invalidates an old token; retry stays blocked until the new p
   render(form());
   await waitFor(() => expect(launchButton().disabled).toBe(false));
   rejectComposition = true;
-  fireEvent.change(screen.getByRole("combobox", { name: "Рабочий процесс" }), {
-    target: { value: "none" },
-  });
+  selectCatalog(
+    screen.getByRole("combobox", { name: "Рабочий процесс" }),
+    "none",
+  );
   await screen.findByText(reason);
   expect(launchButton().disabled).toBe(true);
   let resolve!: (p: typeof preview) => void;

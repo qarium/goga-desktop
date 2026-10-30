@@ -1,4 +1,12 @@
 import type {
+  OverviewDirectory,
+  OverviewFile,
+  OverviewFileActionRequest,
+  OverviewFileActionPreview,
+  OverviewFileActionResult,
+} from "./project-overview";
+import type { SchemaCell, CellContract } from "./project-architecture";
+import type {
   GitHistoryRefs,
   GitHistoryRequest,
   GitHistoryPage,
@@ -142,6 +150,39 @@ export interface SettingsFile {
   version: string;
 }
 export interface DesktopAPI {
+  reportOverviewCloseState(paths: string[], busy: boolean): Promise<void>;
+  listOverviewDirectory(
+    scope: ScopeRef,
+    path: string,
+  ): Promise<OverviewDirectory>;
+  searchOverviewFiles(
+    scope: ScopeRef,
+    path: string,
+    query: string,
+  ): Promise<OverviewDirectory>;
+  readOverviewFile(scope: ScopeRef, path: string): Promise<OverviewFile>;
+  prepareOverviewFileAction(
+    scope: ScopeRef,
+    request: OverviewFileActionRequest,
+  ): Promise<OverviewFileActionPreview>;
+  executeOverviewFileAction(token: string): Promise<OverviewFileActionResult>;
+  revealOverviewEntry(scope: ScopeRef, path: string): Promise<void>;
+
+  saveOverviewFile(
+    scope: ScopeRef,
+    path: string,
+    text: string,
+    version: string,
+  ): Promise<OverviewFile>;
+  createOverviewEntry(
+    scope: ScopeRef,
+    path: string,
+    kind: "file" | "directory",
+    text?: string,
+  ): Promise<OverviewFile | null>;
+  readOverviewSchema(scope: ScopeRef): Promise<SchemaCell[]>;
+  readOverviewContract(scope: ScopeRef, cell: string): Promise<CellContract>;
+
   prepareGitRebaseOperation(
     request: GitRebaseOperationRequest,
   ): Promise<GitRebaseOperationPreview>;

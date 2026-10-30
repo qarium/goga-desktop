@@ -1,3 +1,5 @@
+import { openCatalog, selectCatalog } from "./helpers/select-catalog";
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import {
   installPrototypeContextFixture,
@@ -176,9 +178,7 @@ describe("Desktop shell", () => {
       workflow: "quality",
       stages: [{ id: "quality-check", title: "Quality" }],
     });
-    fireEvent.change(screen.getByLabelText("Рабочий процесс"), {
-      target: { value: "file:quality" },
-    });
+    selectCatalog(screen.getByLabelText("Рабочий процесс"), "file:quality");
     await screen.findByRole("checkbox", { name: /quality-check/ });
     old(result);
     await new Promise((r) => setTimeout(r, 20));
@@ -199,6 +199,7 @@ describe("Desktop shell", () => {
     expect(screen.getAllByRole("radio")).toHaveLength(2);
     fireEvent.click(mode);
     expect(screen.getAllByLabelText("Исходная ветка")).toHaveLength(1);
+    openCatalog(screen.getByRole("combobox", { name: "Исходная ветка" }));
     expect(screen.getAllByRole("option", { name: /текущая/ })[0]).toBeTruthy();
   });
   it("resets destructive confirmations and skip cards after confirmed form reset", async () => {
@@ -375,6 +376,7 @@ async function tabsFixture() {
     return () => {};
   });
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByRole("heading", { name: "Проект" });
   act(() => {
     for (const item of list) focusRun(item.id);
@@ -604,9 +606,7 @@ it.each(["HEAD", "main", "feat/a"])(
     fireEvent.change(screen.getByLabelText("Имя нового топика"), {
       target: { value: "new/work" },
     });
-    fireEvent.change(screen.getByLabelText("Исходная ветка"), {
-      target: { value: base },
-    });
+    selectCatalog(screen.getByLabelText("Исходная ветка"), base);
     expect(
       screen.getByText(
         `Создадим «new/work» от ${base === "HEAD" ? "feat/a" : base} и перейдём в ветку топика при запуске.`,
@@ -743,13 +743,17 @@ it("localizes owned controls, shows pipeline id and preserves workflow names and
     screen.getByRole("heading", { name: "Запустить конвейер" }),
   ).toBeTruthy();
   expect(screen.getByText("workflow пайплайн authored")).toBeTruthy();
-  expect(pipeline.textContent).toBe("tool:pipeline · проектный");
+  expect(pipeline.textContent).toContain("tool:pipeline · проектный");
+  expect((pipeline as HTMLButtonElement).value).toBe("tool:pipeline");
   const workflow = screen.getByLabelText("Рабочий процесс");
-  expect(workflow.textContent).toContain("workflow-original");
+  fireEvent.click(workflow);
+  expect(
+    screen.getByRole("option", { name: "workflow-original" }),
+  ).toBeTruthy();
   expect(
     screen.getByRole("option", { name: "Без рабочего процесса" }),
   ).toBeTruthy();
-  fireEvent.change(workflow, { target: { value: "file:workflow-original" } });
+  fireEvent.click(screen.getByRole("option", { name: "workflow-original" }));
   await waitFor(() =>
     expect(api.preview).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -759,3 +763,114 @@ it("localizes owned controls, shows pipeline id and preserves workflow names and
     ),
   );
 });
+
+it("searches shared pipeline catalogs while keeping decorated labels separate from request values", async () => {
+  api.discover.mockResolvedValue({
+    ...discovery,
+    projectSettings: { profile: "fast", env: [] },
+    pipelines: [
+      ...discovery.pipelines,
+      { id: "tool:quality", name: "Quality", description: "", project: true },
+    ],
+  });
+  render(
+    <LaunchForm project={project} onLaunched={() => {}} onCancel={() => {}} />,
+  );
+  const pipeline = await screen.findByRole("combobox", { name: "Конвейер" });
+  expect(pipeline.tagName).toBe("BUTTON");
+  fireEvent.click(pipeline);
+  fireEvent.change(screen.getByRole("searchbox", { name: "Поиск конвейера" }), {
+    target: { value: "quality" },
+  });
+  fireEvent.click(
+    screen.getByRole("option", { name: "tool:quality · проектный" }),
+  );
+  fireEvent.click(
+    await screen.findByRole("combobox", { name: "Рабочий процесс" }),
+  );
+  fireEvent.change(
+    screen.getByRole("searchbox", { name: "Поиск рабочего процесса" }),
+    { target: { value: "quality" } },
+  );
+  fireEvent.click(screen.getByRole("option", { name: "quality" }));
+  fireEvent.click(await screen.findByRole("combobox", { name: "Профиль" }));
+  fireEvent.change(screen.getByRole("searchbox", { name: "Поиск профиля" }), {
+    target: { value: "личный" },
+  });
+  expect(screen.queryByRole("option")).toBeNull();
+  fireEvent.change(screen.getByRole("searchbox", { name: "Поиск профиля" }), {
+    target: { value: "проектный" },
+  });
+  fireEvent.click(screen.getByRole("option", { name: "fast · проектный" }));
+  await waitFor(() =>
+    expect(api.preview).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        pipeline: "tool:quality",
+        workflow: "file:quality",
+        profile: "fast",
+      }),
+    ),
+  );
+  fireEvent.click(screen.getByRole("radio", { name: "Создать новый" }));
+  fireEvent.change(screen.getByLabelText("Имя нового топика"), {
+    target: { value: "picker-topic" },
+  });
+  fireEvent.click(screen.getByRole("combobox", { name: "Исходная ветка" }));
+  fireEvent.change(
+    screen.getByRole("searchbox", { name: "Поиск исходной ветки" }),
+    { target: { value: "базовая" } },
+  );
+  fireEvent.click(screen.getByRole("option", { name: "main — базовая" }));
+  expect(
+    (
+      screen.getByRole("combobox", {
+        name: "Исходная ветка",
+      }) as HTMLButtonElement
+    ).value,
+  ).toBe("main");
+  await waitFor(() =>
+    expect((executionButton() as HTMLButtonElement).disabled).toBe(false),
+  );
+  fireEvent.click(executionButton());
+  expect(api.launch).not.toHaveBeenCalled();
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Создать и запустить" }),
+  );
+  await waitFor(() => expect(api.launch).toHaveBeenCalledTimes(1));
+  expect(api.launch.mock.calls[0][0]).toMatchObject({
+    pipeline: "tool:quality",
+    workflow: "file:quality",
+    profile: "fast",
+    topic: { mode: "new", name: "picker-topic", baseRef: "main" },
+  });
+});
+
+it.each([
+  ["Конвейер", "tool:deploy"],
+  ["Рабочий процесс", "auto"],
+  ["Профиль", ""],
+])(
+  "reselecting the current %s preserves the ready launch preview",
+  async (label, value) => {
+    render(
+      <LaunchForm
+        project={project}
+        onLaunched={() => {}}
+        onCancel={() => {}}
+      />,
+    );
+    await waitFor(() =>
+      expect((executionButton() as HTMLButtonElement).disabled).toBe(false),
+    );
+    const previews = api.preview.mock.calls.length;
+    selectCatalog(screen.getByRole("combobox", { name: label }), value);
+    expect((executionButton() as HTMLButtonElement).disabled).toBe(false);
+    expect(api.preview).toHaveBeenCalledTimes(previews);
+    fireEvent.click(executionButton());
+    await waitFor(() =>
+      expect(api.launch).toHaveBeenCalledWith(
+        expect.objectContaining({ previewToken: "current-token" }),
+      ),
+    );
+  },
+);

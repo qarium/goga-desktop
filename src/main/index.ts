@@ -1,3 +1,4 @@
+import { OverviewExitGuard } from "./overview-close";
 import { createWindowTerminal } from "./terminal-bootstrap";
 import { ShutdownCoordinator } from "./shutdown-coordinator";
 import { installShutdownHandlers } from "./shutdown-handlers";
@@ -96,6 +97,8 @@ if (!app.requestSingleInstanceLock()) {
       const service = new HostService({
         dataDir: app.getPath("userData"),
         settings,
+        showItemInFolder: (absolutePath) =>
+          shell.showItemInFolder(absolutePath),
         trashItem: (absolutePath) =>
           shell.trashItem(path.resolve(absolutePath)),
       });
@@ -114,9 +117,23 @@ if (!app.requestSingleInstanceLock()) {
       );
       const html = path.join(__dirname, "../dist/index.html"),
         shellURL = pathToFileURL(html).href;
+      const overviewExit = new OverviewExitGuard(async (paths) => {
+        const result = await dialog.showMessageBox(win, {
+          type: "warning",
+          message: "В обзоре есть несохранённые файлы",
+          detail:
+            paths.join("\n") +
+            "\n\nВернитесь в приложение, чтобы сохранить файлы. При выходе без сохранения черновики будут потеряны.",
+          buttons: ["Вернуться", "Выйти без сохранения"],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        return result.response === 1;
+      });
       const topicPopup = new TopicPopup(win, shellURL);
       registerIPC(ipcMain, {
         topicPopup,
+        overviewCloseState: (paths, busy) => overviewExit.update(paths, busy),
         service,
         settings,
         window: win,
@@ -197,6 +214,7 @@ if (!app.requestSingleInstanceLock()) {
           return answer.response === 1;
         },
         finalize: async () => {
+          overviewExit.validate();
           await service.finalizeShutdown();
           terminal.sessions.finalizeShutdown();
           terminal.disposeAfterExit();
@@ -211,6 +229,7 @@ if (!app.requestSingleInstanceLock()) {
         window: win,
         shutdown,
         isExiting: () => exiting,
+        beforeClose: () => overviewExit.beforeClose(),
         report: async (result) => {
           await dialog.showMessageBox(win, {
             type: "error",

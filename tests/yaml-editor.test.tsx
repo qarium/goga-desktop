@@ -575,3 +575,85 @@ it("rejects a precise change whose computed text does not match the requested va
   expect(view.state.doc.toString()).toBe("before");
   expect(undoDepth(view.state)).toBe(0);
 });
+
+it.each(["\n", "\r\n"])(
+  "highlights dash-prefixed YAML keys and a following quoted signature without desynchronizing (%j)",
+  (newline) => {
+    const signature =
+      '"PrettyPlay(cache_key: str, cache_path: str | None, cleanup: bool, hooks: list[StepHooks] | None, config: PrettyConfig | None)"';
+    const value = [
+      "->PrettyConfig: {}",
+      "",
+      "->BrowserConfig: {}",
+      "",
+      "->StepHooks: {}",
+      "",
+      signature + ":",
+      "  location: scenario.py",
+      "  annotations: |",
+      "    ->not_a_key: remains literal",
+      "",
+    ].join(newline);
+    const onChange = vi.fn();
+    render(<YamlEditor value={value} onChange={onChange} />);
+    const view = editor();
+    expect(
+      [...view.dom.querySelectorAll(".yaml-key")].map((e) => e.textContent),
+    ).toEqual([
+      "->PrettyConfig",
+      "->BrowserConfig",
+      "->StepHooks",
+      signature,
+      "location",
+      "annotations",
+    ]);
+    expect(view.state.doc.toString()).toBe(value);
+    expect(onChange).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps YAML mappings, sequences, literals, quoted scalars and updates consistent around indicator-prefixed keys", () => {
+  const value = `---
+-foo: { ?bar: 123, normal: true }
+?flag: yes
+sequence:
+  - key: "->text: stays a value"
+  - item
+quoted: '123'
+body: |
+  ->not_a_key: text
+# tail
+...
+`;
+  render(<YamlEditor value={value} onChange={() => {}} />);
+  const view = editor();
+  const keys = () =>
+    [...view.dom.querySelectorAll(".yaml-key")].map((e) => e.textContent);
+  expect(keys()).toEqual([
+    "-foo",
+    "?bar",
+    "normal",
+    "?flag",
+    "sequence",
+    "key",
+    "quoted",
+    "body",
+  ]);
+  expect(
+    [...view.dom.querySelectorAll(".yaml-number")].map((e) => e.textContent),
+  ).toEqual(["123"]);
+  expect(
+    [...view.dom.querySelectorAll(".yaml-boolean")].map((e) => e.textContent),
+  ).toEqual(["true", "yes"]);
+  expect(view.dom.querySelector(".yaml-comment")?.textContent).toBe("# tail");
+  const start = value.indexOf("-foo");
+  act(() =>
+    view.dispatch({
+      changes: { from: start, to: start + 4, insert: "->Renamed" },
+    }),
+  );
+  expect(keys()[0]).toBe("->Renamed");
+  act(() => expect(undo(view)).toBe(true));
+  expect(keys()[0]).toBe("-foo");
+  expect(view.state.doc.toString()).toBe(value);
+});

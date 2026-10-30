@@ -1,3 +1,4 @@
+import "./helpers/overview-browser-fixture";
 import { useViewActive } from "../src/renderer/RetainedViews";
 // @vitest-environment jsdom
 import React, { useState } from "react";
@@ -185,6 +186,7 @@ beforeEach(() => {
 afterEach(cleanup);
 async function mount() {
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByTestId("settings");
   await waitFor(() => expect(api.listTopicContexts).toHaveBeenCalled());
 }
@@ -198,6 +200,61 @@ async function choose(name: string) {
     name: name === "Без топика" ? name : `Открыть карточку топика ${name}`,
   });
 }
+it.each(["Обзор", "Проект", "Терминал", "Топики"])(
+  "keeps %s selected through primary, A, B and primary topic transitions",
+  async (label) => {
+    api.terminal = terminalFixture();
+    api.listOverviewDirectory = vi.fn(async (_scope: any, path: string) => ({
+      path,
+      entries: [],
+      truncated: false,
+    }));
+    api.readOverviewSchema = vi.fn(async () => []);
+    await mount();
+    fireEvent.click(screen.getByRole("button", { name: label }));
+    for (const topic of ["alpha", "beta", "Без топика"]) {
+      await choose(topic);
+      expect(
+        screen
+          .getByRole("button", { name: label })
+          .getAttribute("aria-pressed"),
+      ).toBe("true");
+      if (label === "Обзор") {
+        const scope =
+          topic === "Без топика"
+            ? "p"
+            : expect.objectContaining({
+                contextId:
+                  topic === "alpha" ? ownerA.contextId : ownerB.contextId,
+              });
+        await waitFor(() =>
+          expect(api.readOverviewSchema).toHaveBeenCalledWith(scope),
+        );
+        expect(
+          screen
+            .getByRole("region", { name: "Обзор проекта" })
+            .closest("[hidden]"),
+        ).toBeNull();
+      }
+      if (label === "Проект") {
+        const expected =
+          topic === "Без топика"
+            ? null
+            : topic === "alpha"
+              ? ownerA.contextId
+              : ownerB.contextId;
+        const owner = JSON.parse(screen.getByTestId("settings").dataset.owner!);
+        expect(owner?.contextId ?? null).toBe(expected);
+      }
+    }
+    expect(api.ensureTopicContext).not.toHaveBeenCalled();
+    expect(api.checkoutBranch).not.toHaveBeenCalled();
+    expect(api.launch).not.toHaveBeenCalled();
+    expect(api.launchBuild).not.toHaveBeenCalled();
+    expect(api.stopRun).not.toHaveBeenCalled();
+    expect(api.closeRun).not.toHaveBeenCalled();
+  },
+);
 function settings() {
   fireEvent.click(screen.getByRole("button", { name: "Проект" }));
 }
@@ -352,6 +409,7 @@ it("keeps Without topic usable even without clone APIs or a readable topic catal
   delete api.resolveTopicContext;
   api.readTopicBoard.mockRejectedValue(Error("Catalog unavailable"));
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByTestId("settings");
   fireEvent.click(screen.getByRole("button", { name: "Без топика" }));
   expect(screen.getByRole("row", { name: /^Без топика / })).toBeTruthy();
@@ -639,9 +697,16 @@ it("keeps Terminal between Project and Topics, follows selector context without 
   expect(
     within(nav)
       .getAllByRole("button")
-      .slice(0, 3)
+      .slice(0, 4)
       .map((b) => b.textContent),
-  ).toEqual(["Проект", "Терминал", "Топики"]);
+  ).toEqual(["Обзор", "Проект", "Терминал", "Топики"]);
+  for (const label of ["Обзор", "Проект", "Терминал", "Топики"]) {
+    expect(
+      within(nav)
+        .getByRole("button", { name: label })
+        .querySelector('svg[aria-hidden="true"]'),
+    ).toBeTruthy();
+  }
   fireEvent.click(screen.getByRole("button", { name: "Терминал" }));
   await screen.findByTestId("terminal-screen");
   await choose("alpha");
@@ -697,6 +762,7 @@ it("returns to each project section instead of resetting to Project", async () =
   ).toHaveLength(1);
   api.terminal.request.mockClear();
   fireEvent.click(screen.getByRole("button", { name: "Other" }));
+  fireEvent.click(screen.getByRole("button", { name: "Проект" }));
   await screen.findByTestId("settings");
   fireEvent.click(screen.getByRole("button", { name: "Fixture" }));
   await waitFor(() =>
@@ -752,6 +818,7 @@ it("restores the same topics table and filter while return-time catalog reads ar
   fireEvent.change(filter, { target: { value: "alpha" } });
   const table = screen.getByRole("table");
   fireEvent.click(screen.getByRole("button", { name: "Other" }));
+  fireEvent.click(screen.getByRole("button", { name: "Проект" }));
   await screen.findByTestId("settings");
   api.readTopicBoard.mockImplementation(() => new Promise(() => {}));
   api.readTopicTable.mockImplementation(() => new Promise(() => {}));
@@ -1029,4 +1096,63 @@ it("deletes a different topic without replacing the selected context", async () 
     )!,
   );
   expect(saved.contextId).toBe(ownerA.contextId);
+});
+
+it("automatically loads a healthy topic after a schema failure and refreshes the retained topic on return", async () => {
+  const scopeRef = (owner: typeof ownerA) => ({
+    projectId: owner.projectId,
+    year: owner.year,
+    topic: owner.topic,
+    branch: owner.branch,
+    contextId: owner.contextId,
+    revision: owner.revision,
+  });
+  let alphaReads = 0;
+  api.listOverviewDirectory = vi.fn(async (scope: any, path: string) => ({
+    path,
+    entries: [
+      {
+        path: typeof scope === "string" ? "primary.ts" : `${scope.topic}.ts`,
+        name: typeof scope === "string" ? "primary.ts" : `${scope.topic}.ts`,
+        kind: "file",
+      },
+    ],
+    truncated: false,
+  }));
+  const failure = "Команда «goga schema» завершилась с кодом 1.";
+  api.readOverviewSchema = vi.fn(async (scope: any) => {
+    if (scope.contextId === ownerA.contextId && ++alphaReads === 1)
+      throw Error(
+        `Error invoking remote method 'goga:read-request': Error: ${failure}`,
+      );
+    return [];
+  });
+  await mount();
+  fireEvent.click(screen.getByRole("button", { name: "Обзор" }));
+  await choose("alpha");
+  await screen.findByText(failure);
+  expect(api.readOverviewSchema).toHaveBeenCalledWith(scopeRef(ownerA));
+  expect(alphaReads).toBe(1);
+  await choose("beta");
+  await screen.findByText("Схема отсутствует");
+  await waitFor(() =>
+    expect(api.readOverviewSchema).toHaveBeenLastCalledWith(scopeRef(ownerB)),
+  );
+  expect(screen.queryByText(failure)).toBeNull();
+  expect(alphaReads).toBe(1);
+  await choose("alpha");
+  await waitFor(() => expect(alphaReads).toBe(2));
+  await waitFor(() => expect(screen.queryByText(failure)).toBeNull());
+  expect(api.readOverviewSchema).toHaveBeenLastCalledWith(scopeRef(ownerA));
+  expect(api.listOverviewDirectory).toHaveBeenLastCalledWith(
+    scopeRef(ownerA),
+    "",
+  );
+  expect(
+    screen
+      .getByRole("button", { name: "Обновить обзор" })
+      .hasAttribute("disabled"),
+  ).toBe(false);
+  expect(api.launch).not.toHaveBeenCalled();
+  expect(api.checkoutBranch).not.toHaveBeenCalled();
 });

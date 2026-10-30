@@ -864,3 +864,14 @@ button.topic-link:hover:not(:disabled) {
 .topic-update-controls .topic-branch-picker {
   display: block;
 }
+
+/* Decorative section icons retain the existing text labels and tab height. */
+.topics-nav {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+}
+.topics-nav > svg {
+  flex: none;
+}

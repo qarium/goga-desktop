@@ -1,3 +1,5 @@
+import { saveProjectSettingsReconciled } from "./project-settings-save";
+import { preparationErrorMessage } from "./preparation-error";
 import "./ProjectContent.css";
 import { RetainedViews, useViewActive } from "./RetainedViews";
 import type { TopicContextRef } from "../shared/worktrees";
@@ -316,7 +318,8 @@ export function ProjectSettings({
     };
   }, [scopeKey, catalogKey, !!doc, profileCatalogAttempt]);
   async function save() {
-    if (!doc || !value || saving || inFlight.current) return false;
+    if (!doc || !value || saving || inFlight.current || registryDraft.conflict)
+      return false;
     // A guarded save can originate from another section; show validation there.
     setTab("launch");
     if (Object.keys(inputErrors).length > 0) return false;
@@ -342,13 +345,29 @@ export function ProjectSettings({
     setError("");
     setNotice("");
     try {
-      const next = await window.goga.saveProjectSettings(
+      const result = await saveProjectSettingsReconciled(
+        window.goga,
         scope,
+        doc,
         timeoutDraft === savedTimeout
           ? value
           : { ...value, startupTimeoutMinutes: Number(timeoutDraft) },
-        doc.version,
       );
+      if (result.conflict) {
+        documentStore.updateRegistryDraft(scope, (previous) => ({
+          ...previous,
+          doc: result.document,
+          value: result.conflict!.mine,
+          timeoutDraft: String(
+            result.conflict!.mine.startupTimeoutMinutes ??
+              DEFAULT_STARTUP_TIMEOUT_MINUTES,
+          ),
+          conflict: result.conflict,
+          error: `Одни и те же настройки изменены в двух местах: ${result.conflict.fields.join(", ")}. Выберите, какие значения оставить. Остальные изменения объединены.`,
+        }));
+        return false;
+      }
+      const next = result.document;
       setDoc(next);
       setValue(next.value);
       setTimeoutDraft(
@@ -362,9 +381,7 @@ export function ProjectSettings({
       return true;
     } catch (e) {
       setError(
-        e instanceof Error
-          ? e.message
-          : "Не удалось сохранить настройки проекта.",
+        preparationErrorMessage(e) || "Не удалось сохранить настройки проекта.",
       );
       return false;
     } finally {
@@ -383,6 +400,10 @@ export function ProjectSettings({
       setError("");
       setInputErrors({});
       setNotice("");
+      documentStore.updateRegistryDraft(scope, (previous) => ({
+        ...previous,
+        conflict: undefined,
+      }));
       if (guard.current) guard.current.dirty = false;
     }
   }
@@ -470,7 +491,7 @@ export function ProjectSettings({
                 void save();
               }}
             >
-              <fieldset disabled={saving}>
+              <fieldset disabled={saving || !!registryDraft.conflict}>
                 <section className="project-settings-section">
                   <div>
                     <h3>Goga</h3>
@@ -730,7 +751,7 @@ export function ProjectSettings({
                               key: "",
                               value: "",
                               secret: false,
-                              runtime: false,
+                              runtime: true,
                             },
                           ],
                         })
@@ -763,6 +784,42 @@ export function ProjectSettings({
             <p role="alert" className="error">
               {Object.values(inputErrors)[0] || error}
             </p>
+          )}
+          {registryDraft.conflict && (
+            <div
+              className="form-actions"
+              aria-label="Разрешение конфликта настроек"
+            >
+              {(
+                [
+                  ["mine", "Оставить мои значения"],
+                  ["current", "Использовать актуальные значения"],
+                ] as const
+              ).map(([choice, label]) => (
+                <button
+                  key={choice}
+                  type="button"
+                  disabled={saving}
+                  onClick={() => {
+                    const next = registryDraft.conflict![choice];
+                    documentStore.updateRegistryDraft(scope, (previous) => ({
+                      ...previous,
+                      value: next,
+                      timeoutDraft: String(
+                        next.startupTimeoutMinutes ??
+                          DEFAULT_STARTUP_TIMEOUT_MINUTES,
+                      ),
+                      conflict: undefined,
+                      error: "",
+                      notice:
+                        "Значения выбраны. Проверьте настройки и сохраните изменения.",
+                    }));
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           )}
           {notice && (
             <p role="status" className="success">

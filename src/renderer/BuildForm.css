@@ -269,3 +269,20 @@
 .launch-draft-tab.active {
   color: var(--teal);
 }
+
+.build-form .searchable-picker {
+  width: 100%;
+  color: var(--text);
+  font-size: 12px;
+}
+.build-catalog-field {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+  align-content: start;
+}
+.build-catalog-field > small {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.6;
+}

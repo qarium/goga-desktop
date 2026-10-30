@@ -1,5 +1,12 @@
 /** File IO is distinct from CLI snapshots (the host already allows 120s/command). */
 export const READ_BUDGETS = {
+  listOverviewDirectory: 30000,
+  searchOverviewFiles: 30000,
+  readOverviewFile: 30000,
+  prepareOverviewFileAction: 30000,
+  readOverviewSchema: 120000,
+  readOverviewContract: 120000,
+
   readGitBranches: 30000,
   prepareGitBranch: 30000,
   prepareGitUpdateHandoff: 30000,

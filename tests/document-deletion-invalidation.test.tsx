@@ -1,3 +1,5 @@
+import { openCatalog, selectCatalog } from "./helpers/select-catalog";
+import "./helpers/overview-browser-fixture";
 import {
   installPrototypeContextFixture,
   openPrototypeLaunch,
@@ -298,18 +300,17 @@ it.each(["explicit", "default"])(
     const ui = render(launch("1"));
     await ready();
     if (kind === "explicit") {
-      fireEvent.change(screen.getByLabelText("Профиль"), {
-        target: { value: "personal" },
-      });
+      selectCatalog(screen.getByLabelText("Профиль"), "personal");
       await ready();
     }
     const before = api.preview.mock.calls.length;
     discovery = { ...discovery, profiles: [] };
     ui.rerender(launch("2"));
     await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
+    openCatalog(await screen.findByRole("combobox", { name: "Профиль" }));
     await screen.findByRole("option", { name: /personal.*не найден/ });
     expect(api.preview).toHaveBeenCalledTimes(before);
-    expect((screen.getByLabelText("Профиль") as HTMLSelectElement).value).toBe(
+    expect((screen.getByLabelText("Профиль") as HTMLButtonElement).value).toBe(
       kind === "explicit" ? "personal" : "",
     );
     expect(
@@ -323,16 +324,15 @@ it("explicit profile survives launch unmount and remains missing after deletion"
   const drafts = createDraftStore();
   const ui = render(launch("1", drafts));
   await ready();
-  fireEvent.change(screen.getByLabelText("Профиль"), {
-    target: { value: "personal" },
-  });
+  selectCatalog(screen.getByLabelText("Профиль"), "personal");
   await waitFor(() => expect(drafts.forms.get("p")?.profile).toBe("personal"));
   ui.unmount();
   api.preview.mockClear();
   discovery = { ...discovery, profiles: [] };
   render(launch("2", drafts));
+  openCatalog(await screen.findByRole("combobox", { name: "Профиль" }));
   await screen.findByRole("option", { name: /personal.*не найден/ });
-  expect((screen.getByLabelText("Профиль") as HTMLSelectElement).value).toBe(
+  expect((screen.getByLabelText("Профиль") as HTMLButtonElement).value).toBe(
     "personal",
   );
   expect(api.preview).not.toHaveBeenCalled();
@@ -531,9 +531,7 @@ it("App preserves explicit profile through global settings deletion with the lau
   render(<App />);
   await openPrototypeLaunch();
   await ready();
-  fireEvent.change(screen.getByLabelText("Профиль"), {
-    target: { value: "personal" },
-  });
+  selectCatalog(screen.getByLabelText("Профиль"), "personal");
   await ready();
   click("Настройки");
   await waitFor(() => expect(api.listSettings).toHaveBeenCalled());
@@ -552,8 +550,9 @@ it("App preserves explicit profile through global settings deletion with the lau
     fireEvent.click(screen.getByRole("button", { name: "← Назад" }));
   else await openPrototypeLaunch();
   await openPrototypeLaunch();
+  openCatalog(await screen.findByRole("combobox", { name: "Профиль" }));
   await screen.findByRole("option", { name: /personal.*не найден/ });
-  expect((screen.getByLabelText("Профиль") as HTMLSelectElement).value).toBe(
+  expect((screen.getByLabelText("Профиль") as HTMLButtonElement).value).toBe(
     "personal",
   );
   expect(api.preview).not.toHaveBeenCalled();
@@ -632,9 +631,7 @@ it.each(["save", "delete"] as const)(
     render(<App />);
     await openPrototypeLaunch();
     await ready();
-    fireEvent.change(screen.getByLabelText("Профиль"), {
-      target: { value: "personal" },
-    });
+    selectCatalog(screen.getByLabelText("Профиль"), "personal");
     await ready();
     await waitFor(() =>
       expect(
@@ -672,9 +669,10 @@ it.each(["save", "delete"] as const)(
       fireEvent.click(screen.getByRole("button", { name: "← Назад" }));
     else await openPrototypeLaunch();
     await ready();
-    expect((screen.getByLabelText("Профиль") as HTMLSelectElement).value).toBe(
+    expect((screen.getByLabelText("Профиль") as HTMLButtonElement).value).toBe(
       "personal",
     );
+    openCatalog(screen.getByRole("combobox", { name: "Профиль" }));
     expect(
       screen.getByRole("option", {
         name: action === "save" ? "personal · проектный" : "personal · личный",

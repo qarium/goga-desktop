@@ -1,0 +1,34 @@
+--- a/@lezer/yaml/dist/index.js
++++ b/@lezer/yaml/dist/index.js
+@@ -128,12 +128,12 @@
+     }
+     return
+   }
+-  if (input.next == 45 /* '-' */) {
++  if (input.next == 45 /* '-' */ && isSep(input.peek(1))) {
+     input.advance();
+     if (isSep(input.next))
+       input.acceptToken(stack.context.type == type_Seq && stack.context.depth == findColumn(input, input.pos - 1)
+                         ? sequenceContinueMark : sequenceStartMark);
+-  } else if (input.next == 63 /* '?' */) {
++  } else if (input.next == 63 /* '?' */ && isSep(input.peek(1))) {
+     input.advance();
+     if (isSep(input.next))
+       input.acceptToken(stack.context.type == type_Map && stack.context.depth == findColumn(input, input.pos - 1)
+--- a/@lezer/yaml/dist/index.cjs
++++ b/@lezer/yaml/dist/index.cjs
+@@ -132,12 +132,12 @@
+     }
+     return
+   }
+-  if (input.next == 45 /* '-' */) {
++  if (input.next == 45 /* '-' */ && isSep(input.peek(1))) {
+     input.advance();
+     if (isSep(input.next))
+       input.acceptToken(stack.context.type == type_Seq && stack.context.depth == findColumn(input, input.pos - 1)
+                         ? sequenceContinueMark : sequenceStartMark);
+-  } else if (input.next == 63 /* '?' */) {
++  } else if (input.next == 63 /* '?' */ && isSep(input.peek(1))) {
+     input.advance();
+     if (isSep(input.next))
+       input.acceptToken(stack.context.type == type_Map && stack.context.depth == findColumn(input, input.pos - 1)

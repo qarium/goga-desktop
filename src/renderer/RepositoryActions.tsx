@@ -119,9 +119,9 @@ export function RepositoryActions({
   };
   const descriptions = {
     "update-remote":
-      "Коммиты: origin → ветка топика в исходном проекте → копия; только fast-forward, без публикации",
+      "Коммиты: origin (если ветка опубликована) → исходный проект → копия; только fast-forward, без публикации",
     sync: selected
-      ? "Коммиты: копия → исходный проект"
+      ? "Коммиты одноимённой ветки: исходный проект → копия → исходный проект; без публикации"
       : "Обновить текущую ветку из upstream (fast-forward)",
     publish: selected
       ? "Коммиты: копия → исходный проект → origin"
@@ -129,7 +129,7 @@ export function RepositoryActions({
     propagate:
       "Синхронизировать копию; перенести топик в base и опубликовать base в origin",
     "update-base":
-      "Обновить base из remote; получить в копию и выполнить goga topics update",
+      "Обновить base из remote, если ветка опубликована; получить локальную базу в копию и выполнить goga topics update",
   };
   return (
     <div

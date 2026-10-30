@@ -1,3 +1,4 @@
+import type { SettingsConflict } from "./project-settings-save";
 import type { ProjectSettings, ProjectSettingsView } from "../shared/types";
 import type { TopicContextRef } from "../shared/worktrees";
 import type { ScopeRef } from "../shared/context";
@@ -57,6 +58,7 @@ export const documentKey = (source: DocumentSource) =>
 // App-owned, memory-only registry form drafts. The registry itself is shared by
 // projectId, but each exact file-validation scope owns its draft and base version.
 export interface RegistrySettingsDraft {
+  conflict?: SettingsConflict;
   doc: ProjectSettingsView | null;
   value: ProjectSettings | null;
   timeoutDraft: string;

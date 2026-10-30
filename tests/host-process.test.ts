@@ -389,3 +389,18 @@ it("preserves a genuine numeric exitCode without exposing stderr or changing its
   );
   expect(error.message).not.toContain("private details");
 });
+
+it("identifies a missing executable separately from command exit without exposing stderr", async () => {
+  const runner = new NodeRunner(1000);
+  try {
+    await expect(
+      runner.command(
+        "/private/tmp/goga-fixture-no-such-executable",
+        [],
+        "/private/tmp",
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT", name: "CommandSpawnError" });
+  } finally {
+    await runner.dispose();
+  }
+});

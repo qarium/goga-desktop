@@ -1,3 +1,5 @@
+import { selectCatalog } from "./helpers/select-catalog";
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import { installHistoryWorker } from "./helpers/history-worker";
 import { openPrototypeLaunch } from "./helpers/prototype-context-fixture";
@@ -215,9 +217,7 @@ it("navigates board/card back to launch without losing task or pipeline or runni
     expect((task as HTMLTextAreaElement).value).toBe("Original"),
   );
   fireEvent.change(task, { target: { value: "Unsaved launch" } });
-  fireEvent.change(screen.getByRole("combobox", { name: "Конвейер" }), {
-    target: { value: "two" },
-  });
+  selectCatalog(screen.getByRole("combobox", { name: "Конвейер" }), "two");
   fireEvent.click(screen.getByRole("button", { name: "Топики" }));
   fireEvent.click(
     await screen.findByRole("button", { name: "Открыть топик feature-a" }),
@@ -235,7 +235,7 @@ it("navigates board/card back to launch without losing task or pipeline or runni
     ).value,
   ).toBe("Unsaved launch");
   expect(
-    (screen.getByRole("combobox", { name: "Конвейер" }) as HTMLSelectElement)
+    (screen.getByRole("combobox", { name: "Конвейер" }) as HTMLButtonElement)
       .value,
   ).toBe("two");
   expect(api.discover).toHaveBeenLastCalledWith(worktreeContextRef(ownerA));

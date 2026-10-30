@@ -1,3 +1,5 @@
+import { selectCatalog } from "./helpers/select-catalog";
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import {
   installPrototypeContextFixture,
@@ -171,6 +173,7 @@ async function openBuild() {
 }
 async function mount() {
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Исполняемый файл");
   act(() => focusRun("b"));
   click("Проект");
@@ -371,9 +374,7 @@ it("real path/workflow/profile/env/revision and explicit refresh still read the 
     ["Профиль", "fast"],
   ]) {
     const count = api.buildContext.mock.calls.length;
-    fireEvent.change(screen.getByRole("combobox", { name: label }), {
-      target: { value },
-    });
+    selectCatalog(screen.getByRole("combobox", { name: label }), value);
     await flush();
     expect(api.buildContext).toHaveBeenCalledTimes(count + 1);
   }

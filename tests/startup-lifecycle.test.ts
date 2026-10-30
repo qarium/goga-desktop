@@ -23,7 +23,7 @@ afterEach(async () => {
   }
   observers.clear();
 });
-async function fixture(minutes?: number) {
+async function fixture(minutes?: number, shellPath?: () => Promise<string>) {
   const root = await mkdtemp("/private/tmp/goga-startup-lifecycle-"),
     home = path.join(root, "home"),
     repo = path.join(root, "project");
@@ -66,6 +66,7 @@ async function fixture(minutes?: number) {
   const service = new HostService({
     home,
     dataDir: path.join(root, "data"),
+    shellPath,
     runner,
   });
   resources.push({ service, root, runner });
@@ -238,15 +239,21 @@ it("timeout kill failure stays explicit and retains ownership until successful r
   expect(f.service.runs()[0].url).toBeUndefined();
   const sibling = await f.launch();
   expect(sibling.status).toBe("starting");
-  expect(f.service.runs().find((r) => r.id === run.id)?.status).toBe("starting");
+  expect(f.service.runs().find((r) => r.id === run.id)?.status).toBe(
+    "starting",
+  );
   await f.service.stop(run.id);
   expect(f.service.runs()[0].status).toBe("stopped");
-  expect(f.service.runs().find((r) => r.id === sibling.id)?.status).toBe("starting");
+  expect(f.service.runs().find((r) => r.id === sibling.id)?.status).toBe(
+    "starting",
+  );
   expect(f.runner.kill).toHaveBeenCalledTimes(2);
   expect(f.runner.kill).toHaveBeenNthCalledWith(1, f.children[0]);
   expect(f.runner.kill).toHaveBeenNthCalledWith(2, f.children[0]);
   await f.service.stop(sibling.id);
-  expect(f.service.runs().find((r) => r.id === sibling.id)?.status).toBe("stopped");
+  expect(f.service.runs().find((r) => r.id === sibling.id)?.status).toBe(
+    "stopped",
+  );
 });
 it("output is isolated across runs, masked before events and retained on exit/error", async () => {
   const f = await fixture();
@@ -291,4 +298,66 @@ it("process exiting after HTTP ready but before browser loaded is a startup fail
   await vi.advanceTimersByTimeAsync(0);
   expect(f.service.runs()[0].status).toBe("failed");
   expect(f.service.runs()[0].error).toMatch(/открыт|открытия/);
+});
+
+it("identifies the failed discovery command and exit code without printing command output", async () => {
+  const { CommandExitError } = await import("../src/host/process");
+  const f = await fixture();
+  const original = f.runner.command.getMockImplementation()!;
+  f.runner.command.mockImplementation(
+    async (exe: string, args: string[], ...rest: unknown[]) => {
+      if (args[0] === "pipeline")
+        throw new CommandExitError(
+          "generic",
+          2,
+          "secret-stdout",
+          "secret-stderr",
+        );
+      return original(exe, args);
+    },
+  );
+  await expect(f.service.discover(f.project.id)).rejects.toThrow(
+    /goga pipeline --list --info.*кодом 2/,
+  );
+  await expect(f.service.discover(f.project.id)).rejects.not.toThrow(
+    /secret-stdout|secret-stderr/,
+  );
+});
+
+it("uses the same prepared shell PATH for discovery, preview and pipeline launch, with project override", async () => {
+  const read = vi.fn(async () => "/fixture/cli:/usr/bin");
+  const f = await fixture(undefined, read);
+  await f.service.discover(f.project.id);
+  await f.launch();
+  const gogaCalls = f.runner.command.mock.calls.filter(
+    ([exe]: any[]) => exe !== "git",
+  );
+  expect(gogaCalls.length).toBeGreaterThan(1);
+  expect(
+    gogaCalls.every(
+      ([, , , env]: any[]) => env.PATH === "/fixture/cli:/usr/bin",
+    ),
+  ).toBe(true);
+  expect((f.runner.start.mock.calls as any[][]).at(-1)?.[3]?.PATH).toBe(
+    "/fixture/cli:/usr/bin",
+  );
+  const doc = await f.service.readProjectSettings(f.project.id);
+  await f.service.saveProjectSettings(
+    f.project.id,
+    {
+      ...doc.value,
+      env: [
+        { key: "PATH", value: "/explicit/bin", runtime: false, secret: false },
+      ],
+    },
+    doc.version,
+  );
+  read.mockClear();
+  await f.service.discover(f.project.id);
+  expect(
+    (f.runner.command.mock.calls as any[][])
+      .filter(([exe]) => exe !== "git")
+      .at(-1)?.[3]?.PATH,
+  ).toBe("/explicit/bin");
+  expect(read).not.toHaveBeenCalled();
 });

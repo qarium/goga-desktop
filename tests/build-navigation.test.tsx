@@ -1,3 +1,5 @@
+import { openCatalog, selectCatalog } from "./helpers/select-catalog";
+import "./helpers/overview-browser-fixture";
 // @vitest-environment jsdom
 import {
   installPrototypeContextFixture,
@@ -113,8 +115,12 @@ beforeEach(() => {
     { id: "q", path: "/fixture/b", topic: "main", branch: "main" },
   ]);
   // Navigation between tabs is tested within one explicit owner.
-  api.listTopicContexts.mockImplementation(async (id: string) => fixture.records.filter(r => r.projectId === id));
-  api.runs.mockResolvedValue([{ ...run, topic: fixture.owner("p").topic, context: fixture.owner("p") }]);
+  api.listTopicContexts.mockImplementation(async (id: string) =>
+    fixture.records.filter((r) => r.projectId === id),
+  );
+  api.runs.mockResolvedValue([
+    { ...run, topic: fixture.owner("p").topic, context: fixture.owner("p") },
+  ]);
   window.goga = api;
 });
 afterEach(cleanup);
@@ -128,8 +134,12 @@ const field = (name: string | RegExp, options?: any) => {
   const region = screen.queryByRole("region", { name: "Новая сборка" });
   return (region ? within(region) : screen).getByLabelText(name, options);
 };
-const change = (name: string | RegExp, value: string) =>
-  fireEvent.change(field(name), { target: { value } });
+const change = (name: string | RegExp, value: string) => {
+  const control = field(name);
+  if (control.getAttribute("role") === "combobox")
+    selectCatalog(control, value);
+  else fireEvent.change(control, { target: { value } });
+};
 const draftTab = () => screen.getByRole("tab", { name: /^Новая сборка · / });
 async function openBuild() {
   await openPrototypeLaunch("build");
@@ -138,6 +148,7 @@ async function openBuild() {
 }
 async function mount() {
   render(<App />);
+  fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Исполняемый файл");
   act(() => focusRun("b"));
   click("Проект");
@@ -163,7 +174,7 @@ function checkValues() {
     expect(
       (
         field(label, {
-          selector: "input,select",
+          selector: 'input,select,button[role="combobox"]',
         }) as HTMLInputElement
       ).value,
     ).toBe(value);
@@ -187,10 +198,16 @@ it("keeps one clickable build tab and all draft values through Home, Topics, run
     )
       await waitFor(() => {
         const select = field(label, {
-          selector: "input,select",
-        }) as HTMLSelectElement;
+          selector: 'input,select,button[role="combobox"]',
+        }) as HTMLButtonElement;
         expect(select.disabled).toBe(false);
-        expect([...select.options].some((o) => o.value === value)).toBe(true);
+        openCatalog(select);
+        const options = within(
+          select.closest<HTMLElement>(".searchable-picker")!,
+        ).getAllByRole("option");
+        expect(
+          options.some((o) => (o as HTMLButtonElement).value === value),
+        ).toBe(true);
       });
     change(label, value);
   }

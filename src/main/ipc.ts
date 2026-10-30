@@ -1,4 +1,13 @@
 import {
+  overviewDirectorySchema,
+  overviewPathSchema,
+  overviewTextSchema,
+  overviewVersionSchema,
+  overviewKindSchema,
+  overviewFileActionRequestSchema,
+  overviewFileActionTokenSchema,
+} from "../shared/project-overview";
+import {
   gitHistoryRequestSchema,
   gitCommitReadRequestSchema,
   gitCommitDiffRequestSchema,
@@ -185,6 +194,7 @@ const launch = pipeline
     },
   );
 interface Dependencies {
+  overviewCloseState?: (paths: string[], busy: boolean) => void;
   topicPopup?: {
     setBounds(id: string, bounds: TopicPopupBounds): void;
     close(id: string): void;
@@ -606,6 +616,73 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   );
   handle("list-workflow-suggestions", (projectId) =>
     d.service.listWorkflowSuggestions(scopeRefSchema.parse(projectId)),
+  );
+  handle("overview-close-state", (paths, busy) =>
+    d.overviewCloseState?.(
+      z.array(z.string().max(4096)).max(500).parse(paths),
+      z.boolean().parse(busy),
+    ),
+  );
+  handle("list-overview-directory", (scope, p) =>
+    d.service.listOverviewDirectory(
+      scopeRefSchema.parse(scope),
+      overviewDirectorySchema.parse(p),
+    ),
+  );
+  handle("search-overview-files", (scope, p, query) =>
+    d.service.searchOverviewFiles(
+      scopeRefSchema.parse(scope),
+      overviewDirectorySchema.parse(p),
+      z.string().min(1).max(256).parse(query),
+    ),
+  );
+  handle("read-overview-file", (scope, p) =>
+    d.service.readOverviewFile(
+      scopeRefSchema.parse(scope),
+      overviewPathSchema.parse(p),
+    ),
+  );
+  handle("save-overview-file", (scope, p, text, version) =>
+    d.service.saveOverviewFile(
+      scopeRefSchema.parse(scope),
+      overviewPathSchema.parse(p),
+      overviewTextSchema.parse(text),
+      overviewVersionSchema.parse(version),
+    ),
+  );
+  handle("create-overview-entry", (scope, p, kind, text) =>
+    d.service.createOverviewEntry(
+      scopeRefSchema.parse(scope),
+      overviewPathSchema.parse(p),
+      overviewKindSchema.parse(kind),
+      text === undefined ? "" : overviewTextSchema.parse(text),
+    ),
+  );
+  handle("prepare-overview-file-action", (scope, request) =>
+    d.service.prepareOverviewFileAction(
+      scopeRefSchema.parse(scope),
+      overviewFileActionRequestSchema.parse(request),
+    ),
+  );
+  handle("execute-overview-file-action", (token) =>
+    d.service.executeOverviewFileAction(
+      overviewFileActionTokenSchema.parse(token),
+    ),
+  );
+  handle("reveal-overview-entry", (scope, p) =>
+    d.service.revealOverviewEntry(
+      scopeRefSchema.parse(scope),
+      overviewPathSchema.parse(p),
+    ),
+  );
+  handle("read-overview-schema", (scope) =>
+    d.service.readOverviewSchema(scopeRefSchema.parse(scope)),
+  );
+  handle("read-overview-contract", (scope, cell) =>
+    d.service.readOverviewContract(
+      scopeRefSchema.parse(scope),
+      z.string().min(1).max(4096).parse(cell),
+    ),
   );
   handle("read-project-document", (projectId, target) =>
     d.service.readProjectDocument(
