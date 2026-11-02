@@ -153,7 +153,7 @@
   "tests/home-build-ui.test.tsx": 1,
   "tests/host-parsers.test.ts": 1,
   "tests/host-process.test.ts": 2,
-  "tests/host-service.test.ts": 24,
+  "tests/host-service.test.ts": 200,
   "tests/host-settings.test.ts": 1,
   "tests/ipc.test.ts": 1,
   "tests/launch-actions-ui.test.tsx": 2,

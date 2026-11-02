@@ -138,3 +138,11 @@ test("native merge/rebase lifecycle contracts use the conflict integration domai
     .map(([domain]) => domain);
   assert.deepEqual(owners, ["git-conflicts"]);
 });
+
+test("Host new-topic clone launch integrations use the measured topic domain", async () => {
+  const manifest = await load();
+  const owners = Object.entries(manifest)
+    .filter(([, files]) => files.includes("tests/host-service.test.ts"))
+    .map(([domain]) => domain);
+  assert.deepEqual(owners, ["topics"]);
+});
