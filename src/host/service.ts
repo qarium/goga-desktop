@@ -4664,7 +4664,7 @@ export class HostService extends EventEmitter {
       const p = await this.project(id);
       const before = await this.fingerprint(p);
       const call = await this.invocation(p);
-      const [help, branch, refs, workflows, profiles] = await Promise.all([
+      const reads = [
         this.cmd(p, ["build", "--help"]),
         this.cmd(p, ["branch", "--show-current"], true),
         this.cmd(
@@ -4679,7 +4679,14 @@ export class HostService extends EventEmitter {
         ),
         this.names(path.join(this.root(p), ".goga/workflows")),
         this.profiles(p),
-      ]);
+      ] as const;
+      const [help, branch, refs, workflows, profiles] = await Promise.all(reads).catch(
+        async (error) => {
+          // Peers can still hold settings locks; retain ownership until all settle.
+          await Promise.allSettled(reads);
+          throw error;
+        },
+      );
       const runtime = {
         ...(await buildHomeEnvironment(this.home)),
         ...Object.fromEntries(
@@ -5109,16 +5116,7 @@ export class HostService extends EventEmitter {
   }
   private async discoverWithSettings(id: ScopeRef): Promise<Discovery> {
     const p = await this.project(id);
-    const [
-      catalog,
-      topics,
-      branches,
-      current,
-      config,
-      workflows,
-      homeProfiles,
-      projectProfiles,
-    ] = await Promise.all([
+    const reads = [
       this.cmd(p, ["pipeline", "--list", "--info"]),
       this.topics(p),
       this.cmd(
@@ -5136,7 +5134,21 @@ export class HostService extends EventEmitter {
       this.names(path.join(this.root(p), ".goga/workflows")),
       this.names(path.join(this.home, ".goga/profiles")),
       this.names(path.join(this.root(p), ".goga/profiles")),
-    ]);
+    ] as const;
+    const [
+      catalog,
+      topics,
+      branches,
+      current,
+      config,
+      workflows,
+      homeProfiles,
+      projectProfiles,
+    ] = await Promise.all(reads).catch(async (error) => {
+      // Peers can still hold settings locks; retain ownership until all settle.
+      await Promise.allSettled(reads);
+      throw error;
+    });
     const profiles = new Map<string, "home" | "project">(
       homeProfiles.map((n) => [n, "home"]),
     );

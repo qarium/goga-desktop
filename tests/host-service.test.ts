@@ -242,15 +242,25 @@ it("starts independent process, holds checkout lock until stop, preserves run co
   expect(run.status).toBe("starting");
   await expect(service.launch(request)).rejects.toThrow(/Предпросмотр устарел/);
   await new Promise<void>((resolve, reject) => {
-    const timeout = setTimeout(() => reject(Error("readiness")), 3000);
-    service.on("runs", (runs) => {
-      if (runs[0].status === "starting" && runs[0].url)
+    const cleanup = () => {
+      clearTimeout(timeout);
+      service.off("runs", onRuns);
+    };
+    const onRuns = (runs: ReturnType<HostService["runs"]>) => {
+      if (runs[0]?.status === "starting" && runs[0].url)
         service.markDashboardOpened(runs[0].id, runs[0].url);
-      if (runs[0].status === "running") {
-        clearTimeout(timeout);
+      if (runs[0]?.status === "running") {
+        cleanup();
         resolve();
       }
-    });
+    };
+    const timeout = setTimeout(() => {
+      cleanup();
+      reject(Error("readiness"));
+    }, 3000);
+    service.on("runs", onRuns);
+    // The child may publish its URL while the stale-launch check is awaited.
+    onRuns(service.runs());
   });
   expect(service.runs()[0]).toMatchObject({
     branch: "main",
@@ -1970,6 +1980,84 @@ it.each(["none", "auto"])(
     await service.stop(run.id);
   },
 );
+it.each(["discover", "buildContext"] as const)(
+  "%s drains parallel metadata before returning its first sanitized error",
+  async (method) => {
+    const { service, project, runner } = await setup();
+    const settings = await service.readProjectSettings(project.id);
+    await service.saveProjectSettings(
+      project.id,
+      {
+        ...settings.value,
+        env: [
+          {
+            key: "DRAIN_CANARY",
+            value: "fixture-drain-canary",
+            secret: true,
+            runtime: false,
+          },
+        ],
+      },
+      settings.version,
+    );
+    let release!: () => void, entered!: () => void, failed!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const started = new Promise<void>((resolve) => {
+      entered = resolve;
+    });
+    const rejected = new Promise<void>((resolve) => {
+      failed = resolve;
+    });
+    const old = runner.command;
+    let heldCalls = 0,
+      failedCalls = 0,
+      settled = false;
+    runner.command = async (exe, args, cwd, env) => {
+      if (
+        exe !== "git" &&
+        (args.includes("--list") || args.includes("--help"))
+      ) {
+        heldCalls++;
+        entered();
+        await held;
+        throw Error("later peer error");
+      }
+      if (exe === "git" && args.includes("for-each-ref")) {
+        failedCalls++;
+        await started;
+        failed();
+        throw Error("first metadata failure fixture-drain-canary");
+      }
+      return old(exe, args, cwd, env);
+    };
+    const flight = service[method](project.id).then(
+      () => {
+        settled = true;
+        return { error: undefined };
+      },
+      (error: Error) => {
+        settled = true;
+        return { error };
+      },
+    );
+    try {
+      await rejected;
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+    } finally {
+      release();
+      await flight;
+    }
+    expect((await flight).error?.message).toBe(
+      "first metadata failure [скрыто]",
+    );
+    expect(heldCalls).toBe(1);
+    expect(failedCalls).toBe(1);
+  },
+);
+
 it("rejects metadata finishing with changed settings and strips configured values from failures", async () => {
   const { service, project, runner } = await setup();
   const first = await service.readProjectSettings(project.id);
