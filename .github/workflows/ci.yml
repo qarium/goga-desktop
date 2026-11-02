@@ -41,7 +41,10 @@ jobs:
             count: 8
           - domain: topics
             shard: 1
-            count: 1
+            count: 2
+          - domain: topics
+            shard: 2
+            count: 2
     runs-on: macos-15
     timeout-minutes: 15
     env:

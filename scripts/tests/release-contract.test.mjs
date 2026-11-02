@@ -194,7 +194,7 @@ test("domain matrix covers eight areas and complete numbered subgroups", async (
       "git-workspace": 1,
       "git-conflicts": 8,
       "git-safety": 1,
-      topics: 1,
+      topics: 2,
       terminal: 1,
       launches: 1,
       documents: 1,
@@ -402,6 +402,7 @@ test("expensive domains start before short domains without skipping checks on a 
       "git-conflicts",
       "git-conflicts",
       "git-conflicts",
+      "topics",
       "topics",
     ],
   );

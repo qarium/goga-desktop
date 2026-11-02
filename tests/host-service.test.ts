@@ -387,65 +387,69 @@ it.each(["HEAD", "source"])(
   // Only these clone integration cases use the existing finite Git profile.
   gitIntegrationBudget(20000),
 );
-it("launches a new topic in its own clone without requiring or creating a task", async () => {
-  const { service, project, repo, node, runner } = await setup(true);
-  const { EventEmitter } = await import("node:events");
-  const { PassThrough } = await import("node:stream");
-  const { ContextSyncManager } = await import("../src/host/context-sync");
-  vi.spyOn(ContextSyncManager.prototype, "afterRun").mockResolvedValue(
-    {} as any,
-  );
-  const start = vi.spyOn(runner, "start").mockImplementation(
-    () =>
-      Object.assign(new EventEmitter(), {
-        stdout: new PassThrough(),
-        stderr: new PassThrough(),
-      }) as any,
-  );
-  try {
-    const params = {
-      projectId: project.id,
-      pipeline: "build",
-      workflow: "none",
-      profile: "",
-      skips: [],
-    };
-    const preview = await service.preview(params);
-    const run = await service.launch({
-      ...params,
-      previewToken: preview.token,
-      topic: { mode: "new", name: "empty-task", baseRef: "HEAD" },
-      task: "",
-      confirmEmptyTask: false,
-      expectedBranch: "main",
-      confirmBranchSwitch: true,
-      clean: false,
-    });
-    expect(run.context?.path).toBeTruthy();
-    expect(run.context?.path).not.toBe(repo);
-    expect(start).toHaveBeenCalledOnce();
-    expect(start.mock.calls[0][2]).toBe(run.context!.path);
-    await expect(
-      stat(
-        path.join(
-          run.context!.path!,
-          `.goga/history/${new Date().getFullYear()}/empty-task/todo.md`,
+it(
+  "launches a new topic in its own clone without requiring or creating a task",
+  async () => {
+    const { service, project, repo, node, runner } = await setup(true);
+    const { EventEmitter } = await import("node:events");
+    const { PassThrough } = await import("node:stream");
+    const { ContextSyncManager } = await import("../src/host/context-sync");
+    vi.spyOn(ContextSyncManager.prototype, "afterRun").mockResolvedValue(
+      {} as any,
+    );
+    const start = vi.spyOn(runner, "start").mockImplementation(
+      () =>
+        Object.assign(new EventEmitter(), {
+          stdout: new PassThrough(),
+          stderr: new PassThrough(),
+        }) as any,
+    );
+    try {
+      const params = {
+        projectId: project.id,
+        pipeline: "build",
+        workflow: "none",
+        profile: "",
+        skips: [],
+      };
+      const preview = await service.preview(params);
+      const run = await service.launch({
+        ...params,
+        previewToken: preview.token,
+        topic: { mode: "new", name: "empty-task", baseRef: "HEAD" },
+        task: "",
+        confirmEmptyTask: false,
+        expectedBranch: "main",
+        confirmBranchSwitch: true,
+        clean: false,
+      });
+      expect(run.context?.path).toBeTruthy();
+      expect(run.context?.path).not.toBe(repo);
+      expect(start).toHaveBeenCalledOnce();
+      expect(start.mock.calls[0][2]).toBe(run.context!.path);
+      await expect(
+        stat(
+          path.join(
+            run.context!.path!,
+            `.goga/history/${new Date().getFullYear()}/empty-task/todo.md`,
+          ),
         ),
-      ),
-    ).rejects.toMatchObject({ code: "ENOENT" });
-    expect(
-      (
-        await node.command("git", ["branch", "--show-current"], repo)
-      ).stdout.trim(),
-    ).toBe("main");
-    expect(
-      (await node.command("git", ["status", "--porcelain"], repo)).stdout,
-    ).toBe("");
-    await service.stop(run.id);
-  } finally {
-    vi.restoreAllMocks();
-  }
-});
+      ).rejects.toMatchObject({ code: "ENOENT" });
+      expect(
+        (
+          await node.command("git", ["branch", "--show-current"], repo)
+        ).stdout.trim(),
+      ).toBe("main");
+      expect(
+        (await node.command("git", ["status", "--porcelain"], repo)).stdout,
+      ).toBe("");
+      await service.stop(run.id);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  },
+  gitIntegrationBudget(20000),
+);
 it("existing task saves exact editor text with matching version", async () => {
   const { service, project, repo } = await setup(true);
   const dir = path.join(
