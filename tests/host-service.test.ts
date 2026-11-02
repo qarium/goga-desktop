@@ -12,6 +12,7 @@ import {
 import path from "node:path";
 import { HostService } from "../src/host/service";
 import { NodeRunner, type Runner } from "../src/host/process";
+import { gitIntegrationBudget } from "./helpers/git-integration";
 const dirs: string[] = [];
 const services: HostService[] = [];
 afterEach(async () => {
@@ -382,6 +383,9 @@ it.each(["HEAD", "source"])(
     expect(denyStart).not.toHaveBeenCalled();
     await service.dispose();
   },
+  // Native runner: 15.079 s (HEAD) / 14.784 s (source) against the generic 15 s.
+  // Only these clone integration cases use the existing finite Git profile.
+  gitIntegrationBudget(20000),
 );
 it("launches a new topic in its own clone without requiring or creating a task", async () => {
   const { service, project, repo, node, runner } = await setup(true);
