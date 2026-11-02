@@ -19,7 +19,7 @@ const files=['src/renderer/Changes.tsx','src/host/selected-files-with-a-long-nam
 const revision='a'.repeat(64);
 window.goga={
  readGitWorkspace:async scope=>({scope,root:'/synthetic/'+scope,revision,head:'b'.repeat(40),branch:'feature/git-workspace',upstream:null,ahead:0,behind:0,operation:'none',files:files.map(path=>({path,indexStatus:'.',worktreeStatus:'M',kind:'tracked',submodule:false}))}),
- readGitDiff:async r=>({...r,staged:{kind:'empty',text:''},unstaged:{kind:'patch',text:'@@ -1,2 +1,2 @@\\n-before\\n+after\\n'+Array.from({length:80},(_,i)=>' line '+i).join('\\n')}}),
+ readGitDiff:async r=>({...r,changes:{kind:'patch',text:'@@ -1,2 +1,2 @@\\n-before\\n+after\\n'+Array.from({length:80},(_,i)=>' line '+i).join('\\n')}}),
  prepareGitCommit:async r=>({...r,token:'1'.repeat(64),root:'/synthetic/'+r.scope,branch:'feature/git-workspace',wholeFiles:true,deletedCount:0,author:'Fixture <fixture@example.invalid>',committer:'Fixture <fixture@example.invalid>',signing:true,hooks:'disabled',expiresAt:Date.now()+300000}),
  executeGitCommit:async token=>{fixture.calls.push(token);return {scope:fixture.scope,status:'not-committed',indexPublished:false,message:'Тестовая ошибка подписи: коммит не создан.',log:'SYNTHETIC SIGNER FAILURE — no real Git process was started.'};},
 };

@@ -1,3 +1,4 @@
+import { documentSaveErrorMessage } from "./preparation-error";
 import type { SettingsConflict } from "./project-settings-save";
 import type { ProjectSettings, ProjectSettingsView } from "../shared/types";
 import type { TopicContextRef } from "../shared/worktrees";
@@ -625,7 +626,7 @@ export function createSettingsDocuments() {
             ...before,
             deletion: undefined,
             busy: false,
-            error: message(e),
+            error: documentSaveErrorMessage(e),
             notice: "",
           });
         return false;

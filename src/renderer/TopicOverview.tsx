@@ -24,7 +24,7 @@ import {
   useTopicOperation,
 } from "./TopicsCommon";
 import { LoadingBoundary } from "./LoadingBoundary";
-import { TopicDeleteDialog } from "./TopicDeleteDialog";
+import { TopicRemovalEntry } from "./TopicDeleteDialog";
 import { TopicTaskText } from "./TopicTaskText";
 import { topicPlacements } from "./topics-model";
 import {
@@ -575,7 +575,7 @@ function TopicOverviewView({
         </footer>
       </TopicModal>
       {deleting && (
-        <TopicDeleteDialog
+        <TopicRemovalEntry
           project={project}
           year={year}
           target={target}

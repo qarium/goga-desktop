@@ -75,8 +75,31 @@ it("exposes separate display table and task-only overview reads", async () => {
   expect(typeof api.readTopicTable).toBe("function");
   expect(typeof api.readTopicOverview).toBe("function");
   await api.readTopicTable("p", "2026");
-  expect(fake.invoke).toHaveBeenLastCalledWith("goga:read-topic-table", "p", "2026");
+  expect(fake.invoke).toHaveBeenLastCalledWith(
+    "goga:read-topic-table",
+    "p",
+    "2026",
+  );
   const target = { topic: "topic", branch: "topic", remote: false };
   await api.readTopicOverview("p", "2026", target);
-  expect(fake.invoke).toHaveBeenLastCalledWith("goga:read-topic-overview", "p", "2026", target);
+  expect(fake.invoke).toHaveBeenLastCalledWith(
+    "goga:read-topic-overview",
+    "p",
+    "2026",
+    target,
+  );
+});
+
+it("bridges dashboard geometry separately from selecting or launching a run", async () => {
+  vi.resetModules();
+  fake.invoke.mockClear();
+  await import("../src/main/preload");
+  const api = fake.expose.mock.calls.at(-1)![1];
+  expect(fake.invoke).not.toHaveBeenCalled();
+  const bounds = { x: 60, y: 212, width: 1220, height: 688 };
+  await api.setDashboardViewport(bounds);
+  expect(fake.invoke).toHaveBeenCalledExactlyOnceWith(
+    "goga:set-dashboard-viewport",
+    bounds,
+  );
 });

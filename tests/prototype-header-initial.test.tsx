@@ -97,6 +97,17 @@ beforeEach(() => {
   };
 
   localStorage.clear();
+  // These regression scenarios explicitly exercise the retained table view.
+  for (const id of ["p", "q", "b"])
+    localStorage.setItem(
+      `goga.desktop.topicsBoard.v1.${id}`,
+      JSON.stringify({
+        schemaVersion: 1,
+        view: "table",
+        columns: [],
+        statusCategory: {},
+      }),
+    );
   api = {
     listProjects: vi.fn(async () => [
       { id: "p", name: "Fixture", path: "/fixture/project" },
@@ -389,7 +400,16 @@ it("primary header remains usable when clone APIs are unavailable", async () => 
     screen.getByRole("region", { name: "Запуски выбранного топика" }),
   ).toBeTruthy();
   headerPrepare();
-  await screen.findByRole("textbox", { name: "Что нужно сделать?" });
+  expect(
+    (
+      (await screen.findByRole("radio", {
+        name: "Без топика",
+      })) as HTMLInputElement
+    ).checked,
+  ).toBe(true);
+  expect(
+    screen.queryByRole("textbox", { name: "Что нужно сделать?" }),
+  ).toBeNull();
   expect(api.discover).toHaveBeenCalledWith("p");
   expect(api.resolveTopicContext).not.toHaveBeenCalled();
   assertNoExecution();

@@ -19,7 +19,7 @@ const files=['src/renderer/Changes.tsx','src/host/selected-files-with-a-long-nam
 const revision='a'.repeat(64);
 window.goga={
  readGitWorkspace:async scope=>({scope,root:'/synthetic/'+scope,revision:fixture.done?'c'.repeat(64):revision,head:'b'.repeat(40),branch:'feature/git-discard',upstream:null,ahead:0,behind:0,operation:'none',files:files.filter((_,i)=>!fixture.done||i===1).map((path,i)=>({path,indexStatus:i===0?'M':'.',worktreeStatus:i===2?'?':'M',kind:i===2?'untracked':'tracked',submodule:false}))}),
- readGitDiff:async r=>({...r,staged:{kind:'patch',text:'@@ -1 +1 @@\\n-base\\n+staged'},unstaged:{kind:'patch',text:'@@ -1 +1 @@\\n-staged\\n+working'}}),
+ readGitDiff:async r=>({...r,changes:{kind:'patch',text:'@@ -1 +1 @@\\n-base\\n+working'}}),
  prepareGitCommit:async()=>{throw Error('Unexpected commit preparation');},
  executeGitCommit:async()=>{throw Error('Unexpected commit');},
  prepareGitDiscard:async r=>{fixture.prepares.push(r);return {...r,token:'1'.repeat(64),root:'/synthetic/'+r.scope,branch:'feature/git-discard',head:'b'.repeat(40),items:r.paths.map(path=>({path,action:path.startsWith('notes/')?'trash':'restore'})),expiresAt:Date.now()+300000};},

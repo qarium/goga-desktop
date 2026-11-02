@@ -375,7 +375,7 @@ it("replays durable terminal sync intent after restart when the first attempt fa
   expect(recovered.runs()[0].status).toBe("stopped");
   await recovered.dispose();
 });
-it("blocks writes, stop, and close for an unreconciled owner after restart", async () => {
+it("allows versioned content saves but blocks stop and close for an unreconciled owner after restart", async () => {
   vi.spyOn(ContextSyncManager.prototype, "afterRun").mockResolvedValue(
     {} as any,
   );
@@ -401,10 +401,10 @@ it("blocks writes, stop, and close for an unreconciled owner after restart", asy
     recovered.saveProjectDocument(
       worktreeContextRef(f.a),
       { kind: "config" },
-      doc.text,
+      doc.text + "# saved while process state is unverified\n",
       doc.version,
     ),
-  ).rejects.toThrow(/состояние процесса/);
+  ).resolves.toMatchObject({ text: doc.text + "# saved while process state is unverified\n" });
   await recovered.dispose();
   // Simulate the old host being gone; it must not write with an obsolete CAS revision.
   for (const entry of (f.service as any).children.values()) {

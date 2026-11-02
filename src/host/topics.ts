@@ -34,6 +34,8 @@ import {
 export interface TopicsContext {
   /** Host-only read-only preview; never used by execute. */
   deletionSwitchFrom?: string;
+  /** Host-only topic-first removal. Never accepted through IPC. */
+  removalFlow?: true;
   project: Project;
   root?: string;
   owner?: import("../shared/worktrees").TopicContextRef;
@@ -52,21 +54,22 @@ export interface TopicsContext {
     operation: TopicOperationRequest["action"],
   ) => Promise<void>;
 }
-const normalize = (name: string) =>
+export const normalizeTopicBranch = (name: string) =>
   name
     .toLowerCase()
     .replace(/[^\x00-\x7f]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
+const normalize = normalizeTopicBranch;
 const short = (name: string) => name.slice(name.indexOf("/") + 1);
-interface Ref {
+export interface TopicRef {
   full: string;
   name: string;
   remote: boolean;
   commit: string;
 }
 interface State {
-  refs: Ref[];
+  refs: TopicRef[];
   current: string;
   dirty: boolean;
   revision: string;
@@ -95,7 +98,7 @@ class TopicSnapshotChangedError extends Error {
     this.name = "TopicSnapshotChangedError";
   }
 }
-async function refs(d: Pick<TopicsContext, "git">): Promise<Ref[]> {
+async function refs(d: Pick<TopicsContext, "git">): Promise<TopicRef[]> {
   const raw = await d.git([
     "for-each-ref",
     "--format=%(refname)%00%(objectname)%00%(symref)",
@@ -113,6 +116,9 @@ async function refs(d: Pick<TopicsContext, "git">): Promise<Ref[]> {
       const remote = full.startsWith("refs/remotes/");
       return [{ full, commit, remote, name: full.slice(remote ? 13 : 11) }];
     });
+}
+export async function readTopicRefInventory(git: TopicsContext["git"]) {
+  return refs({ git });
 }
 /** Names only; deliberately no state fingerprint, Goga, base config or clone inventory. */
 export async function readBranchChoices(git: TopicsContext["git"]) {
@@ -243,6 +249,13 @@ export class TopicCatalogMissingError extends Error {
     this.name = "TopicCatalogMissingError";
   }
 }
+/** Native admission snapshot without reading Goga display/status projections. */
+export async function readTopicMutationSnapshot(
+  d: TopicsContext,
+  year: string,
+) {
+  return state(d, year);
+}
 export class TopicsDomain {
   private tickets = new Map<string, Prepared>();
   scopeForToken(token: string) {
@@ -317,12 +330,18 @@ export class TopicsDomain {
     const args = ["topics", "--year", year, "board", "--json"];
     let entries, records, remoteEntries, remoteRecords;
     try {
-      const raw = await Promise.all([
+      const reads = [
         d.goga(args),
         d.goga([...args, "--per-host"]),
         d.goga([...args, "--remote"]),
         d.goga([...args, "--remote", "--per-host"]),
-      ]);
+      ];
+      const raw = await Promise.all(reads).catch(async (error) => {
+        // Peers may still hold settings locks. Drain these same reads before
+        // returning a failed snapshot; preserve the original error, never retry.
+        await Promise.allSettled(reads);
+        throw error;
+      });
       entries = topicEntriesSchema.parse(JSON.parse(raw[0]!));
       records = topicRecordsSchema.parse(JSON.parse(raw[1]!));
       remoteEntries = topicEntriesSchema.parse(JSON.parse(raw[2]!));
@@ -584,6 +603,53 @@ export class TopicsDomain {
         `Записать ${save.relative} в текущей ветке ${r.target.branch}. Без коммита и публикации.`,
       );
       if (!r.task.trim()) details.push("Задача будет полностью очищена.");
+    } else if (r.action === "clear") {
+      if (!d.removalFlow || d.owner)
+        throw Error("Используйте отдельное подтверждение очистки топиков.");
+      await d.assertPrimaryOwnerAvailable?.(r);
+      const base = await ensureBase();
+      guards.push(
+        (await d.git(["rev-parse", "--verify", `${base}^{commit}`])).trim(),
+      );
+      const yearRoot = path.join(
+        d.root ?? d.project.path,
+        ".goga/history",
+        r.year,
+      );
+      await noSymlinks(yearRoot);
+      try {
+        guards.push(await this.guardDirectory(yearRoot));
+      } catch (e) {
+        if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+        guards.push("absent");
+      }
+      const branches: string[] = [];
+      for (const ref of s.refs.filter(
+        (ref) => !ref.remote && ref.name !== s.current,
+      )) {
+        if (
+          (
+            await d.git([
+              "ls-tree",
+              "-d",
+              "--name-only",
+              ref.commit,
+              "--",
+              `.goga/history/${r.year}`,
+            ])
+          ).trim()
+        )
+          branches.push(ref.name);
+      }
+      await d.assertBranchesAvailable?.(branches, "delete");
+      commands.push({
+        args: [...prefix, "clear", "--base-ref", base, "--yes"],
+      });
+      details.push(
+        `Очистить топики за ${r.year} год по правилам Goga; база ${base}.`,
+        "Поиск, фильтры, категории и отмеченные карточки не ограничивают очистку.",
+        "Могут удаляться собственные ветки, в том числе на origin, и история топиков. Точный список заранее не вычисляется Desktop.",
+      );
     } else if (r.action === "delete") {
       await d.assertPrimaryOwnerAvailable?.(r);
       const topics = [
@@ -697,6 +763,7 @@ export class TopicsDomain {
           publish: "Публикация в origin",
           propagate: "Включение в базовую ветку",
           delete: "Удаление топиков",
+          clear: "Очистка топиков",
         }[r.action],
         details,
         expiresAt: Date.now() + 5 * 60 * 1000,
@@ -846,7 +913,7 @@ export class TopicsDomain {
       throw stale();
     // Recheck after all Git/file validation, outside the mutation error handler:
     // an owner appearing after preview is a rejected admission, not a partial mutation.
-    if (["delete", "update"].includes(ticket.request.action))
+    if (["delete", "clear", "update"].includes(ticket.request.action))
       await d.assertPrimaryOwnerAvailable?.(ticket.request);
     let completed = 0;
     try {
@@ -867,8 +934,9 @@ export class TopicsDomain {
     } catch {
       // Local refs cannot prove that an origin push failed before taking effect.
       const remoteUncertain =
-        ["publish", "propagate", "delete"].includes(ticket.request.action) ||
-        ticket.request.publish === true;
+        ["publish", "propagate", "delete", "clear"].includes(
+          ticket.request.action,
+        ) || ticket.request.publish === true;
       let changed = completed > 0 || remoteUncertain;
       try {
         // Diagnostics must not refresh the real index after the failed command:

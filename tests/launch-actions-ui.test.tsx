@@ -77,8 +77,11 @@ async function setup() {
   );
   return { store, view };
 }
-const chooseOther = () => {
-  fireEvent.click(screen.getByRole("combobox", { name: "Топик проекта" }));
+const chooseOther = async () => {
+  fireEvent.click(screen.getByRole("radio", { name: "Существующий" }));
+  fireEvent.click(
+    await screen.findByRole("combobox", { name: "Топик проекта" }),
+  );
   fireEvent.click(screen.getByRole("option", { name: /other/ }));
 };
 async function newBranch() {
@@ -159,7 +162,7 @@ it("new branch consent shows exact branch/base and update, cancel has no side ef
   await newBranch();
   await update();
   const dialog = await screen.findByRole("dialog", {
-    name: "Создать ветку и запустить конвейер?",
+    name: "Создать топик в отдельной копии и запустить?",
   });
   expect(dialog.textContent).toContain("feature/exact");
   expect(dialog.textContent).toContain("main");
@@ -179,7 +182,7 @@ it("new branch consent shows exact branch/base and update, cancel has no side ef
 });
 it("other branch dirty task waits for consent and sends exact immutable task/update once", async () => {
   await setup();
-  chooseOther();
+  await chooseOther();
   const task = await screen.findByRole("textbox", {
     name: "Что нужно сделать?",
   });
@@ -204,7 +207,7 @@ it("other branch dirty task waits for consent and sends exact immutable task/upd
 });
 it("stale modal cannot be revived after task edit and reverting text", async () => {
   await setup();
-  chooseOther();
+  await chooseOther();
   await waitFor(() =>
     expect(
       screen
@@ -270,7 +273,7 @@ it("new branch approval captures base, task and ordinary mode only once", async 
 });
 it("cancel discards update intent and preserves dirty task and clean selection", async () => {
   await setup();
-  chooseOther();
+  await chooseOther();
   await waitFor(() =>
     expect(screen.getByLabelText("Что нужно сделать?")).toHaveProperty(
       "value",
@@ -410,3 +413,224 @@ it.each([
     expect(api.launch.mock.calls[0][0].pipeline).toBe(pipeline.id);
   },
 );
+
+it("primary launch defaults to no topic without reading or saving a topic task", async () => {
+  api.discover.mockResolvedValue({ ...data, topics: [] });
+  await setup();
+  expect(screen.getByRole("radio", { name: "Без топика" })).toHaveProperty(
+    "checked",
+    true,
+  );
+  expect(screen.queryByRole("combobox", { name: "Топик проекта" })).toBeNull();
+  expect(
+    screen.queryByRole("textbox", { name: "Что нужно сделать?" }),
+  ).toBeNull();
+  expect(api.readTopicTask).not.toHaveBeenCalled();
+  expect(screen.getByText(/Исходный проект.*main/)).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+  await waitFor(() => expect(api.launch).toHaveBeenCalledOnce());
+  expect(api.launch.mock.calls[0][0]).toMatchObject({
+    topic: { mode: "none" },
+    task: "",
+    expectedBranch: "main",
+    confirmBranchSwitch: false,
+    confirmEmptyTask: false,
+    clean: false,
+    update: false,
+  });
+  expect(api.launch.mock.calls[0][0]).not.toHaveProperty("taskVersion");
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("no-topic mode preserves an explicit topic draft, resets without reading tasks and supports update", async () => {
+  const { store } = await setup();
+  fireEvent.click(screen.getByRole("radio", { name: "Существующий" }));
+  const task = await screen.findByRole("textbox", {
+    name: "Что нужно сделать?",
+  });
+  await waitFor(() => expect(task).toHaveProperty("value", "saved task"));
+  fireEvent.change(task, { target: { value: "keep this draft" } });
+  fireEvent.click(screen.getByRole("radio", { name: "Без топика" }));
+  const reads = api.readTopicTask.mock.calls.length;
+  fireEvent.click(screen.getByRole("button", { name: "Сбросить" }));
+  await waitFor(() => expect(api.preview.mock.calls.length).toBeGreaterThan(1));
+  expect(api.readTopicTask).toHaveBeenCalledTimes(reads);
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(
+    [...store.tasks.values()].some((draft) => draft.text === "keep this draft"),
+  ).toBe(true);
+  fireEvent.click(screen.getByRole("radio", { name: "Существующий" }));
+  expect(
+    await screen.findByRole("textbox", { name: "Что нужно сделать?" }),
+  ).toHaveProperty("value", "keep this draft");
+  fireEvent.click(screen.getByRole("radio", { name: "Без топика" }));
+  await update();
+  await waitFor(() => expect(api.launch).toHaveBeenCalledOnce());
+  expect(api.launch.mock.calls[0][0]).toMatchObject({
+    topic: { mode: "none" },
+    task: "",
+    update: true,
+  });
+});
+
+it("owned clone cannot select no-topic launch or lose its scoped owner", async () => {
+  const owner = {
+    projectId: project.id,
+    year: "2026",
+    topic: "main",
+    branch: "main",
+    contextId: "ctx-" + "a".repeat(64),
+    revision: "00000000-0000-4000-8000-000000000001",
+  };
+  render(
+    <LaunchForm
+      project={project}
+      owner={owner}
+      onCancel={() => {}}
+      onLaunched={() => {}}
+    />,
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "Запустить" })).toHaveProperty(
+      "disabled",
+      false,
+    ),
+  );
+  expect(screen.queryByRole("radio", { name: "Без топика" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+  await waitFor(() => expect(api.launch).toHaveBeenCalledOnce());
+  expect(api.launch.mock.calls[0][0]).toMatchObject({
+    context: owner,
+    topic: { mode: "existing", branch: owner.branch, topic: owner.topic },
+    task: "saved task",
+    taskVersion: "v1",
+  });
+});
+
+it.each(["preview-first", "task-first"])(
+  "initial preparation joins preview and selected topic task before showing the form (%s)",
+  async (order) => {
+    let resolvePreview!: (value: typeof preview) => void;
+    let resolveTask!: (value: any) => void;
+    api.preview.mockReturnValue(
+      new Promise((resolve) => {
+        resolvePreview = resolve;
+      }),
+    );
+    api.readTopicTask.mockReturnValue(
+      new Promise((resolve) => {
+        resolveTask = resolve;
+      }),
+    );
+    render(
+      <LaunchForm
+        project={project}
+        onCancel={() => {}}
+        onLaunched={() => {}}
+      />,
+    );
+    await waitFor(() => {
+      expect(api.preview).toHaveBeenCalledOnce();
+      expect(api.readTopicTask).toHaveBeenCalledOnce();
+    });
+    const task = {
+      text: "prepared whole task\nsecond line",
+      exists: true,
+      version: "prepared-version",
+      path: "todo.md",
+    };
+    await act(async () =>
+      order === "preview-first" ? resolvePreview(preview) : resolveTask(task),
+    );
+    expect(document.querySelector(".loading-state")).not.toBeNull();
+    expect(screen.queryByRole("radio", { name: "Без топика" })).toBeNull();
+    await act(async () =>
+      order === "preview-first" ? resolveTask(task) : resolvePreview(preview),
+    );
+    const existing = await screen.findByRole("radio", { name: "Существующий" });
+    expect(screen.getByRole("radio", { name: "Без топика" })).toHaveProperty(
+      "checked",
+      true,
+    );
+    expect(document.querySelector(".loading-state")).toBeNull();
+    for (let attempt = 0; attempt < 2; attempt++) {
+      fireEvent.click(existing);
+      // Assert synchronously: no additional hidden/loading render on the click.
+      expect(document.querySelector(".loading-state")).toBeNull();
+      expect(
+        screen.getByRole("textbox", { name: "Что нужно сделать?" }),
+      ).toHaveProperty("value", task.text);
+      expect(screen.getByRole("button", { name: "Запустить" })).toHaveProperty(
+        "disabled",
+        false,
+      );
+      expect(api.readTopicTask).toHaveBeenCalledOnce();
+      if (!attempt)
+        fireEvent.click(screen.getByRole("radio", { name: "Без топика" }));
+    }
+    fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+    await waitFor(() => expect(api.launch).toHaveBeenCalledOnce());
+    expect(api.launch.mock.calls[0][0]).toMatchObject({
+      topic: { mode: "existing", branch: "main", topic: "main" },
+      task: task.text,
+      taskVersion: task.version,
+    });
+  },
+);
+
+it("prepared topic text is neither submitted nor cleared by a no-topic launch", async () => {
+  const { store } = await setup();
+  expect(api.readTopicTask).toHaveBeenCalledOnce();
+  expect(api.readTopicTask).toHaveBeenCalledWith({
+    projectId: project.id,
+    branch: "main",
+    topic: "main",
+  });
+  expect(
+    [...store.tasks.values()].some(
+      (draft) => draft.document?.text === "saved task",
+    ),
+  ).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+  await waitFor(() => expect(api.launch).toHaveBeenCalledOnce());
+  expect(api.launch.mock.calls[0][0]).toMatchObject({
+    topic: { mode: "none" },
+    task: "",
+    confirmEmptyTask: false,
+  });
+  expect(api.launch.mock.calls[0][0]).not.toHaveProperty("taskVersion");
+  expect(
+    [...store.tasks.values()].some(
+      (draft) => draft.document?.text === "saved task",
+    ),
+  ).toBe(true);
+});
+
+it("failed optional task preparation ends loading but cannot admit an existing-topic launch until retry", async () => {
+  api.readTopicTask.mockRejectedValueOnce(Error("Task unavailable"));
+  await setup();
+  expect(api.readTopicTask).toHaveBeenCalledOnce();
+  expect(document.querySelector(".loading-state")).toBeNull();
+  expect(screen.getByRole("button", { name: "Запустить" })).toHaveProperty(
+    "disabled",
+    false,
+  );
+  fireEvent.click(screen.getByRole("radio", { name: "Существующий" }));
+  expect(await screen.findByRole("alert")).toHaveProperty(
+    "textContent",
+    "Task unavailable",
+  );
+  expect(document.querySelector(".loading-state")).toBeNull();
+  expect(screen.getByRole("button", { name: "Запустить" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  expect(api.launch).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Повторить загрузку" }));
+  expect(await screen.findByDisplayValue("saved task")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Запустить" })).toHaveProperty(
+    "disabled",
+    false,
+  );
+  expect(api.readTopicTask).toHaveBeenCalledTimes(2);
+});

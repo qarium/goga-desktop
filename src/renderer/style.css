@@ -414,8 +414,19 @@ small {
   font-weight: 500;
   margin-left: 5px;
 }
-.run-state {
+.run-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex: 0 0 auto;
   margin-left: auto;
+  gap: 8px;
+}
+.run-state {
+  flex-shrink: 0;
+}
+.run-actions .stop-button {
+  height: 28px;
 }
 .stop-button {
   padding: 3px 8px;
@@ -757,6 +768,7 @@ code {
 }
 .topic-new-row {
   display: grid;
+  align-items: start;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   gap: 14px;
 }

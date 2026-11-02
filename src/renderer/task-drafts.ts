@@ -10,7 +10,7 @@ export interface TaskDraft {
 }
 export interface FormDraft {
   profile?: string;
-  mode: "existing" | "new";
+  mode: "none" | "existing" | "new";
   branch: string;
   topic?: string;
   name: string;

@@ -11,7 +11,10 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
-import { TopicPickerPopup } from "../src/renderer/TopicPickerPopup";
+import {
+  NativeTopicPopupProvider,
+  TopicPickerPopup,
+} from "../src/renderer/TopicPickerPopup";
 
 let frame: HTMLIFrameElement;
 let child: { window: Window & typeof globalThis };
@@ -385,5 +388,97 @@ it("reports refused predecessor cleanup without opening another native layer", a
   first.unmount();
   mount();
   expect(await screen.findByRole("alert")).toBeTruthy();
+  expect(window.open).toHaveBeenCalledTimes(1);
+});
+
+it("dismisses a failed menu before presenting another failed menu", async () => {
+  vi.mocked(window.open).mockReturnValue(null);
+  function Menu({ name }: { name: string }) {
+    const [open, setOpen] = React.useState(true);
+    return open ? (
+      <TopicPickerPopup
+        anchor={anchor}
+        onClose={() => setOpen(false)}
+        label={name}
+      >
+        {content}
+      </TopicPickerPopup>
+    ) : null;
+  }
+  render(<Menu name="Ошибка переноса" />);
+  await screen.findByRole("alert");
+  await act(async () => {});
+  render(<Menu name="Выбор топика" />);
+  await waitFor(() => expect(window.open).toHaveBeenCalledTimes(2));
+  expect(screen.getAllByRole("alert")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "Закрыть меню" }));
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("bounds native-menu errors within the shell viewport instead of overflowing the header", async () => {
+  vi.mocked(window.open).mockReturnValue(null);
+  mount();
+  const alert = await screen.findByRole("alert");
+  const styles = document.createElement("style");
+  styles.textContent = readFileSync(
+    "src/renderer/TopicPickerPopup.css",
+    "utf8",
+  );
+  document.head.append(styles);
+  try {
+    const css = getComputedStyle(alert);
+    expect(css.maxWidth).toBe("calc(100vw - 32px)");
+    expect(css.display).toBe("grid");
+    expect(css.overflowWrap).toBe("anywhere");
+    expect(css.position).toBe("fixed");
+    expect(css.right).toBe("16px");
+    expect(alert.parentElement).toBe(document.body);
+    expect(alert.querySelector("p")?.textContent).toContain(
+      "Не удалось открыть меню",
+    );
+  } finally {
+    styles.remove();
+  }
+});
+
+it("does not create a native menu when the shell has no visible native surface", () => {
+  vi.mocked(window.open).mockReturnValue(null);
+  render(
+    <NativeTopicPopupProvider value={false}>
+      <TopicPickerPopup anchor={anchor} onClose={vi.fn()}>
+        {content}
+      </TopicPickerPopup>
+    </NativeTopicPopupProvider>,
+  );
+  expect(screen.getByRole("combobox")).toBeTruthy();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(window.open).not.toHaveBeenCalled();
+  expect(api.setTopicPopupBounds).not.toHaveBeenCalled();
+});
+
+it("moves an open menu back into the shell when the native pipeline surface finishes", async () => {
+  const onClose = vi.fn();
+  const view = render(
+    <NativeTopicPopupProvider value>
+      <TopicPickerPopup anchor={anchor} onClose={onClose}>
+        {content}
+      </TopicPickerPopup>
+    </NativeTopicPopupProvider>,
+  );
+  await waitFor(() => expect(api.setTopicPopupBounds).toHaveBeenCalled());
+  const id = api.setTopicPopupBounds.mock.calls[0][0];
+  const oldClose = closed;
+  view.rerender(
+    <NativeTopicPopupProvider value={false}>
+      <TopicPickerPopup anchor={anchor} onClose={onClose}>
+        {content}
+      </TopicPickerPopup>
+    </NativeTopicPopupProvider>,
+  );
+  expect(screen.getByRole("combobox")).toBeTruthy();
+  expect(api.closeTopicPopup).toHaveBeenCalledWith(id);
+  act(() => oldClose(id));
+  expect(onClose).not.toHaveBeenCalled();
+  expect(screen.queryByRole("alert")).toBeNull();
   expect(window.open).toHaveBeenCalledTimes(1);
 });

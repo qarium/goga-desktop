@@ -44,6 +44,11 @@ const absent = (error: unknown) =>
   (error as NodeJS.ErrnoException).code === "ENOENT";
 const changed = () =>
   new Error("Файл или его каталог изменён извне. Откройте документ заново.");
+// Only pre-write version mismatches can guarantee that no replacement happened.
+// Keep identity/post-write uncertainty errors distinct rather than promising rollback.
+const saveConflict = () => new Error(
+  "Конфликт сохранения: файл изменился после открытия. Файл не перезаписан. Обновите файл перед повторным сохранением.",
+);
 class NotEditable extends Error {}
 interface DirectoryIdentity {
   path: string;
@@ -398,7 +403,7 @@ async function saveSourceDocument(
       target.kind !== "tool",
       isFlatDocument(target) || target.kind === "source",
     );
-    if (initial.document.version !== expectedVersion) throw changed();
+    if (initial.document.version !== expectedVersion) throw saveConflict();
     await beforeMutation?.();
     if (target.kind === "dockerfile")
       await createSourceDirectories(
@@ -450,7 +455,7 @@ async function saveSourceDocument(
         target.kind !== "tool",
         isFlatDocument(target) || target.kind === "source",
       );
-      if (current.document.version !== expectedVersion) throw changed();
+      if (current.document.version !== expectedVersion) throw saveConflict();
       const staged = await lstat(tmp);
       if (!staged.isFile() || !sameFile(staged, temporary!)) throw changed();
       await verifyDirectories(parent.identities);

@@ -571,15 +571,13 @@ export class GitWorkspaceReader {
   }
   private async patch(
     file: GitWorkspaceFile,
-    staged: boolean,
+    head: string,
     context: PrivateGitRead,
   ): Promise<GitDiffPart> {
-    if ((staged ? file.indexStatus : file.worktreeStatus) === ".") return EMPTY;
     let output: string;
     try {
       output = await context.git([
         "diff",
-        ...(staged ? ["--cached"] : []),
         "--no-ext-diff",
         "--no-textconv",
         "--no-color",
@@ -587,6 +585,7 @@ export class GitWorkspaceReader {
         "--ignore-submodules=all",
         "--src-prefix=a/",
         "--dst-prefix=b/",
+        head,
         "--",
         file.path,
         ...(file.originalPath ? [file.originalPath] : []),
@@ -633,7 +632,7 @@ export class GitWorkspaceReader {
     const file = before.files.find((entry) => entry.path === request.path);
     if (!file) throw new Error("Файла нет в списке изменений Git.");
     const info = await this.fileStat(file.path);
-    let staged: GitDiffPart, unstaged: GitDiffPart;
+    let changes: GitDiffPart;
     if (
       file.kind === "conflict" ||
       file.submodule ||
@@ -641,33 +640,25 @@ export class GitWorkspaceReader {
       info?.isSymbolicLink() ||
       (info && !info.isFile())
     ) {
-      staged = unstaged = unavailable(
+      changes = unavailable(
         file.kind === "conflict"
           ? "Файл содержит конфликт. Обычный diff недоступен."
           : "Предпросмотр ссылок, подмодулей, каталогов и специальных файлов недоступен.",
       );
-    } else if (file.kind === "untracked") {
-      staged = EMPTY;
-      unstaged = await this.untracked(file.path);
+    } else if (file.kind === "untracked" || before.head === null) {
+      // Without a first commit every current file is new. Reuse the bounded,
+      // no-follow reader instead of materializing a tree or temporary index.
+      changes = info ? await this.untracked(file.path) : EMPTY;
     } else {
-      staged = await this.patch(file, true, context);
-      unstaged = await this.patch(file, false, context);
+      changes = await this.patch(file, before.head, context);
     }
     if ((await this.snapshotState(context)).value.revision !== request.revision)
       throw stale();
-    if (
-      Buffer.byteLength(staged.text) + Buffer.byteLength(unstaged.text) >
-      LIMIT
-    )
-      staged = unstaged = unavailable(
-        "Суммарные изменения превышают предел предпросмотра 1 МиБ.",
-      );
     return {
       scope: this.scope,
       path: file.path,
       revision: request.revision,
-      staged,
-      unstaged,
+      changes,
     };
   }
 }

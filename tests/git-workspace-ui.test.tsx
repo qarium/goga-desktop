@@ -44,11 +44,7 @@ function diff(path = "file.txt", scope = "p") {
     scope,
     path,
     revision: "a".repeat(64),
-    staged:
-      path === "other.txt"
-        ? { kind: "patch", text: "@@ -0,0 +1 @@\n+" + scope + " " + path }
-        : { kind: "empty", text: "" },
-    unstaged: {
+    changes: {
       kind: "patch",
       text: "@@ -1 +1 @@\n-base\n+" + scope + " " + path,
     },
@@ -93,16 +89,61 @@ function view(scope = "p", open = true, onClose = vi.fn()) {
     />
   );
 }
-it("shows branch and changes without a Git main tab, file list and staged/working diff", async () => {
+it("shows one final diff and no staged/working tabs", async () => {
   render(view());
   expect(await screen.findByText("main")).toBeTruthy();
   fireEvent.click(await screen.findByRole("button", { name: /file.txt/ }));
   await waitFor(() => expect(portal.textContent).toContain("+p file.txt"));
-  expect(screen.getByRole("button", { name: "Рабочая папка" })).toBeTruthy();
-  expect(screen.getByRole("button", { name: "Подготовлено" })).toBeTruthy();
+  expect(screen.queryByRole("button", { name: "Рабочая папка" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Подготовлено" })).toBeNull();
+  expect(
+    screen.getByText("От последнего коммита до текущего состояния файлов"),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: /other.txt/ }));
+  await waitFor(() => expect(portal.textContent).toContain("+p other.txt"));
   expect(screen.queryByRole("button", { name: /Создать коммит/ })).toBeNull();
   expect(api.readGitWorkspace).toHaveBeenCalledTimes(1);
 });
+it("explains when indexed changes are cancelled in the final file", async () => {
+  api.readGitDiff.mockImplementation(async (r: any) => ({
+    ...diff(r.path, r.scope),
+    changes: { kind: "empty", text: "" },
+  }));
+  render(view());
+  fireEvent.click(await screen.findByRole("button", { name: /file.txt/ }));
+  expect(
+    await screen.findByText(
+      "Итоговых изменений относительно последнего коммита нет.",
+    ),
+  ).toBeTruthy();
+});
+it.each(["constructor", "toString", "__proto__"])(
+  "keeps diff and pagination available for literal filename %s",
+  async (path) => {
+    api.readGitWorkspace.mockImplementation(async () => ({
+      ...snapshot(),
+      files: [{ ...snapshot().files[0], path }],
+    }));
+    api.readGitDiff.mockImplementation(async (r: any) => ({
+      ...diff(r.path, r.scope),
+      changes: {
+        kind: "patch",
+        text: Array.from({ length: 601 }, (_, i) => "+line " + i).join("\n"),
+      },
+    }));
+    render(view());
+    fireEvent.click(await screen.findByRole("button", { name: path }));
+    await waitFor(() =>
+      expect(screen.getByLabelText("Различия файла").textContent).toContain(
+        "+line 0",
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Следующие строки" }));
+    expect(screen.getByLabelText("Различия файла").textContent).toContain(
+      "+line 600",
+    );
+  },
+);
 it("keeps selection when closed and reopened, refreshes status and allows Escape", async () => {
   const close = vi.fn();
   const v = render(view("p", true, close));
@@ -185,7 +226,7 @@ it("does not promise a clean repository when submodule worktrees are not scanned
 it("bounds rendered diff lines and lets readers reach every page without truncation", async () => {
   api.readGitDiff.mockResolvedValue({
     ...diff(),
-    unstaged: {
+    changes: {
       kind: "text",
       text: Array.from({ length: 1201 }, (_, i) => `line ${i + 1}`).join("\n"),
     },
@@ -234,7 +275,7 @@ it("pages a large changed-file list while preserving file access and total count
 it("renders a one-MiB newline file with a bounded DOM and an explicit complete line count", async () => {
   api.readGitDiff.mockResolvedValue({
     ...diff(),
-    unstaged: { kind: "text", text: "\n".repeat(1024 * 1024) },
+    changes: { kind: "text", text: "\n".repeat(1024 * 1024) },
   });
   render(view());
   fireEvent.click(await screen.findByRole("button", { name: /file.txt/ }));

@@ -130,6 +130,8 @@ let api: any;
 let focusRun: (id: string) => void;
 let emitRuns: (runs: any[]) => void;
 beforeEach(() => {
+  // Explicit table preference for table/context regression scenarios.
+  localStorage.setItem("goga.desktop.topicsBoard.v1.p", JSON.stringify({ schemaVersion: 1, view: "table", columns: [], statusCategory: {} }));
   completions.clear();
   api = {
     listProjects: vi.fn(async () => [
@@ -831,7 +833,7 @@ it("restores the same topics table and filter while return-time catalog reads ar
 });
 
 it.each([false, true])(
-  "deletes selected clone then commits primary navigation before Goga (failure=%s)",
+  "resumes legacy deletion and commits primary navigation before Goga (failure=%s)",
   async (fail) => {
     HTMLDialogElement.prototype.showModal = function () {
       this.open = true;
@@ -848,7 +850,7 @@ it.each([false, true])(
       version: "v",
       editable: false,
     }));
-    api.contextDeletionRecovery = vi.fn(async () => null);
+    api.contextDeletionRecovery = vi.fn(async () => api.prepareContextDeletion());
     api.prepareContextDeletion = vi.fn(async () => ({
       token: "delete-alpha",
       contextId: ownerA.contextId,
@@ -893,7 +895,7 @@ it.each([false, true])(
       await screen.findByRole("button", { name: "Удалить топик…" }),
     );
     fireEvent.click(
-      await screen.findByRole("button", { name: "Подтвердить удаление" }),
+      await screen.findByRole("button", { name: "Повторить удаление" }),
     );
     await waitFor(() => expect(trash).toBeDefined());
     expect(
@@ -913,7 +915,7 @@ it.each([false, true])(
   },
 );
 
-it("keeps primary visible but stops before Goga until selection is durably saved", async () => {
+it("legacy recovery stops before Goga until selection is durably saved", async () => {
   HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
   };
@@ -929,7 +931,7 @@ it("keeps primary visible but stops before Goga until selection is durably saved
     version: "v",
     editable: false,
   }));
-  api.contextDeletionRecovery = vi.fn(async () => null);
+  api.contextDeletionRecovery = vi.fn(async () => api.prepareContextDeletion());
   api.prepareContextDeletion = vi.fn(async () => ({
     token: "persist-alpha",
     contextId: ownerA.contextId,
@@ -957,7 +959,7 @@ it("keeps primary visible but stops before Goga until selection is durably saved
     await screen.findByRole("button", { name: "Удалить топик…" }),
   );
   const confirm = await screen.findByRole("button", {
-    name: "Подтвердить удаление",
+    name: "Повторить удаление",
   });
   const persist = vi
     .spyOn(Storage.prototype, "setItem")
@@ -983,7 +985,7 @@ it("keeps primary visible but stops before Goga until selection is durably saved
   expect(localStorage.getItem(key)).toBe("null");
 });
 
-it("keeps the selected context and card after failed clone trash", async () => {
+it("legacy recovery keeps selected context and card after failed clone trash", async () => {
   HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
   };
@@ -999,7 +1001,7 @@ it("keeps the selected context and card after failed clone trash", async () => {
     version: "v",
     editable: false,
   }));
-  api.contextDeletionRecovery = vi.fn(async () => null);
+  api.contextDeletionRecovery = vi.fn(async () => api.prepareContextDeletion());
   api.prepareContextDeletion = vi.fn(async () => ({
     token: "before-trash",
     contextId: ownerA.contextId,
@@ -1022,7 +1024,7 @@ it("keeps the selected context and card after failed clone trash", async () => {
     await screen.findByRole("button", { name: "Удалить топик…" }),
   );
   fireEvent.click(
-    await screen.findByRole("button", { name: "Подтвердить удаление" }),
+    await screen.findByRole("button", { name: "Повторить удаление" }),
   );
   await screen.findByText("Trash denied");
   expect(
@@ -1072,18 +1074,21 @@ it("deletes a different topic without replacing the selected context", async () 
     status: "success",
     message: "Done",
   }));
+  api.prepareTopicRemoval = vi.fn(async () => ({ token: "remove-beta", projectId: "p", year: "2026", action: "delete", details: [], expiresAt: Date.now()+120000 }));
+  api.executeTopicRemoval = vi.fn(async () => ({ projectId: "p", topics: { status: "success", message: "Topic removed" }, copies: [], cleanup: [{ owner: { projectId: ownerB.projectId, year: ownerB.year, topic: ownerB.topic, branch: ownerB.branch, contextId: ownerB.contextId, revision: ownerB.revision }, plan: { token: "delete-beta", contextId: ownerB.contextId, purpose: "clone-after-topic", stage: "prepared", details: [] } }] }));
   await mount();
   await choose("alpha");
   fireEvent.click(screen.getByRole("button", { name: "Топики" }));
   fireEvent.click(
     await screen.findByRole("button", { name: "Удалить топик beta" }),
   );
-  fireEvent.click(
-    await screen.findByRole("button", { name: "Подтвердить удаление" }),
-  );
+  fireEvent.click(await screen.findByRole("checkbox", { name: /Подтверждаю удаление/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Удалить топики" }));
   await waitFor(() =>
     expect(api.finishContextDeletion).toHaveBeenCalledTimes(1),
   );
+  expect(api.executeTopicRemoval).toHaveBeenCalledTimes(1);
+  expect(api.prepareContextDeletion).not.toHaveBeenCalled();
   expect(
     screen.getByRole("button", { name: "Открыть карточку топика alpha" }),
   ).toBeTruthy();
@@ -1153,6 +1158,600 @@ it("automatically loads a healthy topic after a schema failure and refreshes the
       .getByRole("button", { name: "Обновить обзор" })
       .hasAttribute("disabled"),
   ).toBe(false);
+  expect(api.launch).not.toHaveBeenCalled();
+  expect(api.checkoutBranch).not.toHaveBeenCalled();
+});
+
+it("selects a newly created pipeline clone and its path without assigning it to primary", async () => {
+  const created = {
+    ...ownerA,
+    topic: "created",
+    branch: "feature/created",
+    contextId: `ctx-${"d".repeat(64)}`,
+    path: "/fixture/copies/created",
+  };
+  api.resolveTopicContext.mockResolvedValue(created);
+  await mount();
+  launch("Конвейер");
+  await waitFor(() => expect(completions.has("pipeline:primary")).toBe(true));
+  const run = ownedRun("created-pipeline", created);
+  await act(async () => completions.get("pipeline:primary")!(run, false));
+  await waitFor(() =>
+    expect(api.resolveTopicContext).toHaveBeenCalledWith(
+      expect.objectContaining({ contextId: created.contextId }),
+    ),
+  );
+  expect(
+    screen.getByRole("button", { name: "Открыть карточку топика created" }),
+  ).toBeTruthy();
+  expect(screen.getByLabelText("Путь выбранного контекста").textContent).toBe(
+    created.path,
+  );
+  expect(screen.getByRole("tab", { selected: true }).textContent).toContain(
+    "created-pipeline",
+  );
+  expect(api.ensureTopicContext).not.toHaveBeenCalled();
+  expect(api.checkoutBranch).not.toHaveBeenCalled();
+});
+it("does not let slow new-clone verification navigate over a later topic choice", async () => {
+  let resolve!: (value: any) => void;
+  const created = {
+    ...ownerA,
+    topic: "created",
+    branch: "feature/created",
+    contextId: `ctx-${"d".repeat(64)}`,
+    path: "/fixture/copies/created",
+  };
+  api.resolveTopicContext.mockImplementation((ref: any) =>
+    ref.contextId === created.contextId
+      ? new Promise((r) => (resolve = r))
+      : Promise.resolve(ownerB),
+  );
+  await mount();
+  launch("Конвейер");
+  await waitFor(() => expect(completions.has("pipeline:primary")).toBe(true));
+  let completion: any;
+  act(() => {
+    completion = completions.get("pipeline:primary")!(
+      ownedRun("created-pipeline", created),
+      false,
+    );
+  });
+  await waitFor(() => expect(resolve).toBeTypeOf("function"));
+  await choose("beta");
+  await act(async () => {
+    resolve(created);
+    await completion;
+  });
+  expect(
+    screen.getByRole("button", { name: "Открыть карточку топика beta" }),
+  ).toBeTruthy();
+  expect(screen.getByLabelText("Путь выбранного контекста").textContent).toBe(
+    ownerB.path,
+  );
+  expect(screen.queryByRole("tab", { selected: true })).toBeNull();
+});
+
+it("reports dashboard geometry again when the sidebar collapses and the viewport resizes", async () => {
+  const observers: (() => void)[] = [];
+  let width = 1280;
+  api.setDashboardViewport = vi.fn(async () => {});
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(private callback: () => void) {}
+      observe(element: HTMLElement) {
+        if (element.classList.contains("scroll-area"))
+          observers.push(this.callback);
+      }
+      unobserve() {}
+      disconnect() {}
+    },
+  );
+  const original = HTMLElement.prototype.getBoundingClientRect;
+  const measure = vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("scroll-area")) {
+        const x = document.querySelector(".sidebar-collapsed") ? 60 : 236;
+        return {
+          x,
+          left: x,
+          y: 212,
+          top: 212,
+          width: width - x,
+          height: 688,
+          right: width,
+          bottom: 900,
+          toJSON() {},
+        };
+      }
+      return original.call(this);
+    });
+  try {
+    await mount();
+    await waitFor(() =>
+      expect(api.setDashboardViewport).toHaveBeenLastCalledWith({
+        x: 236,
+        y: 212,
+        width: 1044,
+        height: 688,
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: "Свернуть боковую панель" }),
+    );
+    act(() => observers.forEach((cb) => cb()));
+    await waitFor(() =>
+      expect(api.setDashboardViewport).toHaveBeenLastCalledWith({
+        x: 60,
+        y: 212,
+        width: 1220,
+        height: 688,
+      }),
+    );
+    width = 1000;
+    fireEvent(window, new Event("resize"));
+    await waitFor(() =>
+      expect(api.setDashboardViewport).toHaveBeenLastCalledWith({
+        x: 60,
+        y: 212,
+        width: 940,
+        height: 688,
+      }),
+    );
+    expect(api.selectRun).not.toHaveBeenCalledWith(expect.any(String));
+  } finally {
+    measure.mockRestore();
+    vi.unstubAllGlobals();
+  }
+});
+
+it("a no-topic pipeline keeps the primary selector/path and exposes no fictitious topic card", async () => {
+  await mount();
+  launch("Конвейер");
+  await waitFor(() => expect(completions.has("pipeline:primary")).toBe(true));
+  const run = { ...ownedRun("no-topic-pipeline"), topic: "", branch: "main" };
+  await act(async () => completions.get("pipeline:primary")!(run, false));
+  expect(screen.getByRole("button", { name: "Без топика" })).toBeTruthy();
+  expect(screen.getByLabelText("Путь выбранного контекста").textContent).toBe(
+    "/fixture/project",
+  );
+  expect(
+    screen.getByRole("tab", {
+      name: "no-topic-pipeline · Без топика · main",
+      selected: true,
+    }),
+  ).toBeTruthy();
+  expect(screen.queryByRole("button", { name: /^Топик запуска/ })).toBeNull();
+  expect(api.ensureTopicContext).not.toHaveBeenCalled();
+  expect(api.resolveTopicContext).not.toHaveBeenCalled();
+  expect(api.checkoutBranch).not.toHaveBeenCalled();
+});
+
+it('deletes a selected topic first, then leaves its copy before finishing cleanup without repeating Goga', async()=>{
+  HTMLDialogElement.prototype.showModal=function(){this.open=true;};
+  HTMLDialogElement.prototype.close=function(){this.open=false;};
+  api.readTopicOverview=vi.fn(async()=>({projectId:'p',year:'2026',target:{topic:ownerA.topic,branch:ownerA.branch,remote:false},text:'Task',exists:true,version:'v',editable:false}));
+  api.contextDeletionRecovery=vi.fn(async()=>null);
+  api.prepareContextDeletion=vi.fn();
+  api.prepareTopicRemoval=vi.fn(async()=>({token:'topic-first-alpha',projectId:'p',year:'2026',action:'delete',details:['Topic-first'],expiresAt:Date.now()+120000}));
+  api.executeTopicRemoval=vi.fn(async()=>{
+    expect(screen.getByLabelText('Путь выбранного контекста').textContent).toBe(ownerA.path);
+    expect(api.deleteContext).not.toHaveBeenCalled();
+    return {projectId:'p',topics:{status:'success',message:'Topic removed first'},copies:[],cleanup:[{owner:{projectId:ownerA.projectId,year:ownerA.year,topic:ownerA.topic,branch:ownerA.branch,contextId:ownerA.contextId,revision:ownerA.revision},plan:{token:'cleanup-alpha',contextId:ownerA.contextId,purpose:'clone-after-topic',stage:'prepared',details:[]}}]};
+  });
+  api.deleteContext=vi.fn(async()=>{
+    expect(api.executeTopicRemoval).toHaveBeenCalledTimes(1);
+    return {projectId:'p',status:'success',message:'Copy in Trash',cloneRemoved:true,stage:'clone-trashed'};
+  });
+  api.finishContextDeletion=vi.fn(async()=>{
+    expect(screen.getByLabelText('Путь выбранного контекста').textContent).toBe('/fixture/project');
+    expect(api.selectTopicContext).toHaveBeenLastCalledWith(null);
+    expect(api.executeTopicRemoval).toHaveBeenCalledTimes(1);
+    return {projectId:'p',status:'success',message:'Cleanup done without Goga',cloneRemoved:true,stage:'completed'};
+  });
+  await mount();await choose('alpha');
+  fireEvent.click(screen.getByRole('button',{name:'Открыть карточку топика alpha'}));
+  fireEvent.click(await screen.findByRole('button',{name:'Удалить топик…'}));
+  fireEvent.click(await screen.findByRole('checkbox',{name:/Подтверждаю удаление/}));
+  fireEvent.click(screen.getByRole('button',{name:'Удалить топики'}));
+  await screen.findByText('Cleanup done without Goga');
+  expect(api.finishContextDeletion).toHaveBeenCalledTimes(1);expect(api.prepareContextDeletion).not.toHaveBeenCalled();
+});
+
+
+it.each(["pipeline", "no-topic", "build"] as const)(
+  "keeps the %s context bar compact without losing run identity or controls",
+  async (kind) => {
+    const owner = kind === "no-topic" ? undefined : ownerA;
+    const run = {
+      ...ownedRun("compact-run", owner),
+      ...(kind === "no-topic" ? { topic: "" } : {}),
+      ...(kind === "build"
+        ? {
+            kind: "build",
+            build: { planPath: ".goga/history/2026/alpha/plan.md" },
+          }
+        : {}),
+    };
+    api.runs.mockResolvedValue([run]);
+    api.readGitSummary = vi.fn(async (scope: any) => ({
+      scope,
+      branch: typeof scope === "string" ? "main" : ownerA.branch,
+      changedFiles: 0,
+      conflicts: 0,
+    }));
+    api.readGitWorkspace = vi.fn(async (scope: any) => ({
+      scope,
+      root: typeof scope === "string" ? "/fixture/project" : ownerA.path,
+      revision: "a".repeat(64),
+      head: "b".repeat(40),
+      branch: typeof scope === "string" ? "main" : ownerA.branch,
+      upstream: null,
+      ahead: 0,
+      behind: 0,
+      operation: "none",
+      files: [],
+    }));
+    await mount();
+    if (owner) await choose(owner.topic);
+    if (kind === "build") {
+      fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Сборка" }),
+      );
+      fireEvent.click(
+        await screen.findByRole("button", { name: /^Открыть запуск / }),
+      );
+    } else await openRun(run.id);
+    const bar = screen
+      .getByLabelText("Путь выбранного контекста")
+      .closest(".run-context") as HTMLElement;
+    expect(bar.querySelector(".run-topic, .run-branch")).toBeNull();
+    expect(
+      within(bar).queryByRole("button", { name: /^Топик запуска/ }),
+    ).toBeNull();
+    expect(
+      within(bar).getByLabelText("Путь выбранного контекста").textContent,
+    ).toBe(owner?.path ?? "/fixture/project");
+    await within(bar).findByLabelText(`Ветка: ${run.branch}`);
+    expect(within(bar).getByRole("button", { name: /^Изменения/ })).toBeTruthy();
+    expect(within(bar).getByRole("button", { name: "Коммиты" })).toBeTruthy();
+    expect(within(bar).getByText("Работает")).toBeTruthy();
+    expect(
+      screen.getByRole("button", {
+        name: owner ? `Открыть карточку топика ${owner.topic}` : "Без топика",
+      }),
+    ).toBeTruthy();
+    const tab = screen.getByRole("tab", { selected: true });
+    expect(tab.textContent).toContain(run.branch);
+    expect(tab.textContent).toContain(
+      kind === "build" ? "plan.md" : run.topic || "Без топика",
+    );
+    if (kind === "build")
+      expect(within(bar).getByText(run.build!.planPath)).toBeTruthy();
+    fireEvent.click(within(bar).getByRole("button", { name: "Остановить" }));
+    await waitFor(() => expect(api.stopRun).toHaveBeenCalledWith(run.id));
+    expect(api.launch).not.toHaveBeenCalled();
+    expect(api.checkoutBranch).not.toHaveBeenCalled();
+  },
+);
+
+it.each(["history", "just-finished"] as const)(
+  "uses shell menus after a pipeline has finished (%s), even if native popup creation is unavailable",
+  async (mode) => {
+    const run = {
+      ...ownedRun("finished-popup", ownerA),
+      status: mode === "history" ? "exited" : "running",
+      dashboardOpened: mode !== "history",
+      url: "http://localhost:4101",
+      output: { text: "Pipeline output retained", truncated: false },
+    };
+    api.runs.mockResolvedValue([run]);
+    api.runRepositoryAction = vi.fn(async (request: any) => ({
+      projectId: request.projectId,
+      contextId: request.context?.contextId,
+      action: request.action,
+      status: "error",
+      log: "Topic transfer stopped without publication",
+      error: "Synthetic transfer refusal",
+    }));
+    await mount();
+    await choose(ownerA.topic);
+    await openRun(run.id);
+    const popup = vi.spyOn(window, "open").mockReturnValue(null);
+    Object.assign(api, {
+      setTopicPopupBounds: vi.fn(async () => {}),
+      closeTopicPopup: vi.fn(async () => {}),
+      onTopicPopupClosed: () => () => {},
+    });
+    try {
+      act(() =>
+        emitRuns([{ ...run, status: "exited", dashboardOpened: false }]),
+      );
+      await screen.findByRole("heading", { name: "Процесс завершён" });
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: "Перенести топик в base и опубликовать",
+        }),
+      );
+      const result = await screen.findByRole("dialog", {
+        name: "Ошибка операции",
+      });
+      expect(within(result).getByRole("alert").textContent).toBe(
+        "Synthetic transfer refusal",
+      );
+      expect(within(result).getByLabelText("Лог операции").textContent).toBe(
+        "Topic transfer stopped without publication",
+      );
+      fireEvent.click(within(result).getByLabelText("Закрыть попап"));
+      fireEvent.click(
+        screen.getByRole("button", { name: "Выбрать другой топик" }),
+      );
+      await screen.findByRole("combobox", { name: "Найти топик" });
+      expect(popup).not.toHaveBeenCalled();
+      expect(
+        screen.queryByText(/Не удалось открыть меню поверх панели/),
+      ).toBeNull();
+      expect(screen.getByLabelText("Строки вывода запуска").textContent).toBe(
+        "Pipeline output retained",
+      );
+      expect(api.runRepositoryAction).toHaveBeenCalledTimes(1);
+      expect(api.checkoutBranch).not.toHaveBeenCalled();
+      expect(api.launch).not.toHaveBeenCalled();
+      expect(api.selectRun).toHaveBeenLastCalledWith(null);
+    } finally {
+      popup.mockRestore();
+    }
+  },
+);
+
+const newlyCreatedOwner = {
+  ...ownerA,
+  topic: "new-topic",
+  branch: "new-topic",
+  contextId: `ctx-${"d".repeat(64)}`,
+  path: "/fixture/copies/new-topic",
+};
+async function beginTopicCreation() {
+  api.readGitSummary = vi.fn(async (scope: any) => ({
+    scope,
+    branch: "main",
+    changedFiles: 0,
+    conflicts: 0,
+  }));
+  api.readGitWorkspace = vi.fn(async (scope: any) => ({
+    scope,
+    root: "/fixture/project",
+    revision: "a".repeat(64),
+    head: "b".repeat(40),
+    branch: "main",
+    upstream: null,
+    ahead: 0,
+    behind: 0,
+    operation: "none",
+    files: [],
+  }));
+  api.readGitHistory = vi.fn(async (r: any) => ({
+    scope: r.scope,
+    ref: r.ref,
+    currentBranch: "main",
+    tip: null,
+    commits: [],
+    nextOffset: null,
+  }));
+  await mount();
+  await choose("alpha");
+  fireEvent.click(screen.getByRole("button", { name: "Коммиты" }));
+  await screen.findByText("Коммитов пока нет.");
+  fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Найти топик" }), {
+    target: { value: "new-topic" },
+  });
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Создать «new-topic» и подготовить конвейер",
+    }),
+  );
+  await waitFor(() => expect(api.createTopicContext).toHaveBeenCalledTimes(1));
+}
+it("immediately prepares the launch screen and retries creation there before opening the exact owner form", async () => {
+  let reject!: (error: Error) => void;
+  api.createTopicContext = vi.fn(
+    () =>
+      new Promise((_resolve, fail) => {
+        reject = fail;
+      }),
+  );
+  await beginTopicCreation();
+  expect(
+    screen
+      .getByRole("status", { name: "Подготовка запуска" })
+      .closest(".context-stage"),
+  ).not.toBeNull();
+  expect(screen.queryByRole("combobox", { name: "Найти топик" })).toBeNull();
+  expect(
+    screen.queryByRole("status", { name: "Создаётся «new-topic»…" }),
+  ).toBeNull();
+  expect(screen.queryByLabelText("Pipeline draft")).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Открыть карточку топика alpha" }),
+  ).toBeTruthy();
+  await act(async () => reject(Error("Синтетический отказ создания.")));
+  expect(screen.getByRole("alert").textContent).toContain(
+    "Синтетический отказ создания.",
+  );
+  expect(screen.getByRole("alert").closest(".context-stage")).not.toBeNull();
+  api.createTopicContext.mockResolvedValueOnce(newlyCreatedOwner);
+  fireEvent.click(screen.getByRole("button", { name: "Повторить подготовку" }));
+  const draft = await screen.findByLabelText("Pipeline draft");
+  expect(JSON.parse(draft.getAttribute("data-owner")!)).toEqual({
+    projectId: "p",
+    year: "2026",
+    topic: "new-topic",
+    branch: "new-topic",
+    contextId: newlyCreatedOwner.contextId,
+    revision: newlyCreatedOwner.revision,
+  });
+  expect(
+    screen.getByRole("button", { name: "Открыть карточку топика new-topic" }),
+  ).toBeTruthy();
+  expect(api.createTopicContext).toHaveBeenCalledTimes(2);
+  expect(api.ensureTopicContext).not.toHaveBeenCalled();
+  expect(api.launch).not.toHaveBeenCalled();
+  expect(api.checkoutBranch).not.toHaveBeenCalled();
+});
+it("keeps right-side feedback after leaving preparation and never hijacks navigation on late success", async () => {
+  let resolve!: (owner: any) => void;
+  api.createTopicContext = vi.fn(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  await beginTopicCreation();
+  fireEvent.click(screen.getByRole("button", { name: "Коммиты" }));
+  await screen.findByRole("region", { name: "История коммитов" });
+  const status = screen.getByRole("status", { name: "Создаётся «new-topic»…" });
+  expect(status.closest(".project-bar")).not.toBeNull();
+  expect(status.closest(".topic-context-picker")).toBeNull();
+  const actions = status.closest(".project-heading-context")!.querySelector(".repository-actions")!;
+  expect(actions.compareDocumentPosition(status) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+  await act(async () => resolve(newlyCreatedOwner));
+  expect(
+    screen.queryByRole("status", { name: "Создаётся «new-topic»…" }),
+  ).toBeNull();
+  expect(screen.getByRole("region", { name: "История коммитов" })).toBeTruthy();
+  expect(screen.queryByLabelText("Pipeline draft")).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Открыть карточку топика alpha" }),
+  ).toBeTruthy();
+  expect(api.createTopicContext).toHaveBeenCalledTimes(1);
+  expect(api.ensureTopicContext).not.toHaveBeenCalled();
+  expect(api.launch).not.toHaveBeenCalled();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Закрыть историю коммитов" }),
+  );
+  expect(
+    JSON.parse(
+      (await screen.findByLabelText("Pipeline draft")).getAttribute(
+        "data-owner",
+      )!,
+    ).contextId,
+  ).toBe(newlyCreatedOwner.contextId);
+  expect(api.createTopicContext).toHaveBeenCalledTimes(1);
+});
+it("reopens creation failure in the preparation area without another mutation", async () => {
+  let reject!: (error: Error) => void;
+  api.createTopicContext = vi.fn(
+    () =>
+      new Promise((_resolve, fail) => {
+        reject = fail;
+      }),
+  );
+  await beginTopicCreation();
+  fireEvent.click(screen.getByRole("button", { name: "Коммиты" }));
+  await act(async () => reject(Error("Синтетический отказ создания.")));
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Показать ошибку создания топика new-topic",
+    }),
+  );
+  expect(screen.getByRole("alert").closest(".context-stage")).not.toBeNull();
+  expect(screen.getByRole("alert").textContent).toContain(
+    "Синтетический отказ создания.",
+  );
+  expect(
+    screen.getByRole("button", { name: "Повторить подготовку" }),
+  ).toBeTruthy();
+  expect(screen.queryByRole("combobox", { name: "Найти топик" })).toBeNull();
+  expect(api.createTopicContext).toHaveBeenCalledTimes(1);
+});
+
+it("opens preparation before reading the creation base and never ensures a fallback owner", async () => {
+  api.createTopicContext = vi.fn(() => new Promise(() => {}));
+  await mount();
+  let resolveBase!: (board: any) => void;
+  api.readTopicBoard.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        resolveBase = resolve;
+      }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
+  fireEvent.change(screen.getByRole("combobox", { name: "Найти топик" }), {
+    target: { value: "new-topic" },
+  });
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Создать «new-topic» и подготовить конвейер",
+    }),
+  );
+  expect(
+    screen.getByRole("status", { name: "Подготовка запуска" }),
+  ).toBeTruthy();
+  expect(api.createTopicContext).not.toHaveBeenCalled();
+  expect(api.ensureTopicContext).not.toHaveBeenCalled();
+  await act(async () =>
+    resolveBase({ projectId: "p", year: "2026", baseRef: "main" }),
+  );
+  expect(api.createTopicContext).toHaveBeenCalledWith({
+    projectId: "p",
+    year: "2026",
+    branch: "new-topic",
+    baseRef: "main",
+  });
+  expect(screen.queryByLabelText("Pipeline draft")).toBeNull();
+});
+
+it("retains creation success behind a topic card and resumes after closing it", async () => {
+  HTMLDialogElement.prototype.showModal = function () {
+    this.open = true;
+  };
+  HTMLDialogElement.prototype.close = function () {
+    this.open = false;
+  };
+  let resolve!: (owner: any) => void;
+  api.createTopicContext = vi.fn(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  await beginTopicCreation();
+  fireEvent.click(
+    screen.getByRole("button", { name: "Открыть карточку топика alpha" }),
+  );
+  await screen.findByRole("dialog");
+  await act(async () => resolve(newlyCreatedOwner));
+  expect(screen.queryByLabelText("Pipeline draft")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Закрыть карточку" }));
+  await screen.findByLabelText("Pipeline draft");
+  expect(api.createTopicContext).toHaveBeenCalledTimes(1);
+  expect(api.ensureTopicContext).not.toHaveBeenCalled();
+});
+
+it("keeps repository feedback after all header icons when navigating between sections", async () => {
+  let finish!: (value: any) => void;
+  api.runRepositoryAction = vi.fn(() => new Promise((done) => { finish = done; }));
+  await mount();
+  await choose("alpha");
+  fireEvent.click(screen.getByRole("button", { name: "Опубликовать топик" }));
+  const status = screen.getByRole("status", { name: /Публикация…/ });
+  const header = status.closest(".project-heading-context")!;
+  expect(header).not.toBeNull();
+  expect(header.querySelector(".repository-actions")!.nextElementSibling).toBe(status);
+  fireEvent.click(screen.getByRole("button", { name: "Топики" }));
+  await screen.findByRole("heading", { name: "Топики" });
+  expect(screen.getByRole("status", { name: /Публикация…/ })).toBe(status);
+  fireEvent.click(screen.getByRole("button", { name: "Проект" }));
+  await screen.findByTestId("settings");
+  expect(screen.getByRole("status", { name: /Публикация…/ })).toBe(status);
+  await act(async () => finish({ projectId: "p", contextId: ownerA.contextId, action: "publish", status: "success", log: "done" }));
+  expect(screen.queryByRole("status", { name: /Публикация…/ })).toBeNull();
+  expect(api.runRepositoryAction).toHaveBeenCalledTimes(1);
   expect(api.launch).not.toHaveBeenCalled();
   expect(api.checkoutBranch).not.toHaveBeenCalled();
 });

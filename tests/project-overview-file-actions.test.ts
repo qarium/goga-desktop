@@ -8,6 +8,7 @@ import {
   rm,
   symlink,
   lstat,
+  readdir,
 } from "node:fs/promises";
 import path from "node:path";
 vi.mock("node:fs/promises", async (importOriginal) => {
@@ -298,9 +299,26 @@ it("preserves external data added to a directory reservation before rename and d
 it("removes only its own empty directory reservation after rename fails", async () => {
   const f = await fixture();
   await f.file("source/child");
-  vi.mocked(rename).mockRejectedValueOnce(
-    Object.assign(Error("denied"), { code: "EACCES" }),
-  );
+  const actual =
+    await vi.importActual<typeof import("node:fs/promises")>(
+      "node:fs/promises",
+    );
+  let attempted = 0;
+  let reservation: { isDirectory: boolean; entries: string[] } | undefined;
+  vi.mocked(rename).mockImplementation(async (source, destination) => {
+    if (
+      source === path.join(f.root, "source") &&
+      destination === path.join(f.root, "target")
+    ) {
+      attempted++;
+      reservation = {
+        isDirectory: (await lstat(destination)).isDirectory(),
+        entries: await readdir(destination),
+      };
+      throw Object.assign(Error("denied"), { code: "EACCES" });
+    }
+    return actual.rename(source, destination);
+  });
   const p = await f.host.prepareOverviewFileAction("p", {
     kind: "rename",
     path: "source",
@@ -309,6 +327,8 @@ it("removes only its own empty directory reservation after rename fails", async 
   expect((await f.host.executeOverviewFileAction(p.token)).status).toBe(
     "not-done",
   );
+  expect(attempted).toBe(1);
+  expect(reservation).toEqual({ isDirectory: true, entries: [] });
   await expect(lstat(path.join(f.root, "target"))).rejects.toMatchObject({
     code: "ENOENT",
   });

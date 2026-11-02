@@ -3,6 +3,9 @@
   flex: 0 0 auto;
   min-width: 0;
 }
+.run-actions + .git-workspace-controls-host {
+  margin-left: 0;
+}
 .git-workspace-controls {
   display: flex;
   align-items: center;
@@ -238,18 +241,6 @@
   font-size: 13px;
   flex: 1;
 }
-.git-diff-tabs {
-  display: flex;
-  gap: 4px;
-}
-.git-diff-tabs button {
-  font-size: 11px;
-  padding: 6px 10px;
-}
-.git-diff-tabs button[aria-pressed="true"] {
-  color: var(--teal);
-  border-color: var(--teal);
-}
 .git-diff-preview {
   overflow: auto;
   flex: 1;
@@ -331,9 +322,6 @@
   }
   .git-workspace-files {
     flex-basis: 180px;
-  }
-  .git-diff-tabs {
-    width: 100%;
   }
 }
 .git-page-controls {

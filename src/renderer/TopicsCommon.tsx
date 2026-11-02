@@ -14,7 +14,7 @@ import "./Topics.css";
 export function topicError(e: unknown): string {
   const text = e instanceof Error ? e.message : String(e);
   return text.replace(
-    /^Error invoking remote method 'goga:(?:read-request|read-topic-details|read-topic-board)': (?:Error: )?/,
+    /^Error invoking remote method 'goga:(?:read-request|read-topic-details|read-topic-board|prepare-topic-removal|execute-topic-removal|prepare-topic-clone-cleanup)': (?:Error: )?/,
     "",
   );
 }

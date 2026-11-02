@@ -1,4 +1,6 @@
 import {
+  createContext,
+  useContext,
   useLayoutEffect,
   useRef,
   useState,
@@ -29,6 +31,14 @@ export function hasNativeTopicPopup() {
 const failureMessage =
   "Не удалось открыть меню поверх панели. Закройте меню и попробуйте снова.";
 
+// A native layer is necessary only above another native surface, not above
+// completed-run output or ordinary React pages. Standalone hosts keep it on.
+const NativeTopicPopupContext = createContext(true);
+export const NativeTopicPopupProvider = NativeTopicPopupContext.Provider;
+export function useNativeTopicPopup() {
+  return useContext(NativeTopicPopupContext) && hasNativeTopicPopup();
+}
+
 /** Only presentation moves into the same-origin native layer. React state and
  * every privileged call remain in the original, authenticated shell renderer. */
 export function TopicPickerPopup({
@@ -44,7 +54,7 @@ export function TopicPickerPopup({
   label?: string;
   width?: number;
 }) {
-  const native = hasNativeTopicPopup();
+  const native = useNativeTopicPopup();
   const close = useRef(onClose);
   close.current = onClose;
   const [container, setContainer] = useState<HTMLDivElement | null>(null);
@@ -85,14 +95,16 @@ export function TopicPickerPopup({
     previous?.close();
     const previousReleased = previous?.release();
     let released: Promise<void> | null = null;
-    const release = () =>
-      (released ??= (
-        previousReleased
-          ? previousReleased.then(() => api.closeTopicPopup!(id))
-          : api.closeTopicPopup!(id)
-      ).finally(() => {
-        if (activePopup === active) activePopup = null;
-      }));
+    const release = () => {
+      released ??= previousReleased
+        ? previousReleased.then(() => api.closeTopicPopup!(id))
+        : api.closeTopicPopup!(id);
+      return released.finally(() => {
+        // A failed menu still owns its visible error until it is dismissed.
+        // Releasing only the native view must not let that error accumulate.
+        if (activePopup === active && disposed) activePopup = null;
+      });
+    };
     const active = {
       close: () => {
         if (!disposed) {
@@ -245,13 +257,14 @@ export function TopicPickerPopup({
 
   if (!native) return children;
   if (error)
-    return (
+    return createPortal(
       <div className="topic-popup-error" role="alert">
-        {error}
+        <p>{error}</p>
         <button type="button" onClick={onClose}>
           Закрыть меню
         </button>
-      </div>
+      </div>,
+      document.body,
     );
   return container ? createPortal(children, container) : null;
 }

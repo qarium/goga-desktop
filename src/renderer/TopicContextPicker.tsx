@@ -21,9 +21,52 @@ import {
   type RunWithContext,
 } from "./topic-context";
 import "./TopicContextPicker.css";
+import { ContextOperationProgress } from "./ContextOperationProgress";
 import { readRequest } from "./read-request";
 import { TopicQuickSync } from "./TopicQuickSync";
-import { TopicPickerPopup, hasNativeTopicPopup } from "./TopicPickerPopup";
+import { TopicPickerPopup, useNativeTopicPopup } from "./TopicPickerPopup";
+
+export type TopicCreationProgress = {
+  identity: TopicContextIdentity;
+  state: "busy" | "error";
+  message?: string;
+  retry: () => void;
+};
+
+/** Presentation only: App places this after repository actions, while a
+ * standalone picker may retain its local feedback. Never owns a create flight. */
+export function TopicCreationFeedback({
+  progress,
+  disabled = false,
+  onShow,
+}: {
+  progress: Omit<TopicCreationProgress, "retry">;
+  disabled?: boolean;
+  onShow: () => void;
+}) {
+  if (progress.state === "busy") {
+    const label = `Создаётся «${progress.identity.branch}»…`;
+    return <ContextOperationProgress label={label} message="Создаётся…" />;
+  }
+  return (
+    <div className="topic-context-creation-feedback is-error" role="alert">
+      <button
+        type="button"
+        className="topic-context-creation-error"
+        aria-label={`Показать ошибку создания топика ${progress.identity.branch}`}
+        title={progress.message}
+        disabled={disabled}
+        onClick={onShow}
+      >
+        <span className="topic-context-creation-warning" aria-hidden="true">
+          !
+        </span>
+        <span className="topic-context-creation-message">Ошибка создания</span>
+        <span aria-hidden="true">↗</span>
+      </button>
+    </div>
+  );
+}
 
 export interface TopicContextPickerProps {
   project: Project;
@@ -39,6 +82,10 @@ export interface TopicContextPickerProps {
   onSelectionRequestHandled?: () => void;
   onTransitionIntent?: () => void;
   onCreated?: (record: WorktreeRecord) => void;
+  onCreationStarted?: (identity: TopicContextIdentity) => void;
+  onCreationProgress?: (progress: TopicCreationProgress | null) => void;
+  onShowCreation?: (identity: TopicContextIdentity) => void;
+  showCreationFeedback?: boolean;
   onClear: () => void;
   onOpenCard: (target: TopicTarget, year: string) => void;
 }
@@ -113,11 +160,16 @@ export function TopicContextPicker({
   onSelect,
   onTransitionIntent,
   onCreated,
+  onCreationStarted,
+  onCreationProgress,
+  onShowCreation,
+  showCreationFeedback = true,
   onClear,
   onOpenCard,
   requestedSelection,
   onSelectionRequestHandled,
 }: TopicContextPickerProps) {
+  const nativePopup = useNativeTopicPopup();
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -133,6 +185,24 @@ export function TopicContextPicker({
   const [query, setQuery] = useState("");
   const [focused, setFocused] = useState(0);
   const [preparation, setPreparation] = useState<Preparation>(null);
+  const progressCallback = useRef(onCreationProgress);
+  progressCallback.current = onCreationProgress;
+  // Presentation only. The picker retains ownership of the single physical
+  // flight, its epoch checks, timeout reconciliation and explicit retry.
+  useEffect(() => {
+    progressCallback.current?.(
+      preparation?.create
+        ? {
+            identity: preparation.identity,
+            state: preparation.state,
+            message:
+              preparation.state === "error" ? preparation.message : undefined,
+            retry: () => prepare(preparation.identity, true, preparation.owner),
+          }
+        : null,
+    );
+  }, [preparation]);
+  useEffect(() => () => progressCallback.current?.(null), []);
   const current = selected?.projectId === project.id ? selected : null;
   const snapshot = board?.projectId === project.id ? board : null;
   const scopeKey = JSON.stringify([project.id, project.path]);
@@ -330,6 +400,10 @@ export function TopicContextPicker({
     const token = epoch.current;
     busyKey.current = key;
     setPreparation({ state: "busy", identity, create, owner });
+    if (create && onCreationStarted) {
+      close();
+      onCreationStarted(identity);
+    }
     let flight = flights.current.get(key);
     const reused = Boolean(flight);
     if (!flight) {
@@ -587,6 +661,8 @@ export function TopicContextPicker({
     );
   const creationAvailable =
     !!onCreated && typeof window.goga.createTopicContext === "function";
+  const creation =
+    showCreationFeedback && preparation?.create ? preparation : null;
   const validNewName =
     /^[\p{L}\p{N}][\p{L}\p{N}_/-]*$/u.test(newName) &&
     newName.length <= 80 &&
@@ -594,7 +670,7 @@ export function TopicContextPicker({
     !newName.includes("//");
   return (
     <div
-      className="topic-context-picker"
+      className={`topic-context-picker${creation ? " has-creation-feedback" : ""}`}
       ref={root}
       onBlur={(event) => {
         const destination = event.relatedTarget;
@@ -615,7 +691,7 @@ export function TopicContextPicker({
               .includes(tooltip.id),
           );
         if (
-          !hasNativeTopicPopup() &&
+          !nativePopup &&
           !event.currentTarget.contains(destination as Node) &&
           !ownedTooltip
         )
@@ -660,6 +736,20 @@ export function TopicContextPicker({
           <span className="topic-context-chevron" aria-hidden="true" />
         </button>
       </div>
+      {creation && (
+        <TopicCreationFeedback
+          progress={creation}
+          disabled={disabled}
+          onShow={() => {
+            if (onShowCreation) onShowCreation(creation.identity);
+            else {
+              setQuery(creation.identity.branch);
+              setFocused(0);
+              setOpen(true);
+            }
+          }}
+        />
+      )}
       {expanded && (
         <TopicPickerPopup anchor={root} onClose={() => close()}>
           <div
@@ -791,7 +881,10 @@ export function TopicContextPicker({
               )}
             </div>
             {preparation?.state === "busy" && (
-              <p className="topic-context-feedback" role="status">
+              <p
+                className="topic-context-feedback"
+                role={preparation.create ? undefined : "status"}
+              >
                 {preparation.owner
                   ? "Проверяем рабочую копию…"
                   : "Подготавливаем рабочую копию…"}
@@ -799,7 +892,9 @@ export function TopicContextPicker({
             )}
             {preparation?.state === "error" && (
               <div className="topic-context-feedback">
-                <p role="alert">{preparation.message}</p>
+                <p role={preparation.create ? undefined : "alert"}>
+                  {preparation.message}
+                </p>
                 <button
                   type="button"
                   onClick={() =>

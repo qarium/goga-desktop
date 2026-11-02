@@ -105,7 +105,6 @@ function GitWorkspaceOwner({
   const [file, setFile] = useState("");
   const [filePage, setFilePage] = useState(0);
   const [linePages, setLinePages] = useState<Record<string, number>>({});
-  const [side, setSide] = useState<"unstaged" | "staged">("unstaged");
   const [diff, setDiff] = useState<GitWorkspaceDiff | null>(null);
   const [diffPending, setDiffPending] = useState(false);
   const [diffFailed, setDiffFailed] = useState(false);
@@ -420,9 +419,8 @@ function GitWorkspaceOwner({
   }, [active, open]);
   useEffect(() => {
     if (preview.current)
-      preview.current.scrollTop =
-        scroll.current[JSON.stringify([file, side])] ?? 0;
-  }, [open, active, file, side, diff]);
+      preview.current.scrollTop = scroll.current[JSON.stringify([file])] ?? 0;
+  }, [open, active, file, diff]);
   const conflicts =
     snapshot?.files.filter((f) => f.kind === "conflict").length ?? 0;
   const branch = summarySupported
@@ -457,7 +455,7 @@ function GitWorkspaceOwner({
     Math.max(0, Math.ceil(files.length / FILE_PAGE_SIZE) - 1),
   );
   const fileStart = visibleFilePage * FILE_PAGE_SIZE;
-  const linePageKey = JSON.stringify([file, side]);
+  const linePageKey = JSON.stringify([file]);
   const body = active && open;
   return (
     <>
@@ -626,13 +624,13 @@ function GitWorkspaceOwner({
             <header className="git-workspace-heading">
               <div>
                 <h2>Изменения</h2>
-                <p>Рабочая папка и подготовленные изменения</p>
+                <p>От последнего коммита до текущего состояния файлов</p>
               </div>
               <div className="git-workspace-heading-actions">
                 <TooltipButton
                   label="Обновить изменения"
                   tooltipLabel="Обновить изменения"
-                  description="Перечитать состояние локальной рабочей папки и индекса"
+                  description="Перечитать изменения локальных файлов"
                   busy={snapshotPending}
                   disabled={
                     snapshotPending ||
@@ -751,17 +749,10 @@ function GitWorkspaceOwner({
                             className={file === entry.path ? "active" : ""}
                             onClick={() => {
                               setFile(entry.path);
-                              setSide(
-                                entry.worktreeStatus === "." &&
-                                  entry.indexStatus !== "."
-                                  ? "staged"
-                                  : "unstaged",
-                              );
                             }}
                           >
                             <span
                               className={`git-file-status${entry.kind === "conflict" ? " conflict" : ""}`}
-                              title={`Индекс: ${entry.indexStatus}; рабочая папка: ${entry.worktreeStatus}`}
                             >
                               {entry.kind === "untracked"
                                 ? "?"
@@ -814,33 +805,12 @@ function GitWorkspaceOwner({
                     <div className="git-workspace-file">
                       <div className="git-workspace-file-heading">
                         <strong title={file}>{file || "Выберите файл"}</strong>
-                        <div
-                          className="git-diff-tabs"
-                          aria-label="Версия изменений"
-                        >
-                          <button
-                            type="button"
-                            disabled={!file}
-                            aria-pressed={side === "unstaged"}
-                            onClick={() => setSide("unstaged")}
-                          >
-                            Рабочая папка
-                          </button>
-                          <button
-                            type="button"
-                            disabled={!file}
-                            aria-pressed={side === "staged"}
-                            onClick={() => setSide("staged")}
-                          >
-                            Подготовлено
-                          </button>
-                        </div>
                       </div>
                       <div
                         className="git-diff-preview"
                         ref={preview}
                         onScroll={(event) => {
-                          scroll.current[JSON.stringify([file, side])] =
+                          scroll.current[JSON.stringify([file])] =
                             event.currentTarget.scrollTop;
                         }}
                       >
@@ -854,9 +824,14 @@ function GitWorkspaceOwner({
                           <div className="git-workspace-empty">
                             Не удалось прочитать файл. Обновите изменения.
                           </div>
+                        ) : currentDiff?.changes.kind === "empty" ? (
+                          <div className="git-workspace-empty">
+                            Итоговых изменений относительно последнего коммита
+                            нет.
+                          </div>
                         ) : currentDiff ? (
                           <DiffPart
-                            part={currentDiff[side]}
+                            part={currentDiff.changes}
                             page={linePages[linePageKey] ?? 0}
                             onPage={(page) => {
                               setLinePages((pages) => ({

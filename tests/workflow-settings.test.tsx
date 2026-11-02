@@ -723,3 +723,35 @@ it("supersedes an older Reset discovery when workflow saving starts a refresh", 
   openCatalog(await screen.findByRole("combobox", { name: "Рабочий процесс" }));
   await screen.findByRole("option", { name: /new-flow/ });
 });
+
+it("shows a readable external-save conflict without losing the workflow draft or its version", async () => {
+  const store = createSettingsDocuments();
+  const source = {
+    scope: "project" as const,
+    projectId: "p",
+    target: { kind: "workflow" as const, name: "Plan" },
+  };
+  api.readProjectDocument.mockResolvedValueOnce({
+    text: raw,
+    version: "baseline",
+    exists: true,
+  });
+  await store.open(source);
+  const draft = raw + "# unsaved\r\n";
+  store.edit(source, draft);
+  const reason =
+    "Конфликт сохранения: файл изменился после открытия. Файл не перезаписан. Обновите файл перед повторным сохранением.";
+  api.saveProjectDocument.mockRejectedValueOnce(
+    Error(
+      `Error invoking remote method 'goga:save-project-document': Error: ${reason}`,
+    ),
+  );
+  expect(await store.save(source)).toBe(false);
+  expect(store.get(source).text).toBe(draft);
+  expect(store.get(source).document?.version).toBe("baseline");
+  expect(store.get(source).error).toBe(
+    reason + " Ваш черновик остался в редакторе.",
+  );
+  expect(store.get(source).busy).toBe(false);
+  expect(api.saveProjectDocument).toHaveBeenCalledTimes(1);
+});

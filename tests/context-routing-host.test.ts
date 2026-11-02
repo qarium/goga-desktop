@@ -1,7 +1,7 @@
 import { DesktopStateStore } from "../src/host/desktop-state";
 import { CloneStore } from "../src/host/clone-store";
 import { afterEach, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm, readdir } from "node:fs/promises";
 import path from "node:path";
 import { HostService } from "../src/host/service";
 import { CloneManager } from "../src/host/clones";
@@ -555,3 +555,190 @@ it("a late clone selection cannot overwrite a newer primary selection", async ()
   expect((f.service as any).selectedContext).toBeNull();
   await f.service.dispose();
 });
+
+it.each([
+  ["primary", "starting"],
+  ["primary", "running"],
+  ["primary", "unverified"],
+  ["clone", "starting"],
+  ["clone", "running"],
+  ["clone", "unverified"],
+] as const)(
+  "allows versioned file saves in %s with a %s run, but refuses external changes",
+  async (owner, status) => {
+    const f = await fixture();
+    const scope = owner === "clone" ? f.ref : f.project.id;
+    const root = owner === "clone" ? f.record.path : f.project.path;
+    await new DesktopStateStore(f.home, path.join(f.home, "data")).addProject(
+      f.project,
+    );
+    const originalCommand = f.runner.command.getMockImplementation()!;
+    f.runner.command.mockImplementation(async (exe, args, cwd) =>
+      args.join(" ") === "config dockerfile"
+        ? { stdout: "# dockerfile\nDockerfile\n", stderr: "" }
+        : originalCommand(exe, args, cwd),
+    );
+    (f.service as any).runList = [
+      {
+        id: "synthetic-active",
+        projectId: f.project.id,
+        status: status === "unverified" ? "running" : status,
+        ...(owner === "clone" ? { context: f.ref } : {}),
+        ...(status === "unverified" ? { recovery: "unverified" } : {}),
+      },
+    ];
+    const documents = [
+      [{ kind: "config" }, ".goga/config.yml", "value: initial\n"],
+      [
+        { kind: "workflow", name: "Edit" },
+        ".goga/workflows/Edit.yml",
+        "value: initial\n",
+      ],
+      [
+        { kind: "pipeline", name: "Edit" },
+        ".goga/pipelines/Edit.yml",
+        "value: initial\n",
+      ],
+      [
+        { kind: "profile", name: "Edit" },
+        ".goga/profiles/Edit.yml",
+        "value: initial\n",
+      ],
+      [
+        { kind: "tool", tool: "sample", path: "config.yml" },
+        ".goga/tools/sample/config.yml",
+        "value: initial\n",
+      ],
+      [
+        { kind: "dockerfile", path: "Dockerfile" },
+        "Dockerfile",
+        "FROM initial\n",
+      ],
+    ] as const;
+    try {
+      for (const [target, relative, initial] of documents) {
+        const filename = path.join(root, relative);
+        await mkdir(path.dirname(filename), { recursive: true });
+        await writeFile(filename, initial);
+        const before = await f.service.readProjectDocument(scope, target);
+        const edited = initial + "# editor draft\r\n";
+        const saved = await f.service.saveProjectDocument(
+          scope,
+          target,
+          edited,
+          before.version,
+        );
+        expect(saved.text).toBe(edited);
+        expect(await readFile(filename, "utf8")).toBe(edited);
+        const external = initial + "# external writer\n";
+        await writeFile(filename, external);
+        await expect(
+          f.service.saveProjectDocument(
+            scope,
+            target,
+            edited + "# stale\n",
+            saved.version,
+          ),
+        ).rejects.toThrow(/Конфликт сохранения/);
+        expect(await readFile(filename, "utf8")).toBe(external);
+      }
+      const filename = path.join(root, "docs/plan.md");
+      const before = await f.service.readOverviewFile(scope, "docs/plan.md");
+      const saved = await f.service.saveOverviewFile(
+        scope,
+        "docs/plan.md",
+        "# draft\r\n",
+        before.version,
+      );
+      expect(saved.text).toBe("# draft\r\n");
+      await writeFile(filename, "# external\n");
+      await expect(
+        f.service.saveOverviewFile(
+          scope,
+          "docs/plan.md",
+          "# stale\n",
+          saved.version,
+        ),
+      ).rejects.toThrow(/Конфликт сохранения/);
+      expect(await readFile(filename, "utf8")).toBe("# external\n");
+      // Content editing is not permission for structural or process operations.
+      await expect(
+        f.service.createOverviewEntry(scope, "blocked.txt", "file", "new"),
+      ).rejects.toThrow(/занят запуском/);
+      expect(f.runner.start).not.toHaveBeenCalled();
+      expect(f.runner.kill).not.toHaveBeenCalled();
+      expect(
+        (
+          await f.service.readProjectDocument(owner === "clone" ? "p" : f.ref, {
+            kind: "workflow",
+            name: owner === "clone" ? "primary" : "owner",
+          })
+        ).text,
+      ).toBe(`name: ${owner === "clone" ? "primary" : "owner"}\n`);
+    } finally {
+      (f.service as any).runList = [];
+      await f.service.dispose();
+      await rm(path.dirname(f.home), { recursive: true, force: true });
+    }
+  },
+);
+
+it.each(["external-content", "changed-owner"] as const)(
+  "revalidates %s immediately before replacing a file during an active run",
+  async (change) => {
+    const f = await fixture();
+    await new DesktopStateStore(f.home, path.join(f.home, "data")).addProject(
+      f.project,
+    );
+    const target = { kind: "workflow", name: "owner" } as const;
+    const filename = path.join(f.record.path, ".goga/workflows/owner.yml");
+    const before = await f.service.readProjectDocument(f.ref, target);
+    (f.service as any).runList = [
+      { id: "fake-run", projectId: "p", context: f.ref, status: "running" },
+    ];
+    let checks = 0;
+    vi.mocked(CloneManager.prototype.resolve).mockImplementation(async () => {
+      if (++checks === 3) {
+        if (change === "external-content")
+          await writeFile(filename, "# external during save\n");
+        else return { ...f.record, path: f.record.path + "-replaced" };
+      }
+      return f.record;
+    });
+    try {
+      await expect(
+        f.service.saveProjectDocument(
+          f.ref,
+          target,
+          "# pending editor\n",
+          before.version,
+        ),
+      ).rejects.toThrow(
+        change === "external-content"
+          ? /Конфликт сохранения/
+          : /Контекст изменился/,
+      );
+      expect(checks).toBe(3);
+      expect(await readFile(filename, "utf8")).toBe(
+        change === "external-content"
+          ? "# external during save\n"
+          : before.text,
+      );
+      expect(
+        (await readdir(path.dirname(filename))).some((name) =>
+          name.endsWith(".tmp"),
+        ),
+      ).toBe(false);
+      expect(
+        await readFile(
+          path.join(f.project.path, ".goga/workflows/primary.yml"),
+          "utf8",
+        ),
+      ).toBe("name: primary\n");
+    } finally {
+      (f.service as any).runList = [];
+      await f.service.dispose();
+      await rm(path.dirname(f.home), { recursive: true, force: true });
+    }
+  },
+);

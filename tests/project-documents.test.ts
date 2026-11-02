@@ -479,7 +479,16 @@ it.for([
       second = resolve;
     });
     let attempts = 0;
+    const destinations = new Set([
+      p,
+      path.join(p.slice(0, -original.length), alias),
+    ]);
     vi.mocked(rename).mockImplementation(async (source, destination) => {
+      if (
+        !path.basename(String(source)).startsWith(".goga-document-") ||
+        !destinations.has(String(destination))
+      )
+        return actual.rename(source, destination);
       if (++attempts === 1) entered();
       else second();
       await blocked;

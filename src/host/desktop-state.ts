@@ -7,6 +7,10 @@ import { createHash, randomUUID } from "node:crypto";
 import type { Project } from "../shared/types";
 import { profileName } from "./parsers";
 import { noSymlinks } from "./settings";
+import {
+  acquireDesktopStateLock,
+  DesktopStateLockBusyError,
+} from "./desktop-state-lock";
 
 export interface ProjectEnvironmentEntry {
   key: string;
@@ -137,8 +141,8 @@ function parse(text: string): Record<string, unknown> {
 }
 
 /**
- * Private Desktop-only state. All cooperating instances use one exclusive lock.
- * A crashed writer leaves a lock: fail closed rather than guessing that it is stale.
+ * Private Desktop-only state. Versioned directory locks recover only confirmed
+ * dead owners; unknown legacy files require explicit startup recovery.
  * The filesystem owner can still replace ancestors concurrently; Node has no
  * portable dirfd/openat API to eliminate that adversarial same-user race entirely.
  */
@@ -216,53 +220,30 @@ export class DesktopStateStore {
     action: () => Promise<T>,
     saving = false,
   ): Promise<T> {
-    let handle: Awaited<ReturnType<typeof open>> | undefined;
-    const lock = path.join(this.root, ".write.lock");
+    let lease: Awaited<ReturnType<typeof acquireDesktopStateLock>> | undefined;
+    let failed = false;
     try {
       await this.directory(path.join(this.home, ".goga"), false);
       await this.directory(this.root);
-      for (let attempt = 0; attempt < 100; attempt++) {
-        await noSymlinks(lock);
-        try {
-          handle = await open(
-            lock,
-            constants.O_WRONLY |
-              constants.O_CREAT |
-              constants.O_EXCL |
-              constants.O_NOFOLLOW,
-            0o600,
-          );
-          break;
-        } catch (e) {
-          if ((e as NodeJS.ErrnoException).code !== "EEXIST") throw e;
-          if (attempt === 99)
-            throw new StateError(
-              "Хранилище Desktop занято другим экземпляром. Повторите позже.",
-            );
-          await new Promise((resolve) => setTimeout(resolve, 20));
-        }
-      }
+      lease = await acquireDesktopStateLock(path.join(this.root, ".write.lock"));
       return await action();
     } catch (e) {
-      if (e instanceof StateError) throw e;
+      failed = true;
+      if (e instanceof StateError || e instanceof DesktopStateLockBusyError)
+        throw e;
       throw new StateError(
         saving
           ? "Не удалось сохранить настройки Desktop."
           : "Не удалось прочитать состояние Desktop.",
       );
     } finally {
-      if (handle) {
-        // Never remove a lock that was replaced while our handle was open.
-        const owned = await handle.stat().catch(() => undefined);
-        const current = await lstat(lock).catch(() => undefined);
-        if (
-          owned &&
-          current &&
-          owned.ino === current.ino &&
-          owned.dev === current.dev
-        )
-          await unlink(lock).catch(() => {});
-        await handle.close().catch(() => {});
+      try {
+        await lease?.release();
+      } catch {
+        if (!failed)
+          throw new StateError(
+            "Не удалось освободить блокировку хранилища Desktop. Повторите запуск приложения.",
+          );
       }
     }
   }

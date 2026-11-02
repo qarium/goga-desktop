@@ -11,6 +11,13 @@ export type OperationScope =
   | "home"
   | "desktop-project";
 export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
+  "notifications": "transport",
+  "set-notification-view": "transport",
+  "mark-notification-read": "transport",
+  "mark-all-notifications-read": "transport",
+  "set-system-notifications": "transport",
+  "prepare-notification-open": "run",
+  "complete-notification-open": "run",
   "read-git-branches": "primary-admin",
   "prepare-git-branch": "primary-admin",
   "execute-git-branch": "owner-ticket",
@@ -78,6 +85,9 @@ export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
   "read-project-branches": "catalog",
   "read-topic-board": "topic-or-primary-admin",
   "read-topic-details": "topic-or-primary-admin",
+  "prepare-topic-removal": "primary-admin",
+  "execute-topic-removal": "owner-ticket",
+  "prepare-topic-clone-cleanup": "context-lifecycle",
   "prepare-topic-operation": "topic-or-primary-admin",
   "execute-topic-operation": "owner-ticket",
   "prepare-document-deletion": "owner-ticket",
@@ -112,6 +122,7 @@ export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
   launch: "topic-or-primary-admin",
   runs: "run",
   "select-run": "run",
+  "set-dashboard-viewport": "transport",
   "close-run": "run",
   "stop-run": "run",
   "repeat-build": "run",

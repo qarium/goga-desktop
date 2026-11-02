@@ -16,7 +16,7 @@ import { Settings } from "../src/renderer/Settings";
 import { ProjectDocuments } from "../src/renderer/ProjectDocuments";
 import { TopicCard } from "../src/renderer/TopicCard";
 import { BuildForm } from "../src/renderer/BuildForm";
-import { LaunchForm } from "../src/renderer/LaunchForm";
+import { ExistingTopicLaunchForm as LaunchForm } from "./helpers/existing-pipeline-draft";
 import { TopicsWorkspace } from "../src/renderer/TopicsWorkspace";
 import { createTopicsStore } from "../src/renderer/topics-model";
 import { ProjectFlatDocuments } from "../src/renderer/ProjectFlatDocuments";

@@ -9,6 +9,15 @@ function listen<T>(name: string, callback: (value: T) => void) {
   return () => ipcRenderer.removeListener(`goga:${name}`, fn);
 }
 const api: DesktopAPI = {
+  notifications: (page) => invoke("notifications", page),
+  markNotificationRead: (id, sequence) => invoke("mark-notification-read", id, sequence),
+  setNotificationView: (id) => invoke("set-notification-view", id),
+  markAllNotificationsRead: (seq) => invoke("mark-all-notifications-read", seq),
+  setSystemNotifications: (enabled) => invoke("set-system-notifications", enabled),
+  prepareNotificationOpen: (id) => invoke("prepare-notification-open", id),
+  completeNotificationOpen: (ticket) => invoke("complete-notification-open", ticket),
+  onNotifications: (callback) => listen("notifications", callback),
+  onOpenNotification: (callback) => listen("open-notification", callback),
   prepareGitRebaseOperation: (request) =>
     invoke("prepare-git-rebase-operation", request),
   executeGitRebaseOperation: (token) =>
@@ -111,6 +120,9 @@ const api: DesktopAPI = {
   readTopicBoard: (id, year) => invoke("read-topic-board", id, year),
   readTopicDetails: (id, year, target) =>
     invoke("read-topic-details", id, year, target),
+  prepareTopicRemoval: (request) => invoke("prepare-topic-removal", request),
+  executeTopicRemoval: (input) => invoke("execute-topic-removal", input),
+  prepareTopicCloneCleanup: (input) => invoke("prepare-topic-clone-cleanup", input),
   prepareTopicOperation: (request) =>
     invoke("prepare-topic-operation", request),
   executeTopicOperation: (token) => invoke("execute-topic-operation", token),
@@ -161,6 +173,7 @@ const api: DesktopAPI = {
   closeRun: (id) => invoke("close-run", id),
   stopRun: (id) => invoke("stop-run", id),
   selectRun: (id) => invoke("select-run", id),
+  setDashboardViewport: (bounds) => invoke("set-dashboard-viewport", bounds),
   listSettings: () => invoke("list-settings"),
   readSettings: (kind, name) => invoke("read-settings", kind, name),
   saveSettings: (kind, name, text, version) =>

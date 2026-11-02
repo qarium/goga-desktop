@@ -74,6 +74,8 @@ const run = (patch: Partial<RunWithContext> = {}): RunWithContext => ({
 });
 let readBoard: ReturnType<typeof vi.fn>;
 beforeEach(() => {
+  // This suite exercises the existing table; board defaults/behaviour have separate tests.
+  localStorage.setItem("goga.desktop.topicsBoard.v1.p", JSON.stringify({ schemaVersion: 1, view: "table", columns: [], statusCategory: {} }));
   readBoard = vi.fn(async () => board);
   window.goga = { readTopicTable: readBoard } as any;
 });

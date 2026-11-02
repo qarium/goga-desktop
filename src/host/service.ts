@@ -1,3 +1,6 @@
+import { topicRemovalRequestSchema, topicRemovalTokenSchema, topicCloneCleanupRequestSchema, type TopicRemovalRequest, type TopicCloneCleanupRequest } from "../shared/topic-removal";
+import { TopicRemovalDomain, ownTopicRefs, type TopicRemovalAccess, type RemovalInventory } from "./topic-removal";
+import { readTopicRefInventory, readTopicMutationSnapshot } from "./topics";
 import {
   overviewFileActionRequestSchema,
   overviewFileActionTokenSchema,
@@ -304,7 +307,6 @@ interface SavedPreview {
   request: PipelineRequest;
   fingerprint: string;
   preview: Preview;
-  created: number;
 }
 export class HostService extends EventEmitter {
   private overviewSchemaIssued = new Map<string, number>();
@@ -329,6 +331,7 @@ export class HostService extends EventEmitter {
   private selectionEpoch = 0;
   private buildRequests = new Map<string, BuildRequest>();
   private topicDomain = new TopicsDomain();
+  private topicRemovals = new TopicRemovalDomain();
   private deletionTickets = new DocumentDeletionTickets();
   private overviewFileActionTickets = new OverviewFileActionTickets();
   private historyPruner = new HistoryPruner();
@@ -962,6 +965,7 @@ export class HostService extends EventEmitter {
   private overviewWrite<T>(
     scope: ScopeRef,
     action: (root: string, guard: () => Promise<void>) => Promise<T>,
+    allowActiveRun = false,
   ) {
     this.assertLaunchAllowed();
     return this.operation(() =>
@@ -972,7 +976,7 @@ export class HostService extends EventEmitter {
             this.assertLaunchAllowed();
             assertReadActive();
             this.assertCatalog(epoch);
-            this.assertScopeWritable(project);
+            if (!allowActiveRun) this.assertScopeWritable(project);
             await this.validateBinding(project);
             await this.assertSettings(project.id);
           };
@@ -985,8 +989,12 @@ export class HostService extends EventEmitter {
     );
   }
   saveOverviewFile(scope: ScopeRef, p: string, text: string, version: string) {
-    return this.overviewWrite(scope, (root, guard) =>
-      overviewFiles.saveOverviewFile(root, p, text, version, guard),
+    // A running payload is not a file lock. Content saves retain exact-owner
+    // validation and optimistic file versions; structural actions still require idle.
+    return this.overviewWrite(
+      scope,
+      (root, guard) => overviewFiles.saveOverviewFile(root, p, text, version, guard),
+      true,
     );
   }
   createOverviewEntry(
@@ -1161,7 +1169,6 @@ export class HostService extends EventEmitter {
     this.check();
     return this.exclusive(scopeProjectId(id), async () => {
       const project = await this.project(id);
-      this.assertScopeWritable(project);
       const document =
         target.kind === "dockerfile"
           ? await this.snapshot(id, async () => {
@@ -1175,7 +1182,6 @@ export class HostService extends EventEmitter {
                   "Конфигурация Dockerfile изменилась. Черновик сохранён; откройте актуальный файл заново.",
                 );
               const guard = async () => {
-                this.assertScopeWritable(project);
                 await this.validateBinding(project);
                 await this.assertSettings(project.id);
                 const latest = await this.dockerfile(project);
@@ -1199,6 +1205,7 @@ export class HostService extends EventEmitter {
               target,
               text,
               version,
+              () => this.validateBinding(project),
             );
       this.documentSaveRevisions.set(
         scopeProjectId(id),
@@ -2611,10 +2618,13 @@ export class HostService extends EventEmitter {
   private async gitBranchContext<T>(
     input: string,
     action: (context: GitBranchContext) => Promise<T>,
+    projectAlreadySerialized = false,
   ): Promise<T> {
     const id = gitBranchProjectSchema.parse(input);
+    const serialize = (action: () => Promise<T>) =>
+      projectAlreadySerialized ? action() : this.exclusive(id, action);
     return this.context.exit(() =>
-      this.exclusive(id, () =>
+      serialize(() =>
         this.snapshot(
           id,
           async () => {
@@ -2946,6 +2956,118 @@ export class HostService extends EventEmitter {
     const token = gitCommitTokenSchema.parse(input);
     return this.operation(() => this.gitActions.execute(token));
   }
+  /** Each hop completes its own native journal before the next write starts.
+   * The enclosing repository action already serializes this project. */
+  private async withOriginalTopicBranch(
+    project: Project,
+    branch: string,
+    expectedOid: string,
+    action: () => Promise<void>,
+    diagnostic: (message: string) => void,
+  ): Promise<void> {
+    const root = await realpath(project.path);
+    let original: string | undefined;
+    const switchTo = async (target: string, returning = false) => {
+      const result = await withNativeGitCompletion(() =>
+        this.gitBranchContext(
+          project.id,
+          async (context) => {
+            if (context.root !== root)
+              throw Error("Исходная рабочая папка изменилась.");
+            const engine = new GitBranchActions({
+              context: async (_id, fn) => fn(context),
+            });
+            const inventory = await engine.inventory(project.id);
+            if (!inventory.branch)
+              throw Error("Переключение требует текущую локальную ветку.");
+            if (!returning) {
+              original = inventory.branch;
+              if (
+                inventory.local.find(
+                  (row) => row.ref === `refs/heads/${branch}`,
+                )?.oid !== expectedOid
+              )
+                throw Error(
+                  "Ветка топика изменилась после синхронизации; применение не выполнялось.",
+                );
+            }
+            if (inventory.branch === target)
+              return {
+                projectId: project.id,
+                action: "switch-local" as const,
+                status: "success" as const,
+                changed: false,
+                message: "Ветка уже выбрана.",
+                log: "",
+              };
+            if (
+              returning &&
+              (inventory.branch !== branch || inventory.head !== expectedOid)
+            )
+              throw Error(
+                "Текущая ветка или её коммит изменились извне. Чужое переключение не отменялось.",
+              );
+            this.assertScopeWritable(this.context.getStore()!.scopedProject);
+            if (this.terminalDeletionBlocked(project.id))
+              throw Error(
+                "Исходная рабочая папка занята командой в терминале.",
+              );
+            const preview = await engine.prepare({
+              projectId: project.id,
+              action: "switch-local",
+              revision: inventory.revision,
+              ref: `refs/heads/${target}`,
+            });
+            return engine.execute(preview.token);
+          },
+          true,
+        ),
+      );
+      diagnostic(result.log);
+      if (result.status !== "success")
+        throw Error(
+          [
+            result.message,
+            ...(result.recoveryPath
+              ? [`Материалы восстановления: ${result.recoveryPath}`]
+              : []),
+          ].join("\n"),
+        );
+      return result.changed;
+    };
+    diagnostic(`Переключение исходного проекта на ветку топика ${branch}…`);
+    // An uncertain first hop must not authorize CLI execution or another write.
+    const switched = await switchTo(branch);
+    let failure: unknown;
+    let failed = false;
+    try {
+      await action();
+    } catch (error) {
+      failed = true;
+      failure = error;
+    } finally {
+      if (switched) {
+        diagnostic(`Возврат исходного проекта на ветку ${original}…`);
+        try {
+          await switchTo(original!, true);
+          diagnostic(`Исходная ветка ${original} восстановлена.`);
+        } catch (error) {
+          throw Error(
+            [
+              `Не удалось вернуться на исходную ветку ${original}. Изменения не сбрасывались; проверьте текущую ветку перед продолжением.`,
+              failed
+                ? failure instanceof Error
+                  ? failure.message
+                  : "goga topics propagate завершилась ошибкой."
+                : "goga topics propagate выполнена. Повтор команды не выполнялся.",
+              error instanceof Error ? error.message : String(error),
+            ].join("\n"),
+          );
+        }
+      }
+    }
+    if (failed) throw failure;
+  }
   async runRepositoryAction(
     input: RepositoryActionRequest,
   ): Promise<RepositoryActionResult> {
@@ -3055,6 +3177,19 @@ export class HostService extends EventEmitter {
                       handoff = candidate;
                     },
                   ),
+                withOriginalTopicBranch: (
+                  branch,
+                  expectedOid,
+                  action,
+                  diagnostic,
+                ) =>
+                  this.withOriginalTopicBranch(
+                    scoped,
+                    branch,
+                    expectedOid,
+                    action,
+                    diagnostic,
+                  ),
                 gogaOriginal: async (args) => {
                   this.check();
                   await this.assertSettings(request.projectId);
@@ -3150,6 +3285,7 @@ export class HostService extends EventEmitter {
   ): ContextDeletionPreview {
     return {
       token: plan.token,
+      ...(plan.flow === "clone-after-topic" ? { purpose: "clone-after-topic" as const } : {}),
       contextId: plan.owner.contextId,
       stage: plan.stage,
       switchBranch: plan.primarySwitch?.to,
@@ -3165,7 +3301,9 @@ export class HostService extends EventEmitter {
           : []),
         "Простаивающие сессии этого топика будут закрыты. Выполняющиеся команды блокируют удаление; сессии других контекстов сохраняются.",
         "Рабочая копия целиком, включая .git, будет перемещена в системную Корзину.",
-        "После переключения в основную папку Goga удалит топик. Основная папка и внешние рабочие копии не удаляются.",
+        plan.flow === "clone-after-topic"
+          ? "Топик уже удалён. Сейчас очищается только эта копия; повторная команда Goga не выполняется."
+          : "После переключения в основную папку Goga удалит топик. Основная папка и внешние рабочие копии не удаляются.",
         "Незакоммиченные, неотслеживаемые и ignored-файлы блокируют удаление. Архивные refs, синхронизация и публикация не создаются.",
       ],
     };
@@ -3466,7 +3604,8 @@ export class HostService extends EventEmitter {
             beforeTrash: async (latest) => {
               if (this.deletionGuards(plan.owner).active)
                 throw Error("Активный контекст нельзя удалить.");
-              await this.contextTopicDeletion(latest);
+              if (latest.flow === "clone-after-topic") await this.assertCleanupTopicAbsent(latest.owner, latest.projectPath);
+              else await this.contextTopicDeletion(latest);
             },
             stopIdleTerminals: async () => {
               await terminals?.stopIdle();
@@ -4230,7 +4369,107 @@ export class HostService extends EventEmitter {
       return details;
     });
   }
+  private async assertCleanupTopicAbsent(owner: TopicContextRef, expectedPath?: string) {
+    return this.snapshot(owner.projectId, async () => {
+      const project = await this.project(owner.projectId);
+      if (expectedPath && project.path !== expectedPath) throw Error("Основная папка изменилась.");
+      const d = await this.topicsContext(owner.projectId);
+      if (ownTopicRefs(await readTopicRefInventory(d.git), owner.topic).length)
+        throw Error("Собственная ветка топика существует. Очистка копии не разрешена.");
+      const remotes = (await d.git(["remote"])).split("\n");
+      if (remotes.includes("origin") && (await d.git(["ls-remote", "--heads", "--", "origin", `refs/heads/${owner.branch}`])).trim())
+        throw Error("Ветка на origin существует; копия сохранена.");
+    });
+  }
+  private async topicRemovalAccess(projectId: string, year: string): Promise<TopicRemovalAccess> {
+    const project = await this.project(projectId);
+    const owners = async () => (await this.clones.list(projectId)).filter(o => o.year === year && o.storageKind === "clone" && o.ownership === "managed" && !o.deletedAt);
+    const inventory = async (): Promise<RemovalInventory> => {
+      // Mutation admission needs public Git state and registry ownership, not
+      // repeated Goga status projections from every clone in the display table.
+      const before = await this.clones.reconcile(projectId);
+      const d = await this.topicsContext(projectId), local = await readTopicMutationSnapshot(d, year);
+      const after = await this.clones.list(projectId);
+      if (JSON.stringify(before) !== JSON.stringify(after)) throw Error("Каталог контекстов изменился.");
+      return { projectId, projectPath: project.path, year,
+        revision: digest(JSON.stringify([local.revision, before.map(r => [r.contextId,r.revision,r.state])])),
+        refs: local.refs, owners: before.filter(o => o.year === year && o.storageKind === "clone" && o.ownership === "managed" && !o.deletedAt) };
+    };
+    const nativeContext = async (before: RemovalInventory) => {
+      if (before.projectPath !== project.path) throw Error("Основная папка изменилась.");
+      const d = await this.topicsContext(projectId);
+      if (d.owner || d.root !== project.path) throw Error("Подмена основной папки рабочей копией запрещена.");
+      d.removalFlow = true;
+      d.assertPrimaryOwnerAvailable = async () => {
+        const fresh = await owners();
+        const key = (rows: WorktreeRecord[]) => JSON.stringify([...rows].sort((a,b) => a.contextId.localeCompare(b.contextId)));
+        if (fresh.some(o => o.projectPath !== project.path) || key(fresh) !== key(before.owners))
+          throw Error("Владельцы рабочих копий изменились. Подтвердите удаление заново.");
+      };
+      return d;
+    };
+    return {
+      inventory,
+      inspect: async owner => {
+        if (this.deletionGuards(owner).active) throw Error("В копии есть активные сессии.");
+        const recovery = await this.contextDeletionRecovery(owner);
+        if (recovery) throw Error("Есть незавершённое удаление копии.");
+        return this.clones.captureRemovalBaseline(owner);
+      },
+      prepareNative: async (request, before) => {
+        const d = await nativeContext(before), local = await this.topicDomain.board(d, year);
+        const topics = request.action === "delete" ? request.topics.filter(topic =>
+          ownTopicRefs(before.refs, topic).length || !before.owners.some(o => o.topic === topic)) : [];
+        if (request.action === "delete" && !topics.length) return null;
+        return this.topicDomain.prepare(d, { ...request, ...(request.action === "delete" ? { topics } : {}), expectedRevision: local.revision });
+      },
+      executeNative: async (token, before) => {
+        const d = await nativeContext(before), key = await this.key(project);
+        const previous = this.locks.get(key) ?? Promise.resolve();
+        const next = previous.catch(() => {}).then(() => this.topicDomain.execute(d, token));
+        this.locks.set(key, next);
+        try { return await next; } finally { if (this.locks.get(key) === next) this.locks.delete(key); }
+      },
+      prepareCleanup: async (owner, baseline) => {
+        await this.assertCleanupTopicAbsent(owner, project.path);
+        const plan = await this.clones.prepareContextCleanup(owner, this.deletionGuards(owner), baseline);
+        return this.contextDeletionPreview(plan);
+      },
+    };
+  }
+  async prepareTopicRemoval(input: TopicRemovalRequest) {
+    if (this.context.getStore()?.binding) throw Error("Удаление доступно только для основной папки проекта.");
+    const request = topicRemovalRequestSchema.parse(input);
+    return this.operation(() => this.exclusive(request.projectId, () => this.snapshot(request.projectId, async () =>
+      this.topicRemovals.prepare(await this.topicRemovalAccess(request.projectId, request.year), request))));
+  }
+  async executeTopicRemoval(input: { projectId: string; token: string }) {
+    if (this.context.getStore()?.binding) throw Error("Удаление доступно только для основной папки проекта.");
+    const parsed = topicRemovalTokenSchema.parse(input), prepared = this.topicRemovals.take(parsed.projectId, parsed.token);
+    return this.operation(() => this.exclusive(parsed.projectId, () => this.snapshot(parsed.projectId, async () => {
+      const result = await this.topicRemovals.execute(await this.topicRemovalAccess(parsed.projectId, prepared.request.year), prepared);
+      this.previews.clear();
+      return result;
+    }, false)));
+  }
+  async prepareTopicCloneCleanup(input: TopicCloneCleanupRequest): Promise<ContextDeletionPreview> {
+    const request = topicCloneCleanupRequestSchema.parse(input), owner = request.owner;
+    return this.operation(() => this.exclusive(owner.projectId, () => this.snapshot(owner.projectId, async () => {
+      const recovery = await this.contextDeletionRecovery(owner);
+      if (recovery) {
+        if (recovery.purpose !== "clone-after-topic") throw Error("Сначала завершите прежнее удаление этого контекста.");
+        // A prepared cleanup has not moved any data: an explicit recheck must
+        // bind a new snapshot/consent. Later stages keep their original journal.
+        if (recovery.stage !== "prepared") return recovery;
+      }
+      const row = await this.resolveTopicContext(owner);
+      await this.assertCleanupTopicAbsent(owner, row.projectPath);
+      const baseline = request.operationToken ? this.topicRemovals.baseline(request.operationToken, owner) : undefined;
+      return this.contextDeletionPreview(await this.clones.prepareContextCleanup(owner, this.deletionGuards(owner), baseline));
+    })));
+  }
   async prepareTopicOperation(request: TopicOperationRequest) {
+    if (request?.action === "clear") throw Error("Используйте отдельное подтверждение очистки топиков.");
     return this.operation(() =>
       this.exclusive(request?.projectId, () =>
         this.snapshot(request?.context ?? request?.projectId, async () => {
@@ -5060,15 +5299,11 @@ export class HostService extends EventEmitter {
       );
     this.assertCatalog(epoch);
     const result = { ...composed, token: randomUUID() };
-    for (const [token, value] of this.previews)
-      if (Date.now() - value.created > 15 * 60 * 1000)
-        this.previews.delete(token);
     this.previews.set(result.token, {
       request: r,
       ...(metadata ? { metadata } : {}),
       fingerprint: before,
       preview: result,
-      created: Date.now(),
     });
     return result;
   }
@@ -5245,6 +5480,16 @@ export class HostService extends EventEmitter {
       throw new Error(
         "Задача устарела или отсутствует версия. Откройте её заново.",
       );
+    if (
+      request.topic?.mode === "none" &&
+      (Object.keys(request.topic).some((key) => key !== "mode") ||
+        request.task !== "" ||
+        request.confirmEmptyTask ||
+        request.confirmBranchSwitch)
+    )
+      throw Error(
+        "Запуск без топика не сохраняет задачу и не переключает ветку.",
+      );
     const r = this.normalize(request),
       p = await this.project(r.projectId);
     await guardedProject(this.root(p));
@@ -5260,6 +5505,92 @@ export class HostService extends EventEmitter {
       if (this.locks.get(key) === next) this.locks.delete(key);
     }
   }
+  /** One confirmed creation intent; all execution admission is reused in the clone. */
+  private async launchNewTopicInClone(
+    primary: Project,
+    pipeline: PipelineRequest,
+    request: LaunchRequest,
+    approved: SavedPreview,
+  ): Promise<Run> {
+    if (request.topic.mode !== "new" || this.binding(primary))
+      throw Error("Новый топик должен создаваться из исходного проекта.");
+    const documentVersion = this.context.getStore()!.document.version;
+    const base = (
+      await this.cmd(
+        primary,
+        [
+          "rev-parse",
+          "--verify",
+          "--end-of-options",
+          `${request.topic.baseRef}^{commit}`,
+        ],
+        true,
+      )
+    ).trim();
+    if (approved.fingerprint !== (await this.fingerprint(primary)))
+      throw Error(
+        "Предпросмотр устарел. Обновите стадии перед созданием копии.",
+      );
+    // Never replay a creation intent after an uncertain/partial preparation.
+    this.previews.delete(request.previewToken);
+    const owner = await this.clones.create(primary, {
+      year: String(new Date().getFullYear()),
+      branch: request.topic.name,
+      baseRef: base,
+    });
+    try {
+      await this.assertSettings(primary.id);
+      if (approved.fingerprint !== (await this.fingerprint(primary)))
+        throw Error(
+          "Исходный проект изменился во время подготовки копии. Обновите параметры запуска.",
+        );
+      const context = worktreeContextRef(owner);
+      return await this.snapshot(
+        context,
+        async () => {
+          if (this.context.getStore()!.document.version !== documentVersion)
+            throw Error(
+              "Настройки проекта изменились во время подготовки копии.",
+            );
+          const scoped = { ...pipeline, context };
+          const preview = await this.previewWithSettings(scoped);
+          const composition = ({ stages, workflow, profile }: Preview) =>
+            JSON.stringify({ stages, workflow, profile });
+          if (composition(preview) !== composition(approved.preview))
+            throw Error(
+              "В копии изменились стадии/рабочий процесс/профиль. Обновите предпросмотр перед запуском.",
+            );
+          const task = await this.readTopicTaskWithSettings(
+            {
+              projectId: primary.id,
+              context,
+              topic: owner.topic,
+              branch: owner.branch,
+            },
+            true,
+          );
+          return this.launchWithSettings({
+            ...request,
+            ...scoped,
+            previewToken: preview.token,
+            topic: {
+              mode: "existing",
+              topic: owner.topic,
+              branch: owner.branch,
+            },
+            expectedBranch: owner.branch,
+            confirmBranchSwitch: false,
+            taskVersion: task.version,
+          });
+        },
+        false,
+      );
+    } catch (error) {
+      throw Error(
+        `${error instanceof Error ? error.message : String(error)} Копия топика «${owner.topic}» подготовлена: ${owner.path}. Выберите её в шапке и проверьте параметры. Повторное создание автоматически не выполняется.`,
+      );
+    }
+  }
   private async prepare(
     p: Project,
     key: string,
@@ -5269,22 +5600,18 @@ export class HostService extends EventEmitter {
     this.check();
     this.assertRunAdmission(p, key, "pipeline");
     const saved = this.previews.get(request.previewToken);
+    // Freshness depends on project state, not time spent editing the form.
     if (
       !saved ||
       JSON.stringify(saved.request) !== JSON.stringify(r) ||
-      Date.now() - saved.created > 15 * 60 * 1000 ||
       saved.fingerprint !== (await this.fingerprint(p))
     )
       throw new Error("Предпросмотр устарел. Обновите стадии перед запуском.");
     if (!saved.preview.stages.length)
       throw new Error("Нельзя запустить пустой набор стадий");
     validateTaskText(request.task);
-    if (this.binding(p) && !request.task.trim())
-      throw Error(
-        "Введите непустое описание задачи для запуска в рабочей копии.",
-      );
     const selection = request.topic;
-    if (!selection || !["existing", "new"].includes(selection.mode))
+    if (!selection || !["none", "existing", "new"].includes(selection.mode))
       throw new Error("Выберите топик");
     const current = (
       await this.cmd(p, ["branch", "--show-current"], true)
@@ -5310,18 +5637,20 @@ export class HostService extends EventEmitter {
         "Текущая ветка изменилась вне приложения. Обновите каталог и подтвердите запуск повторно.",
       );
     if (
-      (selection.mode === "new" || selection.branch !== current) &&
+      (selection.mode === "new" ||
+        (selection.mode === "existing" && selection.branch !== current)) &&
       !request.confirmBranchSwitch
     )
       throw new Error("Подтвердите переключение ветки перед запуском.");
     if (
-      (selection.mode === "new" || selection.branch !== current) &&
+      (selection.mode === "new" ||
+        (selection.mode === "existing" && selection.branch !== current)) &&
       this.activeRuns(p, key).length
     )
       throw new Error(
         "Нельзя переключать или создавать ветку, пока в этой папке работает процесс.",
       );
-    let branch: string, topic: string, launchTaskPath: string;
+    let branch: string, topic: string, launchTaskPath: string | undefined;
     let mutated = false;
     let taskSnapshot: TopicTaskDocument | undefined;
     const assertTask = async (
@@ -5454,39 +5783,14 @@ export class HostService extends EventEmitter {
           )
             throw new Error("Имя топика уже занято в истории веток.");
         }
-        const beforeState = JSON.stringify([
-          await this.cmd(p, ["rev-parse", "HEAD"], true),
-          await this.cmd(p, ["branch", "--show-current"], true),
-          await this.cmd(p, ["status", "--porcelain"], true),
-        ]);
         this.check();
         await assertBranch(current);
-        try {
-          await this.cmd(p, [
-            "topics",
-            "create",
-            branch,
-            "--base-ref",
-            selection.baseRef,
-            "--switch",
-            ...(request.task ? ["--todo", request.task] : []),
-          ]);
-          mutated = true;
-        } catch (error) {
-          try {
-            const afterState = JSON.stringify([
-              await this.cmd(p, ["rev-parse", "HEAD"], true),
-              await this.cmd(p, ["branch", "--show-current"], true),
-              await this.cmd(p, ["status", "--porcelain"], true),
-            ]);
-            mutated = beforeState !== afterState || (await directoryExists());
-          } catch {
-            throw new Error(
-              "Создание топика не завершилось. Не удалось проверить состояние рабочей копии; проверьте ветку и todo.md.",
-            );
-          }
-          throw error;
-        }
+        await this.assertSettings(p.id);
+        return this.launchNewTopicInClone(p, r, request, saved);
+      } else if (selection.mode === "none") {
+        // Primary checkout only: no topic lookup, task write, clone or checkout.
+        branch = current;
+        topic = "";
       } else {
         branch = selection.branch;
         topic = selection.topic;
@@ -5575,12 +5879,18 @@ export class HostService extends EventEmitter {
           : taskSnapshot,
       );
       await this.assertSettings(p.id);
-      if (taskPath(topic, this.binding(p)?.year) !== launchTaskPath)
+      // No topic means no implicit todo/history read or snapshot. The pipeline
+      // itself still executes its configured stages in the admitted checkout.
+      if (
+        launchTaskPath !== undefined &&
+        taskPath(topic, this.binding(p)?.year) !== launchTaskPath
+      )
         throw new Error("Год задачи изменился. Откройте её заново.");
-      // The create CLI (and its hooks) may normalize the submitted text. Record
-      // what the pipeline will actually read, never substitute the editor draft.
-      const startedTask = await readWorkingTask(this.root(p), launchTaskPath);
-      if (taskSnapshot && startedTask.text !== request.task)
+      const startedTask =
+        launchTaskPath === undefined
+          ? undefined
+          : await readWorkingTask(this.root(p), launchTaskPath);
+      if (taskSnapshot && startedTask?.text !== request.task)
         throw new Error(
           "Задача изменена извне перед запуском. Откройте её заново.",
         );
@@ -5622,12 +5932,13 @@ export class HostService extends EventEmitter {
         output: { text: "", truncated: false },
       };
       const deadlineAt = performance.now() + run.startupTimeoutMs!;
-      run.taskSnapshot = {
-        text: startedTask.text,
-        year: launchTaskPath.split("/")[2]!,
-        topic,
-        branch,
-      };
+      if (startedTask && launchTaskPath)
+        run.taskSnapshot = {
+          text: startedTask.text,
+          year: launchTaskPath.split("/")[2]!,
+          topic,
+          branch,
+        };
       await this.validateBinding(p);
       this.addActiveRun(key, run.id);
       this.runList.push(run);

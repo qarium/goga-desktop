@@ -10,7 +10,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { BuildForm } from "../src/renderer/BuildForm";
-import { LaunchForm } from "../src/renderer/LaunchForm";
+import { ExistingTopicLaunchForm as LaunchForm } from "./helpers/existing-pipeline-draft";
 import { TopicsWorkspace } from "../src/renderer/TopicsWorkspace";
 import { createTopicsStore } from "../src/renderer/topics-model";
 import { ProjectFlatDocuments } from "../src/renderer/ProjectFlatDocuments";
@@ -78,6 +78,17 @@ const flush = async (d: ReturnType<typeof deferred>, value: any) =>
   act(async () => d.resolve(value));
 let api: any;
 beforeEach(() => {
+  // These regression scenarios explicitly exercise the retained table view.
+  for (const id of ["p", "q", "b"])
+    localStorage.setItem(
+      `goga.desktop.topicsBoard.v1.${id}`,
+      JSON.stringify({
+        schemaVersion: 1,
+        view: "table",
+        columns: [],
+        statusCategory: {},
+      }),
+    );
   HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
   };

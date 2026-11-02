@@ -13,4 +13,7 @@ export const AFM_EMBEDDED_STYLE = `
 #header.global-header > .gh-right.header-actions > .gh-theme-seg[role="group"][aria-label="Theme mode"] {
   display: none !important;
 }
+#header.global-header #bell,
+#header.global-header > .gh-right.header-actions > button[aria-label="Enable desktop notifications"],
+#header.global-header > .gh-right.header-actions > button[aria-label="Disable desktop notifications"] { display: none !important; }
 `;

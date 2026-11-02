@@ -1,6 +1,7 @@
 import { useEffect, useRef } from "react";
 import {
   Annotation,
+  countColumn,
   StateEffect,
   type Extension,
   type ChangeSet,
@@ -27,12 +28,15 @@ import {
   history,
   historyKeymap,
   insertNewline,
+  indentMore,
   transposeChars,
   deleteToLineEnd,
   deleteLineBoundaryForward,
 } from "@codemirror/commands";
 import {
   HighlightStyle,
+  getIndentUnit,
+  indentString,
   StreamLanguage,
   syntaxHighlighting,
   syntaxTree,
@@ -93,6 +97,56 @@ const crlfSelection = EditorState.transactionFilter.of((transaction) => {
       ]
     : transaction;
 });
+
+// CodeMirror's standard dedent treats CR as whitespace. Our document retains
+// CRLF bytes, so only horizontal indentation may be changed (even on blank lines).
+function dedentLines(view: EditorView) {
+  const { state } = view;
+  if (state.readOnly) return false;
+  let lastLine = 0;
+  const change = state.changeByRange((range) => {
+    const changes = [];
+    for (let pos = range.from; pos <= range.to;) {
+      const line = state.doc.lineAt(pos);
+      if (line.number > lastLine && (range.empty || range.to > line.from)) {
+        const space = /^[ \t]*/.exec(line.text)![0];
+        if (space) {
+          const insert = indentString(
+            state,
+            Math.max(
+              0,
+              countColumn(space, state.tabSize) - getIndentUnit(state),
+            ),
+          );
+          let keep = 0;
+          while (
+            keep < space.length &&
+            keep < insert.length &&
+            space[keep] === insert[keep]
+          )
+            keep++;
+          changes.push({
+            from: line.from + keep,
+            to: line.from + space.length,
+            insert: insert.slice(keep),
+          });
+        }
+        lastLine = line.number;
+      }
+      pos = line.to + 1;
+    }
+    const mapped = state.changes(changes);
+    return {
+      changes,
+      range: EditorSelection.range(
+        mapped.mapPos(range.anchor, 1),
+        mapped.mapPos(range.head, 1),
+      ),
+    };
+  });
+  view.dispatch(state.update(change, { userEvent: "delete.dedent" }));
+  return true;
+}
 
 // CodeMirror's logical line end is after the retained CR. Deleting to that
 // point would make deleteBy expand through the atomic LF as well. Keep the
@@ -327,6 +381,7 @@ export function YamlEditor({
       history(),
       keymap.of([
         { key: "Enter", run: insertNewline, shift: insertNewline },
+        { key: "Tab", run: indentMore, shift: dedentLines },
         // Transposition is not part of this focused editor. The state-only
         // command cannot respect atomic CRLF boundaries; consume it rather
         // than allowing native contenteditable transposition as a fallback.

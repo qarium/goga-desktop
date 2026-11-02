@@ -39,7 +39,7 @@ export function BranchLaunchConfirmation({
     >
       <h2 id={title}>
         {creating
-          ? "Создать ветку и запустить конвейер?"
+          ? "Создать топик в отдельной копии и запустить?"
           : `Переключиться на ветку «${branch}» и запустить?`}
       </h2>
       <div id={description}>
@@ -58,7 +58,11 @@ export function BranchLaunchConfirmation({
             Dockerfile либо загрузку образа по своей конфигурации.
           </p>
         )}
-        <p>После подтверждения Goga подготовит ветку и запустит конвейер.</p>
+        <p>
+          {creating
+            ? "Будет создана отдельная рабочая копия топика. Ветка и файлы исходного проекта не изменятся. Конвейер запустится в новой копии."
+            : "После подтверждения Goga подготовит ветку и запустит конвейер."}
+        </p>
       </div>
       <div className="form-actions">
         <button type="button" ref={cancel} autoFocus onClick={onCancel}>

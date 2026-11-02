@@ -38,6 +38,12 @@ interface Dependencies {
     input: GitUpdateAttemptInput,
   ): Promise<{ stdout: string; stderr: string }>;
   gogaOriginal(args: string[]): Promise<{ stdout: string; stderr: string }>;
+  withOriginalTopicBranch(
+    branch: string,
+    expectedOid: string,
+    action: () => Promise<void>,
+    diagnostic: (message: string) => void,
+  ): Promise<void>;
   verify(): Promise<void>;
   secrets: string[];
 }
@@ -677,6 +683,38 @@ export class RepositoryActions {
     );
     this.lines.push(`База origin/${branch} в клоне обновлена.`);
   }
+  private async propagateOriginal(
+    branch: string,
+    expectedOid: string,
+    args: string[],
+    verify: () => Promise<void>,
+    message: string,
+  ) {
+    await this.deps.withOriginalTopicBranch(
+      branch,
+      expectedOid,
+      async () => {
+        await verify();
+        this.lines.push(message);
+        try {
+          const result = await this.deps.gogaOriginal(args);
+          this.lines.push(
+            result.stdout,
+            result.stderr,
+            "goga topics propagate завершена.",
+          );
+        } catch (error) {
+          // Keep CLI diagnostics even if returning to the original branch fails.
+          if (error instanceof CommandExitError) {
+            this.lines.push(error.stdout, error.stderr);
+            throw Error(error.message, { cause: error });
+          }
+          throw error;
+        }
+      },
+      (message) => this.lines.push(message),
+    );
+  }
   /** Explicit card publication never borrows the selected header owner or configured base. */
   private async propagateSelected(request: RepositoryActionRequest) {
     const target = request.propagation!;
@@ -750,24 +788,23 @@ export class RepositoryActions {
       this.lines.push("Синхронизация топика завершена.");
     }
     await guard(imported);
-    this.lines.push(
+    await this.propagateOriginal(
+      source.branch,
+      imported ?? source.oid,
+      [
+        "topics",
+        "--year",
+        target.year,
+        "propagate",
+        source.branch,
+        "--base-ref",
+        base.branch,
+        "-y",
+      ],
+      () => guard(imported),
       `Публикация топика ${target.branch} в ветку ${base.branch}: goga topics propagate (оригинальный проект)…`,
     );
-    const result = await this.deps.gogaOriginal([
-      "topics",
-      "--year",
-      target.year,
-      "propagate",
-      source.branch,
-      "--base-ref",
-      base.branch,
-      "-y",
-    ]);
-    this.lines.push(
-      result.stdout,
-      result.stderr,
-      "Публикация топика завершена.",
-    );
+    this.lines.push("Публикация топика завершена.");
   }
   async run(request: RepositoryActionRequest): Promise<RepositoryActionResult> {
     try {
@@ -969,23 +1006,29 @@ export class RepositoryActions {
           )
             throw changed();
           await this.verify();
-          this.lines.push(
+          // Native Goga owns base selection, merge strategy and base publication.
+          await this.propagateOriginal(
+            this.owner.branch,
+            result.importedOid,
+            [
+              "topics",
+              "--year",
+              this.owner.year,
+              "propagate",
+              this.owner.branch,
+              "-y",
+            ],
+            async () => {
+              await this.verify();
+              if (
+                (await this.directBranch(this.owner!.branch)).oid !==
+                result.importedOid
+              )
+                throw changed();
+            },
             "Применение топика к базе: goga topics propagate (оригинальный проект, с публикацией базы)…",
           );
-          // Native Goga owns base selection, merge strategy and base publication.
-          const propagated = await this.deps.gogaOriginal([
-            "topics",
-            "--year",
-            this.owner.year,
-            "propagate",
-            this.owner.branch,
-            "-y",
-          ]);
-          this.lines.push(
-            propagated.stdout,
-            propagated.stderr,
-            "Применение топика к базе завершено.",
-          );
+          this.lines.push("Применение топика к базе завершено.");
         }
       } else if (request.action === "publish")
         await this.publish(await this.currentBranch());

@@ -46,6 +46,7 @@ export const topicOperationSchema = z
       "publish",
       "propagate",
       "delete",
+      "clear",
     ]),
     target: topicTargetSchema.optional(),
     topics: z.array(topicSlugSchema).min(1).max(1000).optional(),

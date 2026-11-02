@@ -44,6 +44,7 @@ export function useContextDeletionController(
       lastOperation.current?.plan.token === plan.token
         ? lastOperation.current
         : null;
+    const delegated = plan.purpose === "clone-after-topic";
     let removed = !!previous;
     const log: string[] = previous
       ? [...previous.log, "Повторяем незавершённую операцию…"]
@@ -59,18 +60,18 @@ export function useContextDeletionController(
         (line, cloneRemoved) => {
           removed ||= cloneRemoved;
           log.push(line);
-          if (removed) update(item());
+          if (removed && !delegated) update(item());
         },
       );
       if (removed) {
         if (result.status === "success") {
           update(null);
           latest.current.changed();
-        } else update({ ...item(), error: result.message });
+        } else if (!delegated) update({ ...item(), error: result.message });
       }
       return result;
     } catch (error) {
-      if (removed)
+      if (removed && !delegated)
         update({
           ...item(),
           error:

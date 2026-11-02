@@ -1,4 +1,8 @@
+import { TopicRemovalProvider, TopicRemovalPopup, useTopicRemovalController } from "./TopicRemovalController";
+import { useDashboardViewport } from "./useDashboardViewport";
 import { Boxes, FolderOpen, SquareTerminal, Layers } from "lucide-react";
+import { NotificationBell } from "./notifications/Notifications";
+import { useNotifications } from "./notifications/useNotifications";
 import { ProjectOverview } from "./overview/ProjectOverview";
 import { GitHistory } from "./GitHistory";
 import { GitUpdateHandoff } from "./GitUpdateHandoff";
@@ -29,7 +33,10 @@ import {
   workspacePath,
   workspaceLaunchBlockReason,
 } from "./workspace-context";
-import { dismissActiveTopicPopup } from "./TopicPickerPopup";
+import {
+  dismissActiveTopicPopup,
+  NativeTopicPopupProvider,
+} from "./TopicPickerPopup";
 import { topicError, TopicModal } from "./TopicsCommon";
 import { preparationErrorMessage } from "./preparation-error";
 import {
@@ -63,7 +70,11 @@ import {
   ProjectSettingsConfirmation,
   type ProjectSettingsGuard,
 } from "./ProjectSettings";
-import { TopicContextPicker } from "./TopicContextPicker";
+import {
+  TopicContextPicker,
+  TopicCreationFeedback,
+  type TopicCreationProgress,
+} from "./TopicContextPicker";
 import {
   RepositoryActions,
   TooltipButton,
@@ -149,6 +160,9 @@ function gitOwnerFlag(
 }
 
 export function App() {
+  const notifications = useNotifications();
+  const notificationIntent = useRef(0);
+  const [notificationOpen, setNotificationOpen] = useState<{ticket:string;runId:string;nonce:number}|null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
     try {
       return localStorage.getItem("goga.desktop.sidebarCollapsed") === "true";
@@ -215,6 +229,11 @@ export function App() {
     >("overview"),
     [error, setError] = useState(""),
     [viewErrors, setViewErrors] = useState<Record<string, string>>({});
+  const viewportError = useCallback(
+    (error: unknown) => setError(message(error)),
+    [],
+  );
+  const dashboardViewport = useDashboardViewport(viewportError);
   const [gitStage, setGitStage] = useState<HTMLDivElement | null>(null);
   const gitReturnPages = useRef(new Map<string, typeof page>());
   const contextsEnabled = typeof window.goga.ensureTopicContext === "function";
@@ -235,9 +254,13 @@ export function App() {
     owner?: WorktreeRecord;
     kind: RunKind;
     nonce: number;
+    creation?: boolean;
   } | null>(null);
   const initialFlights = useRef(new Map<string, Promise<WorktreeRecord>>());
   const initialPreparationNonce = useRef(0);
+  const [topicCreation, setTopicCreation] =
+    useState<TopicCreationProgress | null>(null);
+  const [createdTopic, setCreatedTopic] = useState<WorktreeRecord | null>(null);
   useEffect(() => {
     if (typeof window.goga.selectTopicContext !== "function") return;
     void window.goga
@@ -287,10 +310,11 @@ export function App() {
   const [contextOpenRuns, setContextOpenRuns] = useState(
     () => new Set<string>(),
   );
-  function openContextRun(target: Run) {
+  function openContextRun(target: Run, verifiedOwner?: WorktreeRecord) {
     const ref = (target as RunWithContext).context;
     if (ref) {
       const owner = [
+        ...(verifiedOwner ? [verifiedOwner] : []),
         ...knownContexts,
         ...Object.values(contextSelections),
       ].find(
@@ -329,6 +353,17 @@ export function App() {
   openRunRef.current = openContextRun;
   const pageRef = useRef(page);
   pageRef.current = page;
+  const presentationKey = JSON.stringify([
+    projectId,
+    page,
+    selected,
+    activeDraft,
+    selectedContext?.contextId,
+    selectedContext?.revision,
+  ]);
+  const presentation = useRef({ key: presentationKey });
+  if (presentation.current.key !== presentationKey)
+    presentation.current = { key: presentationKey };
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
   const [showLogs, setShowLogs] = useState<Record<string, boolean>>({});
@@ -457,6 +492,16 @@ export function App() {
     if (kind === "build") showBuild(owner.projectId, owner);
     else showLaunch(owner.projectId, owner);
   }
+  function showTopicCreation(identity: TopicContextIdentity) {
+    navigateContext(() => {
+      const nonce = ++initialPreparationNonce.current;
+      setCreatedTopic(null);
+      setInitialPreparation({ identity, kind: "pipeline", nonce, creation: true });
+      setSelected(null);
+      setPage("context-preparation");
+      setError("");
+    });
+  }
   function returnToDraft(id: string, kind: RunKind) {
     const owner = draftOwners[id];
     setContextSelections((values) => ({
@@ -514,9 +559,11 @@ export function App() {
   >(null);
   const navigateRef = useRef<(action: () => void) => void>(() => {});
   function navigate(action: () => void, preserveProjectDraft = false) {
+    notificationIntent.current++;
     if (
       topicsBusy ||
       deletion.busy ||
+      topicRemoval.busy ||
       repeatPending ||
       repeatBusy ||
       topicCard ||
@@ -530,6 +577,26 @@ export function App() {
     else action();
   }
   navigateRef.current = navigate;
+  async function openNotification(id:string) {
+    const request = ++notificationIntent.current;
+    await dismissActiveTopicPopup();
+    const target = await window.goga.prepareNotificationOpen(id);
+    if(request!==notificationIntent.current)return;
+    const nonce=request+1;
+    navigateRef.current(()=>{
+      if(notificationIntent.current!==nonce)return;
+      notifications.setOpen(false);
+      setShowLogs(previous=>({...previous,[target.run.id]:false}));
+      openRunRef.current(target.run);
+      setNotificationOpen({ticket:target.ticket,runId:target.run.id,nonce});
+    });
+  }
+  const openNotificationRef=useRef(openNotification);
+  openNotificationRef.current=openNotification;
+  useEffect(()=>{
+    if(typeof window.goga.onOpenNotification!=="function")return;
+    return window.goga.onOpenNotification(id=>{void openNotificationRef.current(id).catch(e=>setError(message(e)));});
+  },[]);
   const runsRef = useRef<Run[]>([]),
     selectedRef = useRef<string | null>(null);
   const closing = useRef(new Set<string>());
@@ -783,16 +850,73 @@ export function App() {
     !showLogs[run.id]
       ? run.id
       : null;
+  const notificationView =
+    page === "project" &&
+    run &&
+    !run.recovery &&
+    !error &&
+    !topicCard &&
+    !gitModals.size &&
+    !handoff.candidate &&
+    !pendingNavigation &&
+    !notifications.open &&
+    !notificationOpen &&
+    (visibleRun === run.id ||
+      ["exited", "failed", "stopped"].includes(run.status))
+      ? run.id
+      : null;
+  const notificationOwner = run
+    ? JSON.stringify([
+        run.id,
+        run.projectId,
+        run.pipeline,
+        run.startedAt,
+        run.context ?? null,
+        run.topic,
+        run.branch,
+      ])
+    : null;
   useEffect(() => {
-    window.goga.selectRun(visibleRun).catch((e) => {
-      if (visibleRun)
-        setViewErrors((previous) => ({
-          ...previous,
-          [visibleRun]: message(e),
-        }));
-      setError(message(e));
-    });
-  }, [visibleRun]);
+    let alive = true;
+    const api = window.goga;
+    const reportView = (id: string | null) => {
+      if (typeof api.setNotificationView === "function")
+        void api.setNotificationView(id).catch(() => {});
+    };
+    // Revoke the previous screen before waiting for native selection. A late
+    // acknowledgement cannot claim a run after navigation or an overlay.
+    reportView(null);
+    void api.selectRun(visibleRun).then(
+      () => {
+        if (alive) reportView(notificationView);
+      },
+      (e) => {
+        if (!alive) return;
+        if (visibleRun)
+          setViewErrors((previous) => ({
+            ...previous,
+            [visibleRun]: message(e),
+          }));
+        setError(message(e));
+      },
+    );
+    return () => {
+      alive = false;
+      reportView(null);
+    };
+  }, [visibleRun, notificationView, notificationOwner, run?.dashboardOpened]);
+  useEffect(()=>{
+    if(!notificationOpen||notificationOpen.nonce!==notificationIntent.current||page!=="project"||selected!==notificationOpen.runId||run?.id!==notificationOpen.runId)return;
+    let alive=true;
+    // This effect runs after the target run/history is mounted. Native selection
+    // acknowledgement precedes the stage acknowledgement and durable read.
+    void window.goga.selectRun(visibleRun).then(async()=>{
+      if(!alive||notificationOpen.nonce!==notificationIntent.current)return;
+      await window.goga.completeNotificationOpen(notificationOpen.ticket);
+      if(alive)setNotificationOpen(null);
+    }).catch(e=>{if(alive){setNotificationOpen(null);setError(message(e));}});
+    return()=>{alive=false;};
+  },[notificationOpen,page,selected,visibleRun,run?.id]);
   useEffect(() => {
     if (
       !restoreTabFocus.current ||
@@ -1061,9 +1185,11 @@ export function App() {
   // Owner-local drafts are App-owned. Switching scope preserves them rather
   // than forcing a discard/save dialog for an unrelated context.
   function navigateContext(action: () => void) {
+    notificationIntent.current++;
     if (
       settingsBusy ||
       deletion.busy ||
+      topicRemoval.busy ||
       settingsGuard.current?.busy ||
       topicCard ||
       pendingNavigation
@@ -1169,12 +1295,48 @@ export function App() {
       throw Error("Не удалось сохранить выбор: проект недоступен.");
     persistDeletedWorkspaceSelection(deletingProject, owner);
   }, topicsChanged);
+  const topicRemoval = useTopicRemovalController(deletion.execute, topicsChanged);
+  useEffect(() => {
+    const intent = initialPreparation;
+    if (
+      !createdTopic ||
+      !intent?.creation ||
+      page !== "context-preparation" ||
+      projectId !== createdTopic.projectId ||
+      intent.nonce !== initialPreparationNonce.current ||
+      intent.identity.projectId !== createdTopic.projectId ||
+      intent.identity.year !== createdTopic.year ||
+      intent.identity.branch !== createdTopic.branch
+    )
+      return;
+    // No late navigation while another page is visible, and no lost result
+    // while a card/navigation guard is open. Their closure rechecks this effect.
+    navigateContext(() => {
+      setContextSelections((values) => ({
+        ...values,
+        [createdTopic.projectId]: createdTopic,
+      }));
+      setInitialPreparation(null);
+      setCreatedTopic(null);
+      if (
+        workspaceLaunchBlockReason(
+          runsRef.current, createdTopic.projectId, createdTopic, "pipeline",
+        )
+      )
+        setPage("context-runs");
+      else showContextPreparation("pipeline", createdTopic);
+    });
+  }, [
+    createdTopic, initialPreparation, page, projectId, topicCard,
+    pendingNavigation, settingsBusy, deletion.busy, topicRemoval.busy,
+  ]);
   const content = (
     <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
       <header className="titlebar">
         <div className="wordmark">
           <b>Go</b>ga <small>DESKTOP</small>
         </div>
+        <NotificationBell controller={notifications} projects={projects} onOpen={openNotification}/>
       </header>
       <aside className="sidebar" aria-label="Боковая панель">
         <label className="eyebrow" htmlFor="workspace">
@@ -1198,6 +1360,7 @@ export function App() {
         </div>
         <nav className="project-list">
           {projects.map((p) => (
+            <div className="project-notification-row" key={p.id}>
             <TooltipButton
               label={p.name}
               tooltipLabel={p.name}
@@ -1225,6 +1388,8 @@ export function App() {
                 <small>{p.path.split("/").slice(-2).join("/")}</small>
               </span>
             </TooltipButton>
+            {!!notifications.snapshot.byProject[p.id]&&<button type="button" className="project-notification-badge" aria-label={`Уведомления проекта ${p.name}: ${notifications.snapshot.byProject[p.id]}`} title="Уведомления" onClick={()=>notifications.setOpen(true)}><span className="notification-count">{notifications.snapshot.byProject[p.id]>99?"99+":notifications.snapshot.byProject[p.id]}</span></button>}
+            </div>
           ))}
         </nav>
         <button
@@ -1289,6 +1454,8 @@ export function App() {
                 runs={runs as RunWithContext[]}
                 disabled={settingsBusy}
                 onTransitionIntent={() => {
+                  notificationIntent.current++;
+                  presentation.current = { ...presentation.current };
                   if (pageRef.current !== "context-preparation") return;
                   // A new explicit topic transition owns continuation even
                   // while its verification is pending. Retain A's flight
@@ -1297,22 +1464,24 @@ export function App() {
                   setInitialPreparation(null);
                   setPage("context-runs");
                 }}
-                onCreated={(record) =>
-                  navigateContext(() => {
-                    setContextSelections((values) => ({
-                      ...values,
-                      [projectId]: record,
-                    }));
-                    setKnownContexts((values) => [
-                      ...values.filter(
-                        (value) => value.contextId !== record.contextId,
-                      ),
-                      record,
-                    ]);
-                    topicsChanged();
-                    showContextPreparation("pipeline", record);
-                  })
-                }
+                onCreationStarted={showTopicCreation}
+                onCreationProgress={setTopicCreation}
+                onShowCreation={showTopicCreation}
+                showCreationFeedback={false}
+                onCreated={(record) => {
+                  if (projectIdRef.current !== record.projectId) return;
+                  setKnownContexts((values) => [
+                    ...values.filter(
+                      (value) => value.contextId !== record.contextId,
+                    ),
+                    record,
+                  ]);
+                  topicsChanged();
+                  // Retain success even if the user left preparation or a
+                  // modal currently prevents continuation. Returning can resume
+                  // the form without creating/ensuring the copy again.
+                  setCreatedTopic(record);
+                }}
                 onSelect={(record) =>
                   navigateContext(() => {
                     setContextSelections((values) => ({
@@ -1388,6 +1557,15 @@ export function App() {
                 }
               />
             )}
+            {page !== "settings" && project &&
+              topicCreation?.identity.projectId === project.id &&
+              !(page === "context-preparation" && initialPreparation?.creation) && (
+                <TopicCreationFeedback
+                  progress={topicCreation}
+                  disabled={settingsBusy}
+                  onShow={() => showTopicCreation(topicCreation.identity)}
+                />
+              )}
           </div>
           {page !== "settings" && project && (
             <div className="project-actions">
@@ -1613,7 +1791,7 @@ export function App() {
                 <div className="run-tab-group" role="presentation" key={r.id}>
                   <button
                     role="tab"
-                    aria-label={`${r.kind === "build" ? "Сборка" : r.pipeline} · ${r.topic} · ${r.branch}`}
+                    aria-label={`${r.kind === "build" ? "Сборка" : r.pipeline} · ${r.topic || "Без топика"} · ${r.branch}`}
                     aria-selected={selected === r.id && page === "project"}
                     tabIndex={
                       selected === r.id || (!selected && index === 0) ? 0 : -1
@@ -1648,12 +1826,13 @@ export function App() {
                     className={`run-tab ${selected === r.id && page === "project" ? "active" : ""}`}
                   >
                     <i className={`status-dot ${r.status}`} />
+                    {notifications.snapshot.unreadRunIds.includes(r.id)&&<i className="run-unread-marker" aria-label="Есть непрочитанные уведомления"/>}
                     <span>
                       {r.kind === "build" ? "Сборка" : r.pipeline}
                       <small>
                         {r.kind === "build"
                           ? r.build?.planPath.split("/").at(-1)
-                          : r.topic}{" "}
+                          : r.topic || "Без топика"}{" "}
                         · {r.branch}
                       </small>
                     </span>
@@ -1661,7 +1840,7 @@ export function App() {
                   <button
                     className="close-tab"
                     data-close-run={r.id}
-                    aria-label={`Закрыть вкладку ${r.kind === "build" ? "Сборка" : r.pipeline} · ${r.topic}`}
+                    aria-label={`Закрыть вкладку ${r.kind === "build" ? "Сборка" : r.pipeline} · ${r.topic || "Без топика"}`}
                     title="Закрыть вкладку"
                     disabled={closingIds.includes(r.id)}
                     onClick={() => navigate(() => void closeTab(r.id))}
@@ -1681,118 +1860,95 @@ export function App() {
             </span>
             {run && page === "project" ? (
               <>
-                {run.kind === "build" ? (
+                {run.kind === "build" && (
                   <span>
                     Сборка <strong>{run.build?.planPath}</strong>
                   </span>
-                ) : (
-                  <span>
-                    Топик{" "}
+                )}
+                <div className="run-actions">
+                  {canShowDashboard ? (
                     <button
                       type="button"
-                      className="topic-link"
-                      aria-label={`Топик запуска ${run.topic}`}
+                      className="run-state run-output-toggle"
+                      aria-label="Работает — показ журнала вывода"
+                      aria-pressed={!!showLogs[run.id]}
+                      aria-controls={
+                        showLogs[run.id] ? "run-output-journal" : undefined
+                      }
+                      title={
+                        showLogs[run.id]
+                          ? "Скрыть журнал и вернуться к конвейеру"
+                          : "Показать журнал вывода"
+                      }
                       onClick={() =>
-                        setTopicCard({
-                          project: project!,
-                          year:
-                            run.taskSnapshot?.year ?? run.startedAt.slice(0, 4),
-                          target: {
-                            topic: run.topic,
-                            branch: run.branch,
-                            remote: false,
-                          },
-                          board: null,
-                          context: { kind: "run", run },
-                        })
+                        setShowLogs((values) => ({
+                          ...values,
+                          [run.id]: !values[run.id],
+                        }))
                       }
                     >
-                      {run.topic}
+                      <TerminalIcon />
+                      <span>Работает</span>
                     </button>
-                  </span>
-                )}
-                <span>
-                  Ветка <strong>{run.branch}</strong>
-                </span>
-                {canShowDashboard ? (
-                  <button
-                    type="button"
-                    className="run-state run-output-toggle"
-                    aria-label="Работает — показ журнала вывода"
-                    aria-pressed={!!showLogs[run.id]}
-                    aria-controls={
-                      showLogs[run.id] ? "run-output-journal" : undefined
-                    }
-                    title={
-                      showLogs[run.id]
-                        ? "Скрыть журнал и вернуться к конвейеру"
-                        : "Показать журнал вывода"
-                    }
-                    onClick={() =>
-                      setShowLogs((values) => ({
-                        ...values,
-                        [run.id]: !values[run.id],
-                      }))
-                    }
-                  >
-                    <TerminalIcon />
-                    <span>Работает</span>
-                  </button>
-                ) : (
-                  <span className="run-state">
-                    {run.recovery === "unverified"
-                      ? "Состояние процесса не подтверждено после перезапуска"
-                      : labels[run.status]}
-                  </span>
-                )}
-                {run.recovery && (
-                  <button
-                    type="button"
-                    disabled={
-                      !!reconcilingRun ||
-                      typeof window.goga.reconcileRun !== "function"
-                    }
-                    onClick={() => void reconcileRun(run)}
-                  >
-                    {reconcilingRun === run.id
-                      ? "Проверяем состояние процесса…"
-                      : "Проверить состояние процесса"}
-                  </button>
-                )}
-                {run.kind === "build" &&
-                  !(run.status === "starting" || run.status === "running") && (
+                  ) : (
+                    <span className="run-state">
+                      {run.recovery === "unverified"
+                        ? "Состояние процесса не подтверждено после перезапуска"
+                        : labels[run.status]}
+                    </span>
+                  )}
+                  {run.recovery && (
                     <button
+                      type="button"
                       disabled={
-                        repeatBusy ||
-                        !!contextUnavailable ||
-                        !!workspaceLaunchBlockReason(
-                          runs,
-                          run.projectId,
-                          run.context ?? null,
-                          "build",
-                        )
+                        !!reconcilingRun ||
+                        typeof window.goga.reconcileRun !== "function"
                       }
-                      onClick={() => void repeatBuild(run)}
+                      onClick={() => void reconcileRun(run)}
                     >
-                      Повторить сборку
+                      {reconcilingRun === run.id
+                        ? "Проверяем состояние процесса…"
+                        : "Проверить состояние процесса"}
                     </button>
                   )}
-                {(run.status === "starting" || run.status === "running") && (
-                  <button
-                    onClick={stop}
-                    className="stop-button"
-                    disabled={
-                      run.recovery === "unverified" || reconcilingRun === run.id
-                    }
-                    title={
-                      run.recovery === "unverified"
-                        ? "Невозможно безопасно остановить процесс без подтверждённого владения после перезапуска."
-                        : undefined
-                    }
-                  >
-                    Остановить
-                  </button>
-                )}
+                  {run.kind === "build" &&
+                    !(
+                      run.status === "starting" || run.status === "running"
+                    ) && (
+                      <button
+                        disabled={
+                          repeatBusy ||
+                          !!contextUnavailable ||
+                          !!workspaceLaunchBlockReason(
+                            runs,
+                            run.projectId,
+                            run.context ?? null,
+                            "build",
+                          )
+                        }
+                        onClick={() => void repeatBuild(run)}
+                      >
+                        Повторить сборку
+                      </button>
+                    )}
+                  {(run.status === "starting" || run.status === "running") && (
+                    <button
+                      onClick={stop}
+                      className="stop-button"
+                      disabled={
+                        run.recovery === "unverified" ||
+                        reconcilingRun === run.id
+                      }
+                      title={
+                        run.recovery === "unverified"
+                          ? "Невозможно безопасно остановить процесс без подтверждённого владения после перезапуска."
+                          : undefined
+                      }
+                    >
+                      Остановить
+                    </button>
+                  )}
+                </div>
               </>
             ) : page === "context-runs" && displayOwner ? (
               <span>
@@ -1909,6 +2065,7 @@ export function App() {
             hidden={page !== "changes" && page !== "commits"}
           />
           <div
+            ref={dashboardViewport}
             className="scroll-area"
             hidden={page === "changes" || page === "commits"}
           >
@@ -2041,49 +2198,75 @@ export function App() {
               project &&
               initialPreparation &&
               initialPreparation.identity.projectId === project.id && (
-                <InitialContextPreparation
-                  key={JSON.stringify([project.id, initialPreparation.nonce])}
-                  identity={initialPreparation.identity}
-                  kind={initialPreparation.kind}
-                  explicitOwner={initialPreparation.owner}
-                  knownContexts={knownContexts}
-                  loading={contextsLoading}
-                  inventoryError={contextsError}
-                  onRetryInventory={topicsChanged}
-                  flights={initialFlights.current}
-                  onCancel={() => navigate(() => setPage("context-runs"))}
-                  onPrepared={(record) => {
-                    if (
-                      pageRef.current !== "context-preparation" ||
-                      projectIdRef.current !==
-                        initialPreparation.identity.projectId ||
-                      initialPreparationNonce.current !==
-                        initialPreparation.nonce
-                    )
-                      return;
-                    setContextSelections((values) => ({
-                      ...values,
-                      [record.projectId]: record,
-                    }));
-                    setKnownContexts((values) => [
-                      ...values.filter(
-                        (value) => value.contextId !== record.contextId,
-                      ),
-                      record,
-                    ]);
-                    if (
-                      workspaceLaunchBlockReason(
-                        runsRef.current,
-                        record.projectId,
-                        record,
-                        initialPreparation.kind,
+                initialPreparation.creation ? (
+                  <section className="context-stage" aria-label="Подготовка запуска">
+                    {topicCreation?.state === "error" &&
+                    topicCreation.identity.projectId === initialPreparation.identity.projectId &&
+                    topicCreation.identity.year === initialPreparation.identity.year &&
+                    topicCreation.identity.branch === initialPreparation.identity.branch ? (
+                      <>
+                        <h2>Подготовка конвейера</h2>
+                        <p className="context-run-hint">
+                          Топик: {topicCreation.identity.branch}
+                        </p>
+                        <p className="error" role="alert">{topicCreation.message}</p>
+                        <button
+                          type="button"
+                          className="primary"
+                          onClick={topicCreation.retry}
+                        >
+                          Повторить подготовку
+                        </button>
+                      </>
+                    ) : (
+                      <LoadingState label="Подготовка запуска" />
+                    )}
+                  </section>
+                ) : (
+                  <InitialContextPreparation
+                    key={JSON.stringify([project.id, initialPreparation.nonce])}
+                    identity={initialPreparation.identity}
+                    kind={initialPreparation.kind}
+                    explicitOwner={initialPreparation.owner}
+                    knownContexts={knownContexts}
+                    loading={contextsLoading}
+                    inventoryError={contextsError}
+                    onRetryInventory={topicsChanged}
+                    flights={initialFlights.current}
+                    onCancel={() => navigate(() => setPage("context-runs"))}
+                    onPrepared={(record) => {
+                      if (
+                        pageRef.current !== "context-preparation" ||
+                        projectIdRef.current !==
+                          initialPreparation.identity.projectId ||
+                        initialPreparationNonce.current !==
+                          initialPreparation.nonce
                       )
-                    )
-                      setPage("context-runs");
-                    else
-                      showContextPreparation(initialPreparation.kind, record);
-                  }}
-                />
+                        return;
+                      setContextSelections((values) => ({
+                        ...values,
+                        [record.projectId]: record,
+                      }));
+                      setKnownContexts((values) => [
+                        ...values.filter(
+                          (value) => value.contextId !== record.contextId,
+                        ),
+                        record,
+                      ]);
+                      if (
+                        workspaceLaunchBlockReason(
+                          runsRef.current,
+                          record.projectId,
+                          record,
+                          initialPreparation.kind,
+                        )
+                      )
+                        setPage("context-runs");
+                      else
+                        showContextPreparation(initialPreparation.kind, record);
+                    }}
+                  />
+                )
               )}
             {page === "project-settings" && contextUnavailable && (
               <section
@@ -2229,6 +2412,7 @@ export function App() {
                   aria-labelledby={`pipeline-draft-tab-${encodeURIComponent(id)}`}
                 >
                   <LaunchForm
+                    onTopicsChanged={topicsChanged}
                     settingsRevision={JSON.stringify([
                       settingsRevision[launchProject.id],
                       settingsDocuments.projectRevision(
@@ -2285,7 +2469,7 @@ export function App() {
                     project={launchProject}
                     onCancel={() => closeLaunch(id)}
                     onBusyChange={onLaunchBusy}
-                    onLaunched={(r, stale) => {
+                    onLaunched={async (r, stale) => {
                       // Register the completed launch even when settings navigation
                       // is blocked. Only the current guard may leave the editor.
                       if (r && !runsRef.current.some((i) => i.id === r.id))
@@ -2301,7 +2485,67 @@ export function App() {
                         return;
                       if (stale && pageRef.current !== "project-settings")
                         return;
-                      if (owner)
+                      const sourcePresentation = presentation.current;
+                      let createdOwner: WorktreeRecord | undefined;
+                      if (!owner && r?.context) {
+                        try {
+                          const record = worktreeRecordSchema.parse(
+                            await readRequest(
+                              "resolveTopicContext",
+                              contextRef(r.context),
+                            ),
+                          );
+                          if (
+                            contextKey(record) !== contextKey(r.context) ||
+                            record.revision !== r.context.revision ||
+                            record.projectId !== launchProject.id ||
+                            record.projectPath !== launchProject.path ||
+                            (r.context.path &&
+                              record.path !== r.context.path) ||
+                            record.state !== "ready" ||
+                            record.storageKind !== "clone" ||
+                            record.ownership !== "managed" ||
+                            record.preparation ||
+                            record.deletedAt
+                          )
+                            throw Error(
+                              "Созданная рабочая копия изменилась. Выберите топик заново.",
+                            );
+                          createdOwner = record;
+                          setKnownContexts((values) => [
+                            ...values.filter(
+                              (v) => v.contextId !== record.contextId,
+                            ),
+                            record,
+                          ]);
+                          topicsChanged();
+                        } catch (error) {
+                          if (
+                            presentation.current === sourcePresentation &&
+                            matchesWorkspace(
+                              launchProject.id,
+                              owner,
+                              projectIdRef.current,
+                              selectedContextRef.current,
+                            )
+                          )
+                            setError(message(error));
+                          return;
+                        }
+                        // Resolving the returned owner is read-only and may finish
+                        // after the user has selected another project or topic.
+                        if (
+                          presentation.current !== sourcePresentation ||
+                          !matchesWorkspace(
+                            launchProject.id,
+                            owner,
+                            projectIdRef.current,
+                            selectedContextRef.current,
+                          )
+                        )
+                          return;
+                      }
+                      if (owner || createdOwner)
                         setOpenLaunches((values) => {
                           const next = new Set(values);
                           next.delete(id);
@@ -2311,7 +2555,7 @@ export function App() {
                         if (r) {
                           if (!runsRef.current.some((i) => i.id === r.id))
                             return;
-                          openRunRef.current(r);
+                          openRunRef.current(r, createdOwner);
                         }
                         setPage("project");
                       });
@@ -2330,7 +2574,7 @@ export function App() {
             >
               {project && window.goga.terminal && (
                 <TerminalWorkspace
-                  suspendOpen={deletion.busy}
+                  suspendOpen={deletion.busy || topicRemoval.busy}
                   api={window.goga.terminal}
                   scope={displayOwner ? contextRef(displayOwner) : project.id}
                   blocked={contextUnavailable || undefined}
@@ -2342,7 +2586,8 @@ export function App() {
                     repeatPending ||
                     repositoryActions.failures.length ||
                     gitModals.size ||
-                    deletion.operation,
+                    deletion.operation ||
+                    topicRemoval.operation,
                   )}
                 />
               )}
@@ -2561,11 +2806,16 @@ export function App() {
         />
       )}
       <ContextDeletionPopup controller={deletion} />
+      <TopicRemovalPopup controller={topicRemoval} />
     </div>
   );
   return (
     <ContextDeletionProvider value={deletion.execute}>
-      {content}
+      <TopicRemovalProvider value={topicRemoval.execute}>
+        <NativeTopicPopupProvider value={!!visibleRun || page === "terminal"}>
+          {content}
+        </NativeTopicPopupProvider>
+      </TopicRemovalProvider>
     </ContextDeletionProvider>
   );
 }

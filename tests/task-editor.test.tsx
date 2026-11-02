@@ -16,7 +16,7 @@ import {
   waitFor,
   act,
 } from "@testing-library/react";
-import { LaunchForm } from "../src/renderer/LaunchForm";
+import { ExistingTopicLaunchForm as LaunchForm } from "./helpers/existing-pipeline-draft";
 import { App } from "../src/renderer/App";
 import { createDraftStore, useTaskDraft } from "../src/renderer/task-drafts";
 import { renderHook } from "@testing-library/react";
@@ -250,7 +250,7 @@ it("renders unified radio topic block and renamed workspace", async () => {
   fireEvent.click(screen.getByRole("radio", { name: "Создать новый" }));
   expect(screen.getByLabelText("Имя нового топика")).toBeTruthy();
   expect(screen.getByLabelText("Исходная ветка")).toBeTruthy();
-  expect(screen.getByText(/Создадим.*при запуске/)).toBeTruthy();
+  expect(screen.getByText(/Создадим.*в отдельной рабочей копии/)).toBeTruthy();
   expect(api.launch).not.toHaveBeenCalled();
 });
 it("restores standalone selected topic and independent drafts after changing projects", async () => {

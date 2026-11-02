@@ -179,7 +179,7 @@ describe("read-only Git workspace", () => {
     expect(result.files).toHaveLength(5);
   });
 
-  it("separates staged and unstaged patches and preserves the dirty index byte-for-byte", async () => {
+  it("shows the final HEAD-to-working patch and preserves the dirty index byte-for-byte", async () => {
     const f = await fixture();
     await f.write("a", "base\n");
     await f.commit();
@@ -193,14 +193,19 @@ describe("read-only Git workspace", () => {
       path: "a",
       revision: snap.revision,
     });
-    expect(diff.staged).toMatchObject({
-      kind: "patch",
-      text: expect.stringContaining("+staged"),
-    });
-    expect(diff.unstaged).toMatchObject({
+    expect(diff.changes).toMatchObject({
       kind: "patch",
       text: expect.stringContaining("+working"),
     });
+    expect(diff.changes.text).toContain("-base");
+    expect(diff.changes.text).not.toContain("staged");
+    expect(diff).not.toHaveProperty("staged");
+    expect(diff).not.toHaveProperty("unstaged");
+    expect(
+      f.calls.some(
+        (args) => args.includes("diff") && args.includes(snap.head!),
+      ),
+    ).toBe(true);
     expect(await fs.readFile(path.join(f.root, ".git/index"))).toEqual(before);
     expect(f.verify).toHaveBeenCalled();
     for (const args of f.calls)
@@ -220,6 +225,119 @@ describe("read-only Git workspace", () => {
       );
   });
 
+  it.each([false, true])(
+    "includes indexed edits with later working edits=%s in one final diff",
+    async (workingEdit) => {
+      const f = await fixture();
+      await f.write("a", "first\nsecond\n");
+      await f.commit();
+      await f.write("a", "indexed\nsecond\n");
+      await f.git(["add", "a"]);
+      if (workingEdit) await f.write("a", "indexed\nworking\n");
+      const index = await fs.readFile(path.join(f.root, ".git/index"));
+      const snap = await f.reader.snapshot();
+      const diff = await f.reader.diff({
+        scope: "project",
+        path: "a",
+        revision: snap.revision,
+      });
+      expect(diff.changes.kind).toBe("patch");
+      expect(diff.changes.text).toContain("-first");
+      expect(diff.changes.text).toContain("+indexed");
+      if (workingEdit) {
+        expect(diff.changes.text).toContain("-second");
+        expect(diff.changes.text).toContain("+working");
+      }
+      expect(await fs.readFile(path.join(f.root, ".git/index"))).toEqual(index);
+    },
+  );
+
+  it("shows no final change when working content cancels an indexed edit", async () => {
+    const f = await fixture();
+    await f.write("a", "base\n");
+    await f.commit();
+    await f.write("a", "intermediate\n");
+    await f.git(["add", "a"]);
+    await f.write("a", "base\n");
+    const index = await fs.readFile(path.join(f.root, ".git/index"));
+    const snap = await f.reader.snapshot();
+    expect(
+      (
+        await f.reader.diff({
+          scope: "project",
+          path: "a",
+          revision: snap.revision,
+        })
+      ).changes,
+    ).toEqual({ kind: "empty", text: "" });
+    expect(await fs.readFile(path.join(f.root, ".git/index"))).toEqual(index);
+  });
+
+  it.each([false, true])(
+    "shows final new file contents with unborn HEAD=%s",
+    async (unborn) => {
+      const f = await fixture();
+      if (!unborn) {
+        await f.write("base", "base\n");
+        await f.commit();
+      }
+      await f.write("new", "intermediate\n");
+      await f.git(["add", "new"]);
+      await f.write("new", "final\n");
+      const index = await fs.readFile(path.join(f.root, ".git/index"));
+      const snap = await f.reader.snapshot();
+      const diff = await f.reader.diff({
+        scope: "project",
+        path: "new",
+        revision: snap.revision,
+      });
+      expect(diff.changes.kind).toBe(unborn ? "text" : "patch");
+      expect(diff.changes.text).toContain(unborn ? "final\n" : "+final");
+      expect(diff.changes.text).not.toContain("intermediate");
+      expect(await fs.readFile(path.join(f.root, ".git/index"))).toEqual(index);
+    },
+  );
+
+  it("shows no final change for an unborn indexed addition removed from disk", async () => {
+    const f = await fixture();
+    await f.write("new", "intermediate\n");
+    await f.git(["add", "new"]);
+    await fs.unlink(path.join(f.root, "new"));
+    const index = await fs.readFile(path.join(f.root, ".git/index"));
+    const snap = await f.reader.snapshot();
+    expect(
+      (
+        await f.reader.diff({
+          scope: "project",
+          path: "new",
+          revision: snap.revision,
+        })
+      ).changes,
+    ).toEqual({ kind: "empty", text: "" });
+    expect(await fs.readFile(path.join(f.root, ".git/index"))).toEqual(index);
+  });
+
+  it("compares a staged rename with subsequent edits against the original HEAD path", async () => {
+    const f = await fixture();
+    await f.write("old", "base\nkeep\nother\n");
+    await f.commit();
+    await f.git(["mv", "old", "new"]);
+    await f.write("new", "final\nkeep\nother\n");
+    const index = await fs.readFile(path.join(f.root, ".git/index"));
+    const snap = await f.reader.snapshot();
+    const diff = await f.reader.diff({
+      scope: "project",
+      path: "new",
+      revision: snap.revision,
+    });
+    expect(diff.changes.kind).toBe("patch");
+    expect(diff.changes.text).toContain("-base");
+    expect(diff.changes.text).toContain("+final");
+    expect(diff.changes.text).toContain("a/old");
+    expect(diff.changes.text).toContain("b/new");
+    expect(await fs.readFile(path.join(f.root, ".git/index"))).toEqual(index);
+  });
+
   it("reads bounded untracked text and makes binary, empty and large files explicit", async () => {
     const f = await fixture();
     await f.write("text", "Юникод\n");
@@ -229,13 +347,13 @@ describe("read-only Git workspace", () => {
     const snap = await f.reader.snapshot();
     const read = (name: string) =>
       f.reader.diff({ scope: "project", path: name, revision: snap.revision });
-    expect((await read("text")).unstaged).toEqual({
+    expect((await read("text")).changes).toEqual({
       kind: "text",
       text: "Юникод\n",
     });
-    expect((await read("binary")).unstaged.kind).toBe("binary");
-    expect((await read("empty")).unstaged.kind).toBe("empty");
-    expect((await read("large")).unstaged.kind).toBe("unavailable");
+    expect((await read("binary")).changes.kind).toBe("binary");
+    expect((await read("empty")).changes.kind).toBe("empty");
+    expect((await read("large")).changes.kind).toBe("unavailable");
   });
 
   it("rejects stale same-status content and index revisions, wrong owners and absent paths", async () => {
@@ -277,7 +395,7 @@ describe("read-only Git workspace", () => {
           path: "link",
           revision: snap.revision,
         })
-      ).unstaged.kind,
+      ).changes.kind,
     ).toBe("unavailable");
     await fs.rename(path.join(f.root, ".git"), path.join(f.dir, "metadata"));
     await fs.symlink(path.join(f.dir, "metadata"), path.join(f.root, ".git"));
@@ -308,8 +426,7 @@ describe("read-only Git workspace", () => {
       path: "a",
       revision: snap.revision,
     });
-    expect(diff.staged.kind).toBe("unavailable");
-    expect(diff.unstaged.kind).toBe("unavailable");
+    expect(diff.changes.kind).toBe("unavailable");
   });
 
   it("never runs clean/process/textconv/external-diff/fsmonitor helpers", async () => {
@@ -334,7 +451,7 @@ describe("read-only Git workspace", () => {
           path: "a",
           revision: snap.revision,
         })
-      ).unstaged.text,
+      ).changes.text,
     ).toContain("+working");
     await expect(fs.access(sentinel)).rejects.toThrow();
   });
@@ -425,7 +542,7 @@ describe("read-only Git workspace", () => {
           path: "a",
           revision: snap.revision,
         })
-      ).unstaged.text,
+      ).changes.text,
     ).toContain("+work");
   });
 
@@ -520,7 +637,7 @@ describe("read-only Git workspace", () => {
       path: "a.txt",
       revision: snap.revision,
     });
-    expect(diff.unstaged.text).toBe(
+    expect(diff.changes.text).toBe(
       await f.git([
         "--no-pager",
         "diff",
@@ -530,7 +647,7 @@ describe("read-only Git workspace", () => {
         "a.txt",
       ]),
     );
-    expect(diff.unstaged.text).not.toContain("\r");
+    expect(diff.changes.text).not.toContain("\r");
   });
 
   it("captures native repository policy rather than the legacy GIT_CONFIG override used only by git config", async () => {
@@ -572,7 +689,7 @@ describe("read-only Git workspace", () => {
           path: "a",
           revision: snap.revision,
         })
-      ).unstaged.text,
+      ).changes.text,
     ).toBe(expected);
   });
 
@@ -593,7 +710,7 @@ describe("read-only Git workspace", () => {
           path: "a",
           revision: before.revision,
         })
-      ).unstaged.text,
+      ).changes.text,
     ).toContain("+work");
   });
 
@@ -633,7 +750,7 @@ describe("read-only Git workspace", () => {
           path: "a",
           revision: snap.revision,
         })
-      ).unstaged.text,
+      ).changes.text,
     ).toContain("+work");
     expect(await inspect()).toEqual(before);
   });
@@ -714,7 +831,7 @@ describe("read-only Git workspace", () => {
             path: "a",
             revision: snap.revision,
           })
-        ).unstaged.text,
+        ).changes.text,
       ).toContain("+work");
       expect(
         await fs.stat(target).then(
@@ -795,7 +912,7 @@ describe("read-only Git workspace", () => {
             path: "a.txt",
             revision: snap.revision,
           })
-        ).unstaged.text,
+        ).changes.text,
       ).toBe(expected);
       expect(await fs.readFile(path.join(f.root, ".git/index"))).toEqual(index);
     },
@@ -844,8 +961,8 @@ describe("read-only Git workspace", () => {
       path: ":(glob)*",
       revision: snap.revision,
     });
-    expect(diff.unstaged.text).toContain("+after :(glob)*");
-    expect(diff.unstaged.text).not.toContain("+after -option");
+    expect(diff.changes.text).toContain("+after :(glob)*");
+    expect(diff.changes.text).not.toContain("+after -option");
     expect(
       (
         await f.reader.diff({
@@ -853,7 +970,7 @@ describe("read-only Git workspace", () => {
           path: "line\nbreak",
           revision: snap.revision,
         })
-      ).unstaged.kind,
+      ).changes.kind,
     ).toBe("patch");
   });
 
@@ -869,8 +986,8 @@ describe("read-only Git workspace", () => {
           path: "old",
           revision: snap.revision,
         })
-      ).staged.text,
-    ).toContain("+base");
+      ).changes,
+    ).toEqual({ kind: "text", text: "base\n" });
     await f.git(["commit", "-m", "fixture"]);
     await f.git(["mv", "old", "new"]);
     snap = await f.reader.snapshot();
@@ -881,7 +998,7 @@ describe("read-only Git workspace", () => {
           path: "new",
           revision: snap.revision,
         })
-      ).staged.text,
+      ).changes.text,
     ).toContain("rename from old");
     await f.git(["commit", "-m", "rename"]);
     await f.git(["rm", "new"]);
@@ -893,7 +1010,7 @@ describe("read-only Git workspace", () => {
           path: "new",
           revision: snap.revision,
         })
-      ).staged.text,
+      ).changes.text,
     ).toContain("-base");
   });
 
@@ -974,7 +1091,7 @@ describe("read-only Git workspace", () => {
           path: "nested",
           revision: snap.revision,
         })
-      ).staged.kind,
+      ).changes.kind,
     ).toBe("unavailable");
   });
 
@@ -1051,7 +1168,7 @@ describe("read-only Git workspace", () => {
           path: "binary",
           revision: snap.revision,
         })
-      ).unstaged.kind,
+      ).changes.kind,
     ).toBe("binary");
     expect(
       (
@@ -1060,28 +1177,27 @@ describe("read-only Git workspace", () => {
           path: "large",
           revision: snap.revision,
         })
-      ).unstaged.kind,
+      ).changes.kind,
     ).toBe("unavailable");
   });
 
-  it("caps the combined staged and unstaged renderer response at 1 MiB", async () => {
+  it("caps the final HEAD-to-working renderer response at 1 MiB", async () => {
     const f = await fixture();
-    await f.write("a", "base\n");
+    await f.write("a", "b".repeat(600000) + "\n");
     await f.commit();
     await f.write("a", "s".repeat(400000) + "\n");
     await f.git(["add", "a"]);
-    await f.write("a", "w".repeat(400000) + "\n");
+    await f.write("a", "w".repeat(600000) + "\n");
     const snap = await f.reader.snapshot();
     const diff = await f.reader.diff({
       scope: "project",
       path: "a",
       revision: snap.revision,
     });
-    expect(
-      Buffer.byteLength(diff.staged.text) +
-        Buffer.byteLength(diff.unstaged.text),
-    ).toBeLessThanOrEqual(1024 * 1024);
-    expect([diff.staged.kind, diff.unstaged.kind]).toContain("unavailable");
+    expect(Buffer.byteLength(diff.changes.text)).toBeLessThanOrEqual(
+      1024 * 1024,
+    );
+    expect(diff.changes.kind).toBe("unavailable");
   });
 
   it("makes an oversized Runner diff explicitly unavailable rather than returning a partial patch", async () => {
@@ -1107,7 +1223,7 @@ describe("read-only Git workspace", () => {
           path: "a",
           revision: snap.revision,
         })
-      ).unstaged.kind,
+      ).changes.kind,
     ).toBe("unavailable");
   });
 
@@ -1157,7 +1273,7 @@ describe("read-only Git workspace", () => {
           path: "a",
           revision: snap.revision,
         })
-      ).unstaged.kind,
+      ).changes.kind,
     ).toBe("binary");
   });
 
@@ -1172,8 +1288,7 @@ describe("read-only Git workspace", () => {
       path: "link",
       revision: snap.revision,
     });
-    expect(diff.staged.kind).toBe("unavailable");
-    expect(diff.unstaged.kind).toBe("unavailable");
+    expect(diff.changes.kind).toBe("unavailable");
   });
 
   it("fingerprints active operation files, not only their parent directory", async () => {
@@ -1219,7 +1334,7 @@ describe("read-only Git workspace", () => {
           path: "a",
           revision: snap.revision,
         })
-      ).unstaged,
+      ).changes,
     ).toEqual({ kind: "text", text: content });
   });
 
@@ -1282,7 +1397,7 @@ describe("read-only Git workspace", () => {
           path: "a",
           revision: snap.revision,
         })
-      ).unstaged.kind,
+      ).changes.kind,
     ).toBe("patch");
     console.info(
       "Git reader TEMP benchmark:",
@@ -1393,8 +1508,7 @@ describe("read-only Git workspace", () => {
       path: nested,
       revision: snap.revision,
     });
-    expect(nestedDiff.staged.kind).toBe("unavailable");
-    expect(nestedDiff.unstaged.kind).toBe("unavailable");
+    expect(nestedDiff.changes.kind).toBe("unavailable");
     expect(JSON.stringify(nestedDiff)).not.toContain("private content");
     expect(
       (
@@ -1403,7 +1517,7 @@ describe("read-only Git workspace", () => {
           path: "ordinary",
           revision: snap.revision,
         })
-      ).unstaged.text,
+      ).changes.text,
     ).toContain("+working");
     expect(f.calls.every((args) => !args.includes("-C"))).toBe(true);
     await expect(fs.access(sentinel)).rejects.toThrow();

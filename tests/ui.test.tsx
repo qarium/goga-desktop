@@ -19,6 +19,7 @@ import {
 } from "@testing-library/react";
 import { App } from "../src/renderer/App";
 import { LaunchForm } from "../src/renderer/LaunchForm";
+import { ExistingTopicLaunchForm } from "./helpers/existing-pipeline-draft";
 import { Settings } from "../src/renderer/Settings";
 const project = {
   id: "p",
@@ -119,7 +120,7 @@ describe("Desktop shell", () => {
   });
   it("keeps skipped cards and gates launch until the matching Goga preview arrives", async () => {
     render(
-      <LaunchForm
+      <ExistingTopicLaunchForm
         project={project}
         onLaunched={() => {}}
         onCancel={() => {}}
@@ -134,10 +135,14 @@ describe("Desktop shell", () => {
         }),
     );
     fireEvent.click(checkbox);
-    expect(screen.queryByRole("button", { name: "Запустить" })).toBeNull();
-    expect(screen.queryByRole("checkbox", { name: /verify/ })).toBeNull();
+    expect((executionButton() as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole("checkbox", { name: /verify/ })).toBe(checkbox);
+    expect((checkbox as HTMLInputElement).checked).toBe(false);
     expect(checkbox.isConnected).toBe(true);
-    resolve({ ...result, stages: [result.stages[0]] });
+    expect(document.querySelector(".loading-state")).toBeNull();
+    fireEvent.click(executionButton());
+    expect(api.launch).not.toHaveBeenCalled();
+    await act(async () => resolve({ ...result, stages: [result.stages[0]] }));
     await waitFor(() =>
       expect(api.preview).toHaveBeenLastCalledWith(
         expect.objectContaining({ skips: ["verify"] }),
@@ -165,7 +170,7 @@ describe("Desktop shell", () => {
         }),
     );
     render(
-      <LaunchForm
+      <ExistingTopicLaunchForm
         project={project}
         onLaunched={() => {}}
         onCancel={() => {}}
@@ -187,7 +192,7 @@ describe("Desktop shell", () => {
       screen.getByRole("checkbox", { name: /quality-check/ }),
     ).toBeTruthy();
   });
-  it("shows exactly two topic modes and one source selector for new work", async () => {
+  it("shows three launch modes with no-topic default and one source selector for new work", async () => {
     render(
       <LaunchForm
         project={project}
@@ -196,7 +201,11 @@ describe("Desktop shell", () => {
       />,
     );
     const mode = await screen.findByRole("radio", { name: "Создать новый" });
-    expect(screen.getAllByRole("radio")).toHaveLength(2);
+    expect(screen.getAllByRole("radio")).toHaveLength(3);
+    expect(screen.getByRole("radio", { name: "Без топика" })).toHaveProperty(
+      "checked",
+      true,
+    );
     fireEvent.click(mode);
     expect(screen.getAllByLabelText("Исходная ветка")).toHaveLength(1);
     openCatalog(screen.getByRole("combobox", { name: "Исходная ветка" }));
@@ -216,7 +225,7 @@ describe("Desktop shell", () => {
       ],
     });
     render(
-      <LaunchForm
+      <ExistingTopicLaunchForm
         project={project}
         onLaunched={() => {}}
         onCancel={() => {}}
@@ -277,7 +286,7 @@ it.each([false, true])(
   async (selected) => {
     const onLaunched = vi.fn();
     render(
-      <LaunchForm
+      <ExistingTopicLaunchForm
         project={project}
         onLaunched={onLaunched}
         onCancel={() => {}}
@@ -316,12 +325,15 @@ it.each([false, true])(
 );
 it("clean consent resets on project change and form remount", async () => {
   const props = { project, onLaunched: () => {}, onCancel: () => {} };
-  const view = render(<LaunchForm {...props} />);
+  const view = render(<ExistingTopicLaunchForm {...props} />);
   fireEvent.click(
     await screen.findByRole("checkbox", { name: "Начать с чистого состояния" }),
   );
   view.rerender(
-    <LaunchForm {...props} project={{ ...project, id: "other" }} />,
+    <ExistingTopicLaunchForm
+      {...props}
+      project={{ ...project, id: "other" }}
+    />,
   );
   await waitFor(() =>
     expect(
@@ -336,7 +348,7 @@ it("clean consent resets on project change and form remount", async () => {
     screen.getByRole("checkbox", { name: "Начать с чистого состояния" }),
   );
   view.unmount();
-  render(<LaunchForm {...props} />);
+  render(<ExistingTopicLaunchForm {...props} />);
   expect(
     (
       (await screen.findByRole("checkbox", {
@@ -421,6 +433,7 @@ it("closing a nonselected tab preserves selection and an in-progress launch form
     screen.getByRole("tab", { name: /^a ·/ }).getAttribute("aria-selected"),
   ).toBe("true");
   await openCurrentLaunch();
+  fireEvent.click(await screen.findByRole("radio", { name: "Существующий" }));
   const draftEditor = (await screen.findByRole("textbox", {
     name: /Что нужно сделать/,
   })) as HTMLTextAreaElement;
@@ -558,7 +571,11 @@ it("uses actual checkout branch instead of a stale topic.current marker", async 
   api.discover.mockResolvedValue({ ...discovery, currentBranch: "main" });
   api.checkoutBranch = vi.fn(async () => "main");
   render(
-    <LaunchForm project={project} onCancel={() => {}} onLaunched={() => {}} />,
+    <ExistingTopicLaunchForm
+      project={project}
+      onCancel={() => {}}
+      onLaunched={() => {}}
+    />,
   );
   expect(
     await screen.findByLabelText("Текущая ветка checkout: main"),
@@ -570,7 +587,11 @@ it("uses actual checkout branch instead of a stale topic.current marker", async 
 });
 it("current topic launches without general checkbox or imaginary branch switching", async () => {
   render(
-    <LaunchForm project={project} onCancel={() => {}} onLaunched={() => {}} />,
+    <ExistingTopicLaunchForm
+      project={project}
+      onCancel={() => {}}
+      onLaunched={() => {}}
+    />,
   );
   expect(await screen.findByText("Переключение не требуется")).toBeTruthy();
   await screen.findByRole("combobox", { name: "Топик проекта" });
@@ -591,10 +612,10 @@ it("current topic launches without general checkbox or imaginary branch switchin
   );
 });
 it.each(["HEAD", "main", "feat/a"])(
-  "new topic from %s still warns about a new branch and switch",
+  "new topic from %s explains the isolated copy and unchanged primary branch",
   async (base) => {
     render(
-      <LaunchForm
+      <ExistingTopicLaunchForm
         project={project}
         onCancel={() => {}}
         onLaunched={() => {}}
@@ -609,7 +630,7 @@ it.each(["HEAD", "main", "feat/a"])(
     selectCatalog(screen.getByLabelText("Исходная ветка"), base);
     expect(
       screen.getByText(
-        `Создадим «new/work» от ${base === "HEAD" ? "feat/a" : base} и перейдём в ветку топика при запуске.`,
+        `Создадим «new/work» от ${base === "HEAD" ? "feat/a" : base} в отдельной рабочей копии и запустим конвейер в ней. Исходный проект останется на своей ветке.`,
       ),
     ).toBeTruthy();
     expect(screen.queryByText("Переключение не требуется")).toBeNull();
@@ -618,7 +639,11 @@ it.each(["HEAD", "main", "feat/a"])(
 it("stale checkout before launch updates context and revokes consent without launching", async () => {
   api.checkoutBranch = vi.fn(async () => "main");
   render(
-    <LaunchForm project={project} onCancel={() => {}} onLaunched={() => {}} />,
+    <ExistingTopicLaunchForm
+      project={project}
+      onCancel={() => {}}
+      onLaunched={() => {}}
+    />,
   );
   await screen.findByRole("checkbox", { name: /verify/ });
   fireEvent.click(
@@ -644,7 +669,11 @@ it("stale checkout before launch updates context and revokes consent without lau
 
 it("refreshes actual branch on window focus and revokes previous consent", async () => {
   render(
-    <LaunchForm project={project} onCancel={() => {}} onLaunched={() => {}} />,
+    <ExistingTopicLaunchForm
+      project={project}
+      onCancel={() => {}}
+      onLaunched={() => {}}
+    />,
   );
   await screen.findByRole("checkbox", { name: /verify/ });
   api.checkoutBranch.mockResolvedValue("external");
@@ -667,7 +696,11 @@ it("selects topic matching checkout rather than first or stale current flag", as
     ],
   });
   render(
-    <LaunchForm project={project} onCancel={() => {}} onLaunched={() => {}} />,
+    <ExistingTopicLaunchForm
+      project={project}
+      onCancel={() => {}}
+      onLaunched={() => {}}
+    />,
   );
   expect(await screen.findByText("Переключение не требуется")).toBeTruthy();
   await screen.findByRole("combobox", { name: "Топик проекта" });
@@ -678,7 +711,11 @@ it("selects topic matching checkout rather than first or stale current flag", as
 
 it("branch refresh resets skipped cards and shows all stages from the new checkout", async () => {
   render(
-    <LaunchForm project={project} onCancel={() => {}} onLaunched={() => {}} />,
+    <ExistingTopicLaunchForm
+      project={project}
+      onCancel={() => {}}
+      onLaunched={() => {}}
+    />,
   );
   await screen.findByRole("checkbox", { name: /verify/ });
   api.preview.mockResolvedValue({ ...result, stages: [result.stages[1]] });
@@ -710,7 +747,11 @@ it("does not invalidate fresh preview when the catch branch reread repeats the s
     .mockResolvedValueOnce("main")
     .mockImplementationOnce(() => new Promise((resolve) => (reread = resolve)));
   render(
-    <LaunchForm project={project} onCancel={() => {}} onLaunched={() => {}} />,
+    <ExistingTopicLaunchForm
+      project={project}
+      onCancel={() => {}}
+      onLaunched={() => {}}
+    />,
   );
   await screen.findByRole("checkbox", { name: /verify/ });
   fireEvent.click(executionButton());
@@ -736,7 +777,11 @@ it("localizes owned controls, shows pipeline id and preserves workflow names and
     workflows: ["workflow-original"],
   });
   render(
-    <LaunchForm project={project} onLaunched={() => {}} onCancel={() => {}} />,
+    <ExistingTopicLaunchForm
+      project={project}
+      onLaunched={() => {}}
+      onCancel={() => {}}
+    />,
   );
   const pipeline = await screen.findByRole("combobox", { name: "Конвейер" });
   expect(
@@ -774,7 +819,11 @@ it("searches shared pipeline catalogs while keeping decorated labels separate fr
     ],
   });
   render(
-    <LaunchForm project={project} onLaunched={() => {}} onCancel={() => {}} />,
+    <ExistingTopicLaunchForm
+      project={project}
+      onLaunched={() => {}}
+      onCancel={() => {}}
+    />,
   );
   const pipeline = await screen.findByRole("combobox", { name: "Конвейер" });
   expect(pipeline.tagName).toBe("BUTTON");
@@ -853,7 +902,7 @@ it.each([
   "reselecting the current %s preserves the ready launch preview",
   async (label, value) => {
     render(
-      <LaunchForm
+      <ExistingTopicLaunchForm
         project={project}
         onLaunched={() => {}}
         onCancel={() => {}}

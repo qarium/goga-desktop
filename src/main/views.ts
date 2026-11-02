@@ -1,6 +1,11 @@
+import {
+  dashboardViewportSchema,
+  type DashboardViewport,
+} from "../shared/dashboard-viewport";
 import path from "node:path";
+import { randomUUID } from "node:crypto";
 import { AFM_EMBEDDED_STYLE } from "./afm-style";
-import { WebContentsView, session, dialog, type BrowserWindow } from "electron";
+import { WebContentsView, session, ipcMain, type BrowserWindow, type IpcMainEvent } from "electron";
 import {
   allowedDashboardURL,
   sameDashboardOrigin,
@@ -23,6 +28,8 @@ export class DashboardViews {
   private closed = new Set<string>();
   private disposed = false;
   private selected: string | null = null;
+  private viewport: DashboardViewport | null = null;
+  private stageCancels=new Map<string,()=>void>();
   constructor(
     private win: BrowserWindow,
     private onFocus: (id: string) => void,
@@ -56,37 +63,15 @@ export class DashboardViews {
         spellcheck: false,
       },
     });
-    // Keep backgroundThrottling enabled: disabling it makes document.hidden false in Electron,
-    // which suppresses AFM's own notifications. Its 3s polling continues in a hidden view.
-    const consentAbort = new AbortController();
-    let notificationsAllowed = false;
+    // Stage observation and notifications live in Desktop main; this embedded
+    // page stays unprivileged and never sends duplicate browser notifications.
     const alive = () =>
       !this.disposed &&
       !this.closed.has(id) &&
       this.pages.get(id)?.view === view &&
       !view.webContents.isDestroyed();
-    isolated.setPermissionCheckHandler(
-      (contents, permission, origin) =>
-        (contents === null || contents.id === view.webContents.id) &&
-        permission === "notifications" &&
-        alive() &&
-        notificationsAllowed &&
-        sameDashboardOrigin(url, origin),
-    );
-    isolated.setPermissionRequestHandler(
-      (contents, permission, callback, details) => {
-        if (
-          !alive() ||
-          contents.id !== view.webContents.id ||
-          permission !== "notifications" ||
-          !sameDashboardOrigin(url, details.requestingUrl)
-        ) {
-          callback(false);
-          return;
-        }
-        callback(notificationsAllowed);
-      },
-    );
+    isolated.setPermissionCheckHandler(() => false);
+    isolated.setPermissionRequestHandler((_contents,_permission,callback)=>callback(false));
     const denyDownload = (event: Electron.Event) => event.preventDefault();
     isolated.on("will-download", denyDownload);
     isolated.webRequest.onBeforeRequest(
@@ -159,8 +144,6 @@ export class DashboardViews {
       failed: false,
       loaded: false,
       cleanup: () => {
-        consentAbort.abort();
-        notificationsAllowed = false;
         isolated.setPermissionCheckHandler(() => false);
         isolated.setPermissionRequestHandler((_c, _p, cb) => cb(false));
         isolated.webRequest.onBeforeRequest(null);
@@ -170,29 +153,16 @@ export class DashboardViews {
     });
     // BrowserWindow's own shell is a native child too. Dashboards must stay
     // above that opaque surface, but below any already-mounted topic overlay.
-    const shellIndex = this.win.contentView.children?.findIndex(
-      (child) => "webContents" in child && child.webContents === this.win.webContents,
-    ) ?? -1;
+    const shellIndex =
+      this.win.contentView.children?.findIndex(
+        (child) =>
+          "webContents" in child && child.webContents === this.win.webContents,
+      ) ?? -1;
     this.win.contentView.addChildView(view, shellIndex + 1);
     view.setVisible(false);
     this.layout();
     try {
-      // Electron exposes only granted/denied through its boolean check handler,
-      // and notifications checks can have null WebContents. AFM disables its bell
-      // on denied, so obtain explicit consent before AFM reads Notification.permission.
-      const consent = await dialog.showMessageBox(this.win, {
-        type: "question",
-        signal: consentAbort.signal,
-        title: "Уведомления конвейера",
-        message: "Разрешить уведомления для этого запуска?",
-        detail:
-          "Включение и выключение уведомлений остаётся в панели конвейера. Системная доставка macOS зависит от подписи приложения и настроек уведомлений.",
-        buttons: ["Разрешить", "Не разрешать"],
-        defaultId: 1,
-        cancelId: 1,
-      });
-      if (!alive()) return;
-      notificationsAllowed = consent.response === 0;
+      // System consent is a single Desktop preference, never a load prerequisite.
       await wc.loadURL(url);
       if (!alive() || this.pages.get(id)?.failed) return;
       if (!sameDashboardOrigin(url, wc.getURL())) {
@@ -211,17 +181,54 @@ export class DashboardViews {
     }
   }
   select(id: string | null) {
+    if(this.selected!==id)this.cancelStageNavigation();
     this.selected = id && this.closed.has(id) ? null : id;
     for (const [key, { view, failed, loaded }] of this.pages)
       view.setVisible(key === id && !failed && loaded);
     this.layout();
   }
+  isSelected(id:string){const entry=this.pages.get(id);return !this.disposed&&this.selected===id&&!!entry?.loaded&&!entry.failed;}
+  cancelStageNavigation(){for(const cancel of [...this.stageCancels.values()])cancel();}
+  focusStage(id:string,stageId:string):Promise<boolean>{
+    this.cancelStageNavigation();
+    const entry=this.pages.get(id);
+    if(!entry||!this.isSelected(id)||entry.view.webContents.isDestroyed())return Promise.resolve(false);
+    const wc=entry.view.webContents,requestId=randomUUID();
+    return new Promise(resolve=>{
+      let finished=false;
+      const finish=(value:boolean)=>{if(finished)return;finished=true;clearTimeout(timer);ipcMain.removeListener("goga:afm-stage-selected",ack);this.stageCancels.delete(id);resolve(value);};
+      const cancel=()=>{try{wc.send("goga:afm-cancel-stage",requestId);}catch{}finish(false);};
+      const ack=(event:IpcMainEvent,value:unknown)=>{
+        if(event.sender.id!==wc.id||event.senderFrame!==wc.mainFrame||!sameDashboardOrigin(entry.url,event.senderFrame?.url??"")||!value||typeof value!=="object")return;
+        const result=value as {requestId?:unknown;stageId?:unknown;selected?:unknown};
+        if(result.requestId!==requestId||result.stageId!==stageId)return;
+        finish(result.selected===true&&this.isSelected(id)&&sameDashboardOrigin(entry.url,wc.getURL()));
+      };
+      const timer=setTimeout(()=>finish(false),3000);
+      this.stageCancels.set(id,cancel);
+      ipcMain.on("goga:afm-stage-selected",ack);
+      try{wc.send("goga:afm-select-stage",{requestId,stageId});}catch{finish(false);}
+    });
+  }
+  setViewport(bounds: DashboardViewport) {
+    this.viewport = dashboardViewportSchema.parse(bounds);
+    this.layout();
+  }
   private layout() {
     const [w, h] = this.win.getContentSize();
+    const bounds = this.viewport ?? viewBounds(w, h);
+    const x = Math.min(bounds.x, w),
+      y = Math.min(bounds.y, h);
     for (const { view } of this.pages.values())
-      view.setBounds(viewBounds(w, h));
+      view.setBounds({
+        x,
+        y,
+        width: Math.min(bounds.width, Math.max(0, w - x)),
+        height: Math.min(bounds.height, Math.max(0, h - y)),
+      });
   }
   remove(id: string) {
+    this.stageCancels.get(id)?.();
     this.closed.add(id); // Prevent a stale runs event from recreating this page.
     const entry = this.pages.get(id);
     this.pages.delete(id);

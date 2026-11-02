@@ -1,3 +1,5 @@
+import type { TopicRemovalRequest, TopicRemovalPreview, TopicRemovalResult, TopicCloneCleanupRequest } from "./topic-removal";
+import type { DashboardViewport } from "./dashboard-viewport";
 import type {
   OverviewDirectory,
   OverviewFile,
@@ -150,6 +152,15 @@ export interface SettingsFile {
   version: string;
 }
 export interface DesktopAPI {
+  notifications(page?: import("./notifications").NotificationPageRequest): Promise<import("./notifications").NotificationSnapshot>;
+  markNotificationRead(id: string, expectedSequence?: number): Promise<import("./notifications").NotificationSnapshot>;
+  setNotificationView(runId: string | null): Promise<void>;
+  markAllNotificationsRead(throughSequence: number): Promise<import("./notifications").NotificationSnapshot>;
+  setSystemNotifications(enabled: boolean): Promise<import("./notifications").NotificationSnapshot>;
+  prepareNotificationOpen(id: string): Promise<{ticket:string;run:Run;stageId?:string}>;
+  completeNotificationOpen(ticket: string): Promise<import("./notifications").NotificationSnapshot>;
+  onNotifications(callback:(value:import("./notifications").NotificationSnapshot)=>void):()=>void;
+  onOpenNotification(callback:(id:string)=>void):()=>void;
   reportOverviewCloseState(paths: string[], busy: boolean): Promise<void>;
   listOverviewDirectory(
     scope: ScopeRef,
@@ -336,6 +347,9 @@ export interface DesktopAPI {
     year: string,
     target: TopicTarget,
   ): Promise<TopicDetails>;
+  prepareTopicRemoval(request: TopicRemovalRequest): Promise<TopicRemovalPreview>;
+  executeTopicRemoval(input: { projectId: string; token: string }): Promise<TopicRemovalResult>;
+  prepareTopicCloneCleanup(input: TopicCloneCleanupRequest): Promise<ContextDeletionPreview>;
   prepareTopicOperation(
     request: TopicOperationRequest,
   ): Promise<TopicOperationPlan>;
@@ -378,6 +392,7 @@ export interface DesktopAPI {
   closeRun(id: string): Promise<boolean>;
   stopRun(id: string): Promise<void>;
   selectRun(id: string | null): Promise<void>;
+  setDashboardViewport?(bounds: DashboardViewport): Promise<void>;
   listSettings(): Promise<{ profiles: string[] }>;
   readSettings(kind: SettingsKind, name?: string): Promise<SettingsFile>;
   saveSettings(

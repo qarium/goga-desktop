@@ -102,3 +102,28 @@ it("preserves an existing destination child draft during a late folder rename co
     store.getSnapshot().order.length,
   );
 });
+
+it("keeps source text, baseline and editor memory after a readable save conflict", async () => {
+  const { store, api } = setup();
+  await store.open("src/a.ts");
+  store.edit("src/a.ts", "unsaved source");
+  const memory = store.getSnapshot().files["src/a.ts"].memory;
+  memory.scrollTop = 42;
+  const reason =
+    "Конфликт сохранения: файл изменился после открытия. Файл не перезаписан. Обновите файл перед повторным сохранением.";
+  api.saveOverviewFile.mockRejectedValueOnce(
+    Error(
+      `Error invoking remote method 'goga:save-overview-file': Error: ${reason}`,
+    ),
+  );
+  expect(await store.save("src/a.ts")).toBe(false);
+  const file = store.getSnapshot().files["src/a.ts"];
+  expect(file.text).toBe("unsaved source");
+  expect(file.document.text).toBe("disk");
+  expect(file.document.version).toBe("v-src/a.ts");
+  expect(file.memory).toBe(memory);
+  expect(file.memory.scrollTop).toBe(42);
+  expect(file.error).toBe(reason + " Ваш черновик остался в редакторе.");
+  expect(api.saveOverviewFile).toHaveBeenCalledTimes(1);
+  store.dispose();
+});

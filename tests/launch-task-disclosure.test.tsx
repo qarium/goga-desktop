@@ -10,7 +10,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { LaunchForm } from "../src/renderer/LaunchForm";
+import { ExistingTopicLaunchForm as LaunchForm } from "./helpers/existing-pipeline-draft";
 import { createDraftStore } from "../src/renderer/task-drafts";
 
 const project = { id: "p", name: "Project", path: "/fixture/p" };
@@ -131,35 +131,54 @@ it("toggles the same editor without reading again, preserves edits and sends the
     taskVersion: "v1",
   });
 });
-it("keeps empty replacement consent outside the collapsed editor", async () => {
-  form();
-  await loaded();
-  const { summary, details } = disclosure();
-  await userEvent.click(summary);
-  fireEvent.change(
-    screen.getByRole("textbox", { name: "Что нужно сделать?" }),
-    { target: { value: "" } },
-  );
-  await userEvent.click(summary);
-  const consent = screen.getByRole("checkbox", {
-    name: "Подтверждаю сохранение пустой задачи",
-  });
-  expect(details.contains(consent)).toBe(false);
-  expect(
-    screen
-      .getByRole("button", { name: "Сохранить и запустить" })
-      .hasAttribute("disabled"),
-  ).toBe(true);
-  await userEvent.click(consent);
-  await userEvent.click(
-    screen.getByRole("button", { name: "Сохранить и запустить" }),
-  );
-  await waitFor(() => expect(api.launch).toHaveBeenCalledTimes(1));
-  expect(api.launch.mock.calls[0][0]).toMatchObject({
-    task: "",
-    confirmEmptyTask: true,
-  });
-});
+it.each([false, true])(
+  "keeps empty replacement consent outside the collapsed editor (clone=%s)",
+  async (clone) => {
+    if (clone)
+      render(
+        <LaunchForm
+          project={project}
+          owner={{
+            projectId: project.id,
+            topic: "main",
+            branch: "main",
+            year: "2026",
+            contextId: "ctx-" + "c".repeat(64),
+            revision: "00000000-0000-4000-8000-000000000003",
+          }}
+          onCancel={() => {}}
+          onLaunched={() => {}}
+        />,
+      );
+    else form();
+    await loaded();
+    const { summary, details } = disclosure();
+    await userEvent.click(summary);
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Что нужно сделать?" }),
+      { target: { value: "" } },
+    );
+    await userEvent.click(summary);
+    const consent = screen.getByRole("checkbox", {
+      name: "Подтверждаю сохранение пустой задачи",
+    });
+    expect(details.contains(consent)).toBe(false);
+    expect(
+      screen
+        .getByRole("button", { name: "Сохранить и запустить" })
+        .hasAttribute("disabled"),
+    ).toBe(true);
+    await userEvent.click(consent);
+    await userEvent.click(
+      screen.getByRole("button", { name: "Сохранить и запустить" }),
+    );
+    await waitFor(() => expect(api.launch).toHaveBeenCalledTimes(1));
+    expect(api.launch.mock.calls[0][0]).toMatchObject({
+      task: "",
+      confirmEmptyTask: true,
+    });
+  },
+);
 it("reopens the form collapsed while keeping its draft", async () => {
   const drafts = store();
   const view = form(drafts);
@@ -209,39 +228,50 @@ it("collapses when changing from an existing task to a new topic", async () => {
   ).toHaveProperty("value", "");
 });
 
-it("keeps the clone's nonempty-task prerequisite visible while collapsed", async () => {
-  api.readTopicTask.mockResolvedValue({
-    text: "",
-    exists: false,
-    version: "v1",
-    path: "todo.md",
-    catalogState: "missing-local-metadata",
-  });
-  render(
-    <LaunchForm
-      project={project}
-      owner={{
-        projectId: project.id,
-        topic: "main",
-        branch: "main",
-        year: "2026",
-        contextId: "ctx-" + "a".repeat(64),
-        revision: "00000000-0000-4000-8000-000000000001",
-      }}
-      onCancel={() => {}}
-      onLaunched={() => {}}
-    />,
-  );
-  const reason = await screen.findByText(
-    "Для запуска в этой копии нужна непустая задача.",
-  );
-  expect(disclosure().details.open).toBe(false);
-  expect(reason.closest("details")).toBeNull();
-  expect(
-    screen.getByRole("button", { name: "Запустить" }).hasAttribute("disabled"),
-  ).toBe(true);
-  expect(api.launch).not.toHaveBeenCalled();
-});
+it.each([
+  { text: "", exists: false, catalogState: "missing-local-metadata" },
+  { text: "", exists: true },
+  { text: "  ", exists: true },
+])(
+  "allows an unchanged clone task $text (exists=$exists) without opening the editor",
+  async (document) => {
+    api.readTopicTask.mockResolvedValue({
+      ...document,
+      version: "v1",
+      path: "todo.md",
+    });
+    const owner = {
+      projectId: project.id,
+      topic: "main",
+      branch: "main",
+      year: "2026",
+      contextId: "ctx-" + "a".repeat(64),
+      revision: "00000000-0000-4000-8000-000000000001",
+    };
+    render(
+      <LaunchForm
+        project={project}
+        owner={owner}
+        onCancel={() => {}}
+        onLaunched={() => {}}
+      />,
+    );
+    await loaded();
+    expect(disclosure().details.open).toBe(false);
+    expect(
+      screen.queryByText("Для запуска в этой копии нужна непустая задача."),
+    ).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Запустить" }));
+    await waitFor(() => expect(api.launch).toHaveBeenCalledTimes(1));
+    expect(api.launch.mock.calls[0][0]).toMatchObject({
+      context: owner,
+      task: document.text,
+      taskVersion: "v1",
+      confirmEmptyTask: false,
+      topic: { mode: "existing", topic: "main", branch: "main" },
+    });
+  },
+);
 
 it("separates the task textarea, hints and reload button with explicit spacing", async () => {
   const style = document.createElement("style");

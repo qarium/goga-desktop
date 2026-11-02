@@ -27,10 +27,33 @@ html.topic-popup-document {
   min-height: 0;
 }
 .topic-popup-error {
-  position: absolute;
-  top: 100%;
-  z-index: 35;
-  padding: 8px;
+  position: fixed;
+  top: 16px;
+  right: 16px;
+  z-index: 1001;
+  display: grid;
+  gap: 12px;
+  padding: 14px;
   width: 420px;
+  max-width: calc(100vw - 32px);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  box-sizing: border-box;
+  border: 1px solid var(--line);
+  border-radius: 10px;
   background: var(--surface);
+  box-shadow: 0 12px 32px #0006;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  text-align: left;
+}
+.topic-popup-error p {
+  margin: 0;
+}
+.topic-popup-error button {
+  justify-self: start;
+  max-width: 100%;
+  white-space: normal;
 }

@@ -117,7 +117,7 @@ const deletionSchema = z
     deletedAt: z.string().datetime().optional(),
   })
   .strict();
-const contextDeletionSchema = deletionSchema
+const trashFirstDeletionSchema = deletionSchema
   .omit({ archives: true })
   .extend({
     schemaVersion: z.literal(2),
@@ -141,6 +141,24 @@ const contextDeletionSchema = deletionSchema
     ]),
   })
   .strict();
+const contextDeletionSchema = z.discriminatedUnion("schemaVersion", [
+  trashFirstDeletionSchema,
+  trashFirstDeletionSchema.extend({
+    schemaVersion: z.literal(3),
+    flow: z.literal("clone-after-topic"),
+    primarySwitch: z.never().optional(),
+  }),
+]);
+export interface CloneRemovalBaseline {
+  owner: TopicContextRef;
+  path: string;
+  head: string;
+  fingerprint: string;
+  sourceRoot: { dev: number; ino: number };
+  sourceGit: { dev: number; ino: number };
+  primaryHead: string | null;
+  aheadCount: number;
+}
 export type ContextDeletionPlan = z.infer<typeof contextDeletionSchema>;
 export interface ContextCloneDeletionResult {
   token: string;
@@ -1533,11 +1551,46 @@ export class CloneManager {
     await visit(root);
     return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
   }
+  async captureRemovalBaseline(
+    ref: TopicContextRef,
+  ): Promise<CloneRemovalBaseline> {
+    const row = await this.resolve(ref),
+      snapshot = await this.deletionSnapshot(row);
+    const primaryHead = await this.primaryDeletionHead(row);
+    const primary = new Set(
+      primaryHead
+        ? (await this.git(["rev-list", primaryHead], row.projectPath))
+            .trim()
+            .split("\n")
+        : [],
+    );
+    const commits = (await this.git(["rev-list", snapshot.head], row.path, row))
+      .trim()
+      .split("\n");
+    return {
+      owner: worktreeContextRef(row),
+      path: row.path,
+      ...snapshot,
+      primaryHead,
+      aheadCount: commits.filter((oid) => !primary.has(oidSchema.parse(oid)))
+        .length,
+    };
+  }
+  async prepareContextCleanup(
+    ref: TopicContextRef,
+    guards: { active: boolean; current: boolean },
+    baseline?: CloneRemovalBaseline,
+  ): Promise<ContextDeletionPlan> {
+    return this.prepareContextDeletion(ref, guards, true, undefined, {
+      baseline,
+    });
+  }
   async prepareContextDeletion(
     ref: TopicContextRef,
     guards: { active: boolean; current: boolean },
     primaryTopicAbsent = false,
     primarySwitch?: DeletionSwitch,
+    cleanup?: { baseline?: CloneRemovalBaseline },
   ): Promise<ContextDeletionPlan> {
     this.deletionGuards({ ...guardsSchema.parse(guards), current: false });
     const initial = await this.resolve(ref);
@@ -1549,6 +1602,23 @@ export class CloneManager {
         throw changed();
       const snapshot = await this.deletionSnapshot(row);
       const primaryHead = await this.primaryDeletionHead(row);
+      if (cleanup) {
+        if (primaryHead !== null || primarySwitch) throw changed();
+        const baseline = cleanup.baseline;
+        if (
+          baseline &&
+          (JSON.stringify(baseline.owner) !==
+            JSON.stringify(worktreeContextRef(row)) ||
+            baseline.path !== row.path ||
+            baseline.head !== snapshot.head ||
+            baseline.fingerprint !== snapshot.fingerprint ||
+            JSON.stringify(baseline.sourceRoot) !==
+              JSON.stringify(snapshot.sourceRoot) ||
+            JSON.stringify(baseline.sourceGit) !==
+              JSON.stringify(snapshot.sourceGit))
+        )
+          throw changed();
+      }
       // Compare commit identities from the two local repositories. No fetch,
       // temporary refs, publication, or object writes are needed for this preview.
       const primaryCommits = new Set(
@@ -1563,9 +1633,9 @@ export class CloneManager {
       )
         .trim()
         .split("\n");
-      const plan: ContextDeletionPlan = {
-        schemaVersion: 2,
-        flow: "trash-first",
+      const plan = contextDeletionSchema.parse({
+        schemaVersion: cleanup ? 3 : 2,
+        flow: cleanup ? "clone-after-topic" : "trash-first",
         token: randomUUID(),
         owner: worktreeContextRef(row),
         path: row.path,
@@ -1584,15 +1654,17 @@ export class CloneManager {
           true,
         ),
         primaryHistoryFingerprint: await this.primaryHistoryFingerprint(row),
-        aheadCount: cloneCommits.filter(
-          (oid) => !primaryCommits.has(oidSchema.parse(oid)),
-        ).length,
+        aheadCount:
+          cleanup?.baseline?.aheadCount ??
+          cloneCommits.filter(
+            (oid) => !primaryCommits.has(oidSchema.parse(oid)),
+          ).length,
         stage: "prepared",
         expiresAt: Date.now() + 120000,
         recordRevision: row.revision,
         deletionRevision: randomUUID(),
         tombstoneRevision: randomUUID(),
-      };
+      });
       await this.assertContextDeletionSnapshot(plan, row);
       await this.writeDeletion(plan, true);
       return plan;
@@ -1854,6 +1926,24 @@ export class CloneManager {
           "Топик удалён. Рабочая копия сохранена в Корзине.",
         );
       try {
+        if (plan.flow === "clone-after-topic") {
+          await this.assertContextDeletionSource(plan, row);
+          if (
+            (await this.primaryDeletionHead(row)) !== null ||
+            (await this.primaryDeletionFingerprint(row)) !==
+              plan.primaryFingerprint ||
+            (await this.primaryHistoryFingerprint(row)) !==
+              plan.primaryHistoryFingerprint
+          )
+            throw changed();
+          plan.stage = "completed";
+          await this.writeDeletion(plan);
+          return this.contextDeletionResult(
+            plan,
+            "success",
+            "Топик уже удалён. Рабочая копия перемещена в Корзину; повторная команда Goga не выполнялась.",
+          );
+        }
         const validatePrimarySnapshot = async () => {
           await this.assertContextDeletionSource(plan, row);
           if (plan.primarySwitch?.state === "applied") {
@@ -1997,7 +2087,9 @@ export class CloneManager {
         return this.contextDeletionResult(
           plan,
           "partial",
-          `Рабочая копия в Корзине, но топик не удалён: ${error instanceof Error ? error.message : "ошибка"}. Повторите завершение.`,
+          plan.flow === "clone-after-topic"
+            ? "Рабочая копия в Корзине, но завершение её очистки требует проверки. Goga повторно не запускается."
+            : `Рабочая копия в Корзине, но топик не удалён: ${error instanceof Error ? error.message : "ошибка"}. Повторите завершение.`,
         );
       }
     });

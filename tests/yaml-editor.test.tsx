@@ -8,6 +8,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import { EditorSelection, EditorState } from "@codemirror/state";
 import { EditorView, keymap } from "@codemirror/view";
 import {
   redo,
@@ -113,22 +114,122 @@ it("highlights YAML token categories without interpreting content as HTML or sca
   expect(view.dom.querySelector("img")).toBeNull();
   expect(view.state.doc.toString()).toBe(value);
 });
-it("does not consume Tab and destroys its view on unmount", () => {
-  const rendered = render(<YamlEditor value="a: 1" onChange={() => {}} />);
-  const view = editor();
+const pressTab = (view: EditorView, shiftKey = false) => {
   const event = new KeyboardEvent("keydown", {
     key: "Tab",
     code: "Tab",
+    keyCode: 9,
+    shiftKey,
     bubbles: true,
     cancelable: true,
   });
-  fireEvent(view.contentDOM, event);
-  expect(event.defaultPrevented).toBe(false);
+  act(() => {
+    fireEvent(view.contentDOM, event);
+  });
+  return event;
+};
+it("indents the current line with spaces and retains its cursor and undo history", () => {
+  const onChange = vi.fn();
+  render(<YamlEditor value="key: value" onChange={onChange} />);
+  const view = editor();
+  expect(pressTab(view).defaultPrevented).toBe(true);
+  expect(view.state.doc.toString()).toBe("  key: value");
+  expect(view.state.selection.main.head).toBe(2);
+  expect(onChange).toHaveBeenLastCalledWith("  key: value");
+  act(() => {
+    expect(undo(view)).toBe(true);
+  });
+  expect(view.state.doc.toString()).toBe("key: value");
+  act(() => {
+    expect(redo(view)).toBe(true);
+  });
+  expect(view.state.doc.toString()).toBe("  key: value");
+});
+it("indents selected lines, not the next line at an exact selection boundary", () => {
+  render(<YamlEditor value={"a: 1\nb: 2\nc: 3"} onChange={() => {}} />);
+  const view = editor();
+  act(() => view.dispatch({ selection: EditorSelection.range(10, 0) }));
+  pressTab(view);
+  expect(view.state.doc.toString()).toBe("  a: 1\n  b: 2\nc: 3");
+  expect(view.state.selection.main.anchor).toBe(14);
+  expect(view.state.selection.main.head).toBe(2);
+  pressTab(view, true);
+  expect(view.state.doc.toString()).toBe("a: 1\nb: 2\nc: 3");
+  expect(view.state.selection.main.anchor).toBe(10);
+  expect(view.state.selection.main.head).toBe(0);
+});
+it.each(["\r\n", "a: 1\r\n\r\nb: 2\nc: 3\r", "  a\r\n  \r\n b\nlast\r"])(
+  "preserves every line-ending byte when indenting and dedenting %j",
+  (value) => {
+    render(<YamlEditor value={value} onChange={() => {}} />);
+    const view = editor();
+    act(() => view.dispatch({ selection: { anchor: 0, head: value.length } }));
+    pressTab(view);
+    expect(view.state.doc.toString()).toBe(
+      value
+        .split("\n")
+        .map((line, i, all) =>
+          i === all.length - 1 && line === "" ? line : "  " + line,
+        )
+        .join("\n"),
+    );
+    pressTab(view, true);
+    expect(view.state.doc.toString()).toBe(value);
+  },
+);
+it("dedents only horizontal indentation, including blank CRLF lines", () => {
+  const value = "    a\r\n\r\n \r\nb\r";
+  render(<YamlEditor value={value} onChange={() => {}} />);
+  const view = editor();
+  act(() => view.dispatch({ selection: { anchor: 0, head: value.length } }));
+  expect(pressTab(view, true).defaultPrevented).toBe(true);
+  expect(view.state.doc.toString()).toBe("  a\r\n\r\n\r\nb\r");
+  act(() => {
+    expect(undo(view)).toBe(true);
+  });
+  expect(view.state.doc.toString()).toBe(value);
+});
+it("changes a line only once across multiple selections", () => {
+  render(
+    <YamlEditor
+      value={"abcd\nlast"}
+      onChange={() => {}}
+      extensions={EditorState.allowMultipleSelections.of(true)}
+    />,
+  );
+  const view = editor();
+  act(() =>
+    view.dispatch({
+      selection: EditorSelection.create([
+        EditorSelection.cursor(1),
+        EditorSelection.cursor(3),
+        EditorSelection.cursor(6),
+      ]),
+    }),
+  );
+  pressTab(view);
+  expect(view.state.doc.toString()).toBe("  abcd\n  last");
+  expect(view.state.selection.ranges.map((r) => r.head)).toEqual([3, 5, 10]);
+  pressTab(view, true);
+  expect(view.state.doc.toString()).toBe("abcd\nlast");
+  expect(view.state.selection.ranges.map((r) => r.head)).toEqual([1, 3, 6]);
+});
+it("leaves read-only documents and Escape-Tab keyboard focus navigation intact", () => {
+  const rendered = render(
+    <YamlEditor value="a: 1" onChange={() => {}} readOnly />,
+  );
+  const view = editor();
+  expect(pressTab(view).defaultPrevented).toBe(false);
+  expect(pressTab(view, true).defaultPrevented).toBe(false);
+  rendered.rerender(<YamlEditor value="a: 1" onChange={() => {}} />);
+  fireEvent.keyDown(view.contentDOM, { key: "Escape", keyCode: 27 });
+  expect(pressTab(view).defaultPrevented).toBe(false);
   expect(view.state.doc.toString()).toBe("a: 1");
   const destroy = vi.spyOn(view, "destroy");
   rendered.unmount();
   expect(destroy).toHaveBeenCalledOnce();
 });
+
 it("inserts only a newline on Enter rather than adding indentation", () => {
   render(<YamlEditor value={"body:\n  nested: value"} onChange={() => {}} />);
   const view = editor();
@@ -656,4 +757,39 @@ body: |
   act(() => expect(undo(view)).toBe(true));
   expect(keys()[0]).toBe("-foo");
   expect(view.state.doc.toString()).toBe(value);
+});
+
+it.each([
+  ["  \tfoo", "  foo"],
+  ["\t\tfoo", "      foo"],
+])("reduces the visual indentation by one unit for %j", (source, expected) => {
+  render(<YamlEditor value={source + "\r\n"} onChange={() => {}} />);
+  const view = editor();
+  pressTab(view, true);
+  expect(view.state.doc.toString()).toBe(expected + "\r\n");
+  act(() => {
+    expect(undo(view)).toBe(true);
+  });
+  expect(view.state.doc.toString()).toBe(source + "\r\n");
+});
+it("preserves cursors inside the retained indentation on dedent", () => {
+  render(
+    <YamlEditor
+      value="    foo"
+      onChange={() => {}}
+      extensions={EditorState.allowMultipleSelections.of(true)}
+    />,
+  );
+  const view = editor();
+  act(() =>
+    view.dispatch({
+      selection: EditorSelection.create([
+        EditorSelection.cursor(0),
+        EditorSelection.cursor(1),
+      ]),
+    }),
+  );
+  pressTab(view, true);
+  expect(view.state.doc.toString()).toBe("  foo");
+  expect(view.state.selection.ranges.map((r) => r.head)).toEqual([0, 1]);
 });

@@ -6,7 +6,12 @@ import { describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { HostService } from "../src/host/service";
-import { CommandExitError, NodeRunner, type Runner } from "../src/host/process";
+import {
+  ByteCommandError,
+  CommandExitError,
+  NodeRunner,
+  type Runner,
+} from "../src/host/process";
 import { DesktopStateStore } from "../src/host/desktop-state";
 import { CloneManager } from "../src/host/clones";
 import { worktreeContextRef } from "../src/shared/worktrees";
@@ -846,7 +851,7 @@ describe("header repository actions", () => {
 
 describe("native topic propagation", () => {
   it(
-    "syncs first then invokes exact native propagate in original, allowing dirty files and active runs",
+    "syncs then temporarily switches the original to topic and returns to the advanced base",
     fixtureScope.run(async () => {
       const f = await fixture();
       (f.service as unknown as { runList: Run[] }).runList = [
@@ -858,12 +863,16 @@ describe("native topic propagation", () => {
         } as Run,
       ];
       await fs.writeFile(path.join(f.owner.path, "topic"), "dirty clone\n");
-      await fs.writeFile(path.join(f.repo, "base"), "dirty original\n");
       const topicOid = await f.git(["rev-parse", "HEAD"], f.owner.path);
       f.intercept(async (exe, args, cwd) => {
         if (exe === "FAKE-GOGA") {
           expect(cwd).toBe(f.repo);
           expect(await f.git(["rev-parse", "refs/heads/alpha"])).toBe(topicOid);
+          expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe(
+            "alpha",
+          );
+          // Simulate the CLI advancing the base without checking it out.
+          await f.git(["update-ref", "refs/heads/main", topicOid]);
         }
       });
       const result = await f.action("propagate");
@@ -872,6 +881,9 @@ describe("native topic propagation", () => {
         action: "propagate",
         contextId: f.ref.contextId,
       });
+      expect(result.log.indexOf("Переключение исходного проекта")).toBeLessThan(
+        result.log.indexOf("Применение топика к базе:"),
+      );
       const native = f.calls.filter((c) => c.exe === "FAKE-GOGA");
       expect(native).toEqual([
         {
@@ -902,9 +914,297 @@ describe("native topic propagation", () => {
       expect(await fs.readFile(path.join(f.owner.path, "topic"), "utf8")).toBe(
         "dirty clone\n",
       );
-      expect(await fs.readFile(path.join(f.repo, "base"), "utf8")).toBe(
-        "dirty original\n",
+      expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe("main");
+      expect(await f.git(["rev-parse", "HEAD"])).toBe(topicOid);
+      expect(await fs.readFile(path.join(f.repo, "topic"), "utf8")).toBe(
+        "topic\n",
       );
+      const switches = f.calls.filter(
+        (c) => c.cwd === f.repo && c.args.includes("switch"),
+      );
+      expect(switches.map((c) => c.args.at(-1))).toEqual(["alpha", "main"]);
+      expect(f.calls.indexOf(pushes[0])).toBeLessThan(
+        f.calls.indexOf(switches[0]),
+      );
+      expect(f.calls.indexOf(switches[0])).toBeLessThan(
+        f.calls.indexOf(native[0]),
+      );
+      expect(f.calls.indexOf(native[0])).toBeLessThan(
+        f.calls.indexOf(switches[1]),
+      );
+    }),
+    gitIntegrationBudget(15000),
+  );
+  it.each(["dirty", "running"])(
+    "does not propagate when the original cannot safely switch: %s",
+    fixtureScope.run(async (mode) => {
+      const f = await fixture();
+      if (mode === "dirty")
+        await fs.writeFile(path.join(f.repo, "base"), "keep original edit\n");
+      else
+        (f.service as unknown as { runList: Run[] }).runList = [
+          {
+            id: "primary-active",
+            projectId: f.project.id,
+            status: "running",
+          } as Run,
+        ];
+      const result = await f.action("propagate");
+      expect(result.status, result.log).toBe("error");
+      expect(result.log).toMatch(/Синхронизация топика завершена/);
+      expect(f.calls.some((c) => c.exe === "FAKE-GOGA")).toBe(false);
+      expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe("main");
+      expect(await f.git(["rev-parse", "alpha"])).toBe(
+        await f.git(["rev-parse", "HEAD"], f.owner.path),
+      );
+      if (mode === "dirty")
+        expect(await fs.readFile(path.join(f.repo, "base"), "utf8")).toBe(
+          "keep original edit\n",
+        );
+      expect(
+        f.calls.some((c) =>
+          c.args.some((a) => ["reset", "stash", "--force"].includes(a)),
+        ),
+      ).toBe(false);
+    }),
+    gitIntegrationBudget(15000),
+  );
+  it.each(["success", "failure"])(
+    "reports failed return without losing files or the CLI result: %s",
+    fixtureScope.run(async (mode) => {
+      const f = await fixture();
+      f.intercept(async (exe) => {
+        if (exe !== "FAKE-GOGA") return;
+        await fs.writeFile(
+          path.join(f.repo, "keep-during-command"),
+          "do not discard\n",
+        );
+        if (mode === "failure")
+          throw new CommandExitError(
+            "fixture CLI failed",
+            1,
+            "CLI partial output",
+            "CLI diagnostic",
+          );
+      });
+      const result = await f.action("propagate");
+      expect(result.status, result.log).toBe("error");
+      expect(result.log).toMatch(/возврат|вернуть|возвращ/i);
+      expect(result.log).toContain("main");
+      expect(result.error).toMatch(/Не удалось вернуться.*main/);
+      expect(result.log).toContain(
+        mode === "failure" ? "CLI diagnostic" : "updated",
+      );
+      if (mode === "failure")
+        expect(result.log).toContain("fixture CLI failed");
+      expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe("alpha");
+      expect(
+        await fs.readFile(path.join(f.repo, "keep-during-command"), "utf8"),
+      ).toBe("do not discard\n");
+      expect(f.calls.filter((c) => c.exe === "FAKE-GOGA")).toHaveLength(1);
+      expect(
+        f.calls.some((c) =>
+          c.args.some((a) => ["reset", "stash", "--force"].includes(a)),
+        ),
+      ).toBe(false);
+    }),
+    gitIntegrationBudget(15000),
+  );
+  it(
+    "does not overwrite an external branch selection during propagate",
+    fixtureScope.run(async () => {
+      const f = await fixture();
+      await f.git(["branch", "external"]);
+      f.intercept(async (exe) => {
+        if (exe === "FAKE-GOGA") await f.git(["switch", "external"]);
+      });
+      const result = await f.action("propagate");
+      expect(result.status, result.log).toBe("error");
+      expect(result.log).toMatch(/возврат|вернуть|возвращ/i);
+      expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe("external");
+      expect(
+        f.calls
+          .filter((c) => c.cwd === f.repo && c.args.includes("switch"))
+          .map((c) => c.args.at(-1)),
+      ).toEqual(["alpha"]);
+      expect(f.calls.filter((c) => c.exe === "FAKE-GOGA")).toHaveLength(1);
+    }),
+    gitIntegrationBudget(15000),
+  );
+  it(
+    "reports a deleted original branch without recreating it",
+    fixtureScope.run(async () => {
+      const f = await fixture();
+      f.intercept(async (exe) => {
+        if (exe === "FAKE-GOGA") await f.git(["branch", "-D", "main"]);
+      });
+      const result = await f.action("propagate");
+      expect(result.status, result.log).toBe("error");
+      expect(result.log).toMatch(/возврат|вернуть|возвращ/i);
+      expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe("alpha");
+      expect(await f.git(["for-each-ref", "refs/heads/main"])).toBe("");
+      expect(f.calls.filter((c) => c.exe === "FAKE-GOGA")).toHaveLength(1);
+    }),
+    gitIntegrationBudget(15000),
+  );
+  it.each(["lost-exit", "owner-changed-after-switch"])(
+    "keeps uncertain native recovery and never invokes CLI or a return switch: %s",
+    fixtureScope.run(async (fault) => {
+      const f = await fixture();
+      f.intercept(async (_exe, args, cwd) => {
+        if (cwd !== f.repo || !args.includes("switch")) return;
+        await f.git(["switch", "alpha"]);
+        if (fault === "lost-exit")
+          throw new ByteCommandError(
+            "timeout",
+            true,
+            Buffer.alloc(0),
+            Buffer.from("synthetic lost exit"),
+          );
+        const store = new DesktopStateStore(f.home, path.join(f.root, "data"));
+        const doc = await store.read(f.project.id);
+        await store.save(
+          f.project.id,
+          { ...doc.value, executable: "CHANGED-GOGA" },
+          doc.version,
+        );
+      });
+      const result = await f.action("propagate");
+      expect(result.status, result.log).toBe("error");
+      expect(result.log).toMatch(/провер|восстановлен/i);
+      expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe("alpha");
+      expect(
+        f.calls.filter((c) => c.cwd === f.repo && c.args.includes("switch")),
+      ).toHaveLength(1);
+      expect(f.calls.some((c) => c.exe === "FAKE-GOGA")).toBe(false);
+      const journal = path.join(f.home, ".goga/desktop/git-operations");
+      const records = await fs.readdir(journal);
+      const retained = await Promise.all(
+        records
+          .filter((name) => name.endsWith(".json"))
+          .map(async (name) =>
+            JSON.parse(await fs.readFile(path.join(journal, name), "utf8")),
+          ),
+      );
+      expect(
+        retained.some(
+          (record) => record.state === "uncertain" && record.recovery,
+        ),
+      ).toBe(true);
+    }),
+    gitIntegrationBudget(15000),
+  );
+  it(
+    "returns using the original project even when settings change during a failed CLI",
+    fixtureScope.run(async () => {
+      const f = await fixture();
+      f.intercept(async (exe) => {
+        if (exe !== "FAKE-GOGA") return;
+        const store = new DesktopStateStore(f.home, path.join(f.root, "data"));
+        const doc = await store.read(f.project.id);
+        await store.save(
+          f.project.id,
+          { ...doc.value, executable: "CHANGED-GOGA" },
+          doc.version,
+        );
+        throw new CommandExitError(
+          "synthetic command failed",
+          1,
+          "partial command result",
+          "command diagnostic",
+        );
+      });
+      const result = await f.action("propagate");
+      expect(result.status, result.log).toBe("error");
+      expect(result.log).toContain("command diagnostic");
+      expect(result.log).toContain("Исходная ветка main восстановлена");
+      expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe("main");
+      expect(f.calls.filter((c) => c.exe === "FAKE-GOGA")).toHaveLength(1);
+    }),
+    gitIntegrationBudget(15000),
+  );
+  it(
+    "returns to the actual starting branch rather than the configured base",
+    fixtureScope.run(async () => {
+      const f = await fixture();
+      await f.git(["switch", "-c", "workspace"]);
+      const journal = path.join(f.home, ".goga/desktop/git-operations");
+      const readRecord = async () => {
+        const names = (await fs.readdir(journal)).filter((name) =>
+          name.endsWith(".json"),
+        );
+        expect(names).toHaveLength(1); // The native journal has one slot per repository.
+        return JSON.parse(
+          await fs.readFile(path.join(journal, names[0]), "utf8"),
+        );
+      };
+      let outwardId = "";
+      f.intercept(async (exe) => {
+        if (exe !== "FAKE-GOGA") return;
+        expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe("alpha");
+        const outward = await readRecord();
+        expect(outward).toMatchObject({ state: "completed", recovery: null });
+        outwardId = outward.id;
+      });
+      const result = await f.action("propagate");
+      expect(result.status, result.log).toBe("success");
+      expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe(
+        "workspace",
+      );
+      expect(
+        f.calls
+          .filter((c) => c.cwd === f.repo && c.args.includes("switch"))
+          .map((c) => c.args.at(-1)),
+      ).toEqual(["alpha", "workspace"]);
+      const returned = await readRecord();
+      expect(outwardId).not.toBe("");
+      expect(returned).toMatchObject({ state: "completed", recovery: null });
+      expect(returned.id).not.toBe(outwardId);
+    }),
+    gitIntegrationBudget(15000),
+  );
+  it(
+    "does not claim restoration after a lost return-switch result",
+    fixtureScope.run(async () => {
+      const f = await fixture();
+      f.intercept(async (_exe, args, cwd) => {
+        if (
+          cwd !== f.repo ||
+          !args.includes("switch") ||
+          args.at(-1) !== "main"
+        )
+          return;
+        await f.git(["switch", "main"]);
+        throw new ByteCommandError(
+          "timeout",
+          true,
+          Buffer.alloc(0),
+          Buffer.alloc(0),
+        );
+      });
+      const result = await f.action("propagate");
+      expect(result.status, result.log).toBe("error");
+      expect(result.error).toMatch(/Не удалось вернуться.*main/);
+      expect(result.log).toContain("updated");
+      expect(result.log).not.toContain("Исходная ветка main восстановлена");
+      expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe("main");
+      expect(
+        f.calls.filter((c) => c.cwd === f.repo && c.args.includes("switch")),
+      ).toHaveLength(2);
+      expect(f.calls.filter((c) => c.exe === "FAKE-GOGA")).toHaveLength(1);
+      const journal = path.join(f.home, ".goga/desktop/git-operations");
+      const records = await Promise.all(
+        (await fs.readdir(journal))
+          .filter((name) => name.endsWith(".json"))
+          .map(async (name) =>
+            JSON.parse(await fs.readFile(path.join(journal, name), "utf8")),
+          ),
+      );
+      expect(
+        records.some(
+          (record) => record.state === "uncertain" && record.recovery,
+        ),
+      ).toBe(true);
     }),
     gitIntegrationBudget(15000),
   );
@@ -960,18 +1260,28 @@ describe("native topic propagation", () => {
         settings.version,
       );
       f.intercept(async (exe) => {
-        if (exe === "FAKE-GOGA")
+        if (exe === "FAKE-GOGA") {
+          expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe(
+            "alpha",
+          );
           throw new CommandExitError(
             "native failed propagate-fixture-secret",
             1,
             "native partial output",
             "https://user:credential@example.invalid/path?token=tokenvalue",
           );
+        }
       });
       const result = await f.action("propagate");
       expect(result.status).toBe("error");
       expect(result.log).toMatch(/Синхронизация топика завершена/);
       expect(result.log).toContain("native partial output");
+      expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe("main");
+      expect(
+        f.calls
+          .filter((c) => c.cwd === f.repo && c.args.includes("switch"))
+          .map((c) => c.args.at(-1)),
+      ).toEqual(["alpha", "main"]);
       expect(result.log.length).toBeLessThanOrEqual(65536);
       expect(JSON.stringify(result)).not.toMatch(
         /propagate-fixture-secret|credential|tokenvalue/,
@@ -1307,6 +1617,12 @@ describe("explicit card propagation", () => {
         path.join(f.repo, ".git/config"),
         "utf8",
       );
+      f.intercept(async (exe) => {
+        if (exe === "FAKE-GOGA")
+          expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe(
+            "alpha",
+          );
+      });
       const result = await f.service.runRepositoryAction(
         request(f, true, "alpha", "release"),
       );
@@ -1350,12 +1666,18 @@ describe("explicit card propagation", () => {
     gitIntegrationBudget(15000),
   );
   it(
-    "uses an exact normalized own local branch with no clone directly, without creating or switching",
+    "temporarily switches an exact own local branch with no clone and returns without creating a clone",
     fixtureScope.run(async () => {
       const f = await fixture();
       await f.git(["branch", "feature/Beta"]);
       const before = await f.service.listTopicContexts(f.project.id);
       f.calls.length = 0;
+      f.intercept(async (exe) => {
+        if (exe === "FAKE-GOGA")
+          expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe(
+            "feature/Beta",
+          );
+      });
       const result = await f.service.runRepositoryAction(
         request(f, false, "feature/Beta"),
       );
@@ -1378,6 +1700,32 @@ describe("explicit card propagation", () => {
       ]);
       expect(await f.service.listTopicContexts(f.project.id)).toEqual(before);
       expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe("main");
+    }),
+    gitIntegrationBudget(15000),
+  );
+  it(
+    "does not switch when the original is already on the selected topic",
+    fixtureScope.run(async () => {
+      const f = await fixture();
+      await f.git(["switch", "-c", "feature/Beta"]);
+      await fs.writeFile(
+        path.join(f.repo, "base"),
+        "keep existing topic edit\n",
+      );
+      const result = await f.service.runRepositoryAction(
+        request(f, false, "feature/Beta"),
+      );
+      expect(result.status, result.log).toBe("success");
+      expect(await f.git(["symbolic-ref", "--short", "HEAD"])).toBe(
+        "feature/Beta",
+      );
+      expect(
+        f.calls.filter((c) => c.cwd === f.repo && c.args.includes("switch")),
+      ).toHaveLength(0);
+      expect(f.calls.filter((c) => c.exe === "FAKE-GOGA")).toHaveLength(1);
+      expect(await fs.readFile(path.join(f.repo, "base"), "utf8")).toBe(
+        "keep existing topic edit\n",
+      );
     }),
     gitIntegrationBudget(15000),
   );
@@ -1650,60 +1998,63 @@ it(
   gitIntegrationBudget(15000),
 );
 
-it.each(["abort", "continue"] as const)(
-  "incoming sync conflict stops export and supports Desktop %s",
-  fixtureScope.run(async (action) => {
-    const f = await fixture();
-    await fs.writeFile(path.join(f.owner.path, "base"), "clone-conflict\n");
-    await f.git(["commit", "-am", "clone conflict"], f.owner.path);
-    const cloneBefore = await f.git(["rev-parse", "HEAD"], f.owner.path);
-    await f.git(["checkout", "alpha"]);
-    await fs.writeFile(path.join(f.repo, "base"), "primary-conflict\n");
-    await f.git(["commit", "-am", "primary conflict"]);
-    const incoming = await f.git(["rev-parse", "HEAD"]);
-    await f.git(["checkout", "main"]);
-    f.calls.length = 0;
-    const result = await f.action("sync");
-    expect(result.status).toBe("error");
-    expect(result.log).toMatch(/конфликт/i);
-    expect(
-      await f.git(
-        ["for-each-ref", "--format=%(refname)", "refs/desktop/topic-sync"],
-        f.owner.path,
-      ),
-    ).toBe("");
-    expect(f.calls.some((c) => c.args.includes("push"))).toBe(false);
-    expect(await f.git(["rev-parse", "alpha"])).toBe(incoming);
-    const snapshot = await f.service.readGitWorkspace(f.ref);
-    expect(snapshot.operation).toBe("merge");
-    if (action === "continue") {
-      await fs.writeFile(path.join(f.owner.path, "base"), "resolved both\n");
-      await f.git(["add", "base"], f.owner.path);
-    }
-    const current = await f.service.readGitWorkspace(f.ref);
-    const followup = await f.service.prepareGitMergeOperation({
-      scope: f.ref,
-      revision: current.revision,
-      action,
-    });
-    expect(
-      (await f.service.executeGitMergeOperation(followup.token)).status,
-    ).toBe("success");
-    if (action === "abort")
-      expect(await f.git(["rev-parse", "HEAD"], f.owner.path)).toBe(
-        cloneBefore,
-      );
-    else {
-      const merged = await f.git(["rev-parse", "HEAD"], f.owner.path);
-      expect((await f.action("sync")).status).toBe("success");
-      expect(await f.git(["rev-parse", "alpha"])).toBe(merged);
-      expect(await fs.readFile(path.join(f.owner.path, "base"), "utf8")).toBe(
-        "resolved both\n",
-      );
-    }
-  }),
-  gitIntegrationBudget(15000),
-);
+for (const action of ["abort", "continue"] as const)
+  it(
+    `incoming sync conflict stops export and supports Desktop ${action}`,
+    fixtureScope.run(async () => {
+      const f = await fixture();
+      await fs.writeFile(path.join(f.owner.path, "base"), "clone-conflict\n");
+      await f.git(["commit", "-am", "clone conflict"], f.owner.path);
+      const cloneBefore = await f.git(["rev-parse", "HEAD"], f.owner.path);
+      await f.git(["checkout", "alpha"]);
+      await fs.writeFile(path.join(f.repo, "base"), "primary-conflict\n");
+      await f.git(["commit", "-am", "primary conflict"]);
+      const incoming = await f.git(["rev-parse", "HEAD"]);
+      await f.git(["checkout", "main"]);
+      f.calls.length = 0;
+      const result = await f.action("sync");
+      expect(result.status).toBe("error");
+      expect(result.log).toMatch(/конфликт/i);
+      expect(
+        await f.git(
+          ["for-each-ref", "--format=%(refname)", "refs/desktop/topic-sync"],
+          f.owner.path,
+        ),
+      ).toBe("");
+      expect(f.calls.some((c) => c.args.includes("push"))).toBe(false);
+      expect(await f.git(["rev-parse", "alpha"])).toBe(incoming);
+      const snapshot = await f.service.readGitWorkspace(f.ref);
+      expect(snapshot.operation).toBe("merge");
+      if (action === "continue") {
+        await fs.writeFile(path.join(f.owner.path, "base"), "resolved both\n");
+        await f.git(["add", "base"], f.owner.path);
+      }
+      const current = await f.service.readGitWorkspace(f.ref);
+      const followup = await f.service.prepareGitMergeOperation({
+        scope: f.ref,
+        revision: current.revision,
+        action,
+      });
+      expect(
+        (await f.service.executeGitMergeOperation(followup.token)).status,
+      ).toBe("success");
+      if (action === "abort")
+        expect(await f.git(["rev-parse", "HEAD"], f.owner.path)).toBe(
+          cloneBefore,
+        );
+      else {
+        const merged = await f.git(["rev-parse", "HEAD"], f.owner.path);
+        expect((await f.action("sync")).status).toBe("success");
+        expect(await f.git(["rev-parse", "alpha"])).toBe(merged);
+        expect(await fs.readFile(path.join(f.owner.path, "base"), "utf8")).toBe(
+          "resolved both\n",
+        );
+      }
+    }),
+    // Continue performs both the merge resolution and a second full sync. Measured
+    // 38 s alone / >45 s in the three-worker run; keep a finite per-case budget.
+    gitIntegrationBudget(action === "continue" ? 20000 : 15000),
+  );
 
 it(
   "update-base uses local base when its branch is absent on remote",

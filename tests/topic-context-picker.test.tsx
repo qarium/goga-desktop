@@ -885,3 +885,192 @@ it("keeps the fallback picker open on its own tooltip scrollbar pointerdown, not
     foreign.remove();
   }
 });
+
+describe("persistent topic creation feedback", () => {
+  const created = record("new-topic", { branch: "new-topic" });
+  function begin() {
+    open();
+    fireEvent.change(screen.getByRole("combobox", { name: "Найти топик" }), {
+      target: { value: "new-topic" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Создать «new-topic» и подготовить конвейер",
+      }),
+    );
+  }
+  function hide() {
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "Escape" });
+    expect(screen.queryByRole("region", { name: "Выбор топика" })).toBeNull();
+  }
+  it("keeps creation visible outside the menu from base read through host completion", async () => {
+    const base = deferred<TopicBoardSnapshot>(),
+      flight = deferred<WorktreeRecord>();
+    const create = vi.fn(() => flight.promise),
+      onCreated = vi.fn();
+    Object.assign(api, {
+      readTopicBoard: vi.fn(() => base.promise),
+      createTopicContext: create,
+    });
+    mount({ onCreated });
+    begin();
+    const status = screen.getByRole("status", {
+      name: "Создаётся «new-topic»…",
+    });
+    expect(status.textContent).toContain("Создаётся…");
+    expect(status.closest(".topic-context-popup")).toBeNull();
+    expect(status.closest(".topic-context-picker")).not.toBeNull();
+    hide();
+    expect(screen.getByRole("status", { name: "Создаётся «new-topic»…" })).toBe(
+      status,
+    );
+    expect(create).not.toHaveBeenCalled();
+    await act(async () => base.resolve(board));
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole("button", { name: "Открыть карточку топика beta" }),
+    ).toBeTruthy();
+    expect(onCreated).not.toHaveBeenCalled();
+    open();
+    fireEvent.pointerDown(document.body);
+    expect(screen.queryByRole("grid")).toBeNull();
+    expect(
+      screen.getByRole("status", { name: "Создаётся «new-topic»…" }),
+    ).toBeTruthy();
+    expect(create).toHaveBeenCalledTimes(1);
+    await act(async () => flight.resolve(created));
+    expect(onCreated).toHaveBeenCalledExactlyOnceWith(created);
+    expect(
+      screen.queryByRole("status", { name: "Создаётся «new-topic»…" }),
+    ).toBeNull();
+    expect(api.launch).not.toHaveBeenCalled();
+  });
+  it("keeps a closed-menu creation error visible and retries only from its existing details", async () => {
+    const flight = deferred<WorktreeRecord>();
+    const create = vi.fn(() => flight.promise),
+      onCreated = vi.fn();
+    Object.assign(api, {
+      readTopicBoard: vi.fn(async () => board),
+      createTopicContext: create,
+    });
+    mount({ onCreated });
+    begin();
+    hide();
+    await act(async () =>
+      flight.reject(Error("Синтетическая ошибка создания.")),
+    );
+    const alert = screen.getByRole("alert");
+    expect(alert.closest(".topic-context-popup")).toBeNull();
+    expect(alert.textContent).toContain("Ошибка создания");
+    const details = within(alert).getByRole("button", {
+      name: "Показать ошибку создания топика new-topic",
+    });
+    expect(details.title).toContain("Синтетическая ошибка создания.");
+    expect(onCreated).not.toHaveBeenCalled();
+    expect(create).toHaveBeenCalledTimes(1);
+    fireEvent.click(details);
+    expect(
+      await screen.findByText(/Синтетическая ошибка создания/),
+    ).toBeTruthy();
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    create.mockResolvedValueOnce(created);
+    fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
+    await waitFor(() =>
+      expect(onCreated).toHaveBeenCalledExactlyOnceWith(created),
+    );
+    expect(create).toHaveBeenCalledTimes(2);
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+  it("does not create twice when a timed-out pending creation is retried from the header error", async () => {
+    vi.useFakeTimers();
+    const flight = deferred<WorktreeRecord>();
+    const create = vi.fn(() => flight.promise),
+      onCreated = vi.fn();
+    Object.assign(api, {
+      readTopicBoard: vi.fn(async () => board),
+      createTopicContext: create,
+    });
+    mount({ onCreated });
+    begin();
+    hide();
+    await act(async () => {});
+    expect(create).toHaveBeenCalledTimes(1);
+    await act(async () => vi.advanceTimersByTimeAsync(300000));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Показать ошибку создания топика new-topic",
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Повторить" }));
+    expect(
+      screen.getByRole("status", { name: "Создаётся «new-topic»…" }),
+    ).toBeTruthy();
+    expect(create).toHaveBeenCalledTimes(1);
+    await act(async () => flight.resolve(created));
+    expect(onCreated).toHaveBeenCalledExactlyOnceWith(created);
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(api.resolveTopicContext).toHaveBeenCalledTimes(1);
+  });
+  it("does not leak creation feedback or a late result into another project", async () => {
+    const flight = deferred<WorktreeRecord>(),
+      onCreated = vi.fn();
+    Object.assign(api, {
+      readTopicBoard: vi.fn(async () => board),
+      createTopicContext: vi.fn(() => flight.promise),
+    });
+    const view = mount({ onCreated });
+    begin();
+    await act(async () => {});
+    expect(
+      screen.getByRole("status", { name: "Создаётся «new-topic»…" }),
+    ).toBeTruthy();
+    view.rerender(
+      <TopicContextPicker
+        project={{ id: "q", name: "Other", path: "/fixture/other" }}
+        board={null}
+        selected={null}
+        onSelect={vi.fn()}
+        onClear={vi.fn()}
+        onOpenCard={vi.fn()}
+        onCreated={onCreated}
+      />,
+    );
+    expect(
+      screen.queryByRole("status", { name: "Создаётся «new-topic»…" }),
+    ).toBeNull();
+    await act(async () => flight.resolve(created));
+    expect(onCreated).not.toHaveBeenCalled();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+});
+
+it("gives persistent creation errors the existing visible error colour", async () => {
+  const style = document.createElement("style");
+  style.textContent = readFileSync(
+    "src/renderer/TopicContextPicker.css",
+    "utf8",
+  );
+  document.head.append(style);
+  try {
+    Object.assign(api, {
+      readTopicBoard: vi.fn(async () => board),
+      createTopicContext: vi.fn(async () => {
+        throw Error("Synthetic creation failure");
+      }),
+    });
+    mount({ onCreated: vi.fn() });
+    open();
+    fireEvent.change(screen.getByRole("combobox"), {
+      target: { value: "new-topic" },
+    });
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: "Создать «new-topic» и подготовить конвейер",
+      }),
+    );
+    const error = await screen.findByRole("alert");
+    expect(getComputedStyle(error).color).toBe("rgb(239, 177, 160)");
+  } finally {
+    style.remove();
+  }
+});

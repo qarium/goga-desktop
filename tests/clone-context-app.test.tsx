@@ -57,6 +57,17 @@ const run = {
   output: { text: "Finished fixture", truncated: false },
 };
 beforeEach(() => {
+  // These regression scenarios explicitly exercise the retained table view.
+  for (const id of ["p", "q", "b"])
+    localStorage.setItem(
+      `goga.desktop.topicsBoard.v1.${id}`,
+      JSON.stringify({
+        schemaVersion: 1,
+        view: "table",
+        columns: [],
+        statusCategory: {},
+      }),
+    );
   HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
   };

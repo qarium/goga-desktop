@@ -604,13 +604,14 @@ nativeDescribe("synthetic engine owner launch", { timeout: 30000 }, () => {
       confirmEmptyTask: true,
     };
   }
-  it("rejects forged empty exact-owner launch before writing or starting even when empty confirmation is true", async () => {
+  it("rejects clearing an existing exact-owner task without confirmation before writing or starting", async () => {
     const f = await owned();
     await f.writeTask("Dirty source\n");
-    const input = await request(f, " \n"),
+    await f.writeTask("Existing clone task\n", f.owner.path);
+    const input = { ...(await request(f, " \n")), confirmEmptyTask: false },
       before = await f.frozen();
     await expect(f.service.launch(input)).rejects.toThrow(
-      /непуст|описание задачи/i,
+      /Подтвердите замену задачи/,
     );
     expect(await f.frozen()).toEqual(before);
     expect(f.runner.start).not.toHaveBeenCalled();

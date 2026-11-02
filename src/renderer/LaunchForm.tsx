@@ -41,6 +41,7 @@ export function LaunchForm({
   owner,
   blocked = false,
   onLaunched,
+  onTopicsChanged,
   onCancel,
   draftStore,
   settingsRevision,
@@ -54,6 +55,7 @@ export function LaunchForm({
   owner?: TopicContextRef;
   blocked?: boolean | string;
   onLaunched: (run: Run, stale?: boolean) => void;
+  onTopicsChanged?: () => void;
   onCancel: () => void;
   onBusyChange?: (projectId: string, busy: boolean) => void;
   draftStore?: DraftStore;
@@ -89,8 +91,8 @@ export function LaunchForm({
   const [workflow, setWorkflow] = useState("auto"),
     [profile, setProfile] = useState(initial?.profile ?? ""),
     [skips, setSkips] = useState<string[]>([]);
-  const [mode, setMode] = useState<"existing" | "new">(
-      owner ? "existing" : (initial?.mode ?? "existing"),
+  const [mode, setMode] = useState<"none" | "existing" | "new">(
+      owner ? "existing" : (initial?.mode ?? "none"),
     ),
     [topicIndex, setTopicIndex] = useState("0"),
     [name, setName] = useState(initial?.name ?? ""),
@@ -102,6 +104,11 @@ export function LaunchForm({
     [cards, setCards] = useState<Preview["stages"]>([]),
     [pending, setPending] = useState(true),
     [resetNote, setResetNote] = useState("");
+  // Only presentation differs: every change still needs a fresh exact preview.
+  // Pipeline changes load the stage area; checkbox changes keep it interactive.
+  const [previewRefresh, setPreviewRefresh] = useState<
+    "pipeline" | "stages" | null
+  >(null);
   // Destructive consent belongs to this target and this attempt only.
   useEffect(
     () => setClean(false),
@@ -133,6 +140,7 @@ export function LaunchForm({
     const epoch = ++discoveryGeneration.current;
     discoveryInFlight.current = true;
     setData(null);
+    setPreviewRefresh(null);
     setPending(true);
     currentBranchRef.current = null;
     setError("");
@@ -158,7 +166,6 @@ export function LaunchForm({
             ),
           ),
         );
-        if (!owner && !d.topics.length) setMode("new");
         if (!d.pipelines.length) {
           setPending(false);
         }
@@ -182,6 +189,7 @@ export function LaunchForm({
     const epoch = ++discoveryGeneration.current;
     discoveryInFlight.current = true;
     generation.current++;
+    setPreviewRefresh(null);
     setPending(true);
     setPreview(null);
     setReadyKey("");
@@ -255,8 +263,6 @@ export function LaunchForm({
         setCards(complete.stages);
         setData(fresh);
         setPipeline(nextPipeline);
-        if (!owner && !data && mode === "existing" && !fresh.topics.length)
-          setMode("new");
         setTopicIndex(String(nextIndex));
         setError("");
         initialSettingsRevision.current = settingsRevision;
@@ -364,8 +370,9 @@ export function LaunchForm({
     settingsRefreshError,
     appliedCatalogEpoch,
   ]);
-  const resetComposition = (fn: () => void) => {
+  const resetComposition = (fn: () => void, local = false) => {
     generation.current++;
+    setPreviewRefresh(local ? "pipeline" : null);
     setPending(true);
     setPreview(null);
     setReadyKey("");
@@ -398,23 +405,46 @@ export function LaunchForm({
     baseRef,
     profile,
   ]);
-  const taskKey = !data
-    ? null
-    : JSON.stringify([
-        ownerKey,
-        mode,
-        mode === "new" ? "draft" : topic?.branch,
-        mode === "new" ? "" : topic?.topic,
-      ]);
-  const taskRequest =
-    mode === "existing" && topic
-      ? {
-          projectId: project.id,
-          ...(owner ? { context: contextRef(owner) } : {}),
-          branch: topic.branch,
-          topic: topic.topic,
-        }
+  const taskKey =
+    !data || mode === "none"
+      ? null
+      : JSON.stringify([
+          ownerKey,
+          mode,
+          mode === "new" ? "draft" : topic?.branch,
+          mode === "new" ? "" : topic?.topic,
+        ]);
+  const selectedTaskRequest = topic
+    ? {
+        projectId: project.id,
+        ...(owner ? { context: contextRef(owner) } : {}),
+        branch: topic.branch,
+        topic: topic.topic,
+      }
+    : null;
+  const taskRequest = mode === "existing" ? selectedTaskRequest : null;
+  // Prepare the selected topic under the same initial form loader, even when
+  // starting without a topic. Switching modes then adopts this exact document
+  // from the existing draft store, without a second read or replacing edits.
+  const topicPreparationKey =
+    !owner &&
+    !suspended &&
+    mode !== "existing" &&
+    data &&
+    data.pipelines.length > 0 &&
+    topic
+      ? JSON.stringify([ownerKey, "existing", topic.branch, topic.topic])
       : null;
+  const topicPreparation = useTaskDraft(
+    drafts,
+    topicPreparationKey,
+    selectedTaskRequest,
+    false,
+    suspended,
+  );
+  const topicPreparationPending =
+    !!topicPreparationKey &&
+    (!topicPreparation.draft || topicPreparation.draft.status === "loading");
   const editor = useTaskDraft(
     drafts,
     mode === "existing" && !topic ? null : taskKey,
@@ -503,7 +533,8 @@ export function LaunchForm({
     editor.dirty &&
     !!editor.draft?.document?.text.trim() &&
     !task.trim();
-  const taskReady = editor.ready && (!emptyReplacement || confirmEmpty);
+  const taskReady =
+    mode === "none" || (editor.ready && (!emptyReplacement || confirmEmpty));
   useEffect(() => {
     setConfirmEmpty(false);
   }, [taskKey]);
@@ -670,8 +701,8 @@ export function LaunchForm({
       const nextKey = JSON.stringify([
         ownerKey,
         nextMode,
-        nextMode === "new" ? "draft" : selected.branch,
-        nextMode === "new" ? "" : selected.topic,
+        nextMode === "new" ? "draft" : selected?.branch,
+        nextMode === "new" ? "" : selected?.topic,
       ]);
       const previousTarget = drafts.tasks.get(nextKey);
       const document =
@@ -708,12 +739,13 @@ export function LaunchForm({
       generation.current++;
       preparedPreviewKey.current =
         nextCompositionKey !== compositionKey ? nextCompositionKey : null;
-      drafts.tasks.set(nextKey, {
-        text: document?.text ?? "",
-        document,
-        status: "ready",
-        error: "",
-      });
+      if (nextMode !== "none")
+        drafts.tasks.set(nextKey, {
+          text: document?.text ?? "",
+          document,
+          status: "ready",
+          error: "",
+        });
       drafts.forms.set(storageKey, {
         mode: nextMode,
         branch: selected?.branch ?? "",
@@ -737,6 +769,7 @@ export function LaunchForm({
       setClean(false);
       setConfirmEmpty(false);
       setPreview(prepared);
+      setPreviewRefresh(null);
       setReadyKey(nextCompositionKey);
       setPreviewSettled(nextCompositionKey);
       setPreviewError("");
@@ -759,7 +792,8 @@ export function LaunchForm({
 
   const switchRequired =
     !owner &&
-    (mode === "new" || (!!topic && topic.branch !== data?.currentBranch));
+    (mode === "new" ||
+      (mode === "existing" && !!topic && topic.branch !== data?.currentBranch));
   function updateBranch(currentBranch: string) {
     if (currentBranchRef.current === currentBranch) return;
     currentBranchRef.current = currentBranch;
@@ -814,8 +848,10 @@ export function LaunchForm({
     !!preview &&
     readyKey === compositionKey &&
     !pending &&
+    !topicPreparationPending &&
     preview.stages.length > 0;
-  const validTopic = mode === "new" ? name.trim().length > 0 : !!topic;
+  const validTopic =
+    mode === "none" || (mode === "new" ? name.trim().length > 0 : !!topic);
   // Identity is monotonic even for A→B→A changes. Consent never attaches to
   // a later draft, preview or catalog that merely has equivalent visible text.
   const launchSignature = JSON.stringify([
@@ -872,8 +908,7 @@ export function LaunchForm({
     !!data &&
     !launching &&
     !resetting &&
-    taskReady &&
-    (!owner || !!task.trim());
+    taskReady;
   function requestLaunch(update: boolean) {
     if (
       !canLaunch ||
@@ -907,13 +942,19 @@ export function LaunchForm({
         ...(mode === "existing"
           ? { taskVersion: editor.draft!.document!.version }
           : {}),
-        confirmEmptyTask: confirmEmpty,
+        confirmEmptyTask: mode !== "none" && confirmEmpty,
         clean,
         update,
         topic:
-          mode === "new"
-            ? { mode: "new", name: name.trim(), baseRef }
-            : { mode: "existing", branch: topic!.branch, topic: topic!.topic },
+          mode === "none"
+            ? { mode: "none" }
+            : mode === "new"
+              ? { mode: "new", name: name.trim(), baseRef }
+              : {
+                  mode: "existing",
+                  branch: topic!.branch,
+                  topic: topic!.topic,
+                },
       },
     };
     pendingLaunch.current = intent;
@@ -979,6 +1020,7 @@ export function LaunchForm({
         } catch {}
       }
     } finally {
+      if (intent.request.topic.mode === "new") onTopicsChanged?.();
       launchInFlight.current = false;
       if (mounted.current) {
         setClean(false);
@@ -997,10 +1039,11 @@ export function LaunchForm({
     data.pipelines.some((p) => p.id === pipeline) &&
     !missingProfileName(data, profile);
   const taskLoading =
-    !!data &&
-    data.pipelines.length > 0 &&
-    (mode === "new" || !!topic) &&
-    (!editor.draft || editor.draft.status === "loading");
+    topicPreparationPending ||
+    (!!data &&
+      data.pipelines.length > 0 &&
+      (mode === "new" || (mode === "existing" && !!topic)) &&
+      (!editor.draft || editor.draft.status === "loading"));
   const loadFailure =
     (!data && !catalogLoading ? error : "") ||
     (!settingsPreviewFailure ? settingsRefreshError : "") ||
@@ -1014,11 +1057,26 @@ export function LaunchForm({
       (!settingsRefreshError &&
         settingsRevision !== initialSettingsRevision.current) ||
       (validComposition &&
+        !previewRefresh &&
         !settingsRefreshError &&
         (pending || previewSettled !== compositionKey)) ||
       (taskLoading &&
         !settingsPreviewFailure &&
         !(previewSettled === compositionKey && previewError)));
+  const pipelineRefresh = previewRefresh === "pipeline";
+  const stageLoading =
+    pipelineRefresh &&
+    !formLoading &&
+    validComposition &&
+    !settingsRefreshError &&
+    (pending || previewSettled !== compositionKey);
+  const stageError =
+    pipelineRefresh &&
+    !loadFailure &&
+    !pending &&
+    previewSettled === compositionKey
+      ? previewError
+      : "";
   function retryPreparation() {
     if (editor.draft?.status === "error" || editor.draft?.status === "loading")
       void editor.retry();
@@ -1071,7 +1129,9 @@ export function LaunchForm({
               listLabel="Конвейеры"
               value={pipeline}
               disabled={launching || suspended || settingsRefreshing}
-              onChange={(value) => resetComposition(() => setPipeline(value))}
+              onChange={(value) =>
+                resetComposition(() => setPipeline(value), true)
+              }
               entries={[
                 ...(pipeline && !data.pipelines.some((p) => p.id === pipeline)
                   ? [
@@ -1107,7 +1167,16 @@ export function LaunchForm({
             {!owner && (
               <div className="topic-block">
                 <fieldset className="topic-mode">
-                  <legend>Топик</legend>
+                  <legend>Где запустить</legend>
+                  <label>
+                    <input
+                      type="radio"
+                      name={topicModeName}
+                      checked={mode === "none"}
+                      onChange={() => setMode("none")}
+                    />
+                    Без топика
+                  </label>
                   <label>
                     <input
                       type="radio"
@@ -1131,7 +1200,13 @@ export function LaunchForm({
                     Создать новый
                   </label>
                 </fieldset>
-                {mode === "existing" ? (
+                {mode === "none" ? (
+                  <p className="hint">
+                    Исходный проект · текущая ветка{" "}
+                    {data.currentBranch || "HEAD без ветки"}. Без создания
+                    топика и копии, переключения ветки и записи задачи.
+                  </p>
+                ) : mode === "existing" ? (
                   <>
                     <TopicSelect
                       topics={data.topics}
@@ -1248,8 +1323,11 @@ export function LaunchForm({
                       {baseRef === "HEAD"
                         ? data.currentBranch || "HEAD без ветки"
                         : baseRef}{" "}
-                      и перейдём в ветку топика при запуске.
+                      в отдельной рабочей копии и запустим конвейер в ней.
+                      Исходный проект останется на своей ветке.
                     </span>
+                  ) : mode === "none" ? (
+                    <span>Запуск в исходной папке проекта</span>
                   ) : topic ? (
                     switchRequired ? (
                       <span>
@@ -1282,99 +1360,96 @@ export function LaunchForm({
                   : "Запуск в этой рабочей копии временно недоступен."}
               </p>
             )}
-            <details
-              key={taskKey ?? ownerKey}
-              className="task-editor"
-              aria-busy={editor.draft?.status === "loading"}
-            >
-              <summary>
-                <svg
-                  width="16"
-                  height="16"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="1.75"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="m9 6 6 6-6 6" />
-                </svg>
-                Что нужно сделать?
-              </summary>
-              <textarea
-                aria-label="Что нужно сделать?"
-                rows={5}
-                value={task}
-                disabled={!editor.ready}
-                maxLength={100000}
-                onChange={(e) => {
-                  editor.edit(e.target.value);
-                  setConfirmEmpty(false);
-                }}
-                placeholder={
-                  mode === "new" ? "Опишите задачу для нового топика" : ""
-                }
-              />
-              {editor.draft?.status === "loading" && (
-                <p className="hint" role="status">
-                  Читаем задачу выбранного топика…
-                </p>
-              )}
-              {mode === "existing" && editor.ready && (
-                <p className="hint">
-                  {owner &&
-                  editor.draft?.document?.catalogState ===
-                    "missing-local-metadata"
-                    ? "В этой копии данные топика ещё не созданы. Введите непустую задачу; она сохранится здесь только при запуске."
-                    : !editor.draft?.document?.exists
-                      ? "Файл задачи отсутствует."
-                      : editor.draft.document.text === ""
-                        ? "Файл задачи пуст."
-                        : "Загружено полное содержимое задачи."}{" "}
-                  {topic?.branch !== data.currentBranch &&
-                    "Для другой ветки показана сохранённая в Git версия, без её незакоммиченных изменений."}
-                </p>
-              )}
-              <p className="hint">
-                {mode === "new"
-                  ? "Задача будет записана в todo.md нового топика только при запуске."
-                  : editor.dirty
-                    ? "Есть несохранённые изменения. Они запишутся только кнопкой «Сохранить и запустить»."
-                    : "Без изменений: запуск не переписывает todo.md."}{" "}
-                Черновики сохраняются в памяти до закрытия приложения.
-              </p>
-              {mode === "existing" && (
-                <button
-                  type="button"
-                  className="quiet"
-                  disabled={resetting || editor.draft?.status === "loading"}
-                  onClick={() => {
-                    if (resetOperation.current) return;
-                    if (editor.dirty && editor.draft) {
-                      setReloadConfirmation({
-                        key: taskKey,
-                        draft: editor.draft,
-                      });
-                    } else {
-                      setConfirmEmpty(false);
-                      void editor.reload();
-                    }
+            {mode !== "none" && (
+              <details
+                key={taskKey ?? ownerKey}
+                className="task-editor"
+                aria-busy={editor.draft?.status === "loading"}
+              >
+                <summary>
+                  <svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.75"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="m9 6 6 6-6 6" />
+                  </svg>
+                  Что нужно сделать?
+                </summary>
+                <textarea
+                  aria-label="Что нужно сделать?"
+                  rows={5}
+                  value={task}
+                  disabled={!editor.ready}
+                  maxLength={100000}
+                  onChange={(e) => {
+                    editor.edit(e.target.value);
+                    setConfirmEmpty(false);
                   }}
-                >
-                  Перечитать задачу
-                </button>
-              )}
-            </details>
+                  placeholder={
+                    mode === "new" ? "Опишите задачу для нового топика" : ""
+                  }
+                />
+                {editor.draft?.status === "loading" && (
+                  <p className="hint" role="status">
+                    Читаем задачу выбранного топика…
+                  </p>
+                )}
+                {mode === "existing" && editor.ready && (
+                  <p className="hint">
+                    {owner &&
+                    editor.draft?.document?.catalogState ===
+                      "missing-local-metadata"
+                      ? "В этой копии данные топика ещё не созданы. Можно запустить без задачи или добавить её здесь; она сохранится только при запуске."
+                      : !editor.draft?.document?.exists
+                        ? "Файл задачи отсутствует."
+                        : editor.draft.document.text === ""
+                          ? "Файл задачи пуст."
+                          : "Загружено полное содержимое задачи."}{" "}
+                    {topic?.branch !== data.currentBranch &&
+                      "Для другой ветки показана сохранённая в Git версия, без её незакоммиченных изменений."}
+                  </p>
+                )}
+                <p className="hint">
+                  {mode === "new"
+                    ? "Задача будет записана в todo.md нового топика только при запуске."
+                    : editor.dirty
+                      ? "Есть несохранённые изменения. Они запишутся только кнопкой «Сохранить и запустить»."
+                      : "Без изменений: запуск не переписывает todo.md."}{" "}
+                  Черновики сохраняются в памяти до закрытия приложения.
+                </p>
+                {mode === "existing" && (
+                  <button
+                    type="button"
+                    className="quiet"
+                    disabled={resetting || editor.draft?.status === "loading"}
+                    onClick={() => {
+                      if (resetOperation.current) return;
+                      if (editor.dirty && editor.draft) {
+                        setReloadConfirmation({
+                          key: taskKey,
+                          draft: editor.draft,
+                        });
+                      } else {
+                        setConfirmEmpty(false);
+                        void editor.reload();
+                      }
+                    }}
+                  >
+                    Перечитать задачу
+                  </button>
+                )}
+              </details>
+            )}
             {editor.draft?.error && editor.draft.status !== "error" && (
               <p className="error" role="alert">
                 Не удалось прочитать задачу: {editor.draft.error}
-              </p>
-            )}
-            {owner && editor.ready && !task.trim() && (
-              <p className="hint" role="status">
-                Для запуска в этой копии нужна непустая задача.
               </p>
             )}
             {emptyReplacement && (
@@ -1475,52 +1550,62 @@ export function LaunchForm({
                 </strong>
               </span>
             </p>
-            <div className="section-heading compact">
-              <h3>Стадии запуска</h3>
-              <span className="hint" aria-live="polite">
-                {pending
-                  ? "Получаем состав у Goga…"
-                  : `${preview?.stages.length ?? 0} выбрано`}
-              </span>
-            </div>
-            <div className="stage-cards">
-              {cards.map((stage) => (
-                <label
-                  key={stage.id}
-                  className={`stage-card ${skips.includes(stage.id) ? "skipped" : ""}`}
-                >
-                  <input
-                    type="checkbox"
-                    checked={!skips.includes(stage.id)}
-                    onChange={(e) => {
-                      generation.current++;
-                      setPending(true);
-                      setPreview(null);
-                      setReadyKey("");
-                      setSkips((s) =>
-                        e.target.checked
-                          ? s.filter((id) => id !== stage.id)
-                          : [...s, stage.id],
-                      );
-                    }}
-                  />
-                  <span>
-                    <strong>{stage.id}</strong>
-                    {stage.title && <small>{stage.title}</small>}
-                  </span>
-                </label>
-              ))}
-            </div>
-            <p className="hint">
-              Снятая галочка пропускает стадию только в этом запуске.
-              Определения и рабочий процесс не изменяются.
-            </p>
-            {resetNote && <p className="hint">{resetNote}</p>}
-            {!pending && preview && !preview.stages.length && (
-              <p role="alert" className="error">
-                Нельзя запустить пустой набор стадий.
-              </p>
-            )}
+            <section className="pipeline-stages" aria-label="Стадии запуска">
+              <div className="section-heading compact">
+                <h3>Стадии запуска</h3>
+                <span className="hint" aria-live="polite">
+                  {pending
+                    ? "Получаем состав у Goga…"
+                    : `${preview?.stages.length ?? 0} выбрано`}
+                </span>
+              </div>
+              <LoadingBoundary
+                pending={stageLoading}
+                label="Загружаем стадии конвейера…"
+                error={stageError}
+                onRetry={retryPreparation}
+              >
+                <div className="stage-cards" aria-busy={pending}>
+                  {cards.map((stage) => (
+                    <label
+                      key={stage.id}
+                      className={`stage-card ${skips.includes(stage.id) ? "skipped" : ""}`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={!skips.includes(stage.id)}
+                        onChange={(e) => {
+                          generation.current++;
+                          setPreviewRefresh("stages");
+                          setPending(true);
+                          setPreview(null);
+                          setReadyKey("");
+                          setSkips((s) =>
+                            e.target.checked
+                              ? s.filter((id) => id !== stage.id)
+                              : [...s, stage.id],
+                          );
+                        }}
+                      />
+                      <span>
+                        <strong>{stage.id}</strong>
+                        {stage.title && <small>{stage.title}</small>}
+                      </span>
+                    </label>
+                  ))}
+                </div>
+                <p className="hint">
+                  Снятая галочка пропускает стадию только в этом запуске.
+                  Определения и рабочий процесс не изменяются.
+                </p>
+                {resetNote && <p className="hint">{resetNote}</p>}
+                {!pending && preview && !preview.stages.length && (
+                  <p role="alert" className="error">
+                    Нельзя запустить пустой набор стадий.
+                  </p>
+                )}
+              </LoadingBoundary>
+            </section>
             <label className="check-row">
               <input
                 type="checkbox"
@@ -1536,12 +1621,12 @@ export function LaunchForm({
             </p>
           </fieldset>
         )}
-        {data && correctionError && !loadFailure && (
+        {data && correctionError && !loadFailure && !stageError && (
           <div role="alert" className="error">
             {correctionError}
           </div>
         )}
-        {data && correctionError && !pending && (
+        {data && correctionError && !pending && !stageError && (
           <button type="button" onClick={retryPreparation}>
             {settingsRefreshError
               ? "Повторить обновление каталога"
@@ -1567,7 +1652,9 @@ export function LaunchForm({
           branch={
             launchConfirmation.request.topic.mode === "new"
               ? launchConfirmation.request.topic.name
-              : launchConfirmation.request.topic.branch
+              : launchConfirmation.request.topic.mode === "existing"
+                ? launchConfirmation.request.topic.branch
+                : launchConfirmation.request.expectedBranch
           }
           from={launchConfirmation.from}
           update={!!launchConfirmation.request.update}

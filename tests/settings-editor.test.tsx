@@ -154,3 +154,39 @@ it("unmounts hidden/switched documents and explicitly opens personal profiles", 
   fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
   expect(input()).toBeNull();
 });
+
+it.each(["config", "profile"])(
+  "supports line indentation in the %s editor without touching source line endings",
+  async (kind) => {
+    render(<Settings />);
+    if (kind === "profile") {
+      fireEvent.click(await screen.findByRole("button", { name: "Профили" }));
+      fireEvent.click(await screen.findByRole("button", { name: "personal" }));
+    }
+    const view = await openEditor();
+    act(() =>
+      view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } }),
+    );
+    fireEvent.keyDown(view.contentDOM, {
+      key: "Tab",
+      keyCode: 9,
+      bubbles: true,
+      cancelable: true,
+    });
+    expect(view.state.doc.toString()).toBe(
+      source
+        .split("\n")
+        .map((line, i, all) => (i === all.length - 1 ? line : "  " + line))
+        .join("\n"),
+    );
+    fireEvent.keyDown(view.contentDOM, {
+      key: "Tab",
+      keyCode: 9,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    expect(view.state.doc.toString()).toBe(source);
+    expect(api.saveSettings).not.toHaveBeenCalled();
+  },
+);

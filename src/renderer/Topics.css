@@ -612,23 +612,28 @@ button.topic-link:hover:not(:disabled) {
 .topic-summary-table {
   min-width: 900px;
 }
-.topic-summary-table th:nth-child(1) {
-  width: 23%;
+/* Widths belong to semantic columns, not their position: adding selection must
+   never turn its checkbox into a data column or push actions out of the grid. */
+.topic-summary-table th.topic-table-checkbox {
+  width: 36px;
 }
-.topic-summary-table th:nth-child(2) {
-  width: 18%;
+.topic-summary-table th.topic-table-topic {
+  width: 22%;
 }
-.topic-summary-table th:nth-child(3) {
-  width: 18%;
+.topic-summary-table th.topic-table-branch {
+  width: 22%;
 }
-.topic-summary-table th:nth-child(4) {
-  width: 17%;
+.topic-summary-table th.topic-table-divergence {
+  width: 16%;
 }
-.topic-summary-table th:nth-child(5) {
-  width: 15%;
+.topic-summary-table th.topic-table-statuses {
+  width: 12%;
 }
-.topic-summary-table th:nth-child(6) {
-  width: 150px;
+.topic-summary-table th.topic-table-activity {
+  width: auto;
+}
+.topic-summary-table th.topic-table-actions {
+  width: 128px;
 }
 .topic-divergence {
   display: inline-block;
@@ -874,4 +879,50 @@ button.topic-link:hover:not(:disabled) {
 }
 .topics-nav > svg {
   flex: none;
+}
+.topic-filter-clear {
+  margin-left: auto;
+  border-left: 1px solid var(--border);
+  padding-left: 12px;
+}
+.topic-removal-selected ul {
+  display: flex;
+  gap: 8px 18px;
+  flex-wrap: wrap;
+  max-height: 180px;
+  overflow: auto;
+  padding: 10px 20px;
+}
+.topic-confirm-check {
+  display: flex !important;
+  align-items: flex-start;
+  gap: 10px !important;
+  margin: 18px 0;
+}
+.topic-confirm-check input {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.topic-removal-result {
+  border-top: 1px solid var(--border);
+  padding: 14px 0;
+}
+.topic-removal-copy {
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  padding: 12px;
+  margin-top: 10px;
+  overflow-wrap: anywhere;
+}
+.topic-removal-copy > span {
+  display: block;
+  margin-top: 5px;
+}
+.topic-removal-copy > button {
+  margin-top: 10px;
+}
+@container (max-width: 900px) {
+  .topic-filter-clear {
+    margin-left: 0;
+  }
 }

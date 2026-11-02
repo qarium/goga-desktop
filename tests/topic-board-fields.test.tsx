@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -50,6 +51,17 @@ const makeBoard = (entries = [alpha, beta, gamma]): TopicBoardSnapshot => ({
 });
 let api: any;
 beforeEach(() => {
+  // These regression scenarios explicitly exercise the retained table view.
+  for (const id of ["p", "q", "b"])
+    localStorage.setItem(
+      `goga.desktop.topicsBoard.v1.${id}`,
+      JSON.stringify({
+        schemaVersion: 1,
+        view: "table",
+        columns: [],
+        statusCategory: {},
+      }),
+    );
   HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
   };
@@ -107,6 +119,7 @@ it("shows branch and base columns before statuses and preserves current-first or
   expect(
     screen.getAllByRole("columnheader").map((cell) => cell.textContent),
   ).toEqual([
+    "", // shared column selection checkbox
     "Топик",
     "Ветка",
     "Относительно base",
@@ -116,10 +129,37 @@ it("shows branch and base columns before statuses and preserves current-first or
   ]);
   expect(visibleTopics()).toEqual(["beta", "alpha", "gamma"]);
   const cells = within(screen.getAllByRole("row")[1]!).getAllByRole("cell");
-  expect(cells[1]!.textContent).toBe("feature/beta");
-  expect(cells[2]!.textContent).toBe("Перенесён в базу");
+  expect(cells[2]!.textContent).toBe("feature/beta");
+  expect(cells[3]!.textContent).toBe("Перенесён в базу");
   expect(api.readTopicTable).toHaveBeenCalledTimes(1);
   expect(api.readTopicBoard).not.toHaveBeenCalled();
+});
+it("assigns all seven table columns semantic widths, reserving compact selection and actions", async () => {
+  render(workspace());
+  await screen.findByRole("button", { name: "Открыть топик alpha" });
+  const columns = [
+    ["topic-table-checkbox", "36px"],
+    ["topic-table-topic", "22%"],
+    ["topic-table-branch", "22%"],
+    ["topic-table-divergence", "16%"],
+    ["topic-table-statuses", "12%"],
+    ["topic-table-activity", "auto"],
+    ["topic-table-actions", "128px"],
+  ];
+  const headers = screen.getAllByRole("columnheader");
+  expect(headers).toHaveLength(columns.length);
+  const css = readFileSync("src/renderer/Topics.css", "utf8");
+  columns.forEach(([name, width], index) => {
+    expect(headers[index].classList.contains(name)).toBe(true);
+    const selector = `.topic-summary-table th.${name} {`;
+    const start = css.indexOf(selector);
+    expect(start).toBeGreaterThanOrEqual(0);
+    const rule = css.slice(start, css.indexOf("}", start));
+    expect(rule).toContain(`width: ${width};`);
+  });
+  // Positional widths broke when the selection column was added. Keep the
+  // summary grid independent of column insertion and the legacy six-column grid.
+  expect(css).not.toMatch(/\.topic-summary-table th:nth-child\(/);
 });
 it.each([
   ["base", "Совпадает с базой"],
@@ -156,7 +196,7 @@ it("renders unknown divergence as a dash in table and card", async () => {
   const view = render(workspace());
   await screen.findByRole("button", { name: "Открыть топик alpha" });
   expect(
-    within(screen.getAllByRole("row")[1]!).getAllByRole("cell")[2]!.textContent,
+    within(screen.getAllByRole("row")[1]!).getAllByRole("cell")[3]!.textContent,
   ).toBe("—");
   view.unmount();
   render(card(board, entry));

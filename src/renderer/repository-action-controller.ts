@@ -13,7 +13,13 @@ export interface RepositoryActionFailure {
 }
 interface Snapshot {
   revision: number;
-  busy: ReadonlySet<string>;
+  busy: ReadonlyMap<
+    string,
+    {
+      action: RepositoryActionRequest["action"];
+      label: string;
+    }
+  >;
   failures: RepositoryActionFailure[];
 }
 export function repositoryActionKey(
@@ -24,7 +30,7 @@ export function repositoryActionKey(
 /** Writes outlive their buttons. The captured owner, never the current selector,
  * labels the completion; closing the selector cannot swallow an operation error. */
 class RepositoryActionController {
-  private state: Snapshot = { busy: new Set(), failures: [], revision: 0 };
+  private state: Snapshot = { busy: new Map(), failures: [], revision: 0 };
   private listeners = new Set<() => void>();
   constructor(private api: DesktopAPI) {}
   snapshot = () => this.state;
@@ -44,7 +50,13 @@ class RepositoryActionController {
     const request = structuredClone(input);
     const key = repositoryActionKey(request);
     if (this.state.busy.has(key)) return;
-    this.update({ ...this.state, busy: new Set([...this.state.busy, key]) });
+    this.update({
+      ...this.state,
+      busy: new Map(this.state.busy).set(key, {
+        action: request.action,
+        label,
+      }),
+    });
     try {
       const result = await this.api.runRepositoryAction(request);
       if (window.goga !== this.api) return;
@@ -92,7 +104,7 @@ class RepositoryActionController {
         ],
       });
     } finally {
-      const busy = new Set(this.state.busy);
+      const busy = new Map(this.state.busy);
       busy.delete(key);
       this.update({ ...this.state, busy, revision: this.state.revision + 1 });
     }

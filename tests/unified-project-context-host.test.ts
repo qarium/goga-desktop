@@ -622,8 +622,12 @@ describe(
           ).rejects.toThrow(/устарел|изменен|изменён/i);
           if (context)
             await expect(
-              f.service.launch({ ...request, task: " \n" }),
-            ).rejects.toThrow(/непуст|описание задачи/i);
+              f.service.launch({
+                ...request,
+                task: " \n",
+                confirmEmptyTask: false,
+              }),
+            ).rejects.toThrow(/Подтвердите замену задачи/);
           expect(f.starts).toHaveLength(startsBefore);
           const run = await f.service.launch(request);
           expect(f.starts.at(-1)?.cwd).toBe(owner.path);
@@ -666,6 +670,48 @@ describe(
         expect(
           await fs.readFile(path.join(f.primary, "valuable-untracked"), "utf8"),
         ).toBe("primary only\n");
+      },
+    );
+    it.each([
+      "missing-metadata",
+      "missing-file",
+      "empty-file",
+      "whitespace-file",
+    ])(
+      "launches a clone pipeline with %s without manufacturing a task or changing sibling workspaces",
+      async (kind) => {
+        const f = await fixture();
+        const owner = f.owners[1];
+        const taskPath = path.join(
+          owner.path,
+          ".goga/history/2026/alpha/todo.md",
+        );
+        if (kind.startsWith("missing")) await fs.rm(taskPath);
+        else
+          await fs.writeFile(taskPath, kind === "whitespace-file" ? " \n" : "");
+        if (kind === "missing-metadata") {
+          const original = f.runner.command;
+          vi.spyOn(f.runner, "command").mockImplementation(
+            async (exe, args, cwd, env) =>
+              exe !== "git" &&
+              cwd === owner.path &&
+              args[0] === "topics" &&
+              args.includes("board")
+                ? { stdout: "[]", stderr: "" }
+                : original(exe, args, cwd, env),
+          );
+        }
+        const r = await launchRequests(f, 1);
+        const request = { ...(await r.pipeline()), confirmEmptyTask: false };
+        const before = await Promise.all(f.owners.map((o) => bytes(o.path)));
+        const run = await f.service.launch(request);
+        expect(f.starts).toHaveLength(1);
+        expect(f.starts[0].cwd).toBe(owner.path);
+        expect(run.context).toMatchObject(r.context!);
+        expect(await Promise.all(f.owners.map((o) => bytes(o.path)))).toEqual(
+          before,
+        );
+        await f.service.stop(run.id);
       },
     );
     it.each(["stale", "missing", "legacy"])(
@@ -817,10 +863,12 @@ describe.each([0, 1])(
         f.service.saveProjectDocument(
           r.owner.scope,
           { kind: "config" },
-          "# denied\n",
+          config.text + "# versioned content save while sibling is active\n",
           config.version,
         ),
-      ).rejects.toThrow(/занят/);
+      ).resolves.toMatchObject({
+        text: config.text + "# versioned content save while sibling is active\n",
+      });
       // Check membership independently of run-list fallback guards.
       const memberships = (
         f.rawService as unknown as { activeKeys: Map<string, Set<string>> }

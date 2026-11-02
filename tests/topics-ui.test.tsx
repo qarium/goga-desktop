@@ -47,6 +47,17 @@ const board: TopicBoardSnapshot = {
 };
 let api: any;
 beforeEach(() => {
+  // These regression scenarios explicitly exercise the retained table view.
+  for (const id of ["p", "q", "b"])
+    localStorage.setItem(
+      `goga.desktop.topicsBoard.v1.${id}`,
+      JSON.stringify({
+        schemaVersion: 1,
+        view: "table",
+        columns: [],
+        statusCategory: {},
+      }),
+    );
   HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
   };
@@ -64,6 +75,15 @@ beforeEach(() => {
       version: "task-v",
       editable: true,
     })),
+    prepareTopicRemoval: vi.fn(async (req: any) => ({
+      token: "removal",
+      projectId: req.projectId,
+      year: req.year,
+      action: req.action,
+      details: ["Exact removal preview"],
+      expiresAt: Date.now() + 60000,
+    })),
+    executeTopicRemoval: vi.fn(),
     prepareTopicOperation: vi.fn(async (req) => ({
       token: "token",
       projectId: "p",
@@ -321,12 +341,16 @@ it("row deletion previews the exact topic and cancel never executes", async () =
   fireEvent.click(
     await screen.findByRole("button", { name: "Удалить топик feature-b" }),
   );
-  await screen.findByRole("button", { name: "Удалить без корзины" });
-  expect(api.prepareTopicOperation.mock.calls[0][0]).toMatchObject({
+  await screen.findByRole("button", { name: "Удалить топики" });
+  expect(api.prepareTopicRemoval).toHaveBeenCalledExactlyOnceWith({
+    projectId: "p",
+    year: "2026",
+    expectedRevision: "rev",
     action: "delete",
-    target: { topic: "feature-b", branch: "feature/b", remote: false },
+    topics: ["feature-b"],
   });
   fireEvent.click(screen.getByRole("button", { name: "Отмена" }));
+  expect(api.executeTopicRemoval).not.toHaveBeenCalled();
   expect(api.executeTopicOperation).not.toHaveBeenCalled();
 });
 

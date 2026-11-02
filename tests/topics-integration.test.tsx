@@ -23,7 +23,7 @@ import {
 import type { TopicTarget } from "../src/shared/topics";
 import { topicTargetSchema } from "../src/shared/topics-schema";
 import { App } from "../src/renderer/App";
-import { LaunchForm } from "../src/renderer/LaunchForm";
+import { ExistingTopicLaunchForm as LaunchForm } from "./helpers/existing-pipeline-draft";
 import { createDraftStore } from "../src/renderer/task-drafts";
 const p = { id: "p", name: "Project", path: "/fixture" };
 const a = {
@@ -86,6 +86,8 @@ const ownerB: WorktreeRecord = {
 let focusRun!: (id: string) => void;
 let api: any;
 beforeEach(() => {
+  // Explicit table preference for table/context regression scenarios.
+  localStorage.setItem("goga.desktop.topicsBoard.v1.p", JSON.stringify({ schemaVersion: 1, view: "table", columns: [], statusCategory: {} }));
   installHistoryWorker();
   HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
@@ -276,7 +278,7 @@ it("prepares requested local target and refuses to replace its dirty launch draf
   expect(api.checkoutBranch).not.toHaveBeenCalled();
   expect(api.launch).not.toHaveBeenCalled();
 });
-it("run link reads its snapshot even when current project topic differs; hides native view", async () => {
+it("run tab retains its own topic and branch without duplicate context-bar labels", async () => {
   const run = {
     id: "run",
     projectId: "p",
@@ -301,16 +303,25 @@ it("run link reads its snapshot even when current project topic differs; hides n
   await screen.findByRole("heading", { name: "Project" });
   act(() => focusRun("run"));
   await screen.findByRole("tab", { name: /one · feature-b/ });
-  fireEvent.click(
-    screen.getByRole("button", { name: "Топик запуска feature-b" }),
-  );
-  expect(await screen.findByText("Snapshot B")).toBeTruthy();
-  expect(api.readTopicDetails).not.toHaveBeenCalled();
-  await waitFor(() => expect(api.selectRun).toHaveBeenLastCalledWith(null));
+  const tab = screen.getByRole("tab", {
+    name: "one · feature-b · feature/b",
+    selected: true,
+  });
+  expect(tab.textContent).toContain(b.topic);
+  expect(tab.textContent).toContain(b.branch);
+  const bar = screen
+    .getByLabelText("Путь выбранного контекста")
+    .closest(".run-context")!;
+  expect(bar.querySelector(".run-topic, .run-branch")).toBeNull();
   expect(
-    within(screen.getByRole("dialog")).getByText(/Топик этого запуска/),
-  ).toBeTruthy();
+    within(bar as HTMLElement).queryByRole("button", {
+      name: /^Топик запуска/,
+    }),
+  ).toBeNull();
+  expect(api.readTopicDetails).not.toHaveBeenCalled();
+  await waitFor(() => expect(api.selectRun).toHaveBeenLastCalledWith(run.id));
 });
+
 it("retains a manually selected owner and its independent draft across project navigation", async () => {
   api.listProjects.mockResolvedValue([
     p,

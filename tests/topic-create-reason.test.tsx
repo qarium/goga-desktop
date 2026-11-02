@@ -45,6 +45,17 @@ const board: TopicBoardSnapshot = {
 };
 let api: any;
 beforeEach(() => {
+  // These regression scenarios explicitly exercise the retained table view.
+  for (const id of ["p", "q", "b"])
+    localStorage.setItem(
+      `goga.desktop.topicsBoard.v1.${id}`,
+      JSON.stringify({
+        schemaVersion: 1,
+        view: "table",
+        columns: [],
+        statusCategory: {},
+      }),
+    );
   HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
   };
@@ -62,6 +73,15 @@ beforeEach(() => {
       version: "task-v",
       editable: true,
     })),
+    prepareTopicRemoval: vi.fn(async (req: any) => ({
+      token: "removal",
+      projectId: req.projectId,
+      year: req.year,
+      action: req.action,
+      details: ["Exact removal preview"],
+      expiresAt: Date.now() + 60000,
+    })),
+    executeTopicRemoval: vi.fn(),
     prepareTopicOperation: vi.fn(async (req) => ({
       token: "token",
       projectId: "p",
@@ -328,11 +348,11 @@ it.each([false, true])(
     mount();
     await settled();
     const d = deferred();
-    api.prepareTopicOperation.mockReturnValueOnce(d.promise);
+    api.prepareTopicRemoval.mockReturnValueOnce(d.promise);
     fireEvent.click(
       screen.getByRole("button", { name: "Удалить топик feature-b" }),
     );
-    await waitFor(() => expect(api.prepareTopicOperation).toHaveBeenCalled());
+    await waitFor(() => expect(api.prepareTopicRemoval).toHaveBeenCalled());
     assertReason(["выполняется операция с топиками"]);
     expect(api.executeTopicOperation).not.toHaveBeenCalled();
     await act(async () => d.reject(Error("controlled failure")));
@@ -369,11 +389,11 @@ it("keeps active and in-flight reasons without a dirty prohibition after the nex
   const view = render(ui(store));
   await settled();
   const operation = deferred();
-  api.prepareTopicOperation.mockReturnValueOnce(operation.promise);
+  api.prepareTopicRemoval.mockReturnValueOnce(operation.promise);
   fireEvent.click(
     screen.getByRole("button", { name: "Удалить топик feature-b" }),
   );
-  await waitFor(() => expect(api.prepareTopicOperation).toHaveBeenCalled());
+  await waitFor(() => expect(api.prepareTopicRemoval).toHaveBeenCalled());
   api.readTopicBoard.mockResolvedValueOnce({
     ...board,
     active: true,

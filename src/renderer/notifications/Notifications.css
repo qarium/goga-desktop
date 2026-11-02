@@ -1,0 +1,296 @@
+.notifications-anchor {
+  position: relative;
+  margin-left: auto;
+  -webkit-app-region: no-drag;
+}
+.notification-bell {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 34px;
+  padding: 0;
+  background: var(--surface);
+}
+.notification-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #3bd3c3;
+  color: #072b2b;
+  border-radius: 12px;
+  min-width: 20px;
+  height: 20px;
+  padding: 0 5px;
+  font-size: 11px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.notification-bell .notification-count {
+  position: absolute;
+  right: -7px;
+  top: -6px;
+  border: 2px solid var(--surface);
+}
+.notifications-panel.topic-context-popup {
+  position: absolute;
+  left: auto;
+  right: 0;
+  top: calc(100% + 8px);
+  width: 400px;
+  max-width: calc(100vw - 16px);
+  padding: 0;
+  z-index: 1100;
+  overflow: hidden;
+  background: #152135;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 32px #0006;
+  color: var(--text);
+  text-align: left;
+}
+.notifications-heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 20px 16px 15px;
+  border-bottom: 1px solid var(--line);
+}
+.notifications-heading h2 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+}
+.notifications-heading p {
+  margin: 4px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+.notifications-heading-actions {
+  display: flex;
+  gap: 4px;
+  margin-top: -4px;
+  flex-shrink: 0;
+}
+.notification-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+}
+.notification-icon:hover:not(:disabled) {
+  color: var(--teal);
+  background: var(--raised);
+}
+.notification-events {
+  max-height: min(520px, calc(100dvh - 250px));
+  overflow: auto;
+}
+.notification-event {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px;
+  gap: 4px;
+  padding: 18px 12px 18px 16px;
+  border-bottom: 1px solid var(--line);
+}
+.notification-event.unread {
+  background: #1a2b3b;
+}
+.notification-event-open {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  min-width: 0;
+  padding: 0;
+  text-align: left;
+  background: none;
+  border: 0;
+  border-radius: 0;
+}
+.notification-event-open:hover:not(:disabled) {
+  background: none;
+}
+.notification-symbol {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 30px;
+  height: 30px;
+  border-radius: 8px;
+  background: #193c39;
+  color: #73d3a2;
+}
+.notification-symbol svg {
+  width: 16px;
+  height: 16px;
+}
+.notification-event.question .notification-symbol,
+.notification-event.approval .notification-symbol,
+.notification-event.paused .notification-symbol,
+.notification-event.assistant-decision .notification-symbol {
+  background: #383628;
+  color: #efbf70;
+}
+.notification-event.stage-failed .notification-symbol,
+.notification-event.run-failed .notification-symbol {
+  background: #3b2938;
+  color: #f09191;
+}
+.notification-event-copy {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
+.notification-event-copy strong {
+  font-weight: 600;
+  color: var(--text);
+}
+.notification-event-copy .notification-owner,
+.notification-event-copy small {
+  color: var(--muted);
+  font-size: 11px;
+}
+.notification-new-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-left: 7px;
+  border-radius: 50%;
+  background: var(--teal);
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.notification-read-mark {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 8px;
+  color: var(--muted);
+}
+.notifications-footer {
+  display: grid;
+  gap: 12px;
+  padding: 14px 16px;
+  color: var(--muted);
+  font-size: 11px;
+  background: #152135;
+}
+.notifications-footer > span {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+.notifications-footer > span svg {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.notifications-footer label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+}
+.notifications-footer input {
+  margin: 0;
+  accent-color: var(--teal);
+}
+.notifications-empty {
+  padding: 32px 16px;
+  text-align: center;
+  color: var(--muted);
+}
+.notifications-error {
+  display: grid;
+  gap: 8px;
+  padding: 12px 16px;
+  margin: 0;
+  color: #ffbbb2;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.notifications-error button {
+  justify-self: start;
+}
+.notifications-pagination {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 16px;
+}
+.notifications-pagination button {
+  font-size: 11px;
+  padding: 6px 9px;
+}
+.topic-context-native-root .notifications-panel.topic-context-popup {
+  position: relative;
+  top: auto;
+  left: auto;
+  right: auto;
+  width: 100%;
+  max-width: none;
+  max-height: var(--topic-popup-max-height);
+  overflow: hidden;
+}
+.topic-context-native-root .notifications-panel .notification-events {
+  flex-shrink: 1;
+  min-height: 0;
+  max-height: calc(var(--topic-popup-max-height) - 190px);
+}
+.project-notification-row {
+  position: relative;
+  min-width: 0;
+}
+.project-notification-row .project-button {
+  width: 100%;
+  padding-right: 38px;
+}
+.project-notification-badge {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  transform: translateY(-50%);
+  padding: 4px;
+  border: 0;
+  background: none;
+  min-width: 28px;
+  min-height: 28px;
+}
+.sidebar-collapsed .project-notification-row .project-button {
+  padding-right: 0;
+}
+.sidebar-collapsed .project-notification-badge {
+  top: 2px;
+  right: 0;
+  transform: none;
+  padding: 0;
+  min-width: 20px;
+  min-height: 20px;
+}
+.run-unread-marker {
+  display: inline-block;
+  flex-shrink: 0;
+  width: 6px;
+  height: 6px;
+  margin-left: 5px;
+  border-radius: 50%;
+  background: var(--teal);
+}
+@media (pointer: coarse) {
+  .notification-icon {
+    min-width: 44px;
+    min-height: 44px;
+  }
+  .notification-event {
+    grid-template-columns: minmax(0, 1fr) 44px;
+  }
+}

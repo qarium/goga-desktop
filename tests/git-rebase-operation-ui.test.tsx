@@ -132,8 +132,7 @@ beforeEach(() => {
     readGitWorkspace: vi.fn(async (s: ScopeRef) => snapshot(s)),
     readGitDiff: vi.fn(async (r: any) => ({
       ...r,
-      staged: { kind: "empty", text: "" },
-      unstaged: { kind: "empty", text: "" },
+      changes: { kind: "empty", text: "" },
     })),
     readGitConflict: vi.fn(async (r: any) => conflictDoc(r)),
     prepareGitRebaseOperation: vi.fn(async (r: any) => preview(r)),

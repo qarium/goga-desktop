@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 const fake = vi.hoisted(() => ({
   created: [] as any[],
   sessions: [] as any[],
+  loads: [] as ((url:string)=>Promise<void>)[],
 }));
 vi.mock("electron", () => ({
   WebContentsView: class extends EventEmitter {
@@ -15,6 +16,7 @@ vi.mock("electron", () => ({
         id: fake.created.length + 10,
         loadURL: vi.fn(async (url: string) => {
           this.webContents.url = url;
+          const next=fake.loads.shift();if(next)await next(url);
         }),
         url: "",
         getURL: () => this.webContents.url,
@@ -46,13 +48,15 @@ vi.mock("electron", () => ({
     }),
   },
   dialog: { showMessageBox: vi.fn(async () => ({ response: 1 })) },
+  ipcMain: new EventEmitter(),
 }));
-import { dialog } from "electron";
+import { dialog, ipcMain } from "electron";
 import { DashboardViews } from "../src/main/views";
 describe("independent AFM views", () => {
   beforeEach(() => {
     fake.created.length = 0;
     fake.sessions.length = 0;
+    fake.loads.length = 0;
   });
   function fixture() {
     const win = Object.assign(new EventEmitter(), {
@@ -74,13 +78,56 @@ describe("independent AFM views", () => {
       opened,
     };
   }
+  it("fits the measured shell viewport through sidebar collapse and window resize", async () => {
+    const { views, win } = fixture();
+    await views.ensure("a", "http://localhost:4101");
+    views.setViewport({ x: 60, y: 212, width: 1220, height: 688 });
+    expect(fake.created[0].bounds).toEqual({
+      x: 60,
+      y: 212,
+      width: 1220,
+      height: 688,
+    });
+    views.select("a");
+    expect(fake.created[0].visible).toBe(true);
+    views.setViewport({ x: 236, y: 212, width: 1044, height: 688 });
+    expect(fake.created[0].bounds.x).toBe(236);
+    win.getContentSize = () => [900, 600];
+    win.emit("resize");
+    expect(fake.created[0].bounds).toEqual({
+      x: 236,
+      y: 212,
+      width: 664,
+      height: 388,
+    });
+    expect(() =>
+      views.setViewport({ x: -1, y: 0, width: 10, height: 10 }),
+    ).toThrow();
+    expect(() =>
+      views.setViewport({ x: 0, y: NaN, width: 10, height: 10 }),
+    ).toThrow();
+    views.setViewport({ x: 1000, y: 1000, width: 500, height: 500 });
+    expect(fake.created[0].bounds).toEqual({
+      x: 900,
+      y: 600,
+      width: 0,
+      height: 0,
+    });
+    expect(fake.created[0].options.webPreferences).toMatchObject({
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+    });
+  });
   it("inserts new dashboards below any existing native overlay", async () => {
     const { views, win } = fixture();
     const overlay = { kind: "topic-popup" };
     const children: any[] = [overlay];
-    win.contentView.addChildView.mockImplementation((view: any, index?: number) => {
-      children.splice(index ?? children.length, 0, view);
-    });
+    win.contentView.addChildView.mockImplementation(
+      (view: any, index?: number) => {
+        children.splice(index ?? children.length, 0, view);
+      },
+    );
     await views.ensure("a", "http://localhost:4101");
     await views.ensure("b", "http://localhost:4102");
     expect(children.at(-1)).toBe(overlay);
@@ -95,11 +142,18 @@ describe("independent AFM views", () => {
     const children: any[] = [shellView, oldDashboard, overlay];
     Object.assign(win, { webContents: shellContents });
     Object.assign(win.contentView, { children });
-    win.contentView.addChildView.mockImplementation((view: any, index?: number) => {
-      children.splice(index ?? children.length, 0, view);
-    });
+    win.contentView.addChildView.mockImplementation(
+      (view: any, index?: number) => {
+        children.splice(index ?? children.length, 0, view);
+      },
+    );
     await views.ensure("a", "http://localhost:4101");
-    expect(children).toEqual([shellView, fake.created[0], oldDashboard, overlay]);
+    expect(children).toEqual([
+      shellView,
+      fake.created[0],
+      oldDashboard,
+      overlay,
+    ]);
   });
   it("loads once per run and switching preserves independent page state", async () => {
     const { views } = fixture();
@@ -145,50 +199,27 @@ describe("independent AFM views", () => {
     views.select("a");
     expect(fake.created[0].visible).toBe(false);
   });
-  it("asks before initial load and permits notification checks with null WebContents only for the approved AFM origin", async () => {
-    vi.mocked(dialog.showMessageBox).mockResolvedValueOnce({
-      response: 0,
-      checkboxChecked: false,
-    });
+  it("loads without per-run consent and denies browser notifications to avoid duplicate Desktop delivery", async () => {
+    vi.mocked(dialog.showMessageBox).mockClear();
     const { views } = fixture();
     await views.ensure("a", "http://localhost:4101");
     const check = fake.sessions[0].setPermissionCheckHandler.mock.calls[0][0];
-    expect(dialog.showMessageBox).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        title: "Уведомления конвейера",
-        detail:
-          "Включение и выключение уведомлений остаётся в панели конвейера. Системная доставка macOS зависит от подписи приложения и настроек уведомлений.",
-      }),
-    );
-    expect(check(null, "notifications", "http://localhost:4101")).toBe(true);
+    expect(dialog.showMessageBox).not.toHaveBeenCalled();
+    expect(check(null, "notifications", "http://localhost:4101")).toBe(false);
     expect(check(null, "notifications", "http://localhost:4102")).toBe(false);
     expect(check(null, "camera", "http://localhost:4101")).toBe(false);
     expect(check({ id: 999 }, "notifications", "http://localhost:4101")).toBe(
       false,
     );
   });
-  it("denies before consent, after decline, and after close including requests", async () => {
-    let resolve!: (v: any) => void;
-    vi.mocked(dialog.showMessageBox).mockImplementationOnce(
-      () => new Promise((r) => (resolve = r)),
-    );
+  it("denies every permission request before and after close", async () => {
     const { views } = fixture();
-    const loading = views.ensure("a", "http://localhost:4101");
+    await views.ensure("a", "http://localhost:4101");
     const check = fake.sessions[0].setPermissionCheckHandler.mock.calls[0][0];
     const request =
       fake.sessions[0].setPermissionRequestHandler.mock.calls[0][0];
     expect(check(null, "notifications", "http://localhost:4101")).toBe(false);
-    expect(fake.created[0].webContents.loadURL).not.toHaveBeenCalled();
-    const options = (
-      vi.mocked(dialog.showMessageBox).mock.calls.at(-1) as unknown as [
-        unknown,
-        unknown,
-      ]
-    )[1];
-    expect(options).toMatchObject({ defaultId: 1, cancelId: 1 });
-    resolve({ response: 1 });
-    await loading;
+    expect(fake.created[0].webContents.loadURL).toHaveBeenCalledOnce();
     expect(check(null, "notifications", "http://localhost:4101")).toBe(false);
     const callback = vi.fn();
     request({ id: fake.created[0].webContents.id }, "notifications", callback, {
@@ -201,6 +232,18 @@ describe("independent AFM views", () => {
       requestingUrl: "http://localhost:4101",
     });
     expect(callback).toHaveBeenLastCalledWith(false);
+  });
+  it("requires exact AFM main-frame acknowledgement and selected run for stage navigation",async()=>{
+    const {views}=fixture();await views.ensure("a","http://localhost:4101");
+    expect(await views.focusStage("a","worker")).toBe(false);
+    views.select("a");const wc=fake.created[0].webContents;
+    wc.mainFrame={url:"http://localhost:4101"};wc.send=vi.fn();
+    const pending=views.focusStage("a","worker");
+    const command=wc.send.mock.calls[0][1];
+    ipcMain.emit("goga:afm-stage-selected",{sender:{id:999},senderFrame:wc.mainFrame},{...command,selected:true});
+    ipcMain.emit("goga:afm-stage-selected",{sender:wc,senderFrame:wc.mainFrame},{...command,selected:true});
+    expect(await pending).toBe(true);
+    expect(ipcMain.listenerCount("goga:afm-stage-selected")).toBe(0);
   });
   it("reapplies narrow AFM branding and theme selectors on each trusted document", async () => {
     const { views } = fixture();
@@ -259,17 +302,15 @@ describe("independent AFM views", () => {
     expect(focus).not.toHaveBeenCalled();
     expect(error).not.toHaveBeenCalled();
   });
-  it("cannot load or resurrect after close while permission/load is pending", async () => {
+  it("cannot resurrect after close while browser load is pending", async () => {
     let resolve!: (v: any) => void;
-    vi.mocked(dialog.showMessageBox).mockImplementationOnce(
-      () => new Promise((r) => (resolve = r)),
-    );
+    fake.loads.push(() => new Promise((r) => (resolve = r)));
     const { views, error } = fixture();
     const loading = views.ensure("a", "http://localhost:4101");
     views.remove("a");
-    resolve({ response: 0 });
+    resolve(undefined);
     await loading;
-    expect(fake.created[0].webContents.loadURL).not.toHaveBeenCalled();
+    expect(fake.created[0].webContents.loadURL).toHaveBeenCalledOnce();
     expect(error).not.toHaveBeenCalled();
     views.dispose();
     await views.ensure("c", "http://localhost:4103");
@@ -285,11 +326,9 @@ describe("independent AFM views", () => {
   });
   it("ignores a rejected pending load and late document callbacks after removal", async () => {
     const { views, error, focus } = fixture();
-    const loading = views.ensure("a", "http://localhost:4101");
     let reject!: (e: Error) => void;
-    fake.created[0].webContents.loadURL.mockImplementationOnce(
-      () => new Promise((_r: any, j: any) => (reject = j)),
-    );
+    fake.loads.push(() => new Promise((_r: any,j: any)=>(reject=j)));
+    const loading = views.ensure("a", "http://localhost:4101");
     await Promise.resolve();
     expect(fake.created[0].webContents.loadURL).toHaveBeenCalled();
     views.remove("a");
@@ -304,11 +343,9 @@ describe("independent AFM views", () => {
   it("acknowledges successful browser load only, keeps loading view hidden and reuses it for journal toggle", async () => {
     const { views, opened } = fixture();
     views.select("a");
-    const loading = views.ensure("a", "http://localhost:4101");
     let resolve!: () => void;
-    fake.created[0].webContents.loadURL.mockImplementationOnce(
-      () => new Promise<void>((r) => (resolve = r)),
-    );
+    fake.loads.push(() => new Promise<void>(r=>(resolve=r)));
+    const loading = views.ensure("a", "http://localhost:4101");
     await Promise.resolve();
     expect(opened).not.toHaveBeenCalled();
     expect(fake.created[0].visible).toBe(false);
@@ -327,23 +364,14 @@ describe("independent AFM views", () => {
     expect(fake.created[0].webContents.loadURL).toHaveBeenCalledTimes(1);
     expect(fake.created[0].visible).toBe(true);
   });
-  it("aborts pending permission on deadline removal and never acknowledges late load", async () => {
+  it("closes pending native load on deadline removal and never acknowledges its late result", async () => {
     let resolve!: (v: any) => void;
-    vi.mocked(dialog.showMessageBox).mockImplementationOnce(
-      () => new Promise((r) => (resolve = r)),
-    );
+    fake.loads.push(() => new Promise((r) => (resolve = r)));
     const { views, opened } = fixture();
     const loading = views.ensure("a", "http://localhost:4101");
-    const options: any = (
-      vi.mocked(dialog.showMessageBox).mock.calls.at(-1) as unknown as [
-        unknown,
-        any,
-      ]
-    )[1];
-    expect(options.signal.aborted).toBe(false);
     views.remove("a");
-    expect(options.signal.aborted).toBe(true);
-    resolve({ response: 0 });
+    expect(fake.created[0].webContents.close).toHaveBeenCalledOnce();
+    resolve(undefined);
     await loading;
     expect(opened).not.toHaveBeenCalled();
   });
@@ -354,10 +382,8 @@ describe("independent AFM views", () => {
     await views.ensure("a", "http://localhost:4101");
     expect(fake.created[0].visible).toBe(false);
     expect(fake.created[0].webContents.close).toHaveBeenCalledOnce();
+    fake.loads.push(async()=>{throw Error("navigation failed");});
     const loading = views.ensure("b", "http://localhost:4102");
-    fake.created[1].webContents.loadURL.mockRejectedValueOnce(
-      Error("navigation failed"),
-    );
     await loading;
     expect(error).toHaveBeenCalledWith("b", expect.any(String));
     expect(opened).toHaveBeenCalledTimes(1);

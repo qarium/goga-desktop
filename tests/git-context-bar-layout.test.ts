@@ -33,3 +33,28 @@ it("keeps icons compact and long branch names truncated without hiding the count
     ),
   ).toMatch(/text-overflow: ellipsis;/);
 });
+
+it("groups pipeline state and stop immediately before repository controls", () => {
+  const css = read("style.css");
+  expect(read("App.tsx").includes('className="run-actions"')).toBe(true);
+  expect(rule(css, ".run-actions")).toMatch(/align-items: center;/);
+  expect(rule(css, ".run-actions")).toMatch(/gap: 8px;/);
+  expect(rule(css, ".run-state")).not.toMatch(/margin-left: auto/);
+  expect(
+    rule(
+      read("GitWorkspace.css"),
+      ".run-actions + .git-workspace-controls-host",
+    ),
+  ).toMatch(/margin-left: 0;/);
+});
+it("aligns the new topic fields regardless of the task link", () => {
+  const css = read("style.css");
+  expect(rule(css, ".topic-new-row")).toMatch(/align-items: start;/);
+  const form = read("LaunchForm.css");
+  expect(rule(form, ".topic-new-row .searchable-picker > button")).toMatch(
+    /height: 42px;/,
+  );
+  expect(rule(form, ".topic-new-row > label > input")).toMatch(
+    /margin-top: 8px;/,
+  );
+});

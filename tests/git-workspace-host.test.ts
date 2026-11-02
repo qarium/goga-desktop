@@ -226,7 +226,7 @@ it(
       path: "file.txt",
       revision: snapshot.revision,
     });
-    expect(diff.unstaged.text).toContain("+primary edit");
+    expect(diff.changes.text).toContain("+primary edit");
     expect(
       calls.mock.calls.every(
         (c) => !c[1].includes("board") && !c[1].includes("fetch"),

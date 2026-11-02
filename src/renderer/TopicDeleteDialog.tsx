@@ -6,6 +6,7 @@ import { ContextDeletionAction } from "./ContextDeletionAction";
 import { contextRef } from "./topic-context";
 import { useReadScope } from "./read-request";
 import { LoadingState } from "./LoadingBoundary";
+import { TopicsRemovalDialog } from "./TopicsRemovalDialog";
 import {
   TopicModal,
   TopicConfirmation,
@@ -13,6 +14,67 @@ import {
   topicError,
   useTopicOperation,
 } from "./TopicsCommon";
+
+/** A saved deletion keeps its original protocol; a new deletion is topic-first. */
+export function TopicRemovalEntry(
+  props: Parameters<typeof TopicDeleteDialog>[0],
+) {
+  const owner = props.owner;
+  const read = useReadScope(
+    JSON.stringify(["removal-entry", owner?.contextId, owner?.revision]),
+  );
+  const [legacy, setLegacy] = useState<boolean | null>(owner ? null : false);
+  const [error, setError] = useState("");
+  const [attempt, setAttempt] = useState(0);
+  useEffect(() => {
+    if (!owner) return;
+    let alive = true;
+    setLegacy(null);
+    setError("");
+    read("contextDeletionRecovery", contextRef(owner))
+      .then((plan) => {
+        if (plan && plan.contextId !== owner.contextId)
+          throw Error("Журнал удаления относится к другой копии.");
+        if (alive) setLegacy(!!plan);
+      })
+      .catch((e) => {
+        if (alive) setError(topicError(e));
+      });
+    return () => {
+      alive = false;
+    };
+  }, [read, owner, attempt]);
+  if (legacy === null)
+    return (
+      <TopicModal title="Проверяем удаление" onClose={props.onClose}>
+        {error ? (
+          <>
+            <p role="alert" className="error">
+              {error}
+            </p>
+            <button type="button" onClick={() => setAttempt((n) => n + 1)}>
+              Повторить проверку
+            </button>
+          </>
+        ) : (
+          <LoadingState label="Проверяем прежнее подтверждение…" />
+        )}
+      </TopicModal>
+    );
+  return legacy ? (
+    <TopicDeleteDialog {...props} />
+  ) : (
+    <TopicsRemovalDialog
+      project={props.project}
+      year={props.year}
+      action="delete"
+      topics={[props.target.topic]}
+      onClose={props.onClose}
+      onChanged={props.onChanged}
+      onBusy={props.onBusy}
+    />
+  );
+}
 
 /** Both entrypoints share the existing host preview/token flow; clicking a trash icon never executes. */
 export function TopicDeleteDialog({

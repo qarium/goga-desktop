@@ -23,9 +23,10 @@ import {
 import {
   TopicPickerPopup,
   dismissActiveTopicPopup,
-  hasNativeTopicPopup,
+  useNativeTopicPopup,
 } from "./TopicPickerPopup";
 import "./RepositoryActions.css";
+import { ContextOperationProgress } from "./ContextOperationProgress";
 
 export function RepositoryIcon({
   action,
@@ -86,7 +87,8 @@ export function RepositoryActions({
   const controller = useRepositoryActionController();
   const context = selected ? contextRef(selected) : undefined;
   const request = { projectId: project.id, ...(context ? { context } : {}) };
-  const busy = controller.busy.has(repositoryActionKey(request));
+  const active = controller.busy.get(repositoryActionKey(request));
+  const busy = !!active;
   const unavailable = selected
     ? selected.projectId !== project.id
       ? "Контекст другого проекта."
@@ -131,53 +133,70 @@ export function RepositoryActions({
     "update-base":
       "Обновить base из remote, если ветка опубликована; получить локальную базу в копию и выполнить goga topics update",
   };
+  const progressLabels: Record<RepositoryActionRequest["action"], string> = {
+    sync: "Синхронизация…",
+    publish: "Публикация…",
+    "update-base": "Обновление из базы…",
+    propagate: "Перенос в базу…",
+    "update-remote": "Обновление из remote…",
+  };
   return (
-    <div
-      className={
-        onlySync
-          ? "repository-actions repository-actions-row"
-          : "repository-actions"
-      }
-      role="group"
-      aria-label="Действия с веткой"
-      onClick={(e) => e.stopPropagation()}
-      onPointerDown={(e) => e.stopPropagation()}
-      onKeyDown={(e) => {
-        if (
-          ["Enter", " ", "ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)
-        )
-          e.stopPropagation();
-      }}
-    >
-      {actions.map((action) => (
-        <TooltipButton
-          key={action}
-          disabled={disabled || busy || !available || !!unavailable}
-          label={labels[action]}
-          tooltipLabel={tooltipLabels[action]}
-          busy={busy}
-          description={
-            unavailable ||
-            (!available
-              ? "Действие недоступно в этой версии хоста"
-              : busy
-                ? "Операция выполняется…"
-                : disabled
-                  ? "Действие временно недоступно"
-                  : descriptions[action])
-          }
-          onClick={() => {
-            void controller.run(
-              { ...request, action },
-              `${project.name} · ${selected ? `${selected.topic} · ${selected.year} · ${selected.branch}` : "Без топика · исходный проект"}`,
-            );
-            onStarted?.();
-          }}
-        >
-          <RepositoryIcon action={action} />
-        </TooltipButton>
-      ))}
-    </div>
+    <>
+      <div
+        className={
+          onlySync
+            ? "repository-actions repository-actions-row"
+            : "repository-actions"
+        }
+        role="group"
+        aria-label="Действия с веткой"
+        onClick={(e) => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (
+            ["Enter", " ", "ArrowDown", "ArrowUp", "Home", "End"].includes(
+              e.key,
+            )
+          )
+            e.stopPropagation();
+        }}
+      >
+        {actions.map((action) => (
+          <TooltipButton
+            key={action}
+            disabled={disabled || busy || !available || !!unavailable}
+            label={labels[action]}
+            tooltipLabel={tooltipLabels[action]}
+            busy={busy}
+            description={
+              unavailable ||
+              (!available
+                ? "Действие недоступно в этой версии хоста"
+                : busy
+                  ? "Операция выполняется…"
+                  : disabled
+                    ? "Действие временно недоступно"
+                    : descriptions[action])
+            }
+            onClick={() => {
+              void controller.run(
+                { ...request, action },
+                `${project.name} · ${selected ? `${selected.topic} · ${selected.year} · ${selected.branch}` : "Без топика · исходный проект"}`,
+              );
+              onStarted?.();
+            }}
+          >
+            <RepositoryIcon action={action} />
+          </TooltipButton>
+        ))}
+      </div>
+      {!onlySync && active && (
+        <ContextOperationProgress
+          label={`${progressLabels[active.action]} · ${active.label}`}
+          message={progressLabels[active.action]}
+        />
+      )}
+    </>
   );
 }
 
@@ -408,6 +427,7 @@ export function RepositoryOperationPopup({
   anchor: RefObject<HTMLDivElement | null>;
   onHandoff?: (candidate: GitUpdateHandoffCandidate) => void;
 }) {
+  const nativePopup = useNativeTopicPopup();
   const controller = useRepositoryActionController();
   const failure = controller.failures[0];
   const [ready, setReady] = useState<{
@@ -445,7 +465,7 @@ export function RepositoryOperationPopup({
     documentScopeId(candidate.scope) === documentScopeId(failure.scope)
       ? () => {
           onHandoff(candidate);
-          if (ready.modal || !hasNativeTopicPopup()) controller.close();
+          if (ready.modal || !nativePopup) controller.close();
         }
       : undefined;
   if (ready.modal)

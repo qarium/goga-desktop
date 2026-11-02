@@ -516,3 +516,38 @@ it("uses consistent YAML key colors for CODEMANIFEST, including long raw signatu
   ).toBeNull();
   expect(view.state.doc.toString()).toBe(value);
 });
+
+it.each(["CODEMANIFEST", "README.md", "main.go", "index.ts"])(
+  "shares line indentation in the file editor for %s",
+  (path) => {
+    render(
+      <OverviewEditor
+        path={path}
+        value={"first\nsecond"}
+        onChange={() => {}}
+      />,
+    );
+    const content = document
+      .querySelector(".yaml-code-editor")!
+      .shadowRoot!.querySelector(".cm-content")!;
+    const view = EditorView.findFromDOM(content as HTMLElement)!;
+    act(() =>
+      view.dispatch({ selection: { anchor: 0, head: view.state.doc.length } }),
+    );
+    fireEvent.keyDown(content, {
+      key: "Tab",
+      keyCode: 9,
+      bubbles: true,
+      cancelable: true,
+    });
+    expect(view.state.doc.toString()).toBe("  first\n  second");
+    fireEvent.keyDown(content, {
+      key: "Tab",
+      keyCode: 9,
+      shiftKey: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    expect(view.state.doc.toString()).toBe("first\nsecond");
+  },
+);

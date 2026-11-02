@@ -71,6 +71,6 @@ export interface GitWorkspaceDiff {
   scope: ScopeRef;
   path: string;
   revision: string;
-  staged: GitDiffPart;
-  unstaged: GitDiffPart;
+  /** Final HEAD-to-working content; reading never modifies the Git index. */
+  changes: GitDiffPart;
 }

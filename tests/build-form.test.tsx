@@ -108,8 +108,14 @@ it("searches shared build catalogs by label and submits their exact values", asy
       env: [],
     }),
   );
-  await screen.findByText("План доступен");
-  fireEvent.click(screen.getByRole("combobox", { name: "Профиль" }));
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("region", { name: "Новая сборка" })
+        .getAttribute("aria-busy"),
+    ).toBe("false"),
+  );
+  fireEvent.click(await screen.findByRole("combobox", { name: "Профиль" }));
   fireEvent.change(screen.getByRole("searchbox", { name: "Поиск профиля" }), {
     target: { value: "fast" },
   });
@@ -121,22 +127,25 @@ it("searches shared build catalogs by label and submits their exact values", asy
       env: [],
     }),
   );
-  await screen.findByText("План доступен");
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("region", { name: "Новая сборка" })
+        .getAttribute("aria-busy"),
+    ).toBe("false"),
+  );
   fireEvent.click(
-    screen.getByRole("combobox", { name: "База сравнения", hidden: true }),
+    await screen.findByRole("combobox", { name: "База сравнения" }),
   );
   fireEvent.change(
     screen.getByRole("searchbox", {
       name: "Поиск базы сравнения",
-      hidden: true,
     }),
     {
       target: { value: "ORIGIN" },
     },
   );
-  fireEvent.click(
-    screen.getByRole("option", { name: "origin/dev", hidden: true }),
-  );
+  fireEvent.click(screen.getByRole("option", { name: "origin/dev" }));
   fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
   await waitFor(() => expect(api.launchBuild).toHaveBeenCalledTimes(1));
   expect(api.launchBuild.mock.calls[0][0]).toMatchObject({

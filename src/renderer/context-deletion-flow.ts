@@ -42,7 +42,7 @@ export async function performContextDeletion(
   progress?.("Клон перемещён в Корзину. Переключаем контекст…", true);
   await leave(owner);
   if (result.status !== "success") return result;
-  progress?.("Контекст переключён. Удаляем топик в основном проекте…", true);
+  progress?.(plan.purpose === "clone-after-topic" ? "Контекст переключён. Завершаем очистку копии без повторной команды Goga…" : "Контекст переключён. Удаляем топик в основном проекте…", true);
   return api.finishContextDeletion({
     projectId: owner.projectId,
     token: plan.token,

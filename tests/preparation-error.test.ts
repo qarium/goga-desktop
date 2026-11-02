@@ -1,5 +1,8 @@
 import { expect, it } from "vitest";
-import { preparationErrorMessage } from "../src/renderer/preparation-error";
+import {
+  preparationErrorMessage,
+  documentSaveErrorMessage,
+} from "../src/renderer/preparation-error";
 it("strips only known Electron preparation wrapper and preserves the full host reason", () => {
   const reason =
     "Описание задачи не сохранено в Git. Детали: branch/feature · 2025.";
@@ -45,3 +48,31 @@ it.each(["read-overview-schema", "read-overview-contract"])(
     ).toBe(reason);
   },
 );
+
+it.each(["save-project-document", "save-overview-file", "save-settings"])(
+  "removes only the known %s wrapper while retaining the exact failure reason",
+  (channel) => {
+    const reason = "Нет прав на запись файла. Error: полезная подробность";
+    expect(
+      preparationErrorMessage(
+        Error(
+          `Error invoking remote method 'goga:${channel}': Error: ${reason}`,
+        ),
+      ),
+    ).toBe(reason);
+  },
+);
+
+it("does not disguise an uncertain write outcome as a pre-write file conflict", () => {
+  const reason = "Не удалось подтвердить результат записи. Проверьте файл.";
+  expect(
+    documentSaveErrorMessage(
+      Error(
+        `Error invoking remote method 'goga:save-project-document': Error: ${reason}`,
+      ),
+    ),
+  ).toBe(reason);
+  const unknown =
+    "Error invoking remote method 'goga:unknown-save': Error: stop";
+  expect(documentSaveErrorMessage(Error(unknown))).toBe(unknown);
+});

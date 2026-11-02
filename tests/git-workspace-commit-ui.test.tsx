@@ -64,8 +64,7 @@ beforeEach(() => {
     readGitWorkspace: vi.fn(async (s: string) => snapshot(s)),
     readGitDiff: vi.fn(async (r: any) => ({
       ...r,
-      staged: { kind: "empty", text: "" },
-      unstaged: { kind: "empty", text: "" },
+      changes: { kind: "patch", text: "@@ -1 +1 @@\n-base\n+final " + r.path },
     })),
     prepareGitCommit: vi.fn(async (r: any) => preview(r)),
     executeGitCommit: vi.fn(async () => ({
@@ -105,6 +104,8 @@ async function draft() {
 it("previews only checked whole files and commits only after explicit confirmation", async () => {
   render(view());
   await draft();
+  fireEvent.click(screen.getByRole("button", { name: "one.txt" }));
+  await waitFor(() => expect(portal.textContent).toContain("+final one.txt"));
   expect(
     screen.getByRole<HTMLInputElement>("checkbox", {
       name: "Выбрать файл: other.txt",
@@ -121,6 +122,7 @@ it("previews only checked whole files and commits only after explicit confirmati
     message: "Selected files",
   });
   expect(screen.getByText(/полное текущее содержимое/i)).toBeTruthy();
+  expect(screen.queryByText(/только подготовленные строки/)).toBeNull();
   expect(screen.getByText(/хуки.*не запускаются/i)).toBeTruthy();
   expect(api.executeGitCommit).not.toHaveBeenCalled();
   fireEvent.click(

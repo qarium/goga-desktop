@@ -11,7 +11,7 @@ import {
   waitFor,
   act,
 } from "@testing-library/react";
-import { LaunchForm } from "../src/renderer/LaunchForm";
+import { ExistingTopicLaunchForm as LaunchForm } from "./helpers/existing-pipeline-draft";
 import { createDraftStore } from "../src/renderer/task-drafts";
 const project = { id: "reset", name: "Reset", path: "/fixture/reset" };
 const topics = ["main", "other"].map((branch) => ({

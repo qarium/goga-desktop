@@ -195,6 +195,17 @@ describe("Desktop project settings", () => {
     expect((await store.read("one")).value.profile).toBe("one");
     await expect(store.read("../../unknown")).rejects.toThrow();
   });
+  it("recovers an orphaned versioned owner without losing the registry or settings", async () => {
+    const { store, root } = await setup([project()]);
+    const document = await store.read(project().id);
+    const nonce = "00000000-0000-4000-8000-000000000001";
+    const lock = path.join(root, ".write.lock");
+    await fs.mkdir(lock, { mode: 0o700 });
+    await fs.writeFile(path.join(lock, `owner.${nonce}.json`), JSON.stringify({ schemaVersion: 1, pid: 12345, nonce }), { mode: 0o600 });
+    vi.spyOn(process, "kill").mockImplementation(() => { throw Object.assign(Error("dead fixture"), { code: "ESRCH" }); });
+    expect(await store.listProjects()).toEqual([project()]);
+    expect(await store.read(project().id)).toEqual(document);
+  });
   it("rejects stale and racing writers across instances", async () => {
     const { store, home, old } = await setup([project()]);
     const other = new DesktopStateStore(home, old);

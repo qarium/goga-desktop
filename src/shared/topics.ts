@@ -67,7 +67,8 @@ export type TopicAction =
   | "update"
   | "publish"
   | "propagate"
-  | "delete";
+  | "delete"
+  | "clear";
 export interface TopicOperationRequest {
   context?: TopicContextRef;
   projectId: string;

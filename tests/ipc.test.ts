@@ -602,3 +602,93 @@ it("routes branch inventory through bounded reads and accepts only a registered 
     ),
   ).toThrow(/IPC/);
 });
+
+it("admits measured dashboard bounds only from the shell main frame", () => {
+  const handlers = new Map<string, Function>();
+  const viewport = vi.fn();
+  registerIPC(
+    { handle: (key: string, fn: Function) => handlers.set(key, fn) } as any,
+    {
+      service: {},
+      settings: {},
+      window: { webContents: { id: 1 } },
+      shellURL: "file:///app/index.html",
+      choose: async () => null,
+      select: () => {},
+      viewport,
+      stop: async () => {},
+    } as any,
+  );
+  const event = {
+    sender: { id: 1 },
+    senderFrame: { url: "file:///app/index.html", parent: null },
+  };
+  const handler = handlers.get("goga:set-dashboard-viewport");
+  expect(handler).toBeTypeOf("function");
+  const bounds = { x: 60, y: 212, width: 1000, height: 600 };
+  handler!(event, bounds);
+  expect(viewport).toHaveBeenCalledWith(bounds);
+  for (const bad of [
+    { ...bounds, x: -1 },
+    { ...bounds, width: Infinity },
+    { ...bounds, y: 1.5 },
+    { ...bounds, extra: true },
+  ])
+    expect(() => handler!(event, bad)).toThrow();
+  expect(() => handler!({ ...event, sender: { id: 2 } }, bounds)).toThrow(
+    /IPC/,
+  );
+  expect(() =>
+    handler!(
+      { ...event, senderFrame: { url: "file:///app/index.html", parent: {} } },
+      bounds,
+    ),
+  ).toThrow(/IPC/);
+  expect(viewport).toHaveBeenCalledTimes(1);
+});
+
+it("accepts explicit no-topic launch but rejects hidden topic/task fields", async () => {
+  const handlers = new Map<string, Function>();
+  const service = { launch: vi.fn() };
+  registerIPC(
+    { handle: (key: string, fn: Function) => handlers.set(key, fn) } as any,
+    {
+      service,
+      settings: {},
+      window: { webContents: { id: 1 } },
+      shellURL: "file:///app/index.html",
+    } as any,
+  );
+  const event = {
+    sender: { id: 1 },
+    senderFrame: { url: "file:///app/index.html", parent: null },
+  };
+  const request = {
+    projectId: "p",
+    pipeline: "build",
+    workflow: "auto",
+    profile: "",
+    skips: [],
+    previewToken: "token",
+    task: "",
+    confirmEmptyTask: false,
+    expectedBranch: "main",
+    confirmBranchSwitch: false,
+    clean: false,
+    topic: { mode: "none" },
+  };
+  await handlers.get("goga:launch")!(event, request);
+  expect(service.launch).toHaveBeenLastCalledWith(request);
+  for (const patch of [
+    { task: "hidden task" },
+    { taskVersion: "a".repeat(64) },
+    { confirmEmptyTask: true },
+    { confirmBranchSwitch: true },
+    { topic: { mode: "none", branch: "main" } },
+    { topic: { mode: "none", name: "new" } },
+  ])
+    expect(() =>
+      handlers.get("goga:launch")!(event, { ...request, ...patch }),
+    ).toThrow();
+  expect(service.launch).toHaveBeenCalledOnce();
+});

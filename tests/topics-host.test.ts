@@ -80,6 +80,7 @@ async function fixture() {
   ];
   const mutations: { args: string[]; input?: string }[] = [];
   let onBoardRead: (() => Promise<void>) | undefined;
+  let onProjectionRead: ((args: string[]) => Promise<void>) | undefined;
   let failSwitch = false;
   let failMutation = false;
   const runner: Runner = {
@@ -88,6 +89,7 @@ async function fixture() {
     command: async (exe, args, cwd, env, input?: string) => {
       if (exe === "git") return node.command(exe, args, cwd, env);
       if (args.includes("board")) {
+        await onProjectionRead?.(args);
         if (!args.includes("--remote") && !args.includes("--per-host"))
           await onBoardRead?.();
         const data = args.includes("--remote") ? remote : [...rows, ...remote];
@@ -141,6 +143,9 @@ async function fixture() {
     request,
     onBoardRead: (callback: () => Promise<void>) => {
       onBoardRead = callback;
+    },
+    onProjectionRead: (callback: (args: string[]) => Promise<void>) => {
+      onProjectionRead = callback;
     },
     failMutation: () => {
       failMutation = true;
@@ -728,6 +733,60 @@ it("does not retry unrelated catalog command failures", async () => {
   });
   await expect(f.board()).rejects.toThrow("Операция Goga не выполнена");
   expect(reads).toBe(1);
+  expect(f.mutations).toEqual([]);
+});
+
+it("drains sibling board reads before returning the original command error", async () => {
+  const f = await fixture();
+  let release!: () => void, entered!: () => void, failed!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const started = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const rejected = new Promise<void>((resolve) => {
+    failed = resolve;
+  });
+  let calls = 0,
+    aggregateReads = 0,
+    settled = false;
+  f.onProjectionRead(async (args) => {
+    calls++;
+    if (args.includes("--per-host") && !args.includes("--remote")) {
+      entered();
+      await held;
+    } else if (!args.includes("--per-host") && !args.includes("--remote")) {
+      aggregateReads++;
+      await started;
+      failed();
+      throw Error("CLI unavailable");
+    }
+  });
+  const flight = f.board().then(
+    (value) => {
+      settled = true;
+      return { value };
+    },
+    (error) => {
+      settled = true;
+      return { error };
+    },
+  );
+  try {
+    await rejected;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(settled).toBe(false);
+  } finally {
+    release();
+    await flight;
+  }
+  const result = await flight;
+  expect(result).toHaveProperty("error");
+  if ("error" in result)
+    expect(result.error.message).toContain("Операция Goga не выполнена");
+  expect(calls).toBe(4);
+  expect(aggregateReads).toBe(1);
   expect(f.mutations).toEqual([]);
 });
 

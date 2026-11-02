@@ -92,15 +92,15 @@ it("teardown stops delayed theme mutations", async () => {
   await Promise.resolve();
   expect(document.documentElement.dataset.theme).toBe("light");
 });
-it("hides only theme group and branding, keeping other header controls", () => {
+it("hides embedded theme, branding and duplicate notification bell, keeping other header controls", () => {
   document.body.innerHTML = `<style>${AFM_EMBEDDED_STYLE}</style><header id="header" class="global-header"><div class="gh-left"><div class="gh-mark">Logo</div><div class="gh-wordmark">Wordmark</div><div class="gh-flow">Flow</div></div><div class="gh-right header-actions"><div class="gh-theme-seg" role="group" aria-label="Theme mode"><button>Light</button></div><button id="bell">Bell</button><button id="files">Files</button><button id="agent">Agent</button><span id="status">Online</span><div id="metrics">Metrics</div></div></header>`;
   expect(
     getComputedStyle(document.querySelector(".gh-theme-seg")!).display,
   ).toBe("none");
+  expect(getComputedStyle(document.querySelector("#bell")!).display).toBe("none");
   for (const selector of [
     ".gh-flow",
     ".gh-right",
-    "#bell",
     "#files",
     "#agent",
     "#status",

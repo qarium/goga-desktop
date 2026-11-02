@@ -380,15 +380,15 @@ function setupForm() {
   };
 }
 const formAbsence =
-  "В этой копии данные топика ещё не созданы. Введите непустую задачу; она сохранится здесь только при запуске.";
-it("opens a missing-catalog exact-owner form, explains local prerequisite and launches only an explicit nonblank task", async () => {
+  "В этой копии данные топика ещё не созданы. Можно запустить без задачи или добавить её здесь; она сохранится только при запуске.";
+it("opens a missing-catalog exact-owner form and permits optional task editing", async () => {
   const form = setupForm();
   render(<LaunchForm {...form} />);
   await screen.findByText(formAbsence);
   expect(
     screen.getByRole<HTMLButtonElement>("button", { name: "Запустить" })
       .disabled,
-  ).toBe(true);
+  ).toBe(false);
   expect(api.launch).not.toHaveBeenCalled();
   fireEvent.change(screen.getByLabelText("Что нужно сделать?"), {
     target: { value: "  " },
@@ -397,7 +397,7 @@ it("opens a missing-catalog exact-owner form, explains local prerequisite and la
     screen.getByRole<HTMLButtonElement>("button", {
       name: "Сохранить и запустить",
     }).disabled,
-  ).toBe(true);
+  ).toBe(false);
   fireEvent.change(screen.getByLabelText("Что нужно сделать?"), {
     target: { value: "Local pipeline task" },
   });
@@ -453,10 +453,17 @@ it.each(["remote", "other", "unowned"])(
       />,
     );
     await screen.findByText(/Выбранный топик отсутствует в каталоге запуска/);
-    expect(screen.getByLabelText("Что нужно сделать?")).toHaveProperty(
-      "value",
-      "",
-    );
+    if (kind === "unowned") {
+      expect(screen.getByRole("radio", { name: "Без топика" })).toHaveProperty(
+        "checked",
+        true,
+      );
+      expect(screen.queryByLabelText("Что нужно сделать?")).toBeNull();
+    } else
+      expect(screen.getByLabelText("Что нужно сделать?")).toHaveProperty(
+        "value",
+        "",
+      );
     expect(onPrepared).not.toHaveBeenCalled();
     expect(api.launch).not.toHaveBeenCalled();
   },
@@ -491,7 +498,7 @@ it("preserves dirty preparation text across card handoff, cancelled reset, and s
   expect(api.readTopicTask).toHaveBeenCalledTimes(1);
   expect(api.launch).not.toHaveBeenCalled();
 });
-it("reset rereads missing-local metadata atomically for the exact owner and re-blocks empty launch", async () => {
+it("reset rereads missing-local metadata atomically for the exact owner and permits launch without a task", async () => {
   const form = setupForm();
   render(<LaunchForm {...form} />);
   await screen.findByText(formAbsence);
@@ -512,7 +519,7 @@ it("reset rereads missing-local metadata atomically for the exact owner and re-b
   expect(
     screen.getByRole<HTMLButtonElement>("button", { name: "Запустить" })
       .disabled,
-  ).toBe(true);
+  ).toBe(false);
   expect(api.readTopicTask).toHaveBeenCalledTimes(2);
   for (const [request] of api.readTopicTask.mock.calls)
     expect(request).toEqual({
@@ -580,7 +587,7 @@ it("failed reread retains the local draft, cancelling reread writes nothing, suc
   expect(
     screen.getByRole<HTMLButtonElement>("button", { name: "Запустить" })
       .disabled,
-  ).toBe(true);
+  ).toBe(false);
   expect(api.launch).not.toHaveBeenCalled();
 });
 it.each(["resolve", "reject"] as const)(

@@ -1,5 +1,6 @@
 export interface ContextDeletionPreview {
   token: string;
+  purpose?: "clone-after-topic";
   switchBranches?: string[];
   switchBranch?: string;
   contextId: string;

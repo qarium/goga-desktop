@@ -1,4 +1,4 @@
-import { preparationErrorMessage } from "../preparation-error";
+import { preparationErrorMessage, documentSaveErrorMessage } from "../preparation-error";
 import type { DesktopAPI } from "../../shared/bridge";
 import type { ScopeRef } from "../../shared/context";
 import type {
@@ -513,7 +513,7 @@ export function createOverviewStore(
           await changed(path);
           return !disposed;
         } catch (error) {
-          updateFile(path, runtime, { error: message(error) });
+          updateFile(path, runtime, { error: documentSaveErrorMessage(error) });
           return false;
         }
       });

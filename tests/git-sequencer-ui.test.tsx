@@ -83,8 +83,7 @@ beforeEach(() => {
   api = {
     readGitWorkspace: vi.fn(async (s: string) => snapshot(s)),
     readGitDiff: vi.fn(async () => ({
-      staged: { kind: "empty", text: "" },
-      unstaged: { kind: "empty", text: "" },
+      changes: { kind: "empty", text: "" },
     })),
     prepareGitSequencerOperation: vi.fn(async (r) => preview(r)),
     executeGitSequencerOperation: vi.fn(async () => result()),

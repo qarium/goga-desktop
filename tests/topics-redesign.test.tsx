@@ -43,6 +43,8 @@ const board = {
 };
 let api: any;
 beforeEach(() => {
+  // This suite exercises the existing table; board defaults/behaviour have separate tests.
+  localStorage.setItem("goga.desktop.topicsBoard.v1.p", JSON.stringify({ schemaVersion: 1, view: "table", columns: [], statusCategory: {} }));
   installHistoryWorker();
   HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
@@ -67,6 +69,7 @@ beforeEach(() => {
       localBranches: board.branches,
     })),
     readTopicBoard: vi.fn(async () => ({ ...board, revision: "fresh" })),
+    prepareTopicRemoval: vi.fn(async r => ({ token: "removal", projectId: "p", year: "2026", action: r.action, details: [], expiresAt: Date.now()+120000 })),
     prepareTopicOperation: vi.fn(async (r) => ({
       token: "t",
       projectId: "p",
@@ -125,11 +128,11 @@ it("pins selected context, not primary Git branch; compact table has direct acti
   });
   fireEvent.click(screen.getByRole("button", { name: "Удалить топик alpha" }));
   await waitFor(() =>
-    expect(api.prepareTopicOperation).toHaveBeenCalledWith(
+    expect(api.prepareTopicRemoval).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "delete",
         expectedRevision: "fresh",
-        target: { topic: "alpha", branch: "alpha", remote: false },
+        topics: ["alpha"],
       }),
     ),
   );
@@ -353,7 +356,7 @@ it("does not choose an arbitrary owner for deletion when the same topic has mult
   fireEvent.click(button);
   expect(api.prepareTopicOperation).not.toHaveBeenCalled();
 });
-it("retains the exact deletion owner chosen at click, not the latest inventory order", async () => {
+it("retains the Host-issued deletion confirmation, never chooses an owner from a reordered UI inventory", async () => {
   const owner = {
     projectId: "p",
     year: "2026",
@@ -386,7 +389,7 @@ it("retains the exact deletion owner chosen at click, not the latest inventory o
     await screen.findByRole("button", { name: "Удалить топик beta" }),
   );
   await waitFor(() =>
-    expect(api.prepareContextDeletion).toHaveBeenCalledTimes(1),
+    expect(api.prepareTopicRemoval).toHaveBeenCalledTimes(1),
   );
   view.rerender(
     <TopicsWorkspace
@@ -394,6 +397,7 @@ it("retains the exact deletion owner chosen at click, not the latest inventory o
       knownContexts={[{ ...owner, contextId: "two", path: "/two" }, owner]}
     />,
   );
-  expect(api.prepareContextDeletion.mock.calls[0][0].contextId).toBe("one");
-  expect(api.prepareContextDeletion).toHaveBeenCalledTimes(1);
+  expect(api.prepareTopicRemoval.mock.calls[0][0]).toMatchObject({ projectId: "p", year: "2026", topics: ["beta"], expectedRevision: "fresh" });
+  expect(api.prepareContextDeletion).not.toHaveBeenCalled();
+  expect(api.prepareTopicRemoval).toHaveBeenCalledTimes(1);
 });

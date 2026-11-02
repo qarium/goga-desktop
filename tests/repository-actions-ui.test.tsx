@@ -775,3 +775,210 @@ it("refreshes captured topic from remote without publication", async () => {
     }),
   );
 });
+
+it.each([
+  ["sync", "Синхронизировать топик", "Синхронизация…"],
+  ["publish", "Опубликовать топик", "Публикация…"],
+  ["update-base", "Обновить из base", "Обновление из базы…"],
+  ["propagate", "Перенести топик в base и опубликовать", "Перенос в базу…"],
+  ["update-remote", "Обновить топик из remote", "Обновление из remote…"],
+])(
+  "shows %s progress after all icons until completion",
+  async (action, buttonLabel, message) => {
+    let finish!: (value: any) => void;
+    api.runRepositoryAction.mockImplementation(
+      () =>
+        new Promise((done) => {
+          finish = done;
+        }),
+    );
+    mount();
+    expect(screen.queryByRole("status")).toBeNull();
+    fireEvent.click(screen.getByLabelText(buttonLabel));
+    const status = screen.getByRole("status");
+    expect(status.textContent).toBe(message);
+    expect(status.getAttribute("aria-label")).toContain("feature/alpha");
+    expect(status.getAttribute("aria-label")).toContain(message);
+    expect(status.title).toBe(status.getAttribute("aria-label"));
+    expect(status.getAttribute("aria-live")).toBe("polite");
+    const buttons = screen.getAllByRole("button");
+    expect(buttons.every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+    expect(
+      buttons.at(-1)!.compareDocumentPosition(status) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      buttons.at(-1)!.closest(".repository-actions")!.nextElementSibling,
+    ).toBe(status);
+    fireEvent.click(screen.getByLabelText(buttonLabel));
+    expect(api.runRepositoryAction).toHaveBeenCalledTimes(1);
+    await act(async () =>
+      finish({
+        projectId: "p",
+        contextId: owner.contextId,
+        action,
+        status: "success",
+        log: "done",
+      }),
+    );
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(buttons.every((b) => !(b as HTMLButtonElement).disabled)).toBe(true);
+  },
+);
+
+it("shows primary operation feedback without assigning it to another context or project", async () => {
+  let finish!: (value: any) => void;
+  api.runRepositoryAction.mockImplementation(
+    () =>
+      new Promise((done) => {
+        finish = done;
+      }),
+  );
+  const view = render(<RepositoryActions project={project} selected={null} />);
+  fireEvent.click(screen.getByLabelText("Синхронизировать текущую ветку"));
+  expect(screen.getByRole("status").getAttribute("aria-label")).toContain(
+    "Без топика · исходный проект",
+  );
+  view.rerender(<RepositoryActions project={project} selected={owner} />);
+  expect(screen.queryByRole("status")).toBeNull();
+  expect(
+    (screen.getByLabelText("Синхронизировать топик") as HTMLButtonElement)
+      .disabled,
+  ).toBe(false);
+  view.rerender(
+    <RepositoryActions project={{ ...project, id: "other" }} selected={null} />,
+  );
+  expect(screen.queryByRole("status")).toBeNull();
+  view.rerender(<RepositoryActions project={project} selected={null} />);
+  expect(screen.getByRole("status").textContent).toBe("Синхронизация…");
+  await act(async () =>
+    finish({ projectId: "p", action: "sync", status: "success", log: "done" }),
+  );
+  expect(screen.queryByRole("status")).toBeNull();
+});
+
+it("retains operation progress across remounts and hides it for another topic", async () => {
+  let finish!: (value: any) => void;
+  api.runRepositoryAction.mockImplementation(
+    () =>
+      new Promise((done) => {
+        finish = done;
+      }),
+  );
+  const view = render(<RepositoryActions project={project} selected={owner} />);
+  fireEvent.click(screen.getByLabelText("Опубликовать топик"));
+  expect(screen.getByRole("status").textContent).toBe("Публикация…");
+  view.rerender(
+    <RepositoryActions
+      project={project}
+      selected={{
+        ...owner,
+        contextId: `ctx-${"c".repeat(64)}`,
+        topic: "beta",
+        branch: "feature/beta",
+      }}
+    />,
+  );
+  expect(screen.queryByRole("status")).toBeNull();
+  view.unmount();
+  render(<RepositoryActions project={project} selected={owner} />);
+  expect(screen.getByRole("status").textContent).toBe("Публикация…");
+  expect(api.runRepositoryAction).toHaveBeenCalledTimes(1);
+  await act(async () =>
+    finish({
+      projectId: "p",
+      contextId: owner.contextId,
+      action: "publish",
+      status: "success",
+      log: "done",
+    }),
+  );
+  expect(screen.queryByRole("status")).toBeNull();
+});
+
+it.each([false, true])(
+  "clears progress on failure without losing the existing error (rejection: %s)",
+  async (reject) => {
+    let finish!: (value: any) => void, fail!: (error: Error) => void;
+    api.runRepositoryAction.mockImplementation(
+      () =>
+        new Promise((done, rejected) => {
+          finish = done;
+          fail = rejected;
+        }),
+    );
+    mount();
+    fireEvent.click(screen.getByLabelText("Опубликовать топик"));
+    expect(screen.getByRole("status").textContent).toBe("Публикация…");
+    await act(async () => {
+      if (reject) fail(Error("Synthetic failure"));
+      else
+        finish({
+          projectId: "p",
+          contextId: owner.contextId,
+          action: "publish",
+          status: "error",
+          log: "partial",
+          error: "Synthetic failure",
+        });
+    });
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(screen.getByRole("dialog").textContent).toContain(
+      "Synthetic failure",
+    );
+    expect(
+      (screen.getByLabelText("Опубликовать топик") as HTMLButtonElement)
+        .disabled,
+    ).toBe(false);
+  },
+);
+
+it("shows row-triggered sync once in the header after the row is unmounted", async () => {
+  let finish!: (value: any) => void;
+  api.runRepositoryAction.mockImplementation(
+    () =>
+      new Promise((done) => {
+        finish = done;
+      }),
+  );
+  const view = render(
+    <>
+      <RepositoryActions project={project} selected={owner} />
+      <RepositoryActions project={project} selected={owner} onlySync />
+    </>,
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: /Синхронизировать коммиты/ }),
+  );
+  expect(screen.getAllByRole("status")).toHaveLength(1);
+  expect(
+    screen.getByRole("status").closest(".repository-actions-row"),
+  ).toBeNull();
+  view.rerender(<RepositoryActions project={project} selected={owner} />);
+  expect(screen.getByRole("status").textContent).toBe("Синхронизация…");
+  await act(async () =>
+    finish({
+      projectId: "p",
+      contextId: owner.contextId,
+      action: "sync",
+      status: "success",
+      log: "done",
+    }),
+  );
+  expect(screen.queryByRole("status")).toBeNull();
+});
+
+it("keeps independent owners' action names when their operations overlap", async () => {
+  const finishes = new Map<string, (value: any) => void>();
+  api.runRepositoryAction.mockImplementation((r: any) => new Promise((done) => { finishes.set(r.context?.contextId ?? "primary", done); }));
+  const view = render(<RepositoryActions project={project} selected={owner} />);
+  fireEvent.click(screen.getByLabelText("Опубликовать топик"));
+  view.rerender(<RepositoryActions project={project} selected={null} />);
+  fireEvent.click(screen.getByLabelText("Синхронизировать текущую ветку"));
+  expect(screen.getByRole("status").textContent).toBe("Синхронизация…");
+  await act(async () => finishes.get(owner.contextId)!({ projectId: "p", contextId: owner.contextId, action: "publish", status: "success", log: "done" }));
+  expect(screen.getByRole("status").textContent).toBe("Синхронизация…");
+  expect((screen.getByLabelText("Синхронизировать текущую ветку") as HTMLButtonElement).disabled).toBe(true);
+  await act(async () => finishes.get("primary")!({ projectId: "p", action: "sync", status: "success", log: "done" }));
+  expect(screen.queryByRole("status")).toBeNull();
+});

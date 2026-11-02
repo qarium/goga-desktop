@@ -3,3 +3,45 @@
   color: var(--text);
   font-size: 12px;
 }
+
+.topic-new-row .searchable-picker > button {
+  height: 42px;
+}
+.topic-new-row > label > input {
+  margin-top: 8px;
+}
+
+.topic-new-row .searchable-picker {
+  line-height: 1.5;
+}
+
+/* A composition refresh belongs to the stage area, not the entire form. */
+.launch-panel .pipeline-stages .loading-state {
+  min-height: 120px;
+  padding: 20px 16px;
+}
+
+.launch-panel .pipeline-stages {
+  margin-top: 8px;
+}
+
+.launch-panel .pipeline-stages > .section-heading {
+  margin-bottom: 16px;
+}
+
+.launch-panel .pipeline-stages .stage-cards {
+  margin-top: 0;
+  gap: 12px;
+}
+
+.launch-panel .pipeline-stages .stage-cards + .hint {
+  margin-top: 14px;
+}
+
+.launch-panel .pipeline-stages .hint + .hint {
+  margin-top: 8px;
+}
+
+.launch-panel .pipeline-stages + .check-row {
+  margin-top: 8px;
+}

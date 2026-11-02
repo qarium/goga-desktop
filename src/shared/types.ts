@@ -72,6 +72,7 @@ export interface Preview {
   profile: string | null;
 }
 export type TopicSelection =
+  | { mode: "none" }
   | {
       mode: "existing";
       branch: string;

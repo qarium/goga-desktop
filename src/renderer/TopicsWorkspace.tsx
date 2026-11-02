@@ -1,3 +1,13 @@
+import { Trash2 } from "lucide-react";
+import { TopicsRemovalDialog } from "./TopicsRemovalDialog";
+import { LayoutGrid, List } from "lucide-react";
+import { TopicsBoard } from "./TopicsBoard";
+import { useTopicsBoard } from "./useTopicsBoard";
+import {
+  topicSelectionKey,
+  columnChecked,
+  toggleColumn,
+} from "./topics-board-model";
 import { TopicDivergence } from "./TopicDivergence";
 import { TopicDeleteDialog } from "./TopicDeleteDialog";
 import { TooltipButton } from "./RepositoryActions";
@@ -93,6 +103,10 @@ export function TopicsWorkspace({
     },
     [onBusy],
   );
+  const [removing, setRemoving] = useState<{
+    action: "delete" | "clear";
+    topics: string[];
+  } | null>(null);
   const [deleting, setDeleting] = useState<{
     target: TopicTarget;
     owner?: WorktreeRecord;
@@ -161,6 +175,122 @@ export function TopicsWorkspace({
         )
         .sort((a, b) => Number(current(b)) - Number(current(a)))
     : [];
+  const boardUI = useTopicsBoard(project.id, year, board);
+  const actionsFor = (r: TopicBoardRecord) => {
+    const activity = topicRowActivity(board!, r, runs, knownContexts, true);
+    const matchingOwners = knownContexts.filter(
+      (owner) =>
+        owner.projectId === project.id &&
+        owner.year === year &&
+        owner.topic === r.topic &&
+        owner.branch === r.branch,
+    );
+    const target = { topic: r.topic, branch: r.branch, remote: r.remote };
+    return (
+      <div className="topic-row-actions">
+        {current(r) ? (
+          <span className="topic-selected-label">Текущий</span>
+        ) : (
+          <TooltipButton
+            disabled={disabled || !onSelectTopic || r.remote}
+            label={`Переключиться на топик ${r.topic}`}
+            tooltipLabel="Переключиться"
+            busy={false}
+            description="Открыть контекст топика"
+            onClick={() =>
+              onSelectTopic?.({
+                projectId: project.id,
+                year,
+                topic: r.topic,
+                branch: r.branch,
+              })
+            }
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              aria-hidden="true"
+            >
+              <path d="M4 12h12m-5-5 5 5-5 5M20 4v16" />
+            </svg>
+          </TooltipButton>
+        )}
+        <TooltipButton
+          disabled={
+            disabled ||
+            matchingOwners.length > 1 ||
+            (!matchingOwners.length && current(r)) ||
+            activity.activeCount > 0 ||
+            ownerReadState !== "confirmed"
+          }
+          label={`Удалить топик ${r.topic}`}
+          tooltipLabel="Удалить топик"
+          busy={false}
+          description={
+            matchingOwners.length > 1
+              ? "Выберите нужный рабочий контекст в селекторе топиков"
+              : ownerReadState !== "confirmed"
+                ? ownerReadError || "Проверяем контексты топиков"
+                : activity.activeCount
+                  ? "Сначала завершите запуски топика"
+                  : "Удаление после подтверждения"
+          }
+          buttonClassName="repository-action-button topic-delete-icon"
+          onClick={() =>
+            setRemoving({ action: "delete", topics: [target.topic] })
+          }
+        >
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            aria-hidden="true"
+          >
+            <path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" />
+          </svg>
+        </TooltipButton>
+      </div>
+    );
+  };
+  const activityFor = (r: TopicBoardRecord) => {
+    const activity = topicRowActivity(board!, r, runs, knownContexts, true);
+    return (
+      <>
+        {activity.activeCount === 1 ? (
+          <TopicRunActivity
+            run={activity.activeRuns[0]!}
+            unverified={activity.unverifiedRunIds.includes(
+              activity.activeRuns[0]!.id,
+            )}
+            onOpenRun={onOpenRun}
+          />
+        ) : activity.activeCount > 1 ? (
+          <details className="topic-activity-choices">
+            <summary>Активных: {activity.activeCount} · выбрать запуск</summary>
+            {activity.activeRuns.map((run) => (
+              <TopicRunActivity
+                key={run.id}
+                run={run}
+                unverified={activity.unverifiedRunIds.includes(run.id)}
+                onOpenRun={onOpenRun}
+              />
+            ))}
+          </details>
+        ) : (
+          <span className="hint">Нет активного</span>
+        )}
+      </>
+    );
+  };
+  const visibleKeys = rows.map((r) =>
+    topicSelectionKey(project.id, year, r.topic),
+  );
+  const hiddenSelection = [...boardUI.selected].filter(
+    (key) => !visibleKeys.includes(key),
+  ).length;
   const pending = loading || settled !== key;
   const pendingDeletions = knownContexts.filter(
     (owner) => owner.projectId === project.id && owner.deletedAt,
@@ -197,6 +327,32 @@ export function TopicsWorkspace({
           <p className="hint">Задачи и их состояние</p>
         </div>
         <div className="topic-actions">
+          <div
+            className="topic-view-switch"
+            role="group"
+            aria-label="Вид топиков"
+          >
+            <button
+              type="button"
+              aria-pressed={boardUI.preferences.view === "table"}
+              onClick={() =>
+                boardUI.onPreferences({ ...boardUI.preferences, view: "table" })
+              }
+            >
+              <List />
+              Таблица
+            </button>
+            <button
+              type="button"
+              aria-pressed={boardUI.preferences.view === "board"}
+              onClick={() =>
+                boardUI.onPreferences({ ...boardUI.preferences, view: "board" })
+              }
+            >
+              <LayoutGrid />
+              Доска
+            </button>
+          </div>
           {createReasons.length > 0 && (
             <ActionReason id={reasonId} className="topic-create-reason">
               {createReasons.map((text, i) => (
@@ -262,7 +418,12 @@ export function TopicsWorkspace({
             ["hosts", "Размещение"],
           ] as const
         ).map(([key, label]) => (
-          <button key={key} disabled={!board} onClick={() => setPicker(key)}>
+          <button
+            key={key}
+            data-active={filters[key].length > 0}
+            disabled={!board}
+            onClick={() => setPicker(key)}
+          >
             {label} · {filters[key].length || "Все"} ▾
           </button>
         ))}
@@ -286,188 +447,215 @@ export function TopicsWorkspace({
         >
           Сбросить фильтры
         </button>
+        <div className="topic-filter-clear">
+          <button
+            type="button"
+            disabled={
+              pending || createBusy || !board || ownerReadState !== "confirmed"
+            }
+            onClick={() => setRemoving({ action: "clear", topics: [] })}
+          >
+            <Trash2 size={14} /> Очистить топики…
+          </button>
+        </div>
       </div>
+      {boardUI.error && (
+        <p role="alert" className="error">
+          {boardUI.error}
+        </p>
+      )}
+      {boardUI.selected.size > 0 && (
+        <div className="topic-selection">
+          <span>
+            Выбрано: {boardUI.selected.size}
+            {hiddenSelection > 0
+              ? ` · Скрыто фильтрами: ${hiddenSelection}`
+              : ""}
+          </span>
+          <button type="button" onClick={() => boardUI.onSelection(new Set())}>
+            Снять выделение
+          </button>
+          <button
+            type="button"
+            className="danger"
+            disabled={pending || createBusy || ownerReadState !== "confirmed"}
+            onClick={() =>
+              setRemoving({
+                action: "delete",
+                topics: [...boardUI.selected].map(
+                  (key) => (JSON.parse(key) as string[])[2]!,
+                ),
+              })
+            }
+          >
+            <Trash2 />
+            Удалить выбранные топики
+          </button>
+        </div>
+      )}
       <LoadingBoundary
         pending={pending}
         label="Загружаем топики…"
         error={error}
         onRetry={() => setRefresh((n) => n + 1)}
       >
-        <div className="topic-table-wrap">
-          <table className="topic-table topic-summary-table">
-            <thead>
-              <tr>
-                <th>Топик</th>
-                <th>Ветка</th>
-                <th>Относительно base</th>
-                <th>Статусы</th>
-                <th>Активные запуски</th>
-                <th>
-                  <span className="sr-only">Действия</span>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((r) => {
-                const activity = topicRowActivity(
-                  board!,
-                  r,
-                  runs,
-                  knownContexts,
-                  true,
-                );
-                const matchingOwners = knownContexts.filter(
-                  (owner) =>
-                    owner.projectId === project.id &&
-                    owner.year === year &&
-                    owner.topic === r.topic &&
-                    owner.branch === r.branch,
-                );
-                const target = {
-                  topic: r.topic,
-                  branch: r.branch,
-                  remote: r.remote,
-                };
-                return (
-                  <tr
-                    key={JSON.stringify([r.topic, r.branch, r.remote])}
-                    className={current(r) ? "topic-current-row" : ""}
-                    aria-current={current(r) ? "true" : undefined}
-                  >
-                    <td>
-                      <button
-                        className="topic-link"
-                        aria-label={`Открыть топик ${r.topic}`}
-                        onClick={() => onOpenTopic(target, year, board!, r)}
-                      >
-                        {r.topic}
-                      </button>
-                    </td>
-                    <td className="topic-branch">
-                      <code>{r.branch}</code>
-                    </td>
-                    <td>
-                      <TopicDivergence divergence={r.divergence} />
-                    </td>
-                    <td>
-                      <div className="topic-statuses">
-                        {r.statuses.length ? (
-                          r.statuses.map((s) => (
-                            <span className="topic-status" key={s}>
-                              {s}
-                            </span>
-                          ))
-                        ) : (
-                          <span className="hint" title={r.statusError}>
-                            —
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td>
-                      {activity.activeCount === 1 ? (
-                        <TopicRunActivity
-                          run={activity.activeRuns[0]!}
-                          unverified={activity.unverifiedRunIds.includes(
-                            activity.activeRuns[0]!.id,
+        {boardUI.preferences.view === "board" ? (
+          <TopicsBoard
+            key={JSON.stringify([
+              project.id,
+              year,
+              revision,
+              refresh,
+              boardUI.version,
+            ])}
+            projectId={project.id}
+            year={year}
+            rows={rows}
+            allRows={board?.entries ?? []}
+            preferences={boardUI.preferences}
+            onPreferences={boardUI.onPreferences}
+            selected={boardUI.selected}
+            onSelection={boardUI.onSelection}
+            onOpen={(r) =>
+              onOpenTopic(
+                { topic: r.topic, branch: r.branch, remote: r.remote },
+                year,
+                board!,
+                r,
+              )
+            }
+            renderActions={actionsFor}
+            renderMeta={(r) =>
+              topicRowActivity(board!, r, runs, knownContexts, true)
+                .activeCount ? (
+                activityFor(r)
+              ) : (
+                <span>
+                  {knownContexts.some(
+                    (o) =>
+                      o.projectId === project.id &&
+                      o.year === year &&
+                      o.topic === r.topic &&
+                      o.branch === r.branch &&
+                      !o.deletedAt,
+                  )
+                    ? "Рабочая копия"
+                    : "Исходный проект"}
+                </span>
+              )
+            }
+          />
+        ) : (
+          <div className="topic-table-wrap">
+            <table className="topic-table topic-summary-table">
+              <thead>
+                <tr>
+                  <th className="topic-table-checkbox">
+                    <input
+                      type="checkbox"
+                      aria-label="Выбрать топики таблицы"
+                      checked={columnChecked(visibleKeys, boardUI.selected)}
+                      disabled={!visibleKeys.length}
+                      onChange={() =>
+                        boardUI.onSelection(
+                          toggleColumn(visibleKeys, boardUI.selected),
+                        )
+                      }
+                    />
+                  </th>
+                  <th className="topic-table-topic">Топик</th>
+                  <th className="topic-table-branch">Ветка</th>
+                  <th className="topic-table-divergence">Относительно base</th>
+                  <th className="topic-table-statuses">Статусы</th>
+                  <th className="topic-table-activity">Активные запуски</th>
+                  <th className="topic-table-actions">
+                    <span className="sr-only">Действия</span>
+                  </th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((r) => {
+                  const activity = topicRowActivity(
+                    board!,
+                    r,
+                    runs,
+                    knownContexts,
+                    true,
+                  );
+                  const matchingOwners = knownContexts.filter(
+                    (owner) =>
+                      owner.projectId === project.id &&
+                      owner.year === year &&
+                      owner.topic === r.topic &&
+                      owner.branch === r.branch,
+                  );
+                  const target = {
+                    topic: r.topic,
+                    branch: r.branch,
+                    remote: r.remote,
+                  };
+                  return (
+                    <tr
+                      key={JSON.stringify([r.topic, r.branch, r.remote])}
+                      className={current(r) ? "topic-current-row" : ""}
+                      aria-current={current(r) ? "true" : undefined}
+                    >
+                      <td className="topic-table-checkbox">
+                        <input
+                          type="checkbox"
+                          aria-label={`Выбрать топик ${r.topic}`}
+                          checked={boardUI.selected.has(
+                            topicSelectionKey(project.id, year, r.topic),
                           )}
-                          onOpenRun={onOpenRun}
+                          onChange={() =>
+                            boardUI.onSelection(
+                              toggleColumn(
+                                [topicSelectionKey(project.id, year, r.topic)],
+                                boardUI.selected,
+                              ),
+                            )
+                          }
                         />
-                      ) : activity.activeCount > 1 ? (
-                        <details className="topic-activity-choices">
-                          <summary>
-                            Активных: {activity.activeCount} · выбрать запуск
-                          </summary>
-                          {activity.activeRuns.map((run) => (
-                            <TopicRunActivity
-                              key={run.id}
-                              run={run}
-                              unverified={activity.unverifiedRunIds.includes(
-                                run.id,
-                              )}
-                              onOpenRun={onOpenRun}
-                            />
-                          ))}
-                        </details>
-                      ) : (
-                        <span className="hint">Нет активного</span>
-                      )}
-                    </td>
-                    <td>
-                      <div className="topic-row-actions">
-                        {current(r) ? (
-                          <span className="topic-selected-label">Текущий</span>
-                        ) : (
-                          <TooltipButton
-                            disabled={disabled || !onSelectTopic || r.remote}
-                            label={`Переключиться на топик ${r.topic}`}
-                            tooltipLabel="Переключиться"
-                            busy={false}
-                            description="Открыть контекст топика"
-                            onClick={() =>
-                              onSelectTopic?.({
-                                projectId: project.id,
-                                year,
-                                topic: r.topic,
-                                branch: r.branch,
-                              })
-                            }
-                          >
-                            <svg
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="1.8"
-                              aria-hidden="true"
-                            >
-                              <path d="M4 12h12m-5-5 5 5-5 5M20 4v16" />
-                            </svg>
-                          </TooltipButton>
-                        )}
-                        <TooltipButton
-                          disabled={
-                            disabled ||
-                            matchingOwners.length > 1 ||
-                            (!matchingOwners.length && current(r)) ||
-                            activity.activeCount > 0 ||
-                            ownerReadState !== "confirmed"
-                          }
-                          label={`Удалить топик ${r.topic}`}
-                          tooltipLabel="Удалить топик"
-                          busy={false}
-                          description={
-                            matchingOwners.length > 1
-                              ? "Выберите нужный рабочий контекст в селекторе топиков"
-                              : ownerReadState !== "confirmed"
-                                ? ownerReadError ||
-                                  "Проверяем контексты топиков"
-                                : activity.activeCount
-                                  ? "Сначала завершите запуски топика"
-                                  : "Удаление после подтверждения"
-                          }
-                          buttonClassName="repository-action-button topic-delete-icon"
-                          onClick={() =>
-                            setDeleting({ target, owner: matchingOwners[0] })
-                          }
+                      </td>
+                      <td>
+                        <button
+                          className="topic-link"
+                          aria-label={`Открыть топик ${r.topic}`}
+                          onClick={() => onOpenTopic(target, year, board!, r)}
                         >
-                          <svg
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.8"
-                            aria-hidden="true"
-                          >
-                            <path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" />
-                          </svg>
-                        </TooltipButton>
-                      </div>
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                          {r.topic}
+                        </button>
+                      </td>
+                      <td className="topic-branch">
+                        <code>{r.branch}</code>
+                      </td>
+                      <td>
+                        <TopicDivergence divergence={r.divergence} />
+                      </td>
+                      <td>
+                        <div className="topic-statuses">
+                          {r.statuses.length ? (
+                            r.statuses.map((s) => (
+                              <span className="topic-status" key={s}>
+                                {s}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="hint" title={r.statusError}>
+                              —
+                            </span>
+                          )}
+                        </div>
+                      </td>
+                      <td>{activityFor(r)}</td>
+                      <td>{actionsFor(r)}</td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
         {!rows.length && (
           <p className="topic-empty">
             {filters.onlyActive
@@ -529,6 +717,18 @@ export function TopicsWorkspace({
           year={year}
           store={store}
           onClose={() => setCreate(false)}
+          onChanged={changed}
+          onBusy={markCreateBusy}
+        />
+      )}
+      {removing && (
+        <TopicsRemovalDialog
+          key={JSON.stringify([project.id, year, removing])}
+          project={project}
+          year={year}
+          action={removing.action}
+          topics={removing.topics}
+          onClose={() => setRemoving(null)}
           onChanged={changed}
           onBusy={markCreateBusy}
         />

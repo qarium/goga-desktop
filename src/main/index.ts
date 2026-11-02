@@ -10,6 +10,7 @@ import {
   ipcMain,
   Menu,
   nativeTheme,
+  Notification,
   shell,
 } from "electron";
 import path from "node:path";
@@ -22,7 +23,13 @@ import { TopicPopup } from "./topic-popup";
 import { DashboardViews } from "./views";
 import { registerIPC } from "./ipc";
 import { loadShell } from "./load-shell";
+import { handleDesktopStartupFailure } from "./desktop-state-startup";
 import { installApplicationIcon } from "./app-icon";
+import { NotificationCenter } from "../host/notifications/store";
+import { NotificationMonitor } from "./notification-monitor";
+import { NotificationDelivery } from "./notification-delivery";
+import { NotificationNavigation, installNotificationViewLifecycle, notificationWindowForeground, registerNotificationIPC } from "./notification-ipc";
+import type { NotificationSnapshot } from "../shared/notifications";
 
 // Finder does not inherit a shell's PATH. No login shell/eval is executed.
 process.env.PATH = [
@@ -106,6 +113,9 @@ if (!app.requestSingleInstanceLock()) {
       const send = (channel: string, value: unknown) => {
         if (!win.isDestroyed()) win.webContents.send(`goga:${channel}`, value);
       };
+      const notifications = new NotificationCenter(app.getPath("userData"));
+      // Broken notification storage must never prevent the app/pipeline UI loading.
+      await notifications.initialize().catch(()=>{});
       const views = new DashboardViews(
         win,
         (id) => send("focus-run", id),
@@ -117,6 +127,53 @@ if (!app.requestSingleInstanceLock()) {
       );
       const html = path.join(__dirname, "../dist/index.html"),
         shellURL = pathToFileURL(html).href;
+      const notificationNavigation = new NotificationNavigation({
+        center: notifications,
+        runs: () => service.runs(),
+        isSelected: (id) => views.isSelected(id),
+        focusStage: (id, stage) => views.focusStage(id, stage),
+        cancelStage: () => views.cancelStageNavigation(),
+        isForeground: () => notificationWindowForeground(win),
+      });
+      const disposeNotificationViewing = installNotificationViewLifecycle(
+        win,
+        notificationNavigation,
+      );
+      let deliveryError="";
+      const monitorErrors=new Map<string,string>();
+      const withNotificationErrors=(snapshot:NotificationSnapshot):NotificationSnapshot=>({...snapshot,...(!snapshot.error&&(deliveryError||monitorErrors.size)?{error:deliveryError||"Обновление уведомлений временно недоступно. История сохранена."}:{})});
+      const delivery=new NotificationDelivery({
+        create: options=>{
+          if(!Notification.isSupported())throw Error("Unsupported notifications");
+          return new Notification(options);
+        },
+        badge: count=>app.dock?.setBadge(count),
+        find:id=>notifications.find(id),
+        isViewing:id=>win.isFocused()&&notificationNavigation.isViewing(id),
+        open:id=>{
+          if(win.isDestroyed())return;
+          if(win.isMinimized())win.restore();
+          win.show();win.focus();send("open-notification",id);
+        },
+        onError: error=>{if(deliveryError!==error){deliveryError=error;send("notifications",withNotificationErrors(notifications.snapshot()));}},
+      });
+      delivery.update(notifications.snapshot());
+      if(process.platform==="darwin"&&notifications.snapshot().systemEnabled)
+        void Notification.getHistory().then(history=>delivery.restore(history)).catch(()=>{});
+      const unsubscribeNotifications=notifications.onChanged((snapshot,added)=>{
+        delivery.update(snapshot,added);
+        send("notifications",withNotificationErrors(snapshot));
+      });
+      const monitor=new NotificationMonitor({
+        add:input=>notifications.add(input,()=>notificationNavigation.isViewingRecord(input)),
+        onError:(id,error)=>{
+          const previous=monitorErrors.get(id);
+          if(error)monitorErrors.set(id,error);else monitorErrors.delete(id);
+          if((previous??null)!==error)send("notifications",withNotificationErrors(notifications.snapshot()));
+        },
+      });
+      monitor.reconcile(service.runs());
+      registerNotificationIPC(ipcMain,{center:notifications,navigation:notificationNavigation,window:win,shellURL,getSnapshot:(limit,before)=>withNotificationErrors(notifications.snapshot(limit,before))});
       const overviewExit = new OverviewExitGuard(async (paths) => {
         const result = await dialog.showMessageBox(win, {
           type: "warning",
@@ -147,6 +204,7 @@ if (!app.requestSingleInstanceLock()) {
         },
         confirmClose: (run) => confirmCloseRun(win, run),
         select: (id) => views.select(id),
+        viewport: (bounds) => views.setViewport(bounds),
         stop: async (id) => {
           const result = await dialog.showMessageBox(win, {
             type: "warning",
@@ -161,6 +219,7 @@ if (!app.requestSingleInstanceLock()) {
         },
       });
       service.on("runs", (runs) => {
+        monitor.reconcile(runs);
         views.reconcile(runs.map((run: { id: string }) => run.id));
         send("runs", runs);
         for (const run of runs) {
@@ -220,6 +279,10 @@ if (!app.requestSingleInstanceLock()) {
           terminal.disposeAfterExit();
           topicPopup.dispose();
           views.dispose();
+          monitor.dispose();
+          unsubscribeNotifications();
+          disposeNotificationViewing();
+          delivery.dispose();
           exiting = true;
           app.quit();
         },
@@ -254,12 +317,21 @@ if (!app.requestSingleInstanceLock()) {
         win.focus();
       });
     })
-    .catch((error) => {
-      dialog.showErrorBox(
-        "Goga Desktop",
-        "Не удалось запустить приложение: " +
-          (error instanceof Error ? error.message : "неизвестная ошибка"),
-      );
-      app.exit(1);
-    });
+    .catch((error) => handleDesktopStartupFailure(error, {
+      confirmRecovery: async () => {
+        const answer = await dialog.showMessageBox({
+          type: "warning",
+          title: "Goga Desktop",
+          message: "Нужно восстановить блокировку настроек Desktop",
+          detail: "Предыдущая версия оставила блокировку без данных владельца. Закройте другие экземпляры Goga Desktop. После подтверждения приложение проверит, что файл не используется, сохранит его резервную копию и перезапустится. Настройки, проекты и данные запусков не сбрасываются.",
+          buttons: ["Закрыть", "Проверить и восстановить"],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        return answer.response === 1;
+      },
+      showError: (message) => dialog.showErrorBox("Goga Desktop", message),
+      relaunch: () => app.relaunch(),
+      exit: (code) => app.exit(code),
+    }));
 }

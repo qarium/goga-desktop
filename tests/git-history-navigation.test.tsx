@@ -93,8 +93,7 @@ beforeEach(() => {
     })),
     readGitDiff: vi.fn(async (r: any) => ({
       ...r,
-      staged: { kind: "empty", text: "" },
-      unstaged: { kind: "patch", text: "+" + r.scope + " content" },
+      changes: { kind: "patch", text: "+" + r.scope + " content" },
     })),
   };
   window.goga = api;

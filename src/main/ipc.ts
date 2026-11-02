@@ -1,3 +1,8 @@
+import { topicRemovalRequestSchema, topicRemovalTokenSchema, topicCloneCleanupRequestSchema } from "../shared/topic-removal";
+import {
+  dashboardViewportSchema,
+  type DashboardViewport,
+} from "../shared/dashboard-viewport";
 import {
   overviewDirectorySchema,
   overviewPathSchema,
@@ -179,6 +184,7 @@ const launch = pipeline
       .optional(),
     confirmEmptyTask: z.boolean(),
     topic: z.discriminatedUnion("mode", [
+      z.object({ mode: z.literal("none") }).strict(),
       z.object({ mode: z.literal("existing"), branch: id, topic: id }).strict(),
       z.object({ mode: z.literal("new"), name: id, baseRef: id }).strict(),
     ]),
@@ -192,6 +198,14 @@ const launch = pipeline
       message: "Версия задачи обязательна только для существующего топика",
       path: ["taskVersion"],
     },
+  )
+  .refine(
+    (value) =>
+      value.topic.mode !== "none" ||
+      (value.task === "" &&
+        !value.confirmEmptyTask &&
+        !value.confirmBranchSwitch),
+    { message: "Запуск без топика не сохраняет задачу и не переключает ветку" },
   );
 interface Dependencies {
   overviewCloseState?: (paths: string[], busy: boolean) => void;
@@ -205,6 +219,7 @@ interface Dependencies {
   shellURL: string;
   choose: () => Promise<string | null>;
   select: (id: string | null) => void;
+  viewport?: (bounds: DashboardViewport) => void;
   confirmClose: (run: Run) => Promise<boolean>;
   stop: (id: string) => Promise<void>;
 }
@@ -583,6 +598,9 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
       topicTargetSchema.parse(target),
     ),
   );
+  handle("prepare-topic-removal", (request) => d.service.prepareTopicRemoval(topicRemovalRequestSchema.parse(request)));
+  handle("execute-topic-removal", (input) => d.service.executeTopicRemoval(topicRemovalTokenSchema.parse(input)));
+  handle("prepare-topic-clone-cleanup", (input) => d.service.prepareTopicCloneCleanup(topicCloneCleanupRequestSchema.parse(input)));
   handle("prepare-topic-operation", (request) =>
     d.service.prepareTopicOperation(topicOperationSchema.parse(request)),
   );
@@ -747,6 +765,9 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   handle("preview", (value) => d.service.preview(pipeline.parse(value)));
   handle("launch", (value) => d.service.launch(launch.parse(value)));
   handle("runs", () => d.service.runs());
+  handle("set-dashboard-viewport", (value) => {
+    d.viewport?.(dashboardViewportSchema.parse(value));
+  });
   handle("select-run", (value) => {
     const runId = id.nullable().parse(value);
     if (runId !== null && !d.service.runs().some((r) => r.id === runId))

@@ -51,6 +51,8 @@ export const READ_BUDGETS = {
   readTopicDetails: 300000,
   readTopicTask: 300000,
   prepareTopicOperation: 300000,
+  prepareTopicRemoval: 300000,
+  prepareTopicCloneCleanup: 300000,
   prepareDocumentDeletion: 300000,
   readProjectSettings: 30000,
   listSettings: 30000,

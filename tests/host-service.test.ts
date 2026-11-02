@@ -69,6 +69,39 @@ async function setup(own = false) {
           stdout: "* build\n    name: Build\n    description: Real\n",
           stderr: "",
         };
+      if (args.includes("board") && cwd !== repo) {
+        const branch = (
+          await node.command("git", ["branch", "--show-current"], cwd)
+        ).stdout.trim();
+        const topic = branch
+          .toLowerCase()
+          .replace(/[^a-z0-9]+/g, "-")
+          .replace(/^-|-$/g, "");
+        const todo = await readFile(
+          path.join(
+            cwd,
+            `.goga/history/${new Date().getFullYear()}/${topic}/todo.md`,
+          ),
+          "utf8",
+        ).catch(() => null);
+        return {
+          stdout: JSON.stringify(
+            todo === null
+              ? []
+              : [
+                  {
+                    topic,
+                    branch,
+                    current: true,
+                    remote: false,
+                    todo,
+                    statuses: ["todo"],
+                  },
+                ],
+          ),
+          stderr: "",
+        };
+      }
       if (args.includes("board"))
         return {
           stdout: JSON.stringify([
@@ -228,78 +261,186 @@ it("starts independent process, holds checkout lock until stop, preserves run co
   expect(service.runs()[0]?.status).toBe("stopped");
   await service.dispose();
 });
-it("uses explicit selected source for new topic and forwards todo as one argument", async () => {
-  const { service, project, repo, calls, node, runner } = await setup(true);
-  const previous = runner.command.bind(runner);
-  runner.command = async (exe, args, cwd) => {
-    if (exe === "fake" && args[1] === "create") {
-      calls.push(args);
-      const base = args[args.indexOf("--base-ref") + 1]!;
-      await node.command("git", ["switch", "-c", args[2]!, base], cwd);
-      const directory = path.join(
-        cwd,
-        `.goga/history/${new Date().getFullYear()}/feat-one`,
-      );
-      await mkdir(directory, { recursive: true });
-      // Goga's create path normalizes its actual persisted todo with a newline.
-      await writeFile(
-        path.join(directory, "todo.md"),
-        args[args.indexOf("--todo") + 1]! + "\n",
-      );
-      return { stdout: "created", stderr: "" };
+it.each(["HEAD", "source"])(
+  "uses %s for a new clone, leaves primary unchanged and preserves literal task bytes",
+  async (baseRef) => {
+    const { service, project, repo, calls, node, runner } = await setup(true);
+    if (baseRef === "source") {
+      await node.command("git", ["switch", "-c", "source"], repo);
+      await writeFile(path.join(repo, "only-in-source"), "chosen base");
+      await node.command("git", ["add", "only-in-source"], repo);
+      await node.command("git", ["commit", "-m", "chosen base"], repo);
+      await node.command("git", ["switch", "main"], repo);
     }
-    return previous(exe, args, cwd);
-  };
-  const req = {
-    projectId: project.id,
-    pipeline: "build",
-    workflow: "none",
-    profile: "",
-    skips: ["plan"],
-  };
-  const p = await service.preview(req);
-  const task = "literal $(touch unsafe)\nsecond line";
-  const run = await service.launch({
-    ...req,
-    previewToken: p.token,
-    topic: { mode: "new", name: "feat/One", baseRef: "HEAD" },
-    task,
-    confirmEmptyTask: false,
-    expectedBranch: "main",
-    confirmBranchSwitch: true,
-    clean: false,
-  });
-  expect(calls.find((c) => c[1] === "create")).toEqual([
-    "topics",
-    "create",
-    "feat/One",
-    "--base-ref",
-    "HEAD",
-    "--switch",
-    "--todo",
-    task,
-  ]);
-  expect(run.taskSnapshot).toEqual({
-    text: task + "\n",
-    year: String(new Date().getFullYear()),
-    topic: "feat-one",
-    branch: "feat/One",
-  });
-  expect(run).toMatchObject({
-    branch: "feat/One",
-    topic: "feat-one",
-    workflow: null,
-    profile: null,
-  });
-  expect(calls.at(-1)).toEqual([
-    "pipeline",
-    "build",
-    "--no-workflow",
-    "--skip",
-    "plan",
-  ]);
-  await service.stop(run.id);
-  await service.dispose();
+    const expectedHead = (
+      await node.command("git", ["rev-parse", baseRef], repo)
+    ).stdout.trim();
+    const primaryHead = (await node.command("git", ["rev-parse", "HEAD"], repo))
+      .stdout;
+    let startedIn = "";
+    const start = runner.start.bind(runner);
+    runner.start = (exe, args, cwd, env) => {
+      startedIn = cwd;
+      return start(exe, args, cwd, env);
+    };
+    const req = {
+      projectId: project.id,
+      pipeline: "build",
+      workflow: "none",
+      profile: "",
+      skips: ["plan"],
+    };
+    const p = await service.preview(req);
+    const task = "literal $(touch unsafe)\nsecond line";
+    const run = await service.launch({
+      ...req,
+      previewToken: p.token,
+      topic: { mode: "new", name: "feat/One", baseRef },
+      task,
+      confirmEmptyTask: false,
+      expectedBranch: "main",
+      confirmBranchSwitch: true,
+      clean: false,
+    });
+    expect(run.context?.path).toBeTruthy();
+    expect(run.context?.path).not.toBe(repo);
+    expect(startedIn).toBe(run.context!.path);
+    expect(
+      (
+        await node.command("git", ["rev-parse", "HEAD"], run.context!.path!)
+      ).stdout.trim(),
+    ).toBe(expectedHead);
+    expect(
+      (await node.command("git", ["rev-parse", "HEAD"], repo)).stdout,
+    ).toBe(primaryHead);
+    expect(
+      (await node.command("git", ["status", "--porcelain"], repo)).stdout,
+    ).toBe("");
+    expect(
+      await stat(path.join(run.context!.path!, "unsafe")).catch(() => null),
+    ).toBeNull();
+    expect(
+      (
+        await node.command("git", ["branch", "--show-current"], repo)
+      ).stdout.trim(),
+    ).toBe("main");
+    expect(calls.some((c) => c[1] === "create")).toBe(false);
+    expect(
+      await readFile(
+        path.join(
+          run.context!.path!,
+          `.goga/history/${new Date().getFullYear()}/feat-one/todo.md`,
+        ),
+        "utf8",
+      ),
+    ).toBe(task);
+    expect(
+      await stat(
+        path.join(repo, `.goga/history/${new Date().getFullYear()}/feat-one`),
+      ).catch(() => null),
+    ).toBeNull();
+    expect(run.taskSnapshot).toEqual({
+      text: task,
+      year: String(new Date().getFullYear()),
+      topic: "feat-one",
+      branch: "feat/One",
+    });
+    expect(run).toMatchObject({
+      branch: "feat/One",
+      topic: "feat-one",
+      workflow: null,
+      profile: null,
+    });
+    expect(calls.at(-1)).toEqual([
+      "pipeline",
+      "build",
+      "--no-workflow",
+      "--skip",
+      "plan",
+    ]);
+    await service.stop(run.id);
+    const { projectId, year, topic, branch, contextId, revision } =
+      run.context!;
+    const scoped = {
+      ...req,
+      context: { projectId, year, topic, branch, contextId, revision },
+    };
+    const scopedPreview = await service.preview(scoped);
+    const denyStart = vi.spyOn(runner, "start");
+    await expect(
+      service.launch({
+        ...scoped,
+        previewToken: scopedPreview.token,
+        topic: { mode: "none" },
+        task: "",
+        confirmEmptyTask: false,
+        expectedBranch: branch,
+        confirmBranchSwitch: false,
+        clean: false,
+      } as any),
+    ).rejects.toThrow(/принадлежит клон/);
+    expect(denyStart).not.toHaveBeenCalled();
+    await service.dispose();
+  },
+);
+it("launches a new topic in its own clone without requiring or creating a task", async () => {
+  const { service, project, repo, node, runner } = await setup(true);
+  const { EventEmitter } = await import("node:events");
+  const { PassThrough } = await import("node:stream");
+  const { ContextSyncManager } = await import("../src/host/context-sync");
+  vi.spyOn(ContextSyncManager.prototype, "afterRun").mockResolvedValue(
+    {} as any,
+  );
+  const start = vi.spyOn(runner, "start").mockImplementation(
+    () =>
+      Object.assign(new EventEmitter(), {
+        stdout: new PassThrough(),
+        stderr: new PassThrough(),
+      }) as any,
+  );
+  try {
+    const params = {
+      projectId: project.id,
+      pipeline: "build",
+      workflow: "none",
+      profile: "",
+      skips: [],
+    };
+    const preview = await service.preview(params);
+    const run = await service.launch({
+      ...params,
+      previewToken: preview.token,
+      topic: { mode: "new", name: "empty-task", baseRef: "HEAD" },
+      task: "",
+      confirmEmptyTask: false,
+      expectedBranch: "main",
+      confirmBranchSwitch: true,
+      clean: false,
+    });
+    expect(run.context?.path).toBeTruthy();
+    expect(run.context?.path).not.toBe(repo);
+    expect(start).toHaveBeenCalledOnce();
+    expect(start.mock.calls[0][2]).toBe(run.context!.path);
+    await expect(
+      stat(
+        path.join(
+          run.context!.path!,
+          `.goga/history/${new Date().getFullYear()}/empty-task/todo.md`,
+        ),
+      ),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(
+      (
+        await node.command("git", ["branch", "--show-current"], repo)
+      ).stdout.trim(),
+    ).toBe("main");
+    expect(
+      (await node.command("git", ["status", "--porcelain"], repo)).stdout,
+    ).toBe("");
+    await service.stop(run.id);
+  } finally {
+    vi.restoreAllMocks();
+  }
 });
 it("existing task saves exact editor text with matching version", async () => {
   const { service, project, repo } = await setup(true);
@@ -376,21 +517,16 @@ it("invalidates preview when branch changes even at identical commit", async () 
     }),
   ).rejects.toThrow(/Предпросмотр/);
 });
-it("refuses changed final composition after creating branch and reports mutation", async () => {
+it("refuses changed clone composition and reports the prepared copy without touching primary", async () => {
   const { service, project, repo, node, runner } = await setup(true);
   const previous = runner.command.bind(runner);
-  let switched = false;
   runner.command = async (exe, args, cwd) => {
-    if (exe === "fake" && args[1] === "create") {
-      await node.command(
-        "git",
-        ["switch", "-c", args[2]!, args[args.indexOf("--base-ref") + 1]!],
-        cwd,
-      );
-      switched = true;
-      return { stdout: "created", stderr: "" };
-    }
-    if (exe === "fake" && args.includes("--info") && switched)
+    if (
+      exe === "fake" &&
+      args.includes("--info") &&
+      cwd !== repo &&
+      !args.includes("--list")
+    )
       return { stdout: "* different:\n    title: Changed\n", stderr: "" };
     return previous(exe, args, cwd);
   };
@@ -402,24 +538,37 @@ it("refuses changed final composition after creating branch and reports mutation
     skips: [],
   };
   const p = await service.preview(req);
-  await expect(
-    service.launch({
-      ...req,
-      previewToken: p.token,
-      topic: { mode: "new", name: "different", baseRef: "HEAD" },
-      task: "Task",
-      confirmEmptyTask: false,
-      expectedBranch: "main",
-      confirmBranchSwitch: true,
-      clean: false,
-    }),
-  ).rejects.toThrow(/автоматического отката нет/);
+  const request = {
+    ...req,
+    previewToken: p.token,
+    topic: { mode: "new" as const, name: "different", baseRef: "HEAD" },
+    task: "Task",
+    confirmEmptyTask: false,
+    expectedBranch: "main",
+    confirmBranchSwitch: true,
+    clean: false,
+  };
+  await expect(service.launch(request)).rejects.toThrow(
+    /В копии изменились.*Копия топика.*подготовлена/s,
+  );
   expect(service.runs()).toEqual([]);
+  const copies = await service.listTopicContexts(project.id);
+  expect(copies).toHaveLength(1);
+  expect(copies[0]).toMatchObject({
+    topic: "different",
+    storageKind: "clone",
+    state: "ready",
+  });
   expect(
     (
       await node.command("git", ["branch", "--show-current"], repo)
     ).stdout.trim(),
-  ).toBe("different");
+  ).toBe("main");
+  expect(
+    (await node.command("git", ["status", "--porcelain"], repo)).stdout,
+  ).toBe("");
+  await expect(service.launch(request)).rejects.toThrow(/Предпросмотр устарел/);
+  expect(await service.listTopicContexts(project.id)).toHaveLength(1);
 });
 it("refuses definitions changed while final launch composition is being resolved", async () => {
   const { service, project, repo, runner } = await setup(true);
@@ -537,14 +686,14 @@ it("rejects occupied branch before create and never claims a mutation", async ()
   expect(error).not.toMatch(/уже изменена/);
   expect(calls.some((c) => c[1] === "create")).toBe(false);
 });
-it("detects partial mutation when Goga create fails after switching", async () => {
-  const { service, project, runner, node } = await setup(true);
+it("keeps a failed clone preparation visible and never falls back to primary or repeats creation", async () => {
+  const { service, project, runner, node, repo } = await setup(true);
   const prev = runner.command.bind(runner);
+  let clones = 0;
   runner.command = async (exe, args, cwd) => {
-    if (exe === "fake" && args[1] === "create") {
-      await node.command("git", ["switch", "-c", args[2]!], cwd);
+    if (exe === "git" && args.includes("clone")) clones++;
+    if (exe === "git" && args.includes("checkout") && cwd !== repo)
       throw new Error("Creation failed");
-    }
     return prev(exe, args, cwd);
   };
   const req = {
@@ -555,18 +704,38 @@ it("detects partial mutation when Goga create fails after switching", async () =
     skips: [],
   };
   const p = await service.preview(req);
-  await expect(
-    service.launch({
-      ...req,
-      previewToken: p.token,
-      topic: { mode: "new", name: "partial", baseRef: "HEAD" },
-      task: "Task",
-      confirmEmptyTask: false,
-      expectedBranch: "main",
-      confirmBranchSwitch: true,
-      clean: false,
-    }),
-  ).rejects.toThrow(/уже изменена/);
+  const request = {
+    ...req,
+    previewToken: p.token,
+    topic: { mode: "new" as const, name: "partial", baseRef: "HEAD" },
+    task: "Task",
+    confirmEmptyTask: false,
+    expectedBranch: "main",
+    confirmBranchSwitch: true,
+    clean: false,
+  };
+  await expect(service.launch(request)).rejects.toThrow(
+    /Подготовка клона неоднозначна/,
+  );
+  expect(service.runs()).toEqual([]);
+  expect(clones).toBe(1);
+  const copies = await service.listTopicContexts(project.id);
+  expect(copies).toHaveLength(1);
+  expect(copies[0]).toMatchObject({
+    topic: "partial",
+    state: "conflict",
+    preparation: "ambiguous",
+  });
+  expect(
+    (
+      await node.command("git", ["branch", "--show-current"], repo)
+    ).stdout.trim(),
+  ).toBe("main");
+  expect(
+    (await node.command("git", ["status", "--porcelain"], repo)).stdout,
+  ).toBe("");
+  await expect(service.launch(request)).rejects.toThrow(/Предпросмотр устарел/);
+  expect(clones).toBe(1);
 });
 
 it.each(["starting", "running"] as const)(
@@ -2170,5 +2339,444 @@ it.each(["existing", "new"] as const)(
         await node.command("git", ["branch", "--list", "new-topic"], repo)
       ).stdout.trim(),
     ).toBe("");
+  },
+);
+
+it("no-topic pipeline uses the primary checkout without topic metadata, clone or file writes", async () => {
+  const { service, project, repo, node, runner, calls } = await setup();
+  const params = {
+    projectId: project.id,
+    pipeline: "build",
+    workflow: "auto",
+    profile: "",
+    skips: [],
+  };
+  expect((await service.discover(project.id)).topics).toEqual([]);
+  await writeFile(path.join(repo, "unsaved.txt"), "keep my changes\n");
+  const before = (await node.command("git", ["status", "--porcelain"], repo))
+    .stdout;
+  const head = (await node.command("git", ["rev-parse", "HEAD"], repo)).stdout;
+  const preview = await service.preview(params);
+  const start = vi.spyOn(runner, "start");
+  const command = vi.spyOn(runner, "command");
+  const request = {
+    ...params,
+    topic: { mode: "none" },
+    task: "",
+    confirmEmptyTask: false,
+    clean: false,
+    update: true,
+    expectedBranch: "main",
+    confirmBranchSwitch: false,
+    previewToken: preview.token,
+  } as any;
+  const run = await service.launch(request);
+  expect(run).toMatchObject({
+    topic: "",
+    branch: "main",
+    projectId: project.id,
+    update: true,
+  });
+  expect(run.context).toBeUndefined();
+  expect(run.taskSnapshot).toBeUndefined();
+  expect(start).toHaveBeenCalledOnce();
+  expect(start.mock.calls[0]![2]).toBe(repo);
+  expect(calls.at(-1)).toEqual(["pipeline", "build", "--update"]);
+  expect(
+    command.mock.calls.some(([, args]) =>
+      ["switch", "checkout", "clone", "create"].includes(args[0]!),
+    ),
+  ).toBe(false);
+  expect(
+    (await node.command("git", ["status", "--porcelain"], repo)).stdout,
+  ).toBe(before);
+  expect((await node.command("git", ["rev-parse", "HEAD"], repo)).stdout).toBe(
+    head,
+  );
+  expect(await readFile(path.join(repo, "unsaved.txt"), "utf8")).toBe(
+    "keep my changes\n",
+  );
+  await expect(stat(path.join(repo, ".goga/history"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+  expect(await service.listTopicContexts(project.id)).toEqual([]);
+  await expect(service.launch(request)).rejects.toThrow(/предпросмотр/i);
+  await service.stop(run.id);
+});
+
+it("no-topic launch rejects hidden task writes and stale branch/composition without starting", async () => {
+  const { service, project, repo, node, runner } = await setup(true);
+  const params = {
+    projectId: project.id,
+    pipeline: "build",
+    workflow: "auto",
+    profile: "",
+    skips: [],
+  };
+  const preview = await service.preview(params);
+  const request = {
+    ...params,
+    topic: { mode: "none" },
+    task: "",
+    confirmEmptyTask: false,
+    clean: false,
+    expectedBranch: "main",
+    confirmBranchSwitch: false,
+    previewToken: preview.token,
+  } as any;
+  const start = vi.spyOn(runner, "start");
+  for (const patch of [
+    { task: "hidden write" },
+    { taskVersion: "a".repeat(64) },
+    { confirmEmptyTask: true },
+    { confirmBranchSwitch: true },
+    { topic: { mode: "none", branch: "other" } },
+  ])
+    await expect(service.launch({ ...request, ...patch })).rejects.toThrow();
+  await node.command("git", ["switch", "-c", "other"], repo);
+  await expect(service.launch(request)).rejects.toThrow(
+    /предпросмотр|ветка.*измени|Текущая ветка/i,
+  );
+  await node.command("git", ["switch", "main"], repo);
+  await writeFile(
+    path.join(repo, ".goga/workflows/build.yml"),
+    "prompt: external change\n",
+  );
+  await expect(service.launch(request)).rejects.toThrow(/предпросмотр/i);
+  expect(start).not.toHaveBeenCalled();
+  expect(service.runs()).toEqual([]);
+  await expect(stat(path.join(repo, ".goga/history"))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
+});
+
+it.each([false, true])(
+  "launches an immediately edited task with update in primary/clone (clone=%s)",
+  async (clone) => {
+    const { service, project, repo, runner } = await setup(true);
+    const { EventEmitter } = await import("node:events");
+    const { PassThrough } = await import("node:stream");
+    const { ContextSyncManager } = await import("../src/host/context-sync");
+    vi.spyOn(ContextSyncManager.prototype, "afterRun").mockResolvedValue(
+      {} as any,
+    );
+    const starts = vi.spyOn(runner, "start").mockImplementation(
+      () =>
+        Object.assign(new EventEmitter(), {
+          stdout: new PassThrough(),
+          stderr: new PassThrough(),
+        }) as any,
+    );
+    try {
+      const owner = clone
+        ? await service.createTopicContext({
+            projectId: project.id,
+            year: String(new Date().getFullYear()),
+            branch: "edited-task",
+            baseRef: "HEAD",
+          })
+        : undefined;
+      const { worktreeContextRef } = await import("../src/shared/worktrees");
+      const context = owner ? worktreeContextRef(owner) : undefined;
+      const params = {
+        projectId: project.id,
+        ...(context ? { context } : {}),
+        pipeline: "build",
+        workflow: "auto",
+        profile: "",
+        skips: [],
+      };
+      const selected = {
+        projectId: project.id,
+        ...(context ? { context } : {}),
+        branch: owner?.branch ?? "main",
+        topic: owner?.topic ?? "main",
+      };
+      const preview = await service.preview(params);
+      const document = await service.readTopicTask(selected);
+      const text = "Typed after selecting pipeline\nLiteral $(not-a-command)";
+      const run = await service.launch({
+        ...params,
+        previewToken: preview.token,
+        taskVersion: document.version,
+        task: text,
+        clean: false,
+        update: true,
+        confirmEmptyTask: false,
+        expectedBranch: selected.branch,
+        confirmBranchSwitch: false,
+        topic: {
+          mode: "existing",
+          branch: selected.branch,
+          topic: selected.topic,
+        },
+      });
+      expect(starts).toHaveBeenCalledOnce();
+      expect(starts.mock.calls[0][2]).toBe(owner?.path ?? repo);
+      expect(starts.mock.calls[0][1]).toContain("--update");
+      expect(run.taskSnapshot?.text).toBe(text);
+      expect(
+        await readFile(path.join(owner?.path ?? repo, document.path), "utf8"),
+      ).toBe(text);
+      await service.stop(run.id);
+    } finally {
+      vi.restoreAllMocks();
+    }
+  },
+);
+
+it.each([
+  ...(["none", "existing", "clone", "new"] as const).flatMap((mode) =>
+    [false, true].map((update) => ({ mode, update, otherPreview: true })),
+  ),
+  { mode: "existing" as const, update: true, otherPreview: false },
+  { mode: "clone" as const, update: true, otherPreview: false },
+])(
+  "launches after a long-open form ($mode, update=$update, otherPreview=$otherPreview)",
+  async ({ mode, update, otherPreview }) => {
+    const { service, project, repo, node, runner } = await setup(true);
+    const { EventEmitter } = await import("node:events");
+    const { PassThrough } = await import("node:stream");
+    const { ContextSyncManager } = await import("../src/host/context-sync");
+    vi.spyOn(ContextSyncManager.prototype, "afterRun").mockResolvedValue(
+      {} as any,
+    );
+    const starts = vi.spyOn(runner, "start").mockImplementation(
+      () =>
+        Object.assign(new EventEmitter(), {
+          stdout: new PassThrough(),
+          stderr: new PassThrough(),
+        }) as any,
+    );
+    try {
+      const owner =
+        mode === "clone"
+          ? await service.createTopicContext({
+              projectId: project.id,
+              year: String(new Date().getFullYear()),
+              branch: "long-open",
+              baseRef: "HEAD",
+            })
+          : undefined;
+      const { worktreeContextRef } = await import("../src/shared/worktrees");
+      const context = owner ? worktreeContextRef(owner) : undefined;
+      const params = {
+        projectId: project.id,
+        ...(context ? { context } : {}),
+        pipeline: "build",
+        workflow: "auto",
+        profile: "",
+        skips: [],
+      };
+      const selected = {
+        projectId: project.id,
+        ...(context ? { context } : {}),
+        branch: owner?.branch ?? "main",
+        topic: owner?.topic ?? "main",
+      };
+      const { registerIPC } = await import("../src/main/ipc");
+      const handlers = new Map<string, Function>();
+      registerIPC(
+        { handle: (key: string, fn: Function) => handlers.set(key, fn) } as any,
+        {
+          service,
+          window: { webContents: { id: 1 } },
+          shellURL: "file:///app/index.html",
+        } as any,
+      );
+      const sender = {
+        sender: { id: 1 },
+        senderFrame: { url: "file:///app/index.html", parent: null },
+      };
+      const preview = otherPreview
+        ? await service.preview(params)
+        : await handlers.get("goga:read-request")!(
+            sender,
+            "long-open",
+            "preview",
+            [params],
+          );
+      const document =
+        mode === "existing" || mode === "clone"
+          ? await service.readTopicTask(selected)
+          : undefined;
+      // Advance only the wall clock: no real wait, fake timers or real Goga.
+      const now = Date.now.bind(Date);
+      vi.spyOn(Date, "now").mockImplementation(
+        () => now() + 24 * 60 * 60 * 1000,
+      );
+      // A preview in another form must not purge this idle form's token.
+      if (otherPreview) await service.preview({ ...params, skips: ["plan"] });
+      const text =
+        mode === "none"
+          ? ""
+          : "Task written over a long session\nLiteral $(not-a-command)";
+      const request = {
+        ...params,
+        previewToken: preview.token,
+        task: text,
+        ...(document ? { taskVersion: document.version } : {}),
+        clean: false,
+        update,
+        confirmEmptyTask: false,
+        expectedBranch: selected.branch,
+        confirmBranchSwitch: mode === "new",
+        topic:
+          mode === "none"
+            ? { mode: "none" as const }
+            : mode === "new"
+              ? { mode: "new" as const, name: "long-open", baseRef: "HEAD" }
+              : {
+                  mode: "existing" as const,
+                  branch: selected.branch,
+                  topic: selected.topic,
+                },
+      };
+      const run = otherPreview
+        ? await service.launch(request)
+        : await handlers.get("goga:launch")!(sender, request);
+      expect(starts).toHaveBeenCalledOnce();
+      const root = run.context?.path ?? repo;
+      expect(starts.mock.calls[0][2]).toBe(root);
+      expect(starts.mock.calls[0][1].includes("--update")).toBe(update);
+      if (mode === "none") expect(run.taskSnapshot).toBeUndefined();
+      else {
+        expect(run.taskSnapshot?.text).toBe(text);
+        expect(
+          await readFile(
+            path.join(
+              root,
+              ".goga/history",
+              run.taskSnapshot!.year,
+              run.taskSnapshot!.topic,
+              "todo.md",
+            ),
+            "utf8",
+          ),
+        ).toBe(text);
+      }
+      expect(
+        (
+          await node.command("git", ["branch", "--show-current"], repo)
+        ).stdout.trim(),
+      ).toBe("main");
+      await service.stop(run.id);
+      await expect(service.launch(request)).rejects.toThrow(
+        /Предпросмотр устарел/,
+      );
+      expect(starts).toHaveBeenCalledOnce();
+    } finally {
+      vi.restoreAllMocks();
+    }
+  },
+);
+
+it.each([
+  "definitions",
+  "branch",
+  "task",
+  "request",
+  "settings",
+  "context",
+] as const)(
+  "long-open form still rejects changed $0 before writes or start",
+  async (changed) => {
+    const { service, project, repo, node, runner } = await setup(true);
+    const start = vi.spyOn(runner, "start").mockImplementation(() => {
+      throw Error("Unexpected synthetic launch");
+    });
+    try {
+      const owner =
+        changed === "context"
+          ? await service.createTopicContext({
+              projectId: project.id,
+              year: String(new Date().getFullYear()),
+              branch: "long-open",
+              baseRef: "HEAD",
+            })
+          : undefined;
+      const { worktreeContextRef } = await import("../src/shared/worktrees");
+      const context = owner ? worktreeContextRef(owner) : undefined;
+      const params = {
+        projectId: project.id,
+        ...(context ? { context } : {}),
+        pipeline: "build",
+        workflow: "auto",
+        profile: "",
+        skips: [] as string[],
+      };
+      const selected = {
+        projectId: project.id,
+        ...(context ? { context } : {}),
+        branch: owner?.branch ?? "main",
+        topic: owner?.topic ?? "main",
+      };
+      const preview = await service.preview(params);
+      const document = await service.readTopicTask(selected);
+      const now = Date.now.bind(Date);
+      vi.spyOn(Date, "now").mockImplementation(
+        () => now() + 24 * 60 * 60 * 1000,
+      );
+      const root = owner?.path ?? repo;
+      const taskFile = path.join(root, document.path);
+      if (changed === "definitions")
+        await writeFile(
+          path.join(repo, ".goga/workflows/build.yml"),
+          "prompt: external change\n",
+        );
+      if (changed === "branch")
+        await node.command("git", ["switch", "-c", "external"], repo);
+      if (changed === "task") {
+        await mkdir(path.dirname(taskFile), { recursive: true });
+        await writeFile(taskFile, "External task must survive");
+      }
+      if (changed === "request") params.skips = ["plan"];
+      if (changed === "settings") {
+        const settings = await service.readProjectSettings(project.id);
+        await service.saveProjectSettings(
+          project.id,
+          { ...settings.value, profile: "local" },
+          settings.version,
+        );
+      }
+      if (changed === "context") {
+        const { randomUUID } = await import("node:crypto");
+        params.context = { ...context!, revision: randomUUID() };
+      }
+      await expect(
+        service.launch({
+          ...params,
+          previewToken: preview.token,
+          task: "Draft must not be written",
+          taskVersion: document.version,
+          clean: false,
+          update: true,
+          confirmEmptyTask: false,
+          expectedBranch: selected.branch,
+          confirmBranchSwitch: false,
+          topic: {
+            mode: "existing",
+            branch: selected.branch,
+            topic: selected.topic,
+          },
+        }),
+      ).rejects.toThrow(
+        changed === "task"
+          ? /задач.*измен|задач.*устарел/i
+          : changed === "context"
+            ? /контекст|ревиз|копи|измен/i
+            : /предпросмотр|измен/i,
+      );
+      expect(start).not.toHaveBeenCalled();
+      expect(service.runs()).toEqual([]);
+      if (changed === "task")
+        expect(await readFile(taskFile, "utf8")).toBe(
+          "External task must survive",
+        );
+      else
+        await expect(stat(taskFile)).rejects.toMatchObject({ code: "ENOENT" });
+    } finally {
+      vi.restoreAllMocks();
+    }
   },
 );
