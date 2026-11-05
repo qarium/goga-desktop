@@ -133,9 +133,10 @@ for (const action of ["abort", "continue"] as const)
         );
       }
     }),
-    // Continue performs both the merge resolution and a second full sync. Measured
-    // 38 s alone / >45 s in the three-worker run; keep a finite per-case budget.
-    gitIntegrationBudget(action === "continue" ? 20000 : 15000),
+    // Both cases perform a complete managed sync/conflict/follow-up lifecycle.
+    // ARM CI measured abort >45s and continue 54.860s with three workers.
+    // Keep the existing finite lifecycle budget (20s / 60s in slow-git).
+    gitIntegrationBudget(20000),
   );
 
 it(
