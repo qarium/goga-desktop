@@ -22,6 +22,7 @@ vi.mock("node:fs/promises", async (importOriginal) => {
 });
 import { HostService } from "../src/host/service";
 import { DesktopStateStore } from "../src/host/desktop-state";
+import type { ScopeRef } from "../src/shared/context";
 const clean: (() => Promise<void>)[] = [];
 afterEach(async () => {
   vi.useRealTimers();
@@ -66,6 +67,270 @@ async function fixture() {
   };
   return { host, root, dir, state, trash, reveal, file, runner };
 }
+// Real temporary files, fake process membership and an exact Host-owned clone.
+async function ownedFixture(owner: "primary" | "clone") {
+  const f = await fixture();
+  const ref = {
+    projectId: "p",
+    year: "2026",
+    topic: "fixture",
+    branch: "fixture",
+    contextId: "ctx-" + "a".repeat(64),
+    revision: "12345678-1234-4234-8234-123456789012",
+  };
+  let revision = ref.revision;
+  const root = owner === "clone" ? path.join(f.dir, "clone") : f.root;
+  if (owner === "clone") {
+    await mkdir(root);
+    const clones = (f.host as any).clones;
+    vi.spyOn(clones, "resolve").mockImplementation(async (raw: any) => {
+      if (JSON.stringify(raw) !== JSON.stringify({ ...ref, revision }))
+        throw Error("Stale owner or revision");
+      return {
+        ...ref,
+        revision,
+        storageKind: "clone",
+        path: root,
+        projectPath: f.root,
+        gitCommonDir: path.join(root, ".git"),
+        ownership: "managed",
+        state: "ready",
+        repositoryKey: "a".repeat(64),
+      };
+    });
+    vi.spyOn(clones.store, "assertOwned").mockResolvedValue(undefined);
+    f.runner.command.mockResolvedValue({
+      stdout: [
+        root,
+        root + "/.git",
+        root + "/.git",
+        root + "/.git/index",
+        root + "/.git/objects",
+      ].join("\n"),
+      stderr: "",
+    });
+  }
+  const scope: ScopeRef = owner === "clone" ? ref : "p";
+  return {
+    ...f,
+    scope,
+    ownedRoot: root,
+    setRevision: (value: string) => {
+      revision = value;
+    },
+    setRun: (status: "starting" | "running" | "unverified") => {
+      (f.host as any).runList = [
+        {
+          id: "synthetic-active",
+          projectId: "p",
+          status: status === "unverified" ? "running" : status,
+          ...(owner === "clone" ? { context: ref } : {}),
+          ...(status === "unverified" ? { recovery: "unverified" } : {}),
+        },
+      ];
+    },
+  };
+}
+const activeOwners = (["primary", "clone"] as const).flatMap((owner) =>
+  (["starting", "running", "unverified"] as const).map((status) => ({
+    owner,
+    status,
+  })),
+);
+it.each(activeOwners)(
+  "creates files and directories in $owner during a $status pipeline without touching the other owner",
+  async ({ owner, status }) => {
+    const f = await ownedFixture(owner);
+    f.setRun(status);
+    await f.host.createOverviewEntry(f.scope, "created", "directory");
+    const created = await f.host.createOverviewEntry(
+      f.scope,
+      "created/file.txt",
+      "file",
+      "draft\r\n",
+    );
+    expect(created).toMatchObject({ text: "draft\r\n", exists: true });
+    expect(
+      await readFile(path.join(f.ownedRoot, "created/file.txt"), "utf8"),
+    ).toBe("draft\r\n");
+    if (owner === "clone")
+      await expect(lstat(path.join(f.root, "created"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    expect(f.runner.start).not.toHaveBeenCalled();
+    expect(f.runner.kill).not.toHaveBeenCalled();
+  },
+);
+it.each(activeOwners)(
+  "prepares and executes rename in $owner during a $status pipeline",
+  async ({ owner, status }) => {
+    const f = await ownedFixture(owner);
+    await writeFile(path.join(f.ownedRoot, "source"), "keep\n");
+    f.setRun(status);
+    const preview = await f.host.prepareOverviewFileAction(f.scope, {
+      kind: "rename",
+      path: "source",
+      destination: "renamed",
+    });
+    expect(await f.host.executeOverviewFileAction(preview.token)).toMatchObject(
+      { status: "done", completedPaths: ["source"] },
+    );
+    expect(await readFile(path.join(f.ownedRoot, "renamed"), "utf8")).toBe(
+      "keep\n",
+    );
+    await expect(lstat(path.join(f.ownedRoot, "source"))).rejects.toMatchObject(
+      { code: "ENOENT" },
+    );
+    if (owner === "clone")
+      await expect(lstat(path.join(f.root, "renamed"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    expect((await f.host.executeOverviewFileAction(preview.token)).status).toBe(
+      "not-done",
+    );
+    expect(f.runner.start).not.toHaveBeenCalled();
+    expect(f.runner.kill).not.toHaveBeenCalled();
+  },
+);
+it.each(activeOwners)(
+  "trashes selected entries in $owner during a $status pipeline through the fake adapter only",
+  async ({ owner, status }) => {
+    const f = await ownedFixture(owner);
+    await mkdir(path.join(f.ownedRoot, "folder"));
+    await writeFile(path.join(f.ownedRoot, "folder/child"), "nested");
+    await writeFile(path.join(f.ownedRoot, "selected"), "selected");
+    await writeFile(path.join(f.ownedRoot, "sibling"), "keep");
+    if (owner === "clone") {
+      await f.file("folder/child", "primary nested");
+      await f.file("selected", "primary selected");
+    }
+    f.setRun(status);
+    const preview = await f.host.prepareOverviewFileAction(f.scope, {
+      kind: "trash",
+      paths: ["folder", "folder/child", "selected"],
+    });
+    expect(preview.paths).toEqual(["folder", "selected"]);
+    expect(f.trash).not.toHaveBeenCalled();
+    expect(await f.host.executeOverviewFileAction(preview.token)).toMatchObject(
+      {
+        status: "done",
+        completedPaths: ["folder", "selected"],
+      },
+    );
+    expect(f.trash.mock.calls).toEqual([
+      [path.join(f.ownedRoot, "folder")],
+      [path.join(f.ownedRoot, "selected")],
+    ]);
+    for (const relative of ["folder", "selected"])
+      await expect(
+        lstat(path.join(f.ownedRoot, relative)),
+      ).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await readFile(path.join(f.dir, "trash/folder/child"), "utf8")).toBe(
+      "nested",
+    );
+    expect(await readFile(path.join(f.dir, "trash/selected"), "utf8")).toBe(
+      "selected",
+    );
+    expect(await readFile(path.join(f.ownedRoot, "sibling"), "utf8")).toBe(
+      "keep",
+    );
+    if (owner === "clone") {
+      expect(await readFile(path.join(f.root, "folder/child"), "utf8")).toBe(
+        "primary nested",
+      );
+      expect(await readFile(path.join(f.root, "selected"), "utf8")).toBe(
+        "primary selected",
+      );
+    }
+    expect((await f.host.executeOverviewFileAction(preview.token)).status).toBe(
+      "not-done",
+    );
+    expect(f.trash).toHaveBeenCalledTimes(2);
+    expect(f.runner.start).not.toHaveBeenCalled();
+    expect(f.runner.kill).not.toHaveBeenCalled();
+  },
+);
+it.each(["primary", "clone"] as const)(
+  "keeps a %s rename confirmation valid when a pipeline starts after preview",
+  async (owner) => {
+    const f = await ownedFixture(owner);
+    await writeFile(path.join(f.ownedRoot, "source"), "keep");
+    const preview = await f.host.prepareOverviewFileAction(f.scope, {
+      kind: "rename",
+      path: "source",
+      destination: "renamed",
+    });
+    f.setRun("unverified");
+    expect(await f.host.executeOverviewFileAction(preview.token)).toMatchObject(
+      { status: "done" },
+    );
+    expect(await readFile(path.join(f.ownedRoot, "renamed"), "utf8")).toBe(
+      "keep",
+    );
+  },
+);
+it.each(["primary", "clone"] as const)(
+  "still rejects externally changed sources and settings in %s during a pipeline",
+  async (owner) => {
+    const f = await ownedFixture(owner);
+    await writeFile(path.join(f.ownedRoot, "source"), "original");
+    f.setRun("running");
+    let preview = await f.host.prepareOverviewFileAction(f.scope, {
+      kind: "rename",
+      path: "source",
+      destination: "renamed",
+    });
+    await writeFile(path.join(f.ownedRoot, "source"), "external");
+    expect((await f.host.executeOverviewFileAction(preview.token)).status).toBe(
+      "not-done",
+    );
+    expect(await readFile(path.join(f.ownedRoot, "source"), "utf8")).toBe(
+      "external",
+    );
+    preview = await f.host.prepareOverviewFileAction(f.scope, {
+      kind: "rename",
+      path: "source",
+      destination: "renamed",
+    });
+    const document = await f.state.read("p");
+    await f.state.save(
+      "p",
+      { ...document.value, profile: "changed" },
+      document.version,
+    );
+    expect((await f.host.executeOverviewFileAction(preview.token)).status).toBe(
+      "not-done",
+    );
+    expect(await readFile(path.join(f.ownedRoot, "source"), "utf8")).toBe(
+      "external",
+    );
+    await expect(
+      lstat(path.join(f.ownedRoot, "renamed")),
+    ).rejects.toMatchObject({ code: "ENOENT" });
+  },
+);
+it("still rejects an obsolete clone revision while a pipeline is running", async () => {
+  const f = await ownedFixture("clone");
+  await writeFile(path.join(f.ownedRoot, "source"), "clone");
+  await f.file("source", "primary");
+  f.setRun("running");
+  const preview = await f.host.prepareOverviewFileAction(f.scope, {
+    kind: "rename",
+    path: "source",
+    destination: "renamed",
+  });
+  f.setRevision("87654321-1234-4234-8234-123456789012");
+  expect((await f.host.executeOverviewFileAction(preview.token)).status).toBe(
+    "not-done",
+  );
+  await expect(
+    f.host.createOverviewEntry(f.scope, "created", "file"),
+  ).rejects.toThrow(/Stale owner or revision/);
+  expect(await readFile(path.join(f.ownedRoot, "source"), "utf8")).toBe(
+    "clone",
+  );
+  expect(await readFile(path.join(f.root, "source"), "utf8")).toBe("primary");
+});
 it("previews without writes, collapses nested selections and consumes confirmation once", async () => {
   const f = await fixture();
   await f.file("folder/child");

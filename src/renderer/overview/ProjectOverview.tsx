@@ -1,3 +1,4 @@
+import { selectOverviewRows } from "./selection";
 import { createOverviewTransport } from "./transport";
 import {
   useCallback,
@@ -15,6 +16,7 @@ import {
   ChevronsUpDown,
   CopyX,
   Search,
+  Replace,
   X,
   FolderOpen,
   Braces,
@@ -42,9 +44,12 @@ import {
   type HistoryScrollPositions,
 } from "../HistoryScrollPane";
 import "../ProjectHistory.css";
-import { OverviewEditor } from "./OverviewEditor";
+import { OverviewEditor, type OverviewEditorCommands } from "./OverviewEditor";
 import { FileTree, type FileTreeMenu } from "./FileTree";
-import { OverviewFileActions } from "./OverviewFileActions";
+import {
+  OverviewFileActions,
+  type OverviewPasteActivity,
+} from "./OverviewFileActions";
 import { SchemaGraph, IconButton } from "./SchemaGraph";
 import { ContractPane } from "./ContractPane";
 import { ownerForPath, projectScope, basename } from "./graph";
@@ -120,12 +125,21 @@ export function ProjectOverview({
   );
   const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
   const active = useViewActive();
+  const filePaneRef = useRef<HTMLElement>(null);
+  const searchAnchor = useRef<string | null>(null);
+  useEffect(() => {
+    searchAnchor.current = null;
+  }, [JSON.stringify(scope)]);
+  const editorCommands = useRef<OverviewEditorCommands>(null);
   const [graphScope, setGraphScope] = useState(projectScope),
     [treeScope, setTreeScope] = useState(""),
     [selection, setSelection] = useState<string | null>(null),
     [selectedPaths, setSelectedPaths] = useState<string[]>([]),
     [fileMenu, setFileMenu] = useState<FileTreeMenu | null>(null),
     [fileActionBusy, setFileActionBusy] = useState(false),
+    [pasteActivity, setPasteActivity] = useState<OverviewPasteActivity | null>(
+      null,
+    ),
     [expanded, setExpanded] = useState<string[]>([]),
     [search, setSearch] = useState(""),
     [results, setResults] = useState<OverviewEntry[] | null>(null),
@@ -230,6 +244,26 @@ export function ProjectOverview({
     onCloseState?.(dirty, busy);
   }, [dirty.join("\0"), busy, onCloseState]);
   useEffect(() => () => onCloseState?.([], false), []);
+  // Selection belongs to the visible tree/filter, not to whichever tab was last
+  // opened. Navigation must not leave hidden paths as clipboard targets.
+  const changeFileFilter = (value: string, paths: string[] = []) => {
+    searchAnchor.current = null;
+    setSearch(value);
+    setResults(null);
+    setSearchNotice("");
+    setSelectedPaths(paths);
+    setSelection(paths[0] ?? null);
+    setFileMenu(null);
+  };
+  const showFileDirectory = (
+    directory: string,
+    paths: string[] = [],
+    query = "",
+  ) => {
+    setTreeScope(directory);
+    changeFileFilter(query, paths);
+    void store.loadDirectory(directory);
+  };
   useEffect(() => {
     let current = true;
     if (!active) {
@@ -246,6 +280,10 @@ export function ProjectOverview({
         (r) => {
           if (current) {
             setResults(r.entries);
+            const visible = new Set(r.entries.map((entry) => entry.path));
+            setSelectedPaths((paths) =>
+              paths.filter((p) => p === treeScope || visible.has(p)),
+            );
             setSearchNotice(
               r.truncated
                 ? "Показана часть результатов. Уточните имя или область поиска."
@@ -281,27 +319,20 @@ export function ProjectOverview({
   const drill = (p: string) => {
     if (p === projectScope) {
       setGraphScope(projectScope);
-      setTreeScope("");
-      void store.loadDirectory("");
+      showFileDirectory("");
       return;
     }
     if (!Object.hasOwn(index.cells, p)) return;
     setGraphScope(p);
-    setTreeScope(p === "." ? "" : p);
+    showFileDirectory(p === "." ? "" : p);
     setSelection(p);
-    setSearch("");
-    void store.loadDirectory(p === "." ? "" : p);
   };
   const navigateFromTree = (p: string) => {
     const owner = ownerForPath(state.schema ?? [], p);
-    setTreeScope(p);
+    showFileDirectory(p, [p]);
     setGraphScope(Object.hasOwn(index.cells, p) ? p : (owner ?? projectScope));
-    setSelection(p);
-    setSelectedPaths([p]);
-    setSearch("");
     setGraphCollapsed(false);
     setCompactTab("graph");
-    void store.loadDirectory(p);
   };
   const closeFileMenu = useCallback(() => setFileMenu(null), []);
   const showContract = (p: string, record = true) => {
@@ -440,7 +471,17 @@ export function ProjectOverview({
       {!treeHidden && (
         <>
           <aside
+            ref={filePaneRef}
+            tabIndex={-1}
             className="ov-files"
+            onPointerDown={(event) => {
+              if (
+                !(event.target as HTMLElement).closest(
+                  "input,button,.ov-tree-row",
+                )
+              )
+                event.currentTarget.focus();
+            }}
             onContextMenu={(event) => {
               if (
                 (event.target as HTMLElement).closest(
@@ -499,23 +540,47 @@ export function ProjectOverview({
                 aria-label="Поиск файлов"
                 placeholder="Найти файл…"
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => changeFileFilter(e.target.value)}
               />
               {search && (
                 <IconButton
                   label="Очистить поиск"
-                  onClick={() => setSearch("")}
+                  onClick={() => changeFileFilter("")}
                 >
                   <X size={13} />
                 </IconButton>
               )}
             </div>
+            {active && pasteActivity?.owner === JSON.stringify(scope) && (
+              <div
+                className="ov-paste-activity"
+                role="status"
+                aria-label="Вставка файлов"
+                aria-live="polite"
+              >
+                <RefreshCw size={14} className="ov-spin" aria-hidden="true" />
+                <span>
+                  {
+                    {
+                      preparing: "Подготавливаем вставку",
+                      copying: "Копируем файлы",
+                      refreshing: "Обновляем дерево",
+                    }[pasteActivity.phase]
+                  }
+                  …
+                  <span
+                    className="ov-paste-destination"
+                    title={pasteActivity.destination || "Корень проекта"}
+                  >
+                    {pasteActivity.destination || "Корень проекта"}
+                  </span>
+                </span>
+              </div>
+            )}
             <div className="ov-file-scope">
               <button
                 onClick={() => {
-                  setTreeScope("");
-                  setSearch("");
-                  void store.loadDirectory("");
+                  showFileDirectory("");
                 }}
               >
                 <FolderOpen size={15} />
@@ -579,15 +644,26 @@ export function ProjectOverview({
                 {results.map((e) => (
                   <button
                     key={e.path}
-                    onDoubleClick={() => {
+                    aria-pressed={selectedPaths.includes(e.path)}
+                    className={
+                      selectedPaths.includes(e.path) ? "ov-tree-selected" : ""
+                    }
+                    onDoubleClick={(event) => {
+                      if (event.metaKey || event.ctrlKey || event.shiftKey)
+                        return;
                       if (e.kind === "directory") navigateFromTree(e.path);
                     }}
                     onContextMenu={(event) => {
                       event.preventDefault();
                       event.stopPropagation();
-                      setSelectedPaths([e.path]);
+                      const paths = selectedPaths.includes(e.path)
+                        ? selectedPaths
+                        : [e.path];
+                      if (!selectedPaths.includes(e.path))
+                        searchAnchor.current = e.path;
+                      setSelectedPaths(paths);
                       setFileMenu({
-                        paths: [e.path],
+                        paths,
                         entry: e,
                         parent: e.path.includes("/")
                           ? e.path.slice(0, e.path.lastIndexOf("/"))
@@ -596,11 +672,21 @@ export function ProjectOverview({
                         y: event.clientY,
                       });
                     }}
-                    onClick={() => {
+                    onClick={(event) => {
+                      const next = selectOverviewRows(
+                        results.map((row) => row.path),
+                        selectedPaths,
+                        searchAnchor.current,
+                        e.path,
+                        event,
+                      );
+                      searchAnchor.current = next.anchor;
+                      setSelectedPaths(next.paths);
+                      if (event.metaKey || event.ctrlKey || event.shiftKey)
+                        return;
                       if (e.kind === "directory") {
-                        setTreeScope(e.path);
+                        showFileDirectory(e.path, [e.path], search);
                         select(e.path);
-                        void store.loadDirectory(e.path);
                       } else {
                         select(e.path);
                         void store.open(e.path);
@@ -751,8 +837,7 @@ export function ProjectOverview({
                 aria-label="Корень проекта"
                 onClick={() => {
                   setGraphScope(projectScope);
-                  setTreeScope("");
-                  void store.loadDirectory("");
+                  showFileDirectory("");
                 }}
               >
                 Проект
@@ -925,15 +1010,34 @@ export function ProjectOverview({
                     const parent = p.includes("/")
                       ? p.slice(0, p.lastIndexOf("/"))
                       : "";
-                    setTreeScope(parent);
-                    void store.loadDirectory(parent);
+                    showFileDirectory(parent, [p]);
                     select(p);
                   }}
                 >
                   <FileCode2 size={15} />
-                  {state.active}
+                  <span>{state.active}</span>
                 </button>
-                <div>
+                <div className="ov-file-actions">
+                  <button
+                    type="button"
+                    className="ov-icon"
+                    aria-label="Найти в файле"
+                    title="Найти в файле (Ctrl+F / ⌘F)"
+                    disabled={!active || preview || file.busy}
+                    onClick={() => editorCommands.current?.find()}
+                  >
+                    <Search size={15} />
+                  </button>
+                  <button
+                    type="button"
+                    className="ov-icon"
+                    aria-label="Заменить в файле"
+                    title="Заменить в файле (Ctrl+R / ⌘⌥F)"
+                    disabled={!active || preview || file.busy}
+                    onClick={() => editorCommands.current?.replace()}
+                  >
+                    <Replace size={15} />
+                  </button>
                   <IconButton
                     label="Обновить файл с диска"
                     disabled={file.busy}
@@ -942,13 +1046,19 @@ export function ProjectOverview({
                     <RefreshCw size={15} />
                   </IconButton>
                   <button
-                    className="ov-close-without-save"
+                    className="ov-close-without-save ov-labeled-action"
+                    aria-label="Закрыть без сохранения"
+                    title="Закрыть без сохранения"
                     disabled={file.busy}
                     onClick={() => close([state.active!])}
                   >
-                    Закрыть без сохранения
+                    <X size={15} />
+                    <span>Закрыть без сохранения</span>
                   </button>
                   <button
+                    className="ov-labeled-action"
+                    aria-label="Сохранить"
+                    title="Сохранить"
                     disabled={
                       file.busy ||
                       !file.document.exists ||
@@ -957,7 +1067,7 @@ export function ProjectOverview({
                     onClick={() => void store.save(state.active!)}
                   >
                     <Save size={14} />
-                    Сохранить
+                    <span>Сохранить</span>
                   </button>
                 </div>
               </div>
@@ -1002,6 +1112,7 @@ export function ProjectOverview({
                   onSave={() => void store.save(state.active!)}
                   readOnly={file.busy}
                   memory={file.memory}
+                  commands={editorCommands}
                 />
               )}
               <footer className="ov-status">
@@ -1032,11 +1143,16 @@ export function ProjectOverview({
         scope={scope}
         workspacePath={workspacePath}
         store={store}
+        filePaneRef={filePaneRef}
+        filePaneVisible={!treeHidden}
+        treeScope={treeScope}
+        selectedPaths={selectedPaths}
         menu={fileMenu}
         onCloseMenu={closeFileMenu}
         onCreate={(kind, parent) => startCreate(kind, undefined, parent)}
         onNavigate={navigateFromTree}
         onBusy={setFileActionBusy}
+        onPasteActivity={setPasteActivity}
         onApplied={(kind, paths, destination) => {
           const affected = (p: string) =>
             paths.some((root) => p === root || p.startsWith(root + "/"));

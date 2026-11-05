@@ -26,6 +26,9 @@ function setup(paths = ["src/a.ts", "src/b.ts"]) {
       completedPaths: paths,
       message: "Готово",
     })),
+    copyOverviewPaths: vi.fn(
+      async (_scope: any, _paths: string[], _absolute: boolean) => {},
+    ),
     revealOverviewEntry: vi.fn(async () => {}),
   };
   const store = {
@@ -152,7 +155,9 @@ it("refuses rename into an already open destination before calling Host", async 
   expect(f.api.executeOverviewFileAction).not.toHaveBeenCalled();
 });
 it("copies full paths only on request, using the current workspace rather than the primary project", async () => {
-  const writeText = vi.fn(async () => {});
+  const writeText = vi.fn(async () => {
+    throw Error("Write permission denied");
+  });
   vi.stubGlobal("navigator", { clipboard: { writeText } });
   const f = setup(["src/a.ts"]);
   f.view.rerender(
@@ -163,8 +168,10 @@ it("copies full paths only on request, using the current workspace rather than t
     screen.getByRole("menuitem", { name: "Скопировать полный путь" }),
   );
   await waitFor(() =>
-    expect(writeText).toHaveBeenLastCalledWith(
-      "/fixture/main project/src/a.ts",
+    expect(f.api.copyOverviewPaths).toHaveBeenLastCalledWith(
+      "p",
+      ["src/a.ts"],
+      true,
     ),
   );
   f.view.rerender(
@@ -186,10 +193,32 @@ it("copies full paths only on request, using the current workspace rather than t
     screen.getByRole("menuitem", { name: "Скопировать полные пути" }),
   );
   await waitFor(() =>
-    expect(writeText).toHaveBeenLastCalledWith(
-      "/fixture/clones/топик/src/a.ts\n/fixture/clones/топик/src/b.ts",
+    expect(f.api.copyOverviewPaths).toHaveBeenLastCalledWith(
+      expect.objectContaining({ contextId: "ctx", revision: "r" }),
+      ["src/a.ts", "src/b.ts"],
+      true,
     ),
   );
   expect(f.api.prepareOverviewFileAction).not.toHaveBeenCalled();
   expect(f.api.executeOverviewFileAction).not.toHaveBeenCalled();
+});
+
+it("copies relative paths through the Host even when browser clipboard permission is denied", async () => {
+  const writeText = vi.fn(async () => {
+    throw Error("Write permission denied");
+  });
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  const f = setup();
+  fireEvent.click(
+    screen.getByRole("menuitem", { name: "Скопировать относительные пути" }),
+  );
+  await waitFor(() =>
+    expect(f.api.copyOverviewPaths).toHaveBeenCalledExactlyOnceWith(
+      "p",
+      ["src/a.ts", "src/b.ts"],
+      false,
+    ),
+  );
+  expect(writeText).not.toHaveBeenCalled();
+  expect(screen.queryByRole("alert")).toBeNull();
 });

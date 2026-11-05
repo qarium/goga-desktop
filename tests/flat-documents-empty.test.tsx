@@ -136,7 +136,6 @@ describe.each(["pipeline", "workflow", "profile"] as const)(
       fireEvent.click(
         screen.getByRole("button", { name: `Файл ${file.path}` }),
       );
-      fireEvent.click(screen.getByRole("button", { name: "Открыть редактор" }));
       await waitFor(() =>
         expect(container.querySelector(".yaml-code-editor")).not.toBeNull(),
       );
@@ -253,10 +252,7 @@ describe.each(["pipeline", "workflow", "profile"] as const)(
           ).not.toContain(project.path);
         };
         checkPath();
-        expect(f.read).not.toHaveBeenCalled();
-        fireEvent.click(
-          screen.getByRole("button", { name: "Открыть редактор" }),
-        );
+        expect(f.read).toHaveBeenCalledExactlyOnceWith(project.id, target);
         await waitFor(() =>
           expect(container.querySelector(".yaml-code-editor")).not.toBeNull(),
         );

@@ -358,3 +358,38 @@ it("does not tell locked legacy unknown processes to close their record or prete
       .disabled,
   ).toBe(true);
 });
+
+it("restores only the crashed dashboard with local busy state, preserving the same run", async () => {
+  let finish!: () => void;
+  api.restoreDashboard = vi.fn(
+    () =>
+      new Promise<void>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  await open([
+    ready({
+      dashboardRecoveryVersion: 1,
+      dashboardReconnect: true,
+      dashboardRunId: "afm-1",
+    }),
+  ]);
+  act(() => viewError({ id: "a", error: "Панель завершила работу" }));
+  const button = await screen.findByRole("button", {
+    name: "Восстановить панель",
+  });
+  fireEvent.click(button);
+  fireEvent.click(button);
+  expect(api.restoreDashboard).toHaveBeenCalledTimes(1);
+  expect(api.restoreDashboard).toHaveBeenCalledWith("a");
+  expect(
+    screen
+      .getByRole("button", { name: "Подключаем панель…" })
+      .hasAttribute("disabled"),
+  ).toBe(true);
+  await act(async () => finish());
+  expect(
+    screen.queryByRole("heading", { name: "Панель конвейера недоступна" }),
+  ).toBeNull();
+  expect(api.stopRun).not.toHaveBeenCalled();
+});

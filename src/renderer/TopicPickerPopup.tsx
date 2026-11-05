@@ -153,10 +153,43 @@ export function TopicPickerPopup({
             'link[rel="stylesheet"]',
           ),
         ];
+        // Constructed sheets cascade after ordinary links. Never mix the two:
+        // if any sheet still needs a load, keep the whole original link order.
+        const copyLoadedSheets = links.every(
+          (source) =>
+            source.sheet &&
+            ![...source.sheet.cssRules].some((rule) => rule.type === 3),
+        );
         let remaining = links.length;
         if (!remaining) setStyled(true);
         else timer = setTimeout(state.fail, 5000);
         for (const source of links) {
+          // A long-lived shell can outlive a rebuild which removes its hashed
+          // assets. Reuse the trusted CSS already loaded by that shell instead
+          // of requesting the obsolete URL again. Each copy belongs to the child
+          // document; baseURL preserves relative asset references and CSP stays
+          // unchanged (no inline style text or additional script authority).
+          const loadedSheet = source.sheet;
+          if (copyLoadedSheets && loadedSheet) {
+            const copy = new (
+              popup as Window & typeof globalThis
+            ).CSSStyleSheet({
+              baseURL: source.href,
+              media: source.media,
+              disabled: loadedSheet.disabled,
+            });
+            copy.replaceSync(
+              [...loadedSheet.cssRules].map((rule) => rule.cssText).join("\n"),
+            );
+            doc.adoptedStyleSheets = [...(doc.adoptedStyleSheets ?? []), copy];
+            if (--remaining === 0) {
+              clearTimeout(timer);
+              setStyled(true);
+            }
+            continue;
+          }
+          // A genuinely pending sheet (or an unbundled @import) still needs its
+          // normal load acknowledgement before revealing the native surface.
           const link = doc.createElement("link");
           link.rel = "stylesheet";
           link.href = source.href;

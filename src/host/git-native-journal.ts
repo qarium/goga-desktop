@@ -1,3 +1,8 @@
+import {
+  assertCommitFreshProof,
+  type CommitFreshProof,
+} from "./git-commit-proof";
+
 import { randomUUID, createHash } from "node:crypto";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -21,6 +26,52 @@ import {
   type NativeGitState,
   type NativeGitOwner,
 } from "./git-native-state";
+
+type NativeGitExecution = {
+  token: string;
+  operation: NativeGitOperation;
+  intentFingerprint: string;
+  capture(): Promise<NativeGitState>;
+  run(confirmed: NativeGitState): Promise<ByteCommandResult>;
+  /** Journalled native inspection (e.g. public edit-todo) before the first seal.
+   * A failed inspection retains the real primary command facts and recovery. */
+  afterSettled?(command: ByteCommandResult): Promise<void>;
+  /** Finite host-owned discard phase only; never an error message/path. */
+  failureStep?(): z.infer<typeof discardFailureStepSchema>;
+  /** Keep the durable fence and recovery until the outer host context releases
+   * its leases. Failure before finalization stays blocked across restart. */
+  deferRecoveryCleanup?(
+    finish: () => Promise<NativeGitOperationResult>,
+    result: NativeGitOperationResult,
+  ): void;
+  verify(
+    before: NativeGitState,
+    after: NativeGitState,
+    command: ByteCommandResult,
+  ): Promise<NativeGitVerification>;
+};
+export interface CommitJournalExecution {
+  token: string;
+  intentFingerprint: string;
+  proveBefore(phase: "admit" | "attempt-ready"): Promise<CommitFreshProof>;
+  attemptScope<T>(action: () => Promise<T>): Promise<T>;
+  run(before: CommitFreshProof): Promise<ByteCommandResult>;
+  proveResult(
+    command: ByteCommandResult,
+  ): Promise<{ proof: CommitFreshProof; verification: NativeGitVerification }>;
+  deferRecoveryCleanup(
+    finish: () => Promise<NativeGitOperationResult>,
+    result: NativeGitOperationResult,
+  ): void;
+}
+type NativeGitExecutionStrategy =
+  | ({ kind: "legacy" } & NativeGitExecution)
+  | ({
+      kind: "commit";
+      operation: "commit";
+      afterSettled?: never;
+      failureStep?: never;
+    } & CommitJournalExecution);
 
 const hash = z.string().regex(/^[a-f0-9]{64}$/);
 const digest = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -1361,29 +1412,23 @@ export class NativeGitJournal {
         found.value.controlFingerprint === snapshot.controlFingerprint,
     };
   }
-  async execute(options: {
-    token: string;
-    operation: NativeGitOperation;
-    intentFingerprint: string;
-    capture(): Promise<NativeGitState>;
-    run(confirmed: NativeGitState): Promise<ByteCommandResult>;
-    /** Journalled native inspection (e.g. public edit-todo) before the first seal.
-     * A failed inspection retains the real primary command facts and recovery. */
-    afterSettled?(command: ByteCommandResult): Promise<void>;
-    /** Finite host-owned discard phase only; never an error message/path. */
-    failureStep?(): z.infer<typeof discardFailureStepSchema>;
-    /** Keep the durable fence and recovery until the outer host context releases
-     * its leases. Failure before finalization stays blocked across restart. */
-    deferRecoveryCleanup?(
-      finish: () => Promise<NativeGitOperationResult>,
-      result: NativeGitOperationResult,
-    ): void;
-    verify(
-      before: NativeGitState,
-      after: NativeGitState,
-      command: ByteCommandResult,
-    ): Promise<NativeGitVerification>;
-  }): Promise<NativeGitOperationResult> {
+  async execute(
+    options: NativeGitExecution,
+  ): Promise<NativeGitOperationResult> {
+    return this.executeLifecycle({ ...options, kind: "legacy" });
+  }
+  async executeCommit(
+    options: CommitJournalExecution,
+  ): Promise<NativeGitOperationResult> {
+    return this.executeLifecycle({
+      ...options,
+      kind: "commit",
+      operation: "commit",
+    });
+  }
+  private async executeLifecycle(
+    options: NativeGitExecutionStrategy,
+  ): Promise<NativeGitOperationResult> {
     const pending = this.tokens.get(options.token);
     this.tokens.delete(options.token); // one use, including failed revalidation
     if (
@@ -1394,7 +1439,16 @@ export class NativeGitJournal {
     )
       throw blocked();
     const snapshot = pending.snapshot;
-    assertNativeGitState(snapshot, await options.capture());
+    if (options.kind === "legacy")
+      assertNativeGitState(snapshot, await options.capture());
+    else {
+      const physical = await nativeGitPhysicalIdentity(snapshot.root);
+      if (
+        physical.physicalRoot !== snapshot.physicalRoot ||
+        physical.physicalGit !== snapshot.physicalGit
+      )
+        throw blocked();
+    }
     const directoryIdentity = await this.storage(snapshot, true);
     await this.assertNoPending(snapshot);
     const lease = await acquireOwnedLock(this.recordPath(snapshot) + ".lock", {
@@ -1429,7 +1483,15 @@ export class NativeGitJournal {
           current.value.recovery !== null)
       )
         throw blocked();
-      assertNativeGitState(snapshot, await options.capture());
+      if (options.kind === "legacy")
+        assertNativeGitState(snapshot, await options.capture());
+      else
+        assertCommitFreshProof(
+          snapshot,
+          await options.proveBefore("admit"),
+          "admit",
+          true,
+        );
       await assertNoNativeGitLocks(snapshot.root);
       if (this.now() >= pending.expires) throw blocked();
       const resolutionParent = pending.resolutionRecord
@@ -1468,7 +1530,8 @@ export class NativeGitJournal {
             };
       current = await this.write(snapshot, record, current, directoryIdentity);
       // Recovery is already durable. A crash here is NOT proof that Git ran.
-      assertNativeGitState(snapshot, await options.capture());
+      if (options.kind === "legacy")
+        assertNativeGitState(snapshot, await options.capture());
       await assertNoNativeGitLocks(snapshot.root);
       if (this.now() >= pending.expires) throw blocked();
       // Separate atomic evidence that a native attempt may run. Losing the
@@ -1500,91 +1563,136 @@ export class NativeGitJournal {
       let stage: NativeGitJournalDiagnostic["stage"] = "run";
       let primaryReturned = false;
       let resolvedMode: number | null | undefined;
-      try {
-        const command = await options.run(snapshot); // exactly one attempt, only after durable running
+      const rememberCommand = (command: ByteCommandResult) => {
         primaryReturned = true;
         result.exitCode = command.exitCode;
         result.signal = command.signal;
         result.processSettled = command.processSettled;
+      };
+      try {
+        const command =
+          options.kind === "legacy"
+            ? await options.run(snapshot)
+            : await options.attemptScope(async () => {
+                const proof = await options.proveBefore("attempt-ready");
+                assertCommitFreshProof(snapshot, proof, "attempt-ready", true);
+                if (this.now() >= pending.expires) throw blocked();
+                const command = await options.run(proof);
+                // The native attempt has settled even if attemptScope's config
+                // lease release subsequently fails. Preserve those known facts.
+                rememberCommand(command);
+                return command;
+              }); // exactly one attempt, only after durable running
+        if (options.kind === "legacy") rememberCommand(command);
         if (command.processSettled) {
           stage = "after-settled";
           await options.afterSettled?.(command);
           stage = "capture";
-          const after = await options.capture();
-          if (
-            nativeGitOwnerKey(after) !== nativeGitOwnerKey(snapshot) ||
-            after.policyFingerprint !== snapshot.policyFingerprint
-          )
-            throw blocked();
-          result.afterHead = after.head;
-          stage = "verify";
-          const verified = await options.verify(snapshot, after, command);
-          result.conflicts = [...verified.conflicts];
-          result.verifiedUnrelatedData = verified.verifiedUnrelatedData;
-          if (
-            verified.afterHead !== after.head ||
-            !verified.verifiedUnrelatedData
-          )
-            throw blocked();
-          if (
-            verified.outcome === "completed" &&
-            (command.exitCode !== 0 ||
-              command.signal !== null ||
-              verified.conflicts.length)
-          )
-            throw blocked();
-          if (
-            verified.outcome === "conflicts" &&
-            (command.exitCode !== 1 ||
-              command.signal !== null ||
-              !verified.conflicts.length)
-          )
-            throw blocked();
-          if (
-            verified.outcome === "stopped" &&
-            (command.exitCode === null ||
-              command.exitCode === 0 ||
-              command.signal !== null ||
-              after.head !== snapshot.head)
-          )
-            throw blocked();
-          if (verified.outcome === "rejected") {
-            // A failed command is not itself proof of rejection. In addition to
-            // handler-specific effects, enforce unchanged owner/HEAD/index/refs
-            // and protected bytes here. Native bookkeeping may have changed.
+          if (options.kind === "commit") {
+            const { proof, verification: verified } =
+              await options.proveResult(command);
+            assertCommitFreshProof(
+              snapshot,
+              proof,
+              "result",
+              verified.outcome === "rejected",
+            );
+            result.afterHead = proof.head;
+            stage = "verify";
             if (
-              command.exitCode === null ||
-              command.exitCode === 0 ||
-              command.signal !== null ||
+              !verified.verifiedUnrelatedData ||
+              verified.afterHead !== proof.head ||
               verified.conflicts.length ||
-              after.head !== snapshot.head ||
-              after.headRef !== snapshot.headRef ||
-              after.index !== snapshot.index ||
-              after.refs !== snapshot.refs ||
-              JSON.stringify(after.files) !== JSON.stringify(snapshot.files)
+              command.signal !== null ||
+              (verified.outcome !== "completed" &&
+                verified.outcome !== "rejected") ||
+              (verified.outcome === "completed" &&
+                (command.exitCode !== 0 || proof.head === snapshot.head)) ||
+              (verified.outcome === "rejected" &&
+                (command.exitCode === null || command.exitCode === 0))
             )
               throw blocked();
-          }
-          result.outcome = verified.outcome;
-          if (resolutionParent && verified.outcome === "completed") {
+            result.conflicts = [];
+            result.verifiedUnrelatedData = true;
+            result.outcome = verified.outcome;
+            record.controlFingerprint = proof.controlFingerprint;
+          } else {
+            const after = await options.capture();
             if (
-              after.controlFingerprint !== snapshot.controlFingerprint ||
-              after.head !== snapshot.head ||
-              after.headRef !== snapshot.headRef ||
-              after.refs !== snapshot.refs
+              nativeGitOwnerKey(after) !== nativeGitOwnerKey(snapshot) ||
+              after.policyFingerprint !== snapshot.policyFingerprint
             )
               throw blocked();
-            resolvedMode = after.files.find(
-              (f) => f.path === pending.resolutionPath,
-            )?.mode;
-            if (resolvedMode === undefined) throw blocked();
+            result.afterHead = after.head;
+            stage = "verify";
+            const verified = await options.verify(snapshot, after, command);
+            result.conflicts = [...verified.conflicts];
+            result.verifiedUnrelatedData = verified.verifiedUnrelatedData;
+            if (
+              verified.afterHead !== after.head ||
+              !verified.verifiedUnrelatedData
+            )
+              throw blocked();
+            if (
+              verified.outcome === "completed" &&
+              (command.exitCode !== 0 ||
+                command.signal !== null ||
+                verified.conflicts.length)
+            )
+              throw blocked();
+            if (
+              verified.outcome === "conflicts" &&
+              (command.exitCode !== 1 ||
+                command.signal !== null ||
+                !verified.conflicts.length)
+            )
+              throw blocked();
+            if (
+              verified.outcome === "stopped" &&
+              (command.exitCode === null ||
+                command.exitCode === 0 ||
+                command.signal !== null ||
+                after.head !== snapshot.head)
+            )
+              throw blocked();
+            if (verified.outcome === "rejected") {
+              // A failed command is not itself proof of rejection. In addition to
+              // handler-specific effects, enforce unchanged owner/HEAD/index/refs
+              // and protected bytes here. Native bookkeeping may have changed.
+              if (
+                command.exitCode === null ||
+                command.exitCode === 0 ||
+                command.signal !== null ||
+                verified.conflicts.length ||
+                after.head !== snapshot.head ||
+                after.headRef !== snapshot.headRef ||
+                after.index !== snapshot.index ||
+                after.refs !== snapshot.refs ||
+                JSON.stringify(after.files) !== JSON.stringify(snapshot.files)
+              )
+                throw blocked();
+            }
+            result.outcome = verified.outcome;
+            if (resolutionParent && verified.outcome === "completed") {
+              if (
+                after.controlFingerprint !== snapshot.controlFingerprint ||
+                after.head !== snapshot.head ||
+                after.headRef !== snapshot.headRef ||
+                after.refs !== snapshot.refs
+              )
+                throw blocked();
+              resolvedMode = after.files.find(
+                (f) => f.path === pending.resolutionPath,
+              )?.mode;
+              if (resolvedMode === undefined) throw blocked();
+            }
+            record.controlFingerprint = after.controlFingerprint;
+            if (
+              verified.outcome === "conflicts" ||
+              verified.outcome === "stopped"
+            )
+              record.checkpoint = after;
           }
-          record.controlFingerprint = after.controlFingerprint;
-          if (
-            verified.outcome === "conflicts" ||
-            verified.outcome === "stopped"
-          )
-            record.checkpoint = after;
         }
       } catch (error) {
         record.diagnostic = diagnosticFor(stage, error, options.failureStep);
@@ -1601,7 +1709,10 @@ export class NativeGitJournal {
         }
         // A timeout/error is never retried, nor turned into successful rollback.
         result.outcome = "uncertain";
-        if (error instanceof NativeGitPreflightRejection) {
+        if (
+          error instanceof NativeGitPreflightRejection &&
+          options.kind === "legacy"
+        ) {
           try {
             const after = await options.capture();
             assertNativeGitState(snapshot, after);

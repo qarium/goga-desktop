@@ -661,10 +661,11 @@ it.each([
         ),
       ).rejects.toThrow(/Конфликт сохранения/);
       expect(await readFile(filename, "utf8")).toBe("# external\n");
-      // Content editing is not permission for structural or process operations.
-      await expect(
-        f.service.createOverviewEntry(scope, "blocked.txt", "file", "new"),
-      ).rejects.toThrow(/занят запуском/);
+      // File editing remains available; it grants no process or Git permissions.
+      await f.service.createOverviewEntry(scope, "created.txt", "file", "new");
+      expect(await readFile(path.join(root, "created.txt"), "utf8")).toBe(
+        "new",
+      );
       expect(f.runner.start).not.toHaveBeenCalled();
       expect(f.runner.kill).not.toHaveBeenCalled();
       expect(

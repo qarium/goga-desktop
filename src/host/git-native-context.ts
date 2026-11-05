@@ -1,13 +1,17 @@
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
-import { createNativeGitClient } from "./git-native-client";
+import {
+  createNativeGitClient,
+  type NativeGitClient,
+} from "./git-native-client";
 import { NativeGitJournal } from "./git-native-journal";
 import {
   captureNativeGitState,
   fingerprintNativeGitControls,
   readNativeGitObservation,
   type NativeGitOwner,
+  type NativeGitObservation,
 } from "./git-native-state";
 import { captureNativeIndexRecovery } from "./git-native-recovery";
 import type { Runner } from "./process";
@@ -66,18 +70,32 @@ export const nativeIntent = (value: unknown) =>
   createHash("sha256").update(JSON.stringify(value)).digest("hex");
 /** Admission/config checks remain the handler's responsibility. No fallback to
  * a text runner, and no assertion of settlement from an arbitrary exception. */
-export async function nativeGitGuard(options: {
-  root: string;
-  capability?: NativeGitCapability;
-  paths: readonly string[];
-  configuration: readonly (readonly [string, string])[];
-  verify(): Promise<void>;
-  policy(): Promise<string>;
-  recoverIndex?: boolean;
-  /** The existing private reader owns status canonicalization. A metadata-only
-   * branch operation must not run live status/clean filters in the real repo. */
-  admittedStatus(): Promise<{ data: Buffer; headRef: string | null }>;
-}) {
+export async function nativeGitGuard(
+  options: {
+    root: string;
+    capability?: NativeGitCapability;
+    paths: readonly string[];
+    configuration: readonly (readonly [string, string])[];
+    verify(): Promise<void>;
+    recoverIndex?: boolean;
+  } & (
+    | {
+        /** Commit-only provider; every invocation owns a fresh private read scope. */
+        observe(client: NativeGitClient): Promise<NativeGitObservation>;
+        freshBatchRecovery?: true;
+        admittedStatus?: never;
+        policy?: never;
+      }
+    | {
+        observe?: never;
+        freshBatchRecovery?: never;
+        policy(): Promise<string>;
+        /** The existing private reader owns status canonicalization. A metadata-only
+         * branch operation must not run live status/clean filters in the real repo. */
+        admittedStatus(): Promise<{ data: Buffer; headRef: string | null }>;
+      }
+  ),
+) {
   const capability = options.capability;
   if (!capability)
     throw Error("Защищённый исполнитель штатного Git недоступен.");
@@ -88,8 +106,13 @@ export async function nativeGitGuard(options: {
       paths: options.paths,
       ...(options.recoverIndex
         ? {
-            indexRecovery: (index: Buffer) =>
-              captureNativeIndexRecovery(client, index, options.paths),
+            indexRecovery: (index: Buffer, flags?: Buffer) =>
+              captureNativeIndexRecovery(client, index, options.paths, {
+                flags,
+                ...(options.freshBatchRecovery
+                  ? { freshBatch: true as const }
+                  : {}),
+              }),
           }
         : {}),
       owner: async () => {
@@ -98,6 +121,7 @@ export async function nativeGitGuard(options: {
       },
       observe: async () => {
         await options.verify();
+        if (options.observe) return options.observe(client);
         const status = await options.admittedStatus();
         return readNativeGitObservation(
           client,

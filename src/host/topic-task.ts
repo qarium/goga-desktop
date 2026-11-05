@@ -169,23 +169,17 @@ export async function readCommittedTask(
 export function taskDocument(
   root: string,
   branch: string,
-  commit: string,
+  _commit: string,
   relative: string,
   value: Pick<TopicTaskDocument, "text" | "exists" | "catalogState">,
 ): TopicTaskDocument {
   return {
     ...value,
     path: relative,
+    // A task write conflicts only with this file's content/existence, not HEAD
+    // or the incidental presence of catalog metadata. Owner/path stay scoped.
     version: digest(
-      JSON.stringify([
-        root,
-        branch,
-        commit,
-        relative,
-        value.exists,
-        value.text,
-        ...(value.catalogState ? [value.catalogState] : []),
-      ]),
+      JSON.stringify([root, branch, relative, value.exists, value.text]),
     ),
   };
 }

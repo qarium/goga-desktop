@@ -1,5 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+  type Ref,
+} from "react";
 import { Prec } from "@codemirror/state";
+import { overviewSearch, openOverviewSearch } from "./editor-search";
 import { EditorView, keymap } from "@codemirror/view";
 import { syntaxHighlighting, type LanguageSupport } from "@codemirror/language";
 import { YamlEditor, type YamlEditorMemory } from "../YamlEditor";
@@ -9,6 +17,11 @@ import {
   resolveOverviewLanguage,
 } from "./languages";
 
+export interface OverviewEditorCommands {
+  find: () => void;
+  replace: () => void;
+}
+
 export interface OverviewEditorProps {
   path: string;
   value: string;
@@ -17,9 +30,12 @@ export interface OverviewEditorProps {
   readOnly?: boolean;
   /** Must belong to this file and context, just like the supplied source text. */
   memory?: YamlEditorMemory;
+  /** Commands belong to this mounted file; stale handles become inert on cleanup. */
+  commands?: Ref<OverviewEditorCommands>;
 }
 
 const sourceTheme = EditorView.theme({
+  "&.cm-focused": { outline: "none", boxShadow: "none" },
   ".overview-comment": { color: "#879ab3", fontStyle: "italic" },
   ".overview-keyword, .overview-atom": { color: "#c9aff5" },
   ".overview-string, .overview-regexp": { color: "#b8d99b" },
@@ -62,6 +78,7 @@ function OverviewFileEditor({
   onSave,
   readOnly,
   memory,
+  commands,
 }: OverviewEditorProps) {
   const description = resolveOverviewLanguage(path);
   const builtin =
@@ -71,8 +88,23 @@ function OverviewFileEditor({
         ? "dockerfile"
         : undefined;
   const [support, setSupport] = useState<LanguageSupport | null>(null);
+  const view = useRef<EditorView | null>(null);
   const save = useRef(onSave);
   save.current = onSave;
+  useImperativeHandle(
+    commands,
+    () => ({
+      find() {
+        if (view.current) openOverviewSearch(view.current);
+      },
+      replace() {
+        const current = view.current;
+        if (current && !current.state.readOnly)
+          openOverviewSearch(current, true);
+      },
+    }),
+    [],
+  );
 
   useEffect(() => {
     // Keep the existing YAML scalar colors and Dockerfile CRLF adaptation.
@@ -95,7 +127,8 @@ function OverviewFileEditor({
     () => [
       support ?? [],
       syntaxHighlighting(overviewHighlightStyle),
-      sourceTheme,
+      Prec.highest(sourceTheme),
+      overviewSearch,
       Prec.highest(
         keymap.of([
           {
@@ -112,15 +145,20 @@ function OverviewFileEditor({
   );
 
   return (
-    <YamlEditor
-      value={value}
-      onChange={onChange}
-      readOnly={readOnly}
-      memory={memory}
-      plainText={!builtin}
-      language={builtin}
-      label={path}
-      extensions={extensions}
-    />
+    <div className="ov-source-editor">
+      <YamlEditor
+        onView={(current) => {
+          view.current = current;
+        }}
+        value={value}
+        onChange={onChange}
+        readOnly={readOnly}
+        memory={memory}
+        plainText={!builtin}
+        language={builtin}
+        label={path}
+        extensions={extensions}
+      />
+    </div>
   );
 }

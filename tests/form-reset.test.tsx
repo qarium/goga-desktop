@@ -116,7 +116,7 @@ function deferred<T>() {
   const promise = new Promise<T>((r) => (resolve = r));
   return { promise, resolve };
 }
-it("clean reset reads fresh full document and reuses exactly one prepared preview", async () => {
+it("clean reset reads fresh full document and launches it without a cached write version", async () => {
   const { store } = await setup();
   api.readTopicTask.mockResolvedValue(doc("external\nfull", true, "v2"));
   api.preview.mockResolvedValue({ ...preview, token: "prepared" });
@@ -131,11 +131,11 @@ it("clean reset reads fresh full document and reuses exactly one prepared previe
     expect(api.launch).toHaveBeenCalledWith(
       expect.objectContaining({
         previewToken: "prepared",
-        taskVersion: "v2",
         clean: false,
       }),
     ),
   );
+  expect(api.launch.mock.calls[0][0]).not.toHaveProperty("taskVersion");
 });
 it("dirty reset atomically applies all defaults only after preview and keeps selected exact topic on reorder", async () => {
   await setup();

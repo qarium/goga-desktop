@@ -8,6 +8,12 @@ import {
   withGitPolicyCaptureScope,
 } from "./git-private-read-scope";
 
+import {
+  readCommitSources,
+  assertCommitSources,
+  type ContentWitness,
+} from "./git-commit-proof";
+
 import { CommandExitError } from "./process";
 
 const LIMIT = 32 * 1024 * 1024;
@@ -118,8 +124,14 @@ function objectPath(filename: string) {
 
 export interface PrivateGitRead {
   policy: string;
+  /** Original effective configuration, not the sanitized private execution file. */
+  readonly configuration: string;
   git(args: string[]): Promise<string>;
   verify(): Promise<void>;
+  /** Commit-only byte/membership evidence. Absent for all existing readers. */
+  readonly sources?: readonly ContentWitness[];
+  readonly nativeAttributes?: boolean;
+  verifySources?(): Promise<void>;
 }
 
 /** Disposable metadata only, not a source clone/worktree. Native Git compares
@@ -132,6 +144,7 @@ export async function withPrivateGitRead<T>(
   sourceGit: (args: string[]) => Promise<string>,
   execute: (args: string[]) => Promise<string>,
   read: (context: PrivateGitRead) => Promise<T>,
+  options?: { commitSourcePaths: readonly string[] },
 ): Promise<T> {
   const captureGit = (args: string[]) =>
     withGitPolicyCaptureScope(() => sourceGit(args));
@@ -169,6 +182,13 @@ export async function withPrivateGitRead<T>(
   // remain live, like worktree .gitattributes. Filter definitions still cannot
   // enter the immutable private config. A display revision is not permission to
   // write; the independent prepare/execute policy checks are unchanged.
+  const sourceWitnesses = options
+    ? await readCommitSources(
+        root,
+        options.commitSourcePaths,
+        sources.map((source) => source.filename),
+      )
+    : undefined;
   const config = privateConfig(raw, nativeAttributes);
   const tmp = await fs.realpath(os.tmpdir());
   if (tmp === root || tmp.startsWith(`${root}${path.sep}`))
@@ -242,6 +262,22 @@ export async function withPrivateGitRead<T>(
       { mode: 0o600 },
     );
     return await read({
+      ...(sourceWitnesses
+        ? {
+            sources: sourceWitnesses,
+            nativeAttributes,
+            verifySources: async () =>
+              assertCommitSources(
+                sourceWitnesses,
+                await readCommitSources(
+                  root,
+                  options!.commitSourcePaths,
+                  sources.map((source) => source.filename),
+                ),
+              ),
+          }
+        : {}),
+      configuration: raw,
       policy: createHash("sha256")
         .update(raw)
         .update(nativeAttributes ? "native-attributes" : "pinned-attributes")

@@ -1,3 +1,4 @@
+import {dashboardRecoveryAllowed} from "../shared/dashboard-connection";
 import { TopicRemovalProvider, TopicRemovalPopup, useTopicRemovalController } from "./TopicRemovalController";
 import { useDashboardViewport } from "./useDashboardViewport";
 import { Boxes, FolderOpen, SquareTerminal, Layers } from "lucide-react";
@@ -116,6 +117,22 @@ const labels: Record<string, string> = {
 };
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 
+/** History is viewable without claiming that its recorded working copy is ready. */
+function recordedRunOwner(
+  ref: NonNullable<RunWithContext["context"]>,
+): WorktreeRecord {
+  return {
+    ...ref,
+    repositoryKey: ref.repositoryKey ?? "",
+    projectPath: "",
+    gitCommonDir: "",
+    path: ref.path ?? "",
+    ownership: "managed",
+    storageKind: "clone",
+    state: "missing",
+  };
+}
+
 /** Read-only initial display ownership never becomes an execution selection. */
 function initialOwnerFor(
   records: WorktreeRecord[],
@@ -229,6 +246,7 @@ export function App() {
     >("overview"),
     [error, setError] = useState(""),
     [viewErrors, setViewErrors] = useState<Record<string, string>>({});
+  const launchOwnerErrors = useRef(new Map<string, string>());
   const viewportError = useCallback(
     (error: unknown) => setError(message(error)),
     [],
@@ -290,6 +308,12 @@ export function App() {
     Record<string, WorktreeRecord>
   >({});
   const [activeDraft, setActiveDraft] = useState("");
+  const activeDraftRef = useRef(activeDraft);
+  activeDraftRef.current = activeDraft;
+  // A pending topic selection is already navigation intent, before its host
+  // verification can change the visible owner. It must win over a late launch.
+  const topicTransitionEpochs = useRef(new Map<string, number>());
+  const launchTopicEpochs = useRef(new Map<string, number>());
   const projectNavigation = useRef(
     new Map<
       string,
@@ -322,16 +346,7 @@ export function App() {
       );
       // History remains viewable even if its clone has disappeared. Never ensure
       // or recreate a working copy merely to show recorded output.
-      const recordedOwner: WorktreeRecord = owner ?? {
-        ...ref,
-        repositoryKey: ref.repositoryKey ?? "",
-        projectPath: "",
-        gitCommonDir: "",
-        path: ref.path ?? "",
-        ownership: "managed",
-        storageKind: "clone",
-        state: "missing",
-      };
+      const recordedOwner = owner ?? recordedRunOwner(ref);
       setContextSelections((values) => ({
         ...values,
         [target.projectId]: recordedOwner,
@@ -347,23 +362,12 @@ export function App() {
     setProjectId(target.projectId);
     setSelected(target.id);
     setPage("project");
-    setError("");
+    setError(launchOwnerErrors.current.get(target.id) ?? "");
   }
   const openRunRef = useRef(openContextRun);
   openRunRef.current = openContextRun;
   const pageRef = useRef(page);
   pageRef.current = page;
-  const presentationKey = JSON.stringify([
-    projectId,
-    page,
-    selected,
-    activeDraft,
-    selectedContext?.contextId,
-    selectedContext?.revision,
-  ]);
-  const presentation = useRef({ key: presentationKey });
-  if (presentation.current.key !== presentationKey)
-    presentation.current = { key: presentationKey };
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
   const [showLogs, setShowLogs] = useState<Record<string, boolean>>({});
@@ -429,6 +433,13 @@ export function App() {
   >();
   const [openLaunches, setOpenLaunches] = useState(() => new Set<string>());
   const [launchBusy, setLaunchBusy] = useState<Record<string, boolean>>({});
+  const pendingLaunchPresentations = useRef(
+    new Map<
+      string,
+      { canActivate: () => boolean; complete: (activate: boolean) => void }
+    >(),
+  );
+  const [, refreshLaunchPresentations] = useState(0);
   const onLaunchBusy = useCallback((id: string, busy: boolean) => {
     setLaunchBusy((previous) =>
       previous[id] === busy ? previous : { ...previous, [id]: busy },
@@ -504,6 +515,11 @@ export function App() {
   }
   function returnToDraft(id: string, kind: RunKind) {
     const owner = draftOwners[id];
+    if (kind === "pipeline" && launchBusy[id])
+      launchTopicEpochs.current.set(
+        id,
+        topicTransitionEpochs.current.get(projectId) ?? 0,
+      );
     setContextSelections((values) => ({
       ...values,
       [projectId]: owner ?? null,
@@ -558,9 +574,8 @@ export function App() {
     (() => void) | null
   >(null);
   const navigateRef = useRef<(action: () => void) => void>(() => {});
-  function navigate(action: () => void, preserveProjectDraft = false) {
-    notificationIntent.current++;
-    if (
+  function navigationBlocked() {
+    return Boolean(
       topicsBusy ||
       deletion.busy ||
       topicRemoval.busy ||
@@ -569,14 +584,33 @@ export function App() {
       topicCard ||
       settingsDocuments.busy() ||
       settingsGuard.current?.busy ||
-      pendingNavigation
-    )
-      return;
+      pendingNavigation,
+    );
+  }
+  function navigate(action: () => void, preserveProjectDraft = false) {
+    notificationIntent.current++;
+    if (navigationBlocked()) return;
     if (settingsGuard.current?.dirty && !preserveProjectDraft)
       setPendingNavigation(() => action);
     else action();
   }
   navigateRef.current = navigate;
+  useEffect(() => {
+    // Accepted mutations finish independently from presentation admission. Keep
+    // the original preparation loader while a modal/editor guard owns the UI,
+    // then replace that exact slot; leaving it instead performs cleanup only.
+    for (const pending of [...pendingLaunchPresentations.current.values()]) {
+      if (!pending.canActivate()) pending.complete(false);
+      else if (
+        !navigationBlocked() &&
+        !settingsGuard.current?.dirty &&
+        !error &&
+        !gitModals.size &&
+        !handoff.candidate
+      )
+        navigateRef.current(() => pending.complete(pending.canActivate()));
+    }
+  });
   async function openNotification(id:string) {
     const request = ++notificationIntent.current;
     await dismissActiveTopicPopup();
@@ -611,6 +645,8 @@ export function App() {
     const previous = runsRef.current;
     runsRef.current = next;
     setRuns(next);
+    for (const id of launchOwnerErrors.current.keys())
+      if (!next.some((run) => run.id === id)) launchOwnerErrors.current.delete(id);
     const id = selectedRef.current;
     if (id && !next.some((r) => r.id === id)) {
       const old = previous.find((r) => r.id === id);
@@ -853,7 +889,7 @@ export function App() {
   const notificationView =
     page === "project" &&
     run &&
-    !run.recovery &&
+    dashboardRecoveryAllowed(run) &&
     !error &&
     !topicCard &&
     !gitModals.size &&
@@ -1378,7 +1414,11 @@ export function App() {
                   setPage(saved?.page ?? "overview");
                   setSelected(saved?.selected ?? null);
                   setActiveDraft(saved?.activeDraft ?? "");
-                  setError("");
+                  setError(
+                    saved?.page === "project" && saved.selected
+                      ? launchOwnerErrors.current.get(saved.selected) ?? ""
+                      : "",
+                  );
                 })
               }
             >
@@ -1455,7 +1495,10 @@ export function App() {
                 disabled={settingsBusy}
                 onTransitionIntent={() => {
                   notificationIntent.current++;
-                  presentation.current = { ...presentation.current };
+                  topicTransitionEpochs.current.set(
+                    projectId,
+                    (topicTransitionEpochs.current.get(projectId) ?? 0) + 1,
+                  );
                   if (pageRef.current !== "context-preparation") return;
                   // A new explicit topic transition owns continuation even
                   // while its verification is pending. Retain A's flight
@@ -2469,23 +2512,30 @@ export function App() {
                     project={launchProject}
                     onCancel={() => closeLaunch(id)}
                     onBusyChange={onLaunchBusy}
+                    onLaunchStarted={() =>
+                      launchTopicEpochs.current.set(
+                        id,
+                        topicTransitionEpochs.current.get(launchProject.id) ?? 0,
+                      )
+                    }
                     onLaunched={async (r, stale) => {
-                      // Register the completed launch even when settings navigation
-                      // is blocked. Only the current guard may leave the editor.
+                      // The retained preparation owns this result, not whichever
+                      // section/project happens to be visible when IPC resolves.
                       if (r && !runsRef.current.some((i) => i.id === r.id))
                         applyRuns([...runsRef.current, r]);
-                      if (
-                        !matchesWorkspace(
+                      setContextOpenRuns((values) => new Set(values).add(r.id));
+                      // A genuinely revised draft must survive a late result;
+                      // hiding/reopening the form is not such a revision.
+                      if (stale) return;
+                      const sourceVisible = () =>
+                        pageRef.current === "launch" &&
+                        activeDraftRef.current === id &&
+                        matchesWorkspace(
                           launchProject.id,
                           owner,
                           projectIdRef.current,
                           selectedContextRef.current,
-                        )
-                      )
-                        return;
-                      if (stale && pageRef.current !== "project-settings")
-                        return;
-                      const sourcePresentation = presentation.current;
+                        );
                       let createdOwner: WorktreeRecord | undefined;
                       if (!owner && r?.context) {
                         try {
@@ -2520,44 +2570,72 @@ export function App() {
                           ]);
                           topicsChanged();
                         } catch (error) {
-                          if (
-                            presentation.current === sourcePresentation &&
-                            matchesWorkspace(
-                              launchProject.id,
-                              owner,
-                              projectIdRef.current,
-                              selectedContextRef.current,
-                            )
-                          )
-                            setError(message(error));
-                          return;
+                          launchOwnerErrors.current.set(r.id, message(error));
                         }
-                        // Resolving the returned owner is read-only and may finish
-                        // after the user has selected another project or topic.
-                        if (
-                          presentation.current !== sourcePresentation ||
-                          !matchesWorkspace(
-                            launchProject.id,
-                            owner,
-                            projectIdRef.current,
-                            selectedContextRef.current,
-                          )
-                        )
-                          return;
                       }
-                      if (owner || createdOwner)
-                        setOpenLaunches((values) => {
-                          const next = new Set(values);
-                          next.delete(id);
-                          return next;
+                      const topicEpoch = launchTopicEpochs.current.get(id);
+                      const canActivate = () =>
+                        sourceVisible() &&
+                        topicEpoch ===
+                          (topicTransitionEpochs.current.get(launchProject.id) ?? 0);
+                      await new Promise<void>((resolve) => {
+                        let completed = false;
+                        const complete = (activate: boolean) => {
+                          if (completed) return;
+                          completed = true;
+                          pendingLaunchPresentations.current.delete(id);
+                          launchTopicEpochs.current.delete(id);
+                          setOpenLaunches((values) => {
+                            const next = new Set(values);
+                            next.delete(id);
+                            return next;
+                          });
+                          // Also replace a background project's saved exact slot,
+                          // without changing the currently visible workspace.
+                          const saved = projectNavigation.current.get(
+                            launchProject.id,
+                          );
+                          if (
+                            projectIdRef.current !== launchProject.id &&
+                            saved?.page === "launch" &&
+                            saved.activeDraft === id
+                          ) {
+                            projectNavigation.current.set(launchProject.id, {
+                              page: "project",
+                              selected: r.id,
+                              activeDraft: "",
+                            });
+                            const historyOwner =
+                              createdOwner ??
+                              (owner &&
+                              r.context &&
+                              contextKey(owner) === contextKey(r.context) &&
+                              owner.revision === r.context.revision
+                                ? owner
+                                : r.context
+                                  ? recordedRunOwner(r.context)
+                                  : undefined);
+                            if (historyOwner)
+                              setContextSelections((values) => ({
+                                ...values,
+                                [launchProject.id]: historyOwner,
+                              }));
+                          }
+                          if (
+                            activate &&
+                            canActivate() &&
+                            runsRef.current.some((run) => run.id === r.id)
+                          )
+                            openRunRef.current(r, createdOwner);
+                          else if (sourceVisible())
+                            setPage(owner ? "context-runs" : "project-settings");
+                          resolve();
+                        };
+                        pendingLaunchPresentations.current.set(id, {
+                          canActivate,
+                          complete,
                         });
-                      navigateRef.current(() => {
-                        if (r) {
-                          if (!runsRef.current.some((i) => i.id === r.id))
-                            return;
-                          openRunRef.current(r, createdOwner);
-                        }
-                        setPage("project");
+                        refreshLaunchPresentations((value) => value + 1);
                       });
                     }}
                   />
@@ -2706,7 +2784,11 @@ export function App() {
                 runs.some((run) => run.id === JSON.parse(key)[2])
               }
             >
-              {run && <RunOutput run={run} viewError={viewErrors[run.id]} />}
+              {run && <RunOutput key={run.id} run={run} viewError={viewErrors[run.id]} onRestore={typeof window.goga.restoreDashboard==="function" ? async()=>{
+                  await window.goga.restoreDashboard!(run.id);
+                  setViewErrors(previous=>{const next={...previous};delete next[run.id];return next;});
+                  setShowLogs(previous=>({...previous,[run.id]:false}));
+                }:undefined} />}
             </RetainedViews>
           </div>
         </div>

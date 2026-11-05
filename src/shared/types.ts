@@ -84,15 +84,21 @@ export type TopicSelection =
       baseRef: string;
     };
 export interface LaunchRequest extends PipelineRequest {
+  /** Optional captured catalog labels, display/history only; never command authority. */
+  pipelineName?: string;
+  pipelineDescription?: string;
   expectedBranch: string;
   confirmBranchSwitch: boolean;
   clean: boolean;
   update?: boolean;
   topic: TopicSelection;
   task: string;
+  /** Existing topic: present only to save an edited task; absent uses current disk
+   * content without writing cached `task`. This is a same-file content version. */
   taskVersion?: string;
   confirmEmptyTask: boolean;
-  previewToken: string;
+  /** Informational UI correlation only, never permission or freshness for launch. */
+  previewToken?: string;
 }
 export interface RunOutput {
   text: string;
@@ -122,6 +128,11 @@ export interface Run {
   output?: RunOutput;
   startupTimeoutMs?: number;
   update?: boolean;
+  /** Opt-in set only for launches created with durable dashboard recovery. */
+  dashboardRecoveryVersion?: 1;
+  dashboardReconnect?: boolean;
+  dashboardRunId?: string;
+  dashboardMessage?: string;
   dashboardOpened?: boolean;
   id: string;
   projectId: string;

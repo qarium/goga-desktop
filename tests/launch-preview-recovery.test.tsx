@@ -673,3 +673,43 @@ it("gives the pipeline stage area explicit breathing room without resizing cards
     style.remove();
   }
 });
+
+for (const context of [undefined, owner]) {
+  it.each(cases)(
+    `${context ? "clone" : "primary"}: changing %s loads only stages and retains task through a late preview`,
+    async (label, value) => {
+      rejectComposition = false;
+      render(form(context));
+      await waitFor(() => expect(launchButton().disabled).toBe(false));
+      const task = screen.getByRole("textbox", { name: "Что нужно сделать?" });
+      fireEvent.change(task, { target: { value: "Draft must stay visible" } });
+      const checking = heldPreview();
+      api.preview.mockReturnValueOnce(checking.promise);
+      selectCatalog(screen.getByRole("combobox", { name: label }), value);
+      await waitFor(() => expect(api.preview).toHaveBeenCalledTimes(2));
+      expect(screen.getByRole("textbox", { name: "Что нужно сделать?" })).toBe(
+        task,
+      );
+      expect(screen.getByRole("combobox", { name: label })).toBeTruthy();
+      expect(
+        screen.queryByRole("status", {
+          name: "Загружаем параметры конвейера…",
+        }),
+      ).toBeNull();
+      expect(
+        within(
+          screen.getByRole("region", { name: "Стадии запуска" }),
+        ).getByRole("status", { name: "Загружаем стадии конвейера…" }),
+      ).toBeTruthy();
+      expect(launchButton().disabled).toBe(true);
+      fireEvent.change(task, { target: { value: "Edited while stages load" } });
+      await act(async () =>
+        checking.resolve({ ...preview, token: "changed-composition" }),
+      );
+      await waitFor(() => expect(launchButton().disabled).toBe(false));
+      expect(task).toHaveProperty("value", "Edited while stages load");
+      expect(api.discover).toHaveBeenCalledTimes(1);
+      expect(api.readTopicTask).toHaveBeenCalledTimes(1);
+    },
+  );
+}

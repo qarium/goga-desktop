@@ -15,10 +15,13 @@ import {
   isProjectProfileName,
   projectWorkflowAliasKey,
   isProjectPipelineName,
+  isProjectToolName,
+  isProjectToolPath,
   projectPipelineAliasKey,
 } from "../shared/project-documents";
 import type {
   ProjectWorkflow,
+  ProjectTool,
   ProjectDocument,
   ProjectDocumentTarget,
 } from "../shared/project-documents";
@@ -121,6 +124,22 @@ export function createSettingsDocuments() {
   const listeners = new Set<() => void>();
   const selections = new Map<string, WorkflowSelection>();
   const revisions = new Map<string, number>();
+  const toolSelections = new Map<string, WorkflowSelection>();
+  const toolSelectionKey = (scope: ScopeRef, tool: string) =>
+    JSON.stringify([documentScopeId(scope), tool]);
+  const toolState = (scope: ScopeRef, tool: string) =>
+    toolSelections.get(toolSelectionKey(scope, tool)) ?? emptyWorkflow;
+  function updateTool(
+    scope: ScopeRef,
+    tool: string,
+    patch: Partial<WorkflowSelection>,
+  ) {
+    toolSelections.set(toolSelectionKey(scope, tool), {
+      ...toolState(scope, tool),
+      ...patch,
+    });
+    listeners.forEach((fn) => fn());
+  }
   let homeRevision = 0;
   let removalRevision = 0;
   const removed = new Map<string, number>();
@@ -137,6 +156,16 @@ export function createSettingsDocuments() {
     removalRevision++;
     entries.delete(documentKey(source));
     removed.set(documentKey(source), removalRevision);
+    if (source.scope === "project" && source.target.kind === "tool") {
+      const scope = source.context ?? source.projectId;
+      const { tool, path } = source.target;
+      const state = toolState(scope, tool);
+      toolSelections.set(toolSelectionKey(scope, tool), {
+        ...state,
+        drafts: state.drafts.filter((item) => item !== path),
+        selected: state.selected === path ? "" : state.selected,
+      });
+    }
     if (
       source.scope === "project" &&
       (source.target.kind === "workflow" ||
@@ -292,6 +321,105 @@ export function createSettingsDocuments() {
       };
     },
     get,
+    toolState,
+    /** Real in-memory sources only: stale empty form/selection state is not a tool. */
+    loadedToolFiles(scope: ScopeRef) {
+      const id = documentScopeId(scope);
+      return [...sources.values()].flatMap((source) =>
+        source.scope === "project" &&
+        source.target.kind === "tool" &&
+        documentScopeId(source.context ?? source.projectId) === id &&
+        !!entries.get(documentKey(source))?.document
+          ? [{ tool: source.target.tool, path: source.target.path }]
+          : [],
+      );
+    },
+    updateTool,
+    createToolFile(
+      scope: ScopeRef,
+      tool: string,
+      path: string,
+      catalog: ProjectTool[],
+    ) {
+      const selected = catalog.find((item) => item.name === tool);
+      if (!isProjectToolName(tool) || !selected)
+        throw new Error(
+          "Выберите существующий инструмент перед созданием файла.",
+        );
+      if (!isProjectToolPath(path) || !/\.ya?ml$/.test(path))
+        throw new Error(
+          "Недопустимое имя или путь файла. Укажите файл с расширением .yml или .yaml внутри инструмента.",
+        );
+      try {
+        encodeURIComponent(path);
+        if (
+          path
+            .split("/")
+            .some((part) => new TextEncoder().encode(part).length > 255)
+        )
+          throw new Error();
+      } catch {
+        throw new Error("Недопустимое имя или путь файла.");
+      }
+      const parts = path.split("/");
+      for (let index = 1; index < parts.length; index++) {
+        const parent = selected.entries.find(
+          (entry) => entry.path === parts.slice(0, index).join("/"),
+        );
+        if (!parent || parent.kind !== "directory" || parent.reason)
+          throw new Error(
+            "Родительская папка отсутствует или недоступна. Выберите существующий безопасный каталог инструмента.",
+          );
+      }
+      const state = toolState(scope, tool);
+      const existing = [...entries.keys()]
+        .map((key) => JSON.parse(key) as string[])
+        .filter(
+          (parts) =>
+            parts[0] === "project" &&
+            parts[1] === documentScopeId(scope) &&
+            parts[2] === "tool" &&
+            parts[3] === tool,
+        )
+        .map((parts) => parts[4]);
+      const alias = projectWorkflowAliasKey(path);
+      if (
+        [
+          ...selected.entries.map((entry) => entry.path),
+          ...state.drafts,
+          ...existing,
+        ].some((entry) => projectWorkflowAliasKey(entry) === alias)
+      )
+        throw new Error(
+          "Файл или папка с таким именем или эквивалентным написанием уже существует.",
+        );
+      const source: DocumentSource = {
+        scope: "project",
+        projectId: typeof scope === "string" ? scope : scope.projectId,
+        ...(typeof scope === "string" ? {} : { context: contextRef(scope) }),
+        target: { kind: "tool", tool, path },
+      };
+      // Creation never invokes host reads or writes. Only the existing Save flow
+      // can materialize this missing leaf inside an already existing parent.
+      sources.set(documentKey(source), source);
+      removed.delete(documentKey(source));
+      entries.set(documentKey(source), {
+        ...empty,
+        memoryOnly: true,
+        document: {
+          text: "",
+          exists: false,
+          version: "missing",
+          relativePath: `.goga/tools/${tool}/${path}`,
+        },
+      });
+      updateTool(scope, tool, {
+        drafts: [...state.drafts, path],
+        selected: path,
+        creating: false,
+        name: "",
+      });
+    },
     dockerfile: (scope: ScopeRef) => dockerfiles.get(documentScopeId(scope)),
     selectDockerfile(
       scope: ScopeRef,
@@ -522,6 +650,17 @@ export function createSettingsDocuments() {
           notice: "",
           error: "",
         });
+    },
+    reset(source: DocumentSource) {
+      const entry = get(source);
+      if (entry.busy || !entry.document) return;
+      put(source, {
+        ...entry,
+        text: entry.document.text,
+        deletion: undefined,
+        error: "",
+        notice: "",
+      });
     },
     discard(source: DocumentSource) {
       if (!get(source).busy) {

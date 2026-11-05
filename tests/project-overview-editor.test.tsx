@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import React from "react";
+import React, { createRef, useRef } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   act,
@@ -7,16 +7,33 @@ import {
   fireEvent,
   render,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { language } from "@codemirror/language";
-import { deleteCharForward, redo, undo, undoDepth } from "@codemirror/commands";
+import {
+  deleteCharForward,
+  redo,
+  redoDepth,
+  undo,
+  undoDepth,
+} from "@codemirror/commands";
+import {
+  getSearchQuery,
+  SearchQuery,
+  setSearchQuery,
+} from "@codemirror/search";
 import type { YamlEditorMemory } from "../src/renderer/YamlEditor";
-import { OverviewEditor } from "../src/renderer/overview/OverviewEditor";
+import {
+  OverviewEditor,
+  type OverviewEditorCommands,
+  type OverviewEditorProps,
+} from "../src/renderer/overview/OverviewEditor";
 import * as languages from "../src/renderer/overview/languages";
 
 afterEach(() => {
   cleanup();
+  delete (document as any).execCommand;
   vi.restoreAllMocks();
 });
 const editor = () =>
@@ -551,3 +568,631 @@ it.each(["CODEMANIFEST", "README.md", "main.go", "index.ts"])(
     expect(view.state.doc.toString()).toBe("first\nsecond");
   },
 );
+
+// Standalone editor tests exercise the same public commands as the file toolbar.
+function EditorWithExternalActions(props: OverviewEditorProps) {
+  const commands = useRef<OverviewEditorCommands>(null);
+  return (
+    <>
+      <button
+        aria-label="Найти в файле"
+        onClick={() => commands.current?.find()}
+      >
+        Найти
+      </button>
+      <button
+        aria-label="Заменить в файле"
+        disabled={props.readOnly}
+        onClick={() => commands.current?.replace()}
+      >
+        Заменить
+      </button>
+      <OverviewEditor {...props} commands={commands} />
+    </>
+  );
+}
+
+it("scopes external commands to one editor lifetime and refuses readonly replacement", () => {
+  const commands = createRef<OverviewEditorCommands>();
+  const rendered = render(
+    <OverviewEditor
+      path="one.txt"
+      value="one"
+      onChange={vi.fn()}
+      commands={commands}
+    />,
+  );
+  const first = editor();
+  expect(commands.current).not.toBeNull();
+  const stale = commands.current!;
+  rendered.rerender(
+    <OverviewEditor
+      path="two.txt"
+      value="two"
+      onChange={vi.fn()}
+      commands={commands}
+      readOnly
+    />,
+  );
+  const current = editor();
+  expect(current).not.toBe(first);
+  act(() => {
+    stale.find();
+    stale.replace();
+  });
+  expect(first.dom.querySelector('input[name="search"]')).toBeNull();
+  expect(current.dom.querySelector('input[name="search"]')).toBeNull();
+  act(() => commands.current!.replace());
+  expect(current.dom.querySelector('input[name="replace"]')).toBeNull();
+  act(() => commands.current!.find());
+  expect(current.dom.querySelector('input[name="search"]')).not.toBeNull();
+  const last = commands.current!;
+  rendered.unmount();
+  expect(commands.current).toBeNull();
+  expect(() =>
+    act(() => {
+      last.find();
+      last.replace();
+    }),
+  ).not.toThrow();
+});
+
+it("removes only Overview's whole-editor focus outline while retaining caret, selection and search focus rules", () => {
+  render(
+    <OverviewEditor path="main.yaml" value="flag: true" onChange={vi.fn()} />,
+  );
+  const view = editor();
+  const modules = view.state
+    .facet(EditorView.styleModule)
+    .map((module) => module.getRules());
+  // CodeMirror resolves equal-specificity themes in facet precedence order.
+  const focused = modules.flatMap(
+    (rules) => rules.match(/[^{}]*\.cm-focused[^{}]*\{[^}]*\}/g) ?? [],
+  );
+  expect(focused[0]).toMatch(/outline:\s*none/);
+  expect(focused[0]).toMatch(/box-shadow:\s*none/);
+  expect(modules.join("\n")).toMatch(/caret-color:\s*#ffffff/);
+  expect(modules.join("\n")).toMatch(/::selection/);
+  expect(modules.join("\n")).toMatch(/cm-overview-search input:focus-visible/);
+  act(() => view.dispatch({ selection: { anchor: 0, head: 4 } }));
+  expect(
+    view.state.sliceDoc(
+      view.state.selection.main.from,
+      view.state.selection.main.to,
+    ),
+  ).toBe("flag");
+  expect(view.dom.querySelector(".yaml-boolean")?.textContent).toBe("true");
+});
+
+it("supports external search and replacement, scopes shortcuts to this editor and keeps exact source with Undo", () => {
+  // jsdom lacks the browser method used by CodeMirror when restoring focus.
+  (document as any).execCommand = vi.fn(() => false);
+  const changed = vi.fn();
+  const value = "\ufeffone\r\none\nend\r";
+  const rendered = render(
+    <EditorWithExternalActions
+      path="file.txt"
+      value={value}
+      onChange={changed}
+    />,
+  );
+  const view = editor();
+  fireEvent.click(rendered.getByRole("button", { name: "Найти в файле" }));
+  const root = document.querySelector(".yaml-code-editor")!.shadowRoot!;
+  const query = root.querySelector('input[name="search"]') as HTMLInputElement;
+  expect(query).not.toBeNull();
+  fireEvent.input(query, { target: { value: "one" } });
+  fireEvent.click(root.querySelector('button[name="next"]')!);
+  expect(
+    view.state.sliceDoc(
+      view.state.selection.main.from,
+      view.state.selection.main.to,
+    ),
+  ).toBe("one");
+  fireEvent.click(rendered.getByRole("button", { name: "Заменить в файле" }));
+  const replacement = root.querySelector(
+    'input[name="replace"]',
+  ) as HTMLInputElement;
+  fireEvent.input(replacement, { target: { value: "two" } });
+  fireEvent.click(root.querySelector('button[name="replaceAll"]')!);
+  expect(changed).toHaveBeenLastCalledWith("\ufefftwo\r\ntwo\nend\r");
+  act(() => {
+    expect(undo(view)).toBe(true);
+  });
+  expect(view.state.doc.toString()).toBe(value);
+  fireEvent.keyDown(replacement, { key: "Escape", code: "Escape" });
+  expect(root.querySelector('input[name="search"]')).toBeNull();
+  fireEvent.keyDown(view.contentDOM, { key: "f", code: "KeyF", ctrlKey: true });
+  expect(root.querySelector('input[name="search"]')).not.toBeNull();
+  fireEvent.keyDown(view.contentDOM, { key: "r", code: "KeyR", ctrlKey: true });
+  expect(root.activeElement).toBe(root.querySelector('input[name="replace"]'));
+});
+
+it("permits readonly search but never readonly replacement, including when the file becomes busy", () => {
+  const changed = vi.fn();
+  const rendered = render(
+    <EditorWithExternalActions
+      path="locked.txt"
+      value="one one"
+      onChange={changed}
+    />,
+  );
+  const view = editor();
+  fireEvent.click(rendered.getByRole("button", { name: "Заменить в файле" }));
+  rendered.rerender(
+    <EditorWithExternalActions
+      path="locked.txt"
+      value="one one"
+      onChange={changed}
+      readOnly
+    />,
+  );
+  expect(
+    (
+      rendered.getByRole("button", {
+        name: "Заменить в файле",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
+  const root = document.querySelector(".yaml-code-editor")!.shadowRoot!;
+  const query = root.querySelector('input[name="search"]') as HTMLInputElement;
+  fireEvent.input(query, { target: { value: "one" } });
+  fireEvent.click(root.querySelector('button[name="next"]')!);
+  expect(
+    view.state.sliceDoc(
+      view.state.selection.main.from,
+      view.state.selection.main.to,
+    ),
+  ).toBe("one");
+  for (const button of root.querySelectorAll<HTMLButtonElement>(
+    'button[name="replace"], button[name="replaceAll"]',
+  ))
+    expect(button.disabled).toBe(true);
+  expect(changed).not.toHaveBeenCalled();
+});
+
+it("navigates both directions and replaces a single match through the visible controls", () => {
+  const changed = vi.fn();
+  const rendered = render(
+    <EditorWithExternalActions
+      path="one.txt"
+      value="one one"
+      onChange={changed}
+    />,
+  );
+  const view = editor();
+  fireEvent.click(rendered.getByRole("button", { name: "Заменить в файле" }));
+  const root = document.querySelector(".yaml-code-editor")!.shadowRoot!;
+  fireEvent.input(root.querySelector('input[name="search"]')!, {
+    target: { value: "one" },
+  });
+  fireEvent.click(root.querySelector('button[name="next"]')!);
+  expect(view.state.selection.main.from).toBe(0);
+  fireEvent.click(root.querySelector('button[name="next"]')!);
+  expect(view.state.selection.main.from).toBe(4);
+  fireEvent.click(root.querySelector('button[name="prev"]')!);
+  expect(view.state.selection.main.from).toBe(0);
+  fireEvent.input(root.querySelector('input[name="replace"]')!, {
+    target: { value: "two" },
+  });
+  fireEvent.click(root.querySelector('button[name="replace"]')!);
+  expect(changed).toHaveBeenLastCalledWith("two one");
+  act(() => {
+    undo(view);
+  });
+  expect(view.state.doc.toString()).toBe("one one");
+});
+
+it("consumes readonly replace shortcuts without modifying the source and does not intercept another input", () => {
+  const changed = vi.fn();
+  const rendered = render(
+    <>
+      <input aria-label="Вне редактора" />
+      <EditorWithExternalActions
+        path="one.txt"
+        value="one one"
+        onChange={changed}
+        readOnly
+      />
+    </>,
+  );
+  const view = editor();
+  fireEvent.keyDown(rendered.getByRole("textbox", { name: "Вне редактора" }), {
+    key: "r",
+    code: "KeyR",
+    ctrlKey: true,
+  });
+  const root = document.querySelector(".yaml-code-editor")!.shadowRoot!;
+  expect(root.querySelector('input[name="search"]')).toBeNull();
+  fireEvent.keyDown(view.contentDOM, { key: "r", code: "KeyR", ctrlKey: true });
+  fireEvent.input(root.querySelector('input[name="search"]')!, {
+    target: { value: "one" },
+  });
+  const replacement = root.querySelector('input[name="replace"]')!;
+  expect((replacement as HTMLInputElement).disabled).toBe(true);
+  fireEvent.input(replacement, { target: { value: "changed" } });
+  fireEvent.keyDown(replacement, { key: "Enter", code: "Enter" });
+  expect(view.state.doc.toString()).toBe("one one");
+  expect(changed).not.toHaveBeenCalled();
+});
+
+it("leaves Enter on search buttons to native button activation", () => {
+  const rendered = render(
+    <EditorWithExternalActions
+      path="one.txt"
+      value="one one"
+      onChange={vi.fn()}
+    />,
+  );
+  fireEvent.click(rendered.getByRole("button", { name: "Заменить в файле" }));
+  const root = document.querySelector(".yaml-code-editor")!.shadowRoot!;
+  fireEvent.input(root.querySelector('input[name="search"]')!, {
+    target: { value: "one" },
+  });
+  for (const name of [
+    "prev",
+    "next",
+    "clear",
+    "close",
+    "replace",
+    "replaceAll",
+  ]) {
+    const button = root.querySelector(`button[name="${name}"]`);
+    expect(button).not.toBeNull();
+    expect(
+      fireEvent.keyDown(button!, {
+        key: "Enter",
+        code: "Enter",
+      }),
+    ).toBe(true);
+  }
+});
+
+it("clears the query and actual highlights without changing replacement, source, selection or history", () => {
+  const value = "\ufeffone\r\none\nend\r";
+  const changed = vi.fn();
+  const rendered = render(
+    <EditorWithExternalActions
+      path="file.txt"
+      value={value}
+      onChange={changed}
+    />,
+  );
+  const view = editor();
+  act(() =>
+    view.dispatch({ changes: { from: view.state.doc.length, insert: "!" } }),
+  );
+  fireEvent.click(rendered.getByRole("button", { name: "Заменить в файле" }));
+  const panel = view.dom.querySelector<HTMLElement>('[role="search"]')!;
+  const query = within(panel).getByRole("textbox", {
+    name: "Найти",
+  }) as HTMLInputElement;
+  const replacement = within(panel).getByRole("textbox", {
+    name: "Заменить на",
+  }) as HTMLInputElement;
+  fireEvent.input(query, { target: { value: "one" } });
+  fireEvent.input(replacement, { target: { value: "two" } });
+  fireEvent.click(within(panel).getByRole("button", { name: "Далее" }));
+  expect(view.dom.querySelectorAll(".cm-searchMatch")).toHaveLength(2);
+  const selection = view.state.selection.toJSON();
+  const undoBefore = undoDepth(view.state);
+  const redoBefore = redoDepth(view.state);
+  changed.mockClear();
+  const clear = within(panel).getByRole("button", { name: "Очистить поиск" });
+  const close = within(panel).getByRole("button", { name: "Закрыть поиск" });
+  expect(clear).not.toBe(close);
+  expect(query.parentElement!.contains(clear)).toBe(true);
+  expect(query.parentElement!.contains(close)).toBe(false);
+  expect(clear.title).toBe("Очистить поиск");
+  expect(clear.textContent).toBe("");
+  expect(clear.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+  act(() => clear.focus());
+  fireEvent.click(clear);
+  expect(view.dom.querySelector('[role="search"]')).toBe(panel);
+  expect(query.value).toBe("");
+  expect(getSearchQuery(view.state).search).toBe("");
+  expect(getSearchQuery(view.state).replace).toBe("two");
+  expect(replacement.value).toBe("two");
+  expect(replacement.disabled).toBe(false);
+  expect(view.dom.querySelectorAll(".cm-searchMatch")).toHaveLength(0);
+  expect(view.root.activeElement).toBe(query);
+  expect(view.state.doc.toString()).toBe(value + "!");
+  expect(view.state.selection.toJSON()).toEqual(selection);
+  expect(undoDepth(view.state)).toBe(undoBefore);
+  expect(redoDepth(view.state)).toBe(redoBefore);
+  expect(changed).not.toHaveBeenCalled();
+  act(() => expect(undo(view)).toBe(true));
+  expect(view.state.doc.toString()).toBe(value);
+  act(() => expect(redo(view)).toBe(true));
+  expect(view.state.doc.toString()).toBe(value + "!");
+});
+
+it("shows clear only for a nonempty query and synchronizes programmatic query changes", () => {
+  const commands = createRef<OverviewEditorCommands>();
+  render(
+    <OverviewEditor
+      path="file.txt"
+      value="one two"
+      onChange={vi.fn()}
+      commands={commands}
+    />,
+  );
+  const view = editor();
+  act(() => commands.current!.find());
+  const panel = view.dom.querySelector<HTMLElement>('[role="search"]')!;
+  const query = within(panel).getByRole("textbox", {
+    name: "Найти",
+  }) as HTMLInputElement;
+  expect(
+    within(panel).queryByRole("button", { name: "Очистить поиск" }),
+  ).toBeNull();
+  fireEvent.input(query, { target: { value: "one" } });
+  const clear = within(panel).getByRole("button", {
+    name: "Очистить поиск",
+  }) as HTMLButtonElement;
+  expect(clear.hidden).toBe(false);
+  act(() =>
+    view.dispatch({
+      effects: setSearchQuery.of(
+        new SearchQuery({ search: "", replace: "saved", literal: true }),
+      ),
+    }),
+  );
+  expect(query.value).toBe("");
+  expect(clear.hidden).toBe(true);
+  expect(
+    within(panel).queryByRole("button", { name: "Очистить поиск" }),
+  ).toBeNull();
+  act(() =>
+    view.dispatch({
+      effects: setSearchQuery.of(
+        new SearchQuery({
+          search: "two",
+          replace: "saved",
+          literal: true,
+          caseSensitive: true,
+          wholeWord: true,
+        }),
+      ),
+    }),
+  );
+  expect(query.value).toBe("two");
+  expect(within(panel).getByRole("button", { name: "Очистить поиск" })).toBe(
+    clear,
+  );
+  fireEvent.click(clear);
+  expect(getSearchQuery(view.state)).toMatchObject({
+    search: "",
+    replace: "saved",
+    literal: true,
+    caseSensitive: true,
+    wholeWord: true,
+  });
+  expect(clear.hidden).toBe(true);
+  fireEvent.input(query, { target: { value: " " } });
+  expect(within(panel).getByRole("button", { name: "Очистить поиск" })).toBe(
+    clear,
+  );
+  fireEvent.input(query, { target: { value: "" } });
+  expect(clear.hidden).toBe(true);
+});
+
+it("closes with a separate rightmost accessible icon and remembers the query through shortcuts and reopen", () => {
+  (document as any).execCommand = vi.fn(() => false);
+  const changed = vi.fn();
+  const rendered = render(
+    <EditorWithExternalActions
+      path="file.txt"
+      value="one one"
+      onChange={changed}
+    />,
+  );
+  const view = editor();
+  fireEvent.click(rendered.getByRole("button", { name: "Заменить в файле" }));
+  const panel = view.dom.querySelector<HTMLElement>('[role="search"]')!;
+  fireEvent.input(within(panel).getByRole("textbox", { name: "Найти" }), {
+    target: { value: "one" },
+  });
+  fireEvent.input(within(panel).getByRole("textbox", { name: "Заменить на" }), {
+    target: { value: "two" },
+  });
+  const close = within(panel).getByRole("button", { name: "Закрыть поиск" });
+  expect(close.title).toBe("Закрыть поиск");
+  expect(close.textContent).toBe("");
+  expect(close.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
+  expect(panel.firstElementChild!.lastElementChild).toBe(close);
+  act(() => close.focus());
+  fireEvent.click(close);
+  expect(view.dom.querySelector('[role="search"]')).toBeNull();
+  expect(view.root.activeElement).toBe(view.contentDOM);
+  expect(getSearchQuery(view.state)).toMatchObject({
+    search: "one",
+    replace: "two",
+  });
+  fireEvent.keyDown(view.contentDOM, { key: "f", code: "KeyF", ctrlKey: true });
+  const reopened = view.dom.querySelector<HTMLElement>('[role="search"]')!;
+  const query = within(reopened).getByRole("textbox", {
+    name: "Найти",
+  }) as HTMLInputElement;
+  expect(query.value).toBe("one");
+  expect(view.root.activeElement).toBe(query);
+  expect(
+    within(reopened).getByRole("button", { name: "Очистить поиск" }),
+  ).not.toBeNull();
+  fireEvent.keyDown(query, { key: "r", code: "KeyR", ctrlKey: true });
+  // jsdom may cache the former hidden row's computed style inside a shadow root.
+  const replacement = within(reopened).getByLabelText(
+    "Заменить на",
+  ) as HTMLInputElement;
+  expect(replacement.parentElement!.hidden).toBe(false);
+  expect(replacement.value).toBe("two");
+  expect(view.root.activeElement).toBe(replacement);
+  fireEvent.keyDown(replacement, { key: "Escape", code: "Escape" });
+  expect(view.dom.querySelector('[role="search"]')).toBeNull();
+  expect(view.root.activeElement).toBe(view.contentDOM);
+  fireEvent.click(rendered.getByRole("button", { name: "Найти в файле" }));
+  expect(
+    (view.dom.querySelector('input[name="search"]') as HTMLInputElement).value,
+  ).toBe("one");
+  expect(view.state.doc.toString()).toBe("one one");
+  expect(changed).not.toHaveBeenCalled();
+});
+
+it("keeps the clear icon usable in readonly search without enabling replacement", () => {
+  const changed = vi.fn();
+  const rendered = render(
+    <EditorWithExternalActions
+      path="locked.txt"
+      value={"one\r\none"}
+      onChange={changed}
+      readOnly
+    />,
+  );
+  const view = editor();
+  fireEvent.click(rendered.getByRole("button", { name: "Найти в файле" }));
+  const panel = view.dom.querySelector<HTMLElement>('[role="search"]')!;
+  const query = within(panel).getByRole("textbox", { name: "Найти" });
+  fireEvent.input(query, { target: { value: "one" } });
+  fireEvent.click(within(panel).getByRole("button", { name: "Далее" }));
+  expect(view.dom.querySelectorAll(".cm-searchMatch")).toHaveLength(2);
+  const selection = view.state.selection.toJSON();
+  const clear = within(panel).getByRole("button", {
+    name: "Очистить поиск",
+  }) as HTMLButtonElement;
+  expect(clear.disabled).toBe(false);
+  fireEvent.click(clear);
+  expect(getSearchQuery(view.state).search).toBe("");
+  expect(view.dom.querySelectorAll(".cm-searchMatch")).toHaveLength(0);
+  expect(view.state.selection.toJSON()).toEqual(selection);
+  expect(view.root.activeElement).toBe(query);
+  fireEvent.keyDown(query, { key: "r", code: "KeyR", ctrlKey: true });
+  const replacement = panel.querySelector<HTMLInputElement>(
+    'input[name="replace"]',
+  )!;
+  expect(replacement.disabled).toBe(true);
+  for (const button of panel.querySelectorAll<HTMLButtonElement>(
+    'button[name="replace"], button[name="replaceAll"]',
+  )) {
+    expect(button.disabled).toBe(true);
+    fireEvent.click(button);
+  }
+  expect(view.state.doc.toString()).toBe("one\r\none");
+  expect(undoDepth(view.state)).toBe(0);
+  expect(changed).not.toHaveBeenCalled();
+});
+
+it("keeps source-path queries literal before and after clearing", () => {
+  const path = String.raw`C:\temp\file.txt`;
+  const changed = vi.fn();
+  const rendered = render(
+    <EditorWithExternalActions
+      path="paths.txt"
+      value={`${path}\r\n${path}`}
+      onChange={changed}
+    />,
+  );
+  const view = editor();
+  fireEvent.click(rendered.getByRole("button", { name: "Найти в файле" }));
+  const panel = view.dom.querySelector<HTMLElement>('[role="search"]')!;
+  const query = within(panel).getByRole("textbox", { name: "Найти" });
+  for (let i = 0; i < 2; i++) {
+    fireEvent.input(query, { target: { value: path } });
+    fireEvent.click(within(panel).getByRole("button", { name: "Далее" }));
+    expect(
+      view.state.sliceDoc(
+        view.state.selection.main.from,
+        view.state.selection.main.to,
+      ),
+    ).toBe(path);
+    expect(getSearchQuery(view.state).literal).toBe(true);
+    fireEvent.click(
+      within(panel).getByRole("button", { name: "Очистить поиск" }),
+    );
+  }
+  expect(view.state.doc.toString()).toBe(`${path}\r\n${path}`);
+  expect(changed).not.toHaveBeenCalled();
+});
+
+it("retains a cleared query only in its owner memory when the same path changes context", () => {
+  const first: YamlEditorMemory = {},
+    second: YamlEditorMemory = {};
+  const commands = createRef<OverviewEditorCommands>();
+  const changed = vi.fn();
+  const props = {
+    path: "same.txt",
+    value: "one two",
+    onChange: changed,
+    commands,
+  };
+  const rendered = render(<OverviewEditor {...props} memory={first} />);
+  act(() => commands.current!.replace());
+  const stale = commands.current!;
+  const firstView = editor();
+  const firstPanel =
+    firstView.dom.querySelector<HTMLElement>('[role="search"]')!;
+  fireEvent.input(within(firstPanel).getByRole("textbox", { name: "Найти" }), {
+    target: { value: "one" },
+  });
+  fireEvent.input(
+    within(firstPanel).getByRole("textbox", { name: "Заменить на" }),
+    { target: { value: "saved" } },
+  );
+  fireEvent.click(
+    within(firstPanel).getByRole("button", { name: "Очистить поиск" }),
+  );
+  rendered.rerender(<OverviewEditor {...props} memory={second} />);
+  const secondView = editor();
+  act(() => {
+    stale.find();
+    stale.replace();
+  });
+  expect(secondView.dom.querySelector('[role="search"]')).toBeNull();
+  act(() => commands.current!.find());
+  fireEvent.input(secondView.dom.querySelector('input[name="search"]')!, {
+    target: { value: "two" },
+  });
+  rendered.rerender(<OverviewEditor {...props} memory={first} />);
+  act(() => commands.current!.replace());
+  expect(getSearchQuery(editor().state)).toMatchObject({
+    search: "",
+    replace: "saved",
+  });
+  expect(
+    within(editor().dom).queryByRole("button", { name: "Очистить поиск" }),
+  ).toBeNull();
+  rendered.rerender(<OverviewEditor {...props} memory={second} />);
+  act(() => commands.current!.find());
+  expect(getSearchQuery(editor().state).search).toBe("two");
+  expect(
+    within(editor().dom).getByRole("button", { name: "Очистить поиск" }),
+  ).not.toBeNull();
+  expect(changed).not.toHaveBeenCalled();
+});
+
+it("reserves input space for the clear icon and keeps compact wrapping and keyboard focus styles local", () => {
+  render(<OverviewEditor path="file.txt" value="one" onChange={vi.fn()} />);
+  const css = editor()
+    .state.facet(EditorView.styleModule)
+    .map((module) => module.getRules())
+    .join("\n");
+  expect(css).toMatch(
+    /\.cm-overview-search-field[^{}]*\{[^}]*position:\s*relative/,
+  );
+  expect(css).toMatch(/\.cm-overview-search-field[^{}]*\{[^}]*min-width:\s*0/);
+  expect(css).toMatch(
+    /\.cm-overview-search-field input[^{}]*\{[^}]*padding-right:\s*28px/,
+  );
+  expect(css).toMatch(
+    /\.cm-overview-search-clear[^{}]*\{[^}]*position:\s*absolute/,
+  );
+  expect(css).toMatch(/\.cm-overview-search-clear[^{}]*\{[^}]*right:\s*4px/);
+  expect(css).toMatch(
+    /\.cm-overview-search[^{}]*> div[^{}]*\{[^}]*flex-wrap:\s*wrap/,
+  );
+  expect(css).toMatch(
+    /\.cm-overview-search-close[^{}]*\{[^}]*margin-left:\s*auto/,
+  );
+  expect(css).toMatch(
+    /\.cm-overview-search button:focus-visible[^{}]*\{[^}]*outline:/,
+  );
+});

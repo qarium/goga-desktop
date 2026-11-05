@@ -5,7 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { HostService } from "../src/host/service";
-import { NativeGitWorkspaceActions } from "../src/host/git-native-commit";
+import { GitCommitCoordinator } from "../src/host/git-commit-coordinator";
 import { NativeGitDiscardActions } from "../src/host/git-native-discard";
 import { NativeGitConflictActions } from "../src/host/git-native-conflict-save";
 const cleanup: (() => Promise<unknown>)[] = [];
@@ -24,7 +24,7 @@ it("Host routes selected-file writes and stopped operations to the native engine
   expect((host as any).gitMergeOperations).toBeInstanceOf(NativeGitMergeOperations);
   expect((host as any).gitNativeSequence).toBeInstanceOf(NativeGitSequenceAPI);
   expect((host as any).gitUpdateHandoff).toBeInstanceOf(NativeGitUpdateHandoff);
-  expect((host as any).gitActions).toBeInstanceOf(NativeGitWorkspaceActions);
+  expect((host as any).gitActions).toBeInstanceOf(GitCommitCoordinator);
   expect((host as any).gitDiscardActions).toBeInstanceOf(
     NativeGitDiscardActions,
   );

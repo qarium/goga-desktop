@@ -68,7 +68,7 @@ const mount = (source = sources[0]) =>
     />,
   );
 async function prepare() {
-  fireEvent.click(screen.getByRole("button", { name: "Удалить" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Удалить" }));
   await screen.findByRole("dialog");
 }
 async function confirm() {
@@ -99,12 +99,21 @@ afterEach(cleanup);
 describe.each(sources.map((source, i) => ({ source, label: String(i) })))(
   "shared deletion $label",
   ({ source }) => {
-    it("places one destructive action beside reveal inside the privacy card", () => {
+    it("places one destructive action in HOME privacy or the Project bottom bar", async () => {
       mount(source);
-      const deletion = screen.getByRole("button", { name: "Удалить" });
-      const reveal = screen.getByRole("button", { name: "Открыть редактор" });
-      expect(deletion.closest(".privacy-note")).not.toBeNull();
-      expect(deletion.parentElement).toBe(reveal.parentElement);
+      const deletion = await screen.findByRole("button", { name: "Удалить" });
+      if (source.scope === "home") {
+        const reveal = screen.getByRole("button", { name: "Открыть редактор" });
+        expect(deletion.closest(".privacy-note")).not.toBeNull();
+        expect(deletion.parentElement).toBe(reveal.parentElement);
+        expect(api.readSettings).not.toHaveBeenCalled();
+      } else {
+        expect(deletion.closest(".savebar")).not.toBeNull();
+        expect(
+          screen.queryByRole("button", { name: "Открыть редактор" }),
+        ).toBeNull();
+        expect(api.readProjectDocument).toHaveBeenCalledTimes(1);
+      }
       expect(deletion.classList.contains("danger")).toBe(true);
       expect(screen.getAllByRole("button", { name: "Удалить" })).toHaveLength(
         1,
@@ -135,15 +144,17 @@ describe.each(sources.map((source, i) => ({ source, label: String(i) })))(
       expect(cancel.classList.contains("danger")).toBe(false);
       expect(document.activeElement).toBe(cancel);
     });
-    it("prepares hidden metadata without exposing contents, then cancels with focus", async () => {
+    it("prepares HOME hidden or Project saved metadata, then cancels with focus", async () => {
       mount(source);
       await prepare();
       expect(api.prepareDocumentDeletion).toHaveBeenCalledWith(
         source,
-        undefined,
+        source.scope === "home" ? undefined : documentValue.version,
       );
       expect(api.readSettings).not.toHaveBeenCalled();
-      expect(api.readProjectDocument).not.toHaveBeenCalled();
+      expect(api.readProjectDocument).toHaveBeenCalledTimes(
+        source.scope === "home" ? 0 : 1,
+      );
       expect(api.deleteDocument).not.toHaveBeenCalled();
       expect(screen.getByRole("button", { name: "Отмена" })).toBe(
         document.activeElement,
@@ -153,7 +164,10 @@ describe.each(sources.map((source, i) => ({ source, label: String(i) })))(
       );
       fireEvent.click(screen.getByRole("button", { name: "Отмена" }));
       expect(screen.queryByRole("dialog")).toBeNull();
-      expect(store.get(source).document).toBeUndefined();
+      if (source.scope === "home")
+        expect(store.get(source).document).toBeUndefined();
+      else
+        expect(store.get(source).document?.version).toBe(documentValue.version);
     });
     it("warns about dirty text and passes only saved version; cancellation preserves editor and history", async () => {
       await store.open(source);
@@ -231,7 +245,7 @@ it("config has no destructive button", () => {
   expect(screen.queryByRole("button", { name: /Удалить/ })).toBeNull();
 });
 it.each(["profile", "pipeline", "workflow"] as const)(
-  "memory-only %s survives hide and deletes without any host call",
+  "memory-only %s survives HOME hide or Project Cancel and deletes without any host call",
   async (kind) => {
     const source: DocumentSource =
       kind === "profile"
@@ -241,10 +255,16 @@ it.each(["profile", "pipeline", "workflow"] as const)(
     else if (kind === "pipeline") store.createPipeline("p", "new", []);
     else store.createWorkflow("p", "new", []);
     mount(source);
-    fireEvent.click(
-      screen.getByRole("button", { name: "Скрыть без сохранения" }),
-    );
-    fireEvent.click(screen.getByRole("button", { name: "Открыть редактор" }));
+    if (source.scope === "home") {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Скрыть без сохранения" }),
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Открыть редактор" }));
+    } else {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Отменить изменения" }),
+      );
+    }
     await waitFor(() => expect(editor()).not.toBeNull());
     expect(api.readSettings).not.toHaveBeenCalled();
     expect(api.readProjectDocument).not.toHaveBeenCalled();
@@ -441,18 +461,17 @@ it("saved memory draft becomes disk-backed, including after hiding", async () =>
   expect(api.prepareDocumentDeletion).toHaveBeenCalledWith(source, undefined);
   expect(screen.queryByRole("button", { name: "Удалить черновик" })).toBeNull();
 });
-it("loaded existing flat document is never mistaken for memory-only draft after hiding", async () => {
+it("loaded existing flat document is never mistaken for memory-only draft after Project Cancel", async () => {
   await store.open(sources[1]);
   expect(store.pipelineState("p").drafts).toEqual(["sample"]);
   mount(sources[1]);
-  fireEvent.click(
-    screen.getByRole("button", { name: "Скрыть без сохранения" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "Отменить изменения" }));
   await prepare();
   expect(api.prepareDocumentDeletion).toHaveBeenCalledWith(
     sources[1],
-    undefined,
+    documentValue.version,
   );
+  expect(screen.queryByRole("button", { name: "Удалить черновик" })).toBeNull();
 });
 it("stale canceled prepare cannot replace a newer confirmation for the same source", async () => {
   const old = deferred<any>();

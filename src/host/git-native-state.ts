@@ -85,6 +85,8 @@ export interface NativeGitObservation {
   head: string | null;
   headRef?: string | null;
   index: Buffer;
+  /** Ephemeral evidence for this observation only; never serialized in state. */
+  indexFlags?: Buffer;
   refs: Buffer;
   status: Buffer;
   policyFingerprint: string;
@@ -102,6 +104,7 @@ interface Options {
   observe(): Promise<NativeGitObservation>;
   indexRecovery?(
     index: Buffer,
+    flags?: Buffer,
   ): Promise<NonNullable<NativeGitState["indexRecovery"]>>;
   maxBytes?: number;
 }
@@ -304,6 +307,8 @@ export async function captureNativeGitState(
     const o = await options.observe();
     if (
       ![o.index, o.refs, o.status].every(Buffer.isBuffer) ||
+      (o.indexFlags !== undefined &&
+        (!Buffer.isBuffer(o.indexFlags) || o.indexFlags.length > FILE)) ||
       o.index.length + o.refs.length + o.status.length > 8 * 1024 * 1024
     )
       throw stale();
@@ -315,7 +320,7 @@ export async function captureNativeGitState(
       index: digest(o.index),
       indexData: o.index.toString("base64"),
       ...(options.indexRecovery
-        ? { indexRecovery: await options.indexRecovery(o.index) }
+        ? { indexRecovery: await options.indexRecovery(o.index, o.indexFlags) }
         : {}),
       refs: digest(o.refs),
       status: digest(o.status),

@@ -30,7 +30,7 @@ export interface GitCommitContext {
     options?: { stdin?: string; indexFile?: string },
   ): Promise<{ stdout: string; stderr: string }>;
 }
-interface State {
+export interface GitCommitAdmissionState {
   revision: string;
   head: string | null;
   branch: string | null;
@@ -45,10 +45,10 @@ interface State {
   committer: string;
   signing: boolean;
 }
-interface Ticket {
+export interface GitCommitAdmissionTicket {
   preview: GitCommitPreview;
   ownerKey: string;
-  state: State;
+  state: GitCommitAdmissionState;
 }
 const stale = () =>
   Error(
@@ -198,7 +198,7 @@ function ident(raw: string) {
 /** Serial admission is supplied by HostService. Tickets never authorize a path or
  * a project by themselves: their context is reconstructed inside each operation. */
 export abstract class GitWorkspaceActions {
-  protected tickets = new Map<string, Ticket>();
+  protected tickets = new Map<string, GitCommitAdmissionTicket>();
   constructor(
     protected readonly options: {
       context: <T>(
@@ -299,7 +299,7 @@ export abstract class GitWorkspaceActions {
   protected async capture(
     context: GitCommitContext,
     paths: string[],
-  ): Promise<State> {
+  ): Promise<GitCommitAdmissionState> {
     scopeRefSchema.parse(context.scope);
     if (
       !path.isAbsolute(context.root) ||
@@ -384,8 +384,8 @@ export abstract class GitWorkspaceActions {
       const match = /^(\d{6}) [a-f0-9]+ 0\t([\s\S]+)$/.exec(row);
       if (match) modesByPath[match[2]] = match[1];
     }
-    const selectedModes: State["modes"] = Object.create(null);
-    const blobs: State["blobs"] = Object.create(null),
+    const selectedModes: GitCommitAdmissionState["modes"] = Object.create(null);
+    const blobs: GitCommitAdmissionState["blobs"] = Object.create(null),
       hash = createHash("sha256");
     // Pin the complete filter-free configuration, not just filter names known
     // before check-attr. A concurrently added driver can never be executed.
@@ -442,68 +442,73 @@ export abstract class GitWorkspaceActions {
   }
   async prepare(input: GitCommitRequest): Promise<GitCommitPreview> {
     const request = gitCommitRequestSchema.parse(input);
-    return this.options.context(request.scope, async (context) => {
-      if (JSON.stringify(context.scope) !== JSON.stringify(request.scope))
-        throw stale();
-      const snapshot = await context.snapshot();
-      if (snapshot.revision !== request.revision) throw stale();
-      const selected = request.paths.map((name) => {
-        const file = snapshot.files.find((file) => file.path === name);
-        if (!file) throw Error("Выбранного файла нет в списке изменений Git.");
-        if (file.submodule || file.kind === "conflict")
-          throw Error("Коммит подмодулей и конфликтов не поддерживается.");
-        return file;
-      });
-      // A rename source is implicit only as a deletion. If it was recreated,
-      // committing it would capture a whole file the user did not select.
-      for (const file of selected)
-        if (
-          file.originalPath &&
-          !request.paths.includes(file.originalPath) &&
-          (await selectedFile(context.root, file.originalPath))
-        )
-          throw Error(
-            "Исходный путь переименованного файла создан заново. Выберите его отдельно либо исключите переименование.",
-          );
-      const paths = [
-        ...new Set(
-          selected.flatMap((file) => [
-            file.path,
-            ...(file.originalPath ? [file.originalPath] : []),
-          ]),
-        ),
-      ];
-      if (paths.length > 2000) throw Error("Слишком много выбранных путей.");
-      const state = await this.capture(context, paths);
-      if (state.revision !== request.revision) throw stale();
-      const now = this.now();
-      for (const [token, ticket] of this.tickets)
-        if (ticket.preview.expiresAt <= now) this.tickets.delete(token);
-      if (this.tickets.size >= 64)
-        this.tickets.delete(this.tickets.keys().next().value!);
-      const preview: GitCommitPreview = {
-        token: randomBytes(32).toString("hex"),
-        scope: request.scope,
-        root: context.root,
-        branch: snapshot.branch,
-        paths,
-        deletedCount: Object.values(state.blobs).filter((v) => v === null)
-          .length,
-        message: request.message,
-        wholeFiles: true,
-        author: state.author,
-        committer: state.committer,
-        signing: state.signing,
-        hooks: "disabled",
-        expiresAt: now + 5 * 60 * 1000,
-      };
-      this.tickets.set(preview.token, {
-        preview: structuredClone(preview),
-        ownerKey: context.ownerKey,
-        state,
-      });
-      return preview;
+    return this.options.context(request.scope, (context) =>
+      this.prepareInContext(request, context),
+    );
+  }
+  protected async prepareInContext(
+    request: GitCommitRequest,
+    context: GitCommitContext,
+  ): Promise<GitCommitPreview> {
+    if (JSON.stringify(context.scope) !== JSON.stringify(request.scope))
+      throw stale();
+    const snapshot = await context.snapshot();
+    if (snapshot.revision !== request.revision) throw stale();
+    const selected = request.paths.map((name) => {
+      const file = snapshot.files.find((file) => file.path === name);
+      if (!file) throw Error("Выбранного файла нет в списке изменений Git.");
+      if (file.submodule || file.kind === "conflict")
+        throw Error("Коммит подмодулей и конфликтов не поддерживается.");
+      return file;
     });
+    // A rename source is implicit only as a deletion. If it was recreated,
+    // committing it would capture a whole file the user did not select.
+    for (const file of selected)
+      if (
+        file.originalPath &&
+        !request.paths.includes(file.originalPath) &&
+        (await selectedFile(context.root, file.originalPath))
+      )
+        throw Error(
+          "Исходный путь переименованного файла создан заново. Выберите его отдельно либо исключите переименование.",
+        );
+    const paths = [
+      ...new Set(
+        selected.flatMap((file) => [
+          file.path,
+          ...(file.originalPath ? [file.originalPath] : []),
+        ]),
+      ),
+    ];
+    if (paths.length > 2000) throw Error("Слишком много выбранных путей.");
+    const state = await this.capture(context, paths);
+    if (state.revision !== request.revision) throw stale();
+    const now = this.now();
+    for (const [token, ticket] of this.tickets)
+      if (ticket.preview.expiresAt <= now) this.tickets.delete(token);
+    if (this.tickets.size >= 64)
+      this.tickets.delete(this.tickets.keys().next().value!);
+    const preview: GitCommitPreview = {
+      token: randomBytes(32).toString("hex"),
+      scope: request.scope,
+      root: context.root,
+      branch: snapshot.branch,
+      paths,
+      deletedCount: Object.values(state.blobs).filter((v) => v === null).length,
+      message: request.message,
+      wholeFiles: true,
+      author: state.author,
+      committer: state.committer,
+      signing: state.signing,
+      hooks: "disabled",
+      expiresAt: now + 5 * 60 * 1000,
+    };
+    this.tickets.set(preview.token, {
+      preview: structuredClone(preview),
+      ownerKey: context.ownerKey,
+      state,
+    });
+    return preview;
   }
   abstract execute(input: string): Promise<GitCommitResult>;
 }

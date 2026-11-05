@@ -186,7 +186,7 @@ it("requires noncoerced checkout expectation/switch consent and validates branch
   expect(() => handlers.get("goga:checkout-branch")!(event, {})).toThrow();
 });
 
-it("exposes narrow task reader and rejects old overwrite and missing conditional task versions", async () => {
+it("exposes narrow task reader, accepts current-disk launch intent and rejects forged write versions", async () => {
   const handlers = new Map<string, Function>();
   const service = {
     readTopicTask: vi.fn(async (r) => ({
@@ -232,16 +232,20 @@ it("exposes narrow task reader and rejects old overwrite and missing conditional
     previewToken: "t",
     task: "",
     taskVersion: "a".repeat(64),
+    pipelineName: "Human pipeline label",
+    pipelineDescription: "Display only",
     confirmEmptyTask: false,
     expectedBranch: "main",
     confirmBranchSwitch: false,
     topic: { mode: "existing", branch: "main", topic: "main" },
   };
   for (const bad of [
-    { ...valid, taskVersion: undefined },
     { ...valid, confirmEmptyTask: "true" },
     { ...valid, confirmTaskOverwrite: true },
     { ...valid, taskVersion: "bad" },
+    { ...valid, pipelineName: "x".repeat(1025) },
+    { ...valid, pipelineDescription: "x".repeat(16001) },
+    { ...valid, pipelineName: "bad\0label" },
     { ...valid, topic: { mode: "new", name: "new", baseRef: "main" } },
   ])
     expect(() => handlers.get("goga:launch")!(event, bad)).toThrow();
@@ -252,7 +256,19 @@ it("exposes narrow task reader and rejects old overwrite and missing conditional
     taskVersion: undefined,
     topic: { mode: "new", name: "new", baseRef: "main" },
   });
-  expect(service.launch).toHaveBeenCalledTimes(2);
+  await handlers.get("goga:launch")!(event, {
+    ...valid,
+    taskVersion: undefined,
+    previewToken: undefined,
+  });
+  expect(service.launch).toHaveBeenCalledTimes(3);
+  expect(service.launch).toHaveBeenLastCalledWith(
+    expect.objectContaining({ topic: valid.topic }),
+  );
+  expect(vi.mocked(service.launch).mock.calls.at(-1)![0]).not.toHaveProperty(
+    "taskVersion",
+    expect.any(String),
+  );
 });
 it("protects project settings IPC and rejects malformed secret-bearing payload without echoing it", async () => {
   const handlers = new Map<string, Function>();
@@ -691,4 +707,37 @@ it("accepts explicit no-topic launch but rejects hidden topic/task fields", asyn
       handlers.get("goga:launch")!(event, { ...request, ...patch }),
     ).toThrow();
   expect(service.launch).toHaveBeenCalledOnce();
+});
+
+it("dashboard restore accepts only a known run id from the trusted shell, never a renderer URL", async () => {
+  const handlers = new Map<string, Function>(),
+    restoreDashboard = vi.fn(async () => {});
+  const service = { runs: () => [{ id: "run-a" }] };
+  registerIPC(
+    { handle: (key: string, fn: Function) => handlers.set(key, fn) } as any,
+    {
+      service,
+      settings: {},
+      window: { webContents: { id: 7 } },
+      shellURL: "file:///shell",
+      choose: vi.fn(),
+      select: vi.fn(),
+      confirmClose: vi.fn(),
+      stop: vi.fn(),
+      restoreDashboard,
+    } as any,
+  );
+  const event = {
+    sender: { id: 7 },
+    senderFrame: { url: "file:///shell", parent: null },
+  };
+  const handle = handlers.get("goga:restore-dashboard")!;
+  await handle(event, "run-a");
+  expect(restoreDashboard).toHaveBeenCalledExactlyOnceWith("run-a");
+  expect(() => handle(event, "foreign")).toThrow();
+  expect(() =>
+    handle(event, { id: "run-a", url: "http://localhost:1234" }),
+  ).toThrow();
+  expect(() => handle({ ...event, sender: { id: 8 } }, "run-a")).toThrow();
+  expect(restoreDashboard).toHaveBeenCalledTimes(1);
 });

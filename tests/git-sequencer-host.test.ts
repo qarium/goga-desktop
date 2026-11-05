@@ -184,7 +184,7 @@ for (const operation of ["cherry-pick", "revert"] as const)
           resolution: { kind: "text", text: "resolved second\n" },
         });
         const r = await f.host.executeGitConflictSave(p.token);
-        expect(r.status).toBe("saved");
+        expect(r.status, JSON.stringify(r)).toBe("saved");
       }
       async function phase2() {
         const snapshot = await f.host.readGitWorkspace(f.scope),

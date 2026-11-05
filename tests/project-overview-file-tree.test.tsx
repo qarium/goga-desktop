@@ -120,3 +120,16 @@ it.each([true, false])(
     else expect(contract).toBeNull();
   },
 );
+
+it("does not navigate from a modified folder double click", () => {
+  const f = setup();
+  fireEvent.doubleClick(screen.getByText("src"), { metaKey: true });
+  expect(f.navigate).not.toHaveBeenCalled();
+});
+it("anchors a newly right-clicked row without collapsing an existing group", () => {
+  setup();
+  fireEvent.click(screen.getByText("src"));
+  fireEvent.contextMenu(screen.getByText("b.ts"));
+  fireEvent.click(screen.getByText("a.ts"), { shiftKey: true });
+  expect(document.querySelectorAll(".ov-tree-selected")).toHaveLength(2);
+});

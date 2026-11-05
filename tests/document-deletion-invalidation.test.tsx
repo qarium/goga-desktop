@@ -61,7 +61,7 @@ const click = (name: string) =>
       : screen.getByRole("button", { name }),
   );
 async function remove() {
-  click("Удалить");
+  fireEvent.click(await screen.findByRole("button", { name: "Удалить" }));
   await screen.findByRole("dialog");
   click("Переместить в корзину");
   await waitFor(() => expect(api.deleteDocument).toHaveBeenCalled());
@@ -156,7 +156,6 @@ async function tools() {
   await screen.findByRole("button", { name: "Папка env" });
   click("Папка env");
   click("Файл env/local.yml");
-  click("Открыть редактор");
   await waitFor(() => expect(editor()).not.toBeNull());
   return editor()!;
 }
@@ -381,8 +380,8 @@ it("tool file recreated after successful deletion can be explicitly selected aga
   await remove();
   await waitFor(() => expect(editor()).toBeNull());
   click("Файл env/local.yml");
-  expect(screen.getByRole("button", { name: "Открыть редактор" })).toBeTruthy();
-  expect(api.readProjectDocument).toHaveBeenCalledTimes(1);
+  await waitFor(() => expect(editor()).not.toBeNull());
+  expect(api.readProjectDocument).toHaveBeenCalledTimes(2);
 });
 it("deleting a workflow frees its pipeline-name suggestion without changing typed name", async () => {
   api.listWorkflowSuggestions = vi.fn(async () => [
@@ -570,7 +569,7 @@ it("fresh profile catalog can expose an externally restored profile for explicit
   expect(api.readSettings).not.toHaveBeenCalled();
 });
 it.each(["workflow", "pipeline"] as const)(
-  "hidden %s selection retains deletion error when refreshed catalog marks it unavailable",
+  "selected %s editor retains deletion error when refreshed catalog marks it unavailable",
   async (kind) => {
     render(
       <ProjectFlatDocuments kind={kind} project={project} store={store} />,
@@ -600,10 +599,11 @@ it.each(["workflow", "pipeline"] as const)(
       ).toHaveBeenCalledTimes(2),
     );
     expect(screen.getByText("Outcome unknown")).toBeTruthy();
+    expect(editor()!.state.doc.toString()).toBe("secret: saved\n");
     expect(
-      screen.getByRole("button", { name: "Открыть редактор" }),
-    ).toBeTruthy();
-    expect(api.readProjectDocument).not.toHaveBeenCalled();
+      screen.queryByRole("button", { name: "Открыть редактор" }),
+    ).toBeNull();
+    expect(api.readProjectDocument).toHaveBeenCalledTimes(1);
   },
 );
 
@@ -657,7 +657,6 @@ it.each(["save", "delete"] as const)(
       ],
     };
     if (action === "save") {
-      click("Открыть редактор");
       await waitFor(() => expect(editor()).not.toBeNull());
       click("Сохранить");
       await waitFor(() => expect(api.saveProjectDocument).toHaveBeenCalled());

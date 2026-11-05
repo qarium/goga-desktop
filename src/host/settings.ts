@@ -11,6 +11,7 @@ import {
   readFile,
   readdir,
   rename,
+  link,
   unlink,
   open,
 } from "node:fs/promises";
@@ -39,7 +40,14 @@ export async function noSymlinks(target: string) {
     }
   }
 }
-export async function atomicWrite(target: string, text: string) {
+/** Optional commit guard runs after staging. This narrows the optimistic race;
+ * Node does not offer compare-and-swap rename against arbitrary external writers.
+ * Existing callers retain unconditional replacement unless they explicitly opt in. */
+export async function atomicWrite(
+  target: string,
+  text: string,
+  options?: { beforeCommit?: () => Promise<void>; createOnly?: boolean },
+) {
   await noSymlinks(target);
   await mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
   await noSymlinks(target);
@@ -53,7 +61,9 @@ export async function atomicWrite(target: string, text: string) {
       await f.close();
     }
     await noSymlinks(target);
-    await rename(tmp, target);
+    await options?.beforeCommit?.();
+    if (options?.createOnly) await link(tmp, target);
+    else await rename(tmp, target);
   } finally {
     await unlink(tmp).catch(() => {});
   }

@@ -127,3 +127,85 @@ it("keeps source text, baseline and editor memory after a readable save conflict
   expect(api.saveOverviewFile).toHaveBeenCalledTimes(1);
   store.dispose();
 });
+it("refreshes pasted paths and invalidates in-flight reads without changing open draft memory", async () => {
+  const { store, api } = setup();
+  await store.loadDirectory("");
+  await store.open("open.ts");
+  store.edit("open.ts", "unsaved");
+  const memory = store.getSnapshot().files["open.ts"].memory;
+  let release!: (value: any) => void;
+  api.listOverviewDirectory.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  const old = store.loadDirectory("");
+  await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+  expect((store as any).applyPaste).toBeTypeOf("function");
+  await store.applyPaste(["new/a"], "p");
+  release({
+    path: "",
+    entries: [{ path: "stale", name: "stale", kind: "file" }],
+    truncated: false,
+  });
+  await old;
+  const state = store.getSnapshot();
+  expect(state.directories[""].entries).toEqual([]);
+  expect(state.files["open.ts"].text).toBe("unsaved");
+  expect(state.files["open.ts"].memory).toBe(memory);
+  expect(api.listOverviewDirectory).toHaveBeenCalledWith("p", "new");
+});
+it("ignores paste completion for an old revision of the SAME store, retaining new revision state", async () => {
+  const { api } = setup();
+  const owner = {
+    projectId: "p",
+    year: "2026",
+    topic: "t",
+    branch: "t",
+    contextId: "ctx",
+    revision: "old",
+  };
+  const mutation = vi.fn();
+  const store = createOverviewStore(api as any, owner, mutation);
+  await store.loadDirectory("");
+  await store.open("open.ts");
+  store.edit("open.ts", "draft");
+  store.setScope({ ...owner, revision: "new" });
+  const snapshot = store.getSnapshot();
+  api.listOverviewDirectory.mockClear();
+  api.readOverviewSchema.mockClear();
+  await (store as any).applyPaste(["late/new"], owner);
+  expect(store.getSnapshot()).toBe(snapshot);
+  expect(api.listOverviewDirectory).not.toHaveBeenCalled();
+  expect(api.readOverviewSchema).not.toHaveBeenCalled();
+  expect(mutation).not.toHaveBeenCalled();
+});
+it("does not start later paste refresh reads in a new revision if scope changes during refresh", async () => {
+  const { api } = setup();
+  const owner = {
+    projectId: "p",
+    year: "2026",
+    topic: "t",
+    branch: "t",
+    contextId: "ctx",
+    revision: "old",
+  };
+  const store = createOverviewStore(api as any, owner);
+  let release!: (value: any) => void;
+  api.listOverviewDirectory.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        release = resolve;
+      }),
+  );
+  const pending = (store as any).applyPaste(["first/a", "second/b"], owner);
+  await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+  store.setScope({ ...owner, revision: "new" });
+  api.listOverviewDirectory.mockClear();
+  api.readOverviewSchema.mockClear();
+  release({ path: "first", entries: [], truncated: false });
+  await pending;
+  expect(api.listOverviewDirectory).not.toHaveBeenCalled();
+  expect(api.readOverviewSchema).not.toHaveBeenCalled();
+});

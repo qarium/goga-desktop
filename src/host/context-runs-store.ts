@@ -69,6 +69,7 @@ const runSchema = z.object({
   endedAt: z.string().datetime().optional(),
   startupTimeoutMs: z.number().int().nonnegative().optional(),
   update: z.boolean().optional(),
+  dashboardRecoveryVersion: z.literal(1).optional(),
   dashboardOpened: z.boolean().optional(),
   recovery: z.enum(["unverified", "confirmed"]).optional(),
   syncPending: z.boolean().optional(),
@@ -127,6 +128,7 @@ function identity(run: Snapshot) {
         run.startupTimeoutMs ?? null,
         run.update ?? null,
         ...(run.buildRepeat ? [run.buildRepeat] : []),
+        ...(run.dashboardRecoveryVersion ? [run.dashboardRecoveryVersion] : []),
       ]),
     )
     .digest("hex");

@@ -586,6 +586,31 @@ export function createOverviewStore(
       });
       return true;
     },
+    /** Paste adds disk entries; open source drafts and editor history keep their ownership. */
+    async applyPaste(paths: string[], expectedOwner: ScopeRef) {
+      const currentOwner = owner;
+      const sameOwner = typeof currentOwner === "string" || typeof expectedOwner === "string"
+        ? currentOwner === expectedOwner
+        : (["projectId", "year", "topic", "branch", "contextId", "revision"] as const).every(key => currentOwner[key] === expectedOwner[key]);
+      if (disposed || !sameOwner) return;
+      const requestEpoch = epoch;
+      readEpoch++;
+      contractRequest++;
+      refresh = null;
+      directories.clear();
+      if (paths.length) mutations++;
+      publish({
+        stale: true, refreshing: false, contractBusy: false,
+        directoryBusy: Object.fromEntries(Object.keys(state.directoryBusy).map(p => [p, false])),
+        directoryErrors: {},
+      });
+      if (paths.length) onMutation?.();
+      for (const p of new Set(paths.map(parentPath))) {
+        if (!inScope(requestEpoch)) return;
+        await loadDirectory(p);
+      }
+      if (inScope(requestEpoch)) await refreshAll();
+    },
     async applyFileAction(
       kind: "trash" | "rename",
       paths: string[],

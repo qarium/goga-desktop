@@ -1180,6 +1180,14 @@ code {
 .tools-detail {
   grid-template-columns: 236px minmax(0, 1fr);
 }
+/* Tool files alone: fit Delete + Cancel/Save at the 920px minimum window.
+ * Shared flat documents and personal settings keep their existing action gaps. */
+.tool-files-detail .document-save-actions {
+  gap: 8px;
+}
+.tool-files-detail .document-save-primary-actions {
+  gap: 12px;
+}
 .tree-pane {
   padding-right: 12px;
 }

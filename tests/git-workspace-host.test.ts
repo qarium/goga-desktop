@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { HostService } from "../src/host/service";
+import { GitWorkspaceActions } from "../src/host/git-workspace-actions";
 import { NodeRunner } from "../src/host/process";
 import { CloneManager } from "../src/host/clones";
 import { worktreeContextRef } from "../src/shared/worktrees";
@@ -79,6 +80,8 @@ it(
     await writeFile(path.join(f.root, "file.txt"), "chosen\n");
     await writeFile(path.join(f.root, "other.txt"), "staged other\n");
     await f.git(["add", "other.txt"]);
+    await writeFile(path.join(f.root, "other.txt"), "working other\n");
+    const capture = vi.spyOn(GitWorkspaceActions.prototype as any, "capture");
     const snapshot = await f.host.readGitWorkspace(f.project.id);
     const preview = await (f.host as any).prepareGitCommit({
       scope: f.project.id,
@@ -87,16 +90,24 @@ it(
       message: "selected",
     });
     expect(preview.root).toBe(f.root);
-    const result = await (f.host as any).executeGitCommit(preview.token);
+    capture.mockClear();
+    const result = await f.host.executeGitCommit(preview.token);
+    const executeCaptures = capture.mock.calls.length;
+    capture.mockRestore();
     expect(result.status).toBe("committed");
     expect(result.indexPublished).toBe(true);
     expect(await f.git(["show", "HEAD:file.txt"])).toBe("chosen\n");
     expect((await f.git(["diff", "--cached", "--name-only"])).trim()).toBe(
       "other.txt",
     );
-    await expect(
-      (f.host as any).executeGitCommit(preview.token),
-    ).rejects.toThrow();
+    expect(await f.git(["show", ":other.txt"])).toBe("staged other\n");
+    expect(await readFile(path.join(f.root, "other.txt"), "utf8")).toBe(
+      "working other\n",
+    );
+    const committedHead = await f.git(["rev-parse", "HEAD"]);
+    await expect(f.host.executeGitCommit(preview.token)).rejects.toThrow();
+    expect(await f.git(["rev-parse", "HEAD"])).toBe(committedHead);
+    expect(executeCaptures).toBe(0);
   }),
   gitIntegrationBudget(15000),
 );
@@ -112,6 +123,13 @@ it(
     });
     const scope = worktreeContextRef(clone);
     await writeFile(path.join(clone.path, "file.txt"), "only clone\n");
+    await writeFile(path.join(clone.path, "other.txt"), "staged clone other\n");
+    await f.runner.command("git", ["add", "other.txt"], clone.path);
+    await writeFile(
+      path.join(clone.path, "other.txt"),
+      "working clone other\n",
+    );
+    const capture = vi.spyOn(GitWorkspaceActions.prototype as any, "capture");
     const snapshot = await f.host.readGitWorkspace(scope);
     const request = {
       scope,
@@ -119,8 +137,11 @@ it(
       paths: ["file.txt"],
       message: "clone selected",
     };
-    const preview = await (f.host as any).prepareGitCommit(request);
-    const result = await (f.host as any).executeGitCommit(preview.token);
+    const preview = await f.host.prepareGitCommit(request);
+    capture.mockClear();
+    const result = await f.host.executeGitCommit(preview.token);
+    const executeCaptures = capture.mock.calls.length;
+    capture.mockRestore();
     expect(result.status).toBe("committed");
     expect(result.scope).toEqual(scope);
     expect(await f.git(["show", "HEAD:file.txt"])).toBe("base\n");
@@ -128,6 +149,29 @@ it(
       (await f.runner.command("git", ["show", "HEAD:file.txt"], clone.path))
         .stdout,
     ).toBe("only clone\n");
+    expect(
+      (
+        await f.runner.command(
+          "git",
+          ["diff", "--cached", "--name-only"],
+          clone.path,
+        )
+      ).stdout.trim(),
+    ).toBe("other.txt");
+    expect(
+      (await f.runner.command("git", ["show", ":other.txt"], clone.path))
+        .stdout,
+    ).toBe("staged clone other\n");
+    expect(await readFile(path.join(clone.path, "other.txt"), "utf8")).toBe(
+      "working clone other\n",
+    );
+    const committedHead = (
+      await f.runner.command("git", ["rev-parse", "HEAD"], clone.path)
+    ).stdout;
+    await expect(f.host.executeGitCommit(preview.token)).rejects.toThrow();
+    expect(
+      (await f.runner.command("git", ["rev-parse", "HEAD"], clone.path)).stdout,
+    ).toBe(committedHead);
     await expect(
       (f.host as any).prepareGitCommit({
         ...request,
@@ -137,6 +181,7 @@ it(
     await rm(clone.path, { recursive: true, force: true });
     await expect((f.host as any).prepareGitCommit(request)).rejects.toThrow();
     expect(await f.git(["show", "HEAD:file.txt"])).toBe("base\n");
+    expect(executeCaptures).toBe(0);
   }),
   gitIntegrationBudget(30000),
 );

@@ -151,3 +151,6 @@ button.run-output-toggle[aria-pressed="true"] {
     padding: 12px;
   }
 }
+
+.run-output-reconnect { display:flex; flex-wrap:wrap; align-items:center; gap:12px; margin-top:18px; }
+.run-output-reconnect p { flex-basis:100%; }

@@ -147,7 +147,7 @@ it("registers canonical git root, persists projects and resolves profile precede
   expect(d.workflows).toEqual(["build"]);
   expect(d.pipelines[0]?.name).toBe("Build");
 });
-it("previews filtered cards using same flags and refuses stale token or dirty new topic", async () => {
+it("previews filtered cards using same flags and still refuses a dirty new-topic checkout", async () => {
   const { service, project, repo, calls } = await setup();
   const req = {
     projectId: project.id,
@@ -171,15 +171,14 @@ it("previews filtered cards using same flags and refuses stale token or dirty ne
     confirmBranchSwitch: true,
     clean: false,
   };
-  await expect(
-    service.launch({ ...launch, clean: true, previewToken: "bogus" }),
-  ).rejects.toThrow(/предпросмотр/i);
   await writeFile(path.join(repo, "dirty"), "x");
-  await expect(service.launch(launch)).rejects.toThrow(/изменения|dirty/i);
+  await expect(
+    service.launch({ ...launch, previewToken: "discarded-preview" }),
+  ).rejects.toThrow(/изменения|dirty/i);
   expect(calls.some((c) => c.includes("create"))).toBe(false);
 });
-it("definition fingerprint changes invalidate preview before any branch operation", async () => {
-  const { service, project, repo, calls } = await setup();
+it("definition edits do not invalidate launch; the selected command uses current definitions", async () => {
+  const { service, project, repo } = await setup(true);
   const req = {
     projectId: project.id,
     pipeline: "build",
@@ -187,25 +186,25 @@ it("definition fingerprint changes invalidate preview before any branch operatio
     profile: "",
     skips: [],
   };
-  const p = await service.preview(req);
+  const preview = await service.preview(req);
   await writeFile(
     path.join(repo, ".goga/workflows/build.yml"),
     "prompt: changed\n",
   );
-  await expect(
-    service.launch({
-      ...req,
-      previewToken: p.token,
-      topic: { mode: "existing", branch: "main", topic: "existing" },
-      task: "",
-      confirmEmptyTask: false,
-      taskVersion: "a".repeat(64),
-      expectedBranch: "main",
-      confirmBranchSwitch: true,
-      clean: false,
-    }),
-  ).rejects.toThrow(/предпросмотр/i);
-  expect(calls.some((c) => c.includes("create"))).toBe(false);
+  const run = await service.launch({
+    ...req,
+    previewToken: preview.token,
+    topic: { mode: "existing", branch: "main", topic: "main" },
+    task: "cached text is not a write",
+    confirmEmptyTask: false,
+    expectedBranch: "main",
+    confirmBranchSwitch: false,
+    clean: false,
+  });
+  expect(run.workflow).toBe("build");
+  expect(run.profile).toBeNull();
+  expect(run.taskSnapshot?.text).toBe("");
+  await service.stop(run.id);
 });
 it("filters merged topic hosts because Goga uses current branch slug as work identity", async () => {
   const { service, project } = await setup();
@@ -240,7 +239,12 @@ it("starts independent process, holds checkout lock until stop, preserves run co
   };
   const run = await service.launch(request);
   expect(run.status).toBe("starting");
-  await expect(service.launch(request)).rejects.toThrow(/Предпросмотр устарел/);
+  const sibling = await service.launch(request);
+  expect(sibling.id).not.toBe(run.id);
+  await service.stop(sibling.id);
+  expect(service.runs().find((row) => row.id === run.id)?.status).not.toBe(
+    "stopped",
+  );
   await new Promise<void>((resolve, reject) => {
     const cleanup = () => {
       clearTimeout(timeout);
@@ -497,14 +501,14 @@ it("existing task saves exact editor text with matching version", async () => {
   };
   await expect(
     service.launch({ ...launch, taskVersion: "stale" }),
-  ).rejects.toThrow(/измен|устарел/i);
+  ).rejects.toThrow(/верси/i);
   expect(await readFile(path.join(dir, "todo.md"), "utf8")).toBe("Old task\n");
   const run = await service.launch(launch);
   expect(await readFile(path.join(dir, "todo.md"), "utf8")).toBe("New task");
   await service.stop(run.id);
   await service.dispose();
 });
-it("invalidates preview when branch changes even at identical commit", async () => {
+it("requires renewed branch-switch consent when the displayed checkout actually changed", async () => {
   const { service, project, repo, node } = await setup(true);
   const req = {
     projectId: project.id,
@@ -533,9 +537,9 @@ it("invalidates preview when branch changes even at identical commit", async () 
       confirmBranchSwitch: true,
       clean: false,
     }),
-  ).rejects.toThrow(/Предпросмотр/);
+  ).rejects.toThrow(/Текущая ветка изменилась/);
 });
-it("refuses changed clone composition and reports the prepared copy without touching primary", async () => {
+it("launches a new topic using the actual clone composition without touching primary", async () => {
   const { service, project, repo, node, runner } = await setup(true);
   const previous = runner.command.bind(runner);
   runner.command = async (exe, args, cwd) => {
@@ -566,10 +570,10 @@ it("refuses changed clone composition and reports the prepared copy without touc
     confirmBranchSwitch: true,
     clean: false,
   };
-  await expect(service.launch(request)).rejects.toThrow(
-    /В копии изменились.*Копия топика.*подготовлена/s,
-  );
-  expect(service.runs()).toEqual([]);
+  const run = await service.launch(request);
+  expect(run.context?.topic).toBe("different");
+  expect(run.taskSnapshot?.text).toBe("Task");
+  await service.stop(run.id);
   const copies = await service.listTopicContexts(project.id);
   expect(copies).toHaveLength(1);
   expect(copies[0]).toMatchObject({
@@ -585,10 +589,12 @@ it("refuses changed clone composition and reports the prepared copy without touc
   expect(
     (await node.command("git", ["status", "--porcelain"], repo)).stdout,
   ).toBe("");
-  await expect(service.launch(request)).rejects.toThrow(/Предпросмотр устарел/);
+  await expect(service.launch(request)).rejects.toThrow(
+    /уже существует|уже занят/,
+  );
   expect(await service.listTopicContexts(project.id)).toHaveLength(1);
 });
-it("refuses definitions changed while final launch composition is being resolved", async () => {
+it("does not reject an unrelated definition edit while resolving the current command", async () => {
   const { service, project, repo, runner } = await setup(true);
   const req = {
     projectId: project.id,
@@ -608,25 +614,25 @@ it("refuses definitions changed while final launch composition is being resolved
       );
     return result;
   };
-  await expect(
-    service.launch({
-      ...req,
-      previewToken: p.token,
-      topic: { mode: "existing", branch: "main", topic: "main" },
-      task: "",
-      confirmEmptyTask: false,
-      taskVersion: (
-        await service.readTopicTask({
-          projectId: project.id,
-          branch: "main",
-          topic: "main",
-        })
-      ).version,
-      expectedBranch: "main",
-      confirmBranchSwitch: true,
-      clean: false,
-    }),
-  ).rejects.toThrow(/предпросмотр/i);
+  const run = await service.launch({
+    ...req,
+    previewToken: p.token,
+    topic: { mode: "existing", branch: "main", topic: "main" },
+    task: "",
+    confirmEmptyTask: false,
+    taskVersion: (
+      await service.readTopicTask({
+        projectId: project.id,
+        branch: "main",
+        topic: "main",
+      })
+    ).version,
+    expectedBranch: "main",
+    confirmBranchSwitch: true,
+    clean: false,
+  });
+  expect(run.pipeline).toBe("build");
+  await service.stop(run.id);
 });
 it.each([
   ["none", "explicit"],
@@ -752,7 +758,7 @@ it("keeps a failed clone preparation visible and never falls back to primary or 
   expect(
     (await node.command("git", ["status", "--porcelain"], repo)).stdout,
   ).toBe("");
-  await expect(service.launch(request)).rejects.toThrow(/Предпросмотр устарел/);
+  await expect(service.launch(request)).rejects.toThrow(/уже существует/);
   expect(clones).toBe(1);
 });
 
@@ -1653,9 +1659,11 @@ it("keeps existing task untouched when final composition fails", async () => {
   const previous = runner.command.bind(runner);
   runner.command = async (exe, args, cwd) =>
     exe === "fake" && args.includes("--info")
-      ? { stdout: "* changed:\n    title: Different\n", stderr: "" }
+      ? Promise.reject(Error("Goga: invalid current pipeline definition"))
       : previous(exe, args, cwd);
-  await expect(service.launch(request)).rejects.toThrow(/предпросмотр/i);
+  await expect(service.launch(request)).rejects.toThrow(
+    /fake pipeline build --info.*не выполнена/s,
+  );
   expect(await readFile(file, "utf8")).toBe("original");
   expect(service.runs()).toEqual([]);
 });
@@ -1669,7 +1677,7 @@ it("rejects replaced project root before executing any launch command", async ()
   await expect(service.launch(request)).rejects.toThrow(/ссыл/i);
 });
 it.each(["text", "missing", "commit"] as const)(
-  "rejects %s changed during the first branch check after saving before process start",
+  "protects task content after save without rejecting an unrelated %s change",
   async (kind) => {
     const { service, repo, node, runner, file, request } =
       await switchTaskFixture();
@@ -1704,6 +1712,14 @@ it.each(["text", "missing", "commit"] as const)(
       }
       return result;
     };
+    if (kind === "commit") {
+      const run = await service.launch(request);
+      expect(changed).toBe(true);
+      expect(starts).toBe(1);
+      expect(await readFile(file, "utf8")).toBe("edited");
+      await service.stop(run.id);
+      return;
+    }
     await expect(service.launch(request)).rejects.toThrow(/измен|устарел/i);
     expect(changed).toBe(true);
     expect(starts).toBe(0);
@@ -1823,7 +1839,7 @@ it("uses project binary/env for all Goga metadata and sends only runtime rows to
   expect(process.env.DEMO_HOST).toBeUndefined();
   expect(calls.some((c) => c.includes("board"))).toBe(true);
 });
-it("project settings revision invalidates old preview; explicit automatic bypasses project default", async () => {
+it("launch reads current project settings; explicit automatic bypasses the project default", async () => {
   const { service, project, runner } = await setup(true);
   const req = {
     projectId: project.id,
@@ -1839,19 +1855,18 @@ it("project settings revision invalidates old preview; explicit automatic bypass
     { ...settings.value, profile: "local" },
     settings.version,
   );
-  await expect(
-    service.launch({
-      ...req,
-      previewToken: preview.token,
-      expectedBranch: "main",
-      confirmBranchSwitch: false,
-      clean: false,
-      confirmEmptyTask: false,
-      topic: { mode: "existing", branch: "main", topic: "main" },
-      task: "",
-      taskVersion: "a".repeat(64),
-    }),
-  ).rejects.toThrow(/устарел/);
+  const run = await service.launch({
+    ...req,
+    previewToken: preview.token,
+    expectedBranch: "main",
+    confirmBranchSwitch: false,
+    clean: false,
+    confirmEmptyTask: false,
+    topic: { mode: "existing", branch: "main", topic: "main" },
+    task: "",
+  });
+  expect(run.profile).toBe("local");
+  await service.stop(run.id);
   expect((await service.preview({ ...req, profileMode: "auto" })).profile).toBe(
     "base",
   );
@@ -2496,11 +2511,14 @@ it("no-topic pipeline uses the primary checkout without topic metadata, clone or
     code: "ENOENT",
   });
   expect(await service.listTopicContexts(project.id)).toEqual([]);
-  await expect(service.launch(request)).rejects.toThrow(/предпросмотр/i);
+  const sibling = await service.launch(request);
+  expect(sibling.id).not.toBe(run.id);
+  expect(sibling.taskSnapshot).toBeUndefined();
+  await service.stop(sibling.id);
   await service.stop(run.id);
 });
 
-it("no-topic launch rejects hidden task writes and stale branch/composition without starting", async () => {
+it("no-topic launch rejects hidden writes and stale branch consent but allows current definitions", async () => {
   const { service, project, repo, node, runner } = await setup(true);
   const params = {
     projectId: project.id,
@@ -2538,9 +2556,12 @@ it("no-topic launch rejects hidden task writes and stale branch/composition with
     path.join(repo, ".goga/workflows/build.yml"),
     "prompt: external change\n",
   );
-  await expect(service.launch(request)).rejects.toThrow(/предпросмотр/i);
   expect(start).not.toHaveBeenCalled();
-  expect(service.runs()).toEqual([]);
+  const run = await service.launch(request);
+  expect(start).toHaveBeenCalledOnce();
+  expect(run.workflow).toBe("build");
+  expect(run.taskSnapshot).toBeUndefined();
+  await service.stop(run.id);
   await expect(stat(path.join(repo, ".goga/history"))).rejects.toMatchObject({
     code: "ENOENT",
   });
@@ -2757,10 +2778,17 @@ it.each([
         ).stdout.trim(),
       ).toBe("main");
       await service.stop(run.id);
-      await expect(service.launch(request)).rejects.toThrow(
-        /Предпросмотр устарел/,
-      );
-      expect(starts).toHaveBeenCalledOnce();
+      if (mode === "new") {
+        await expect(service.launch(request)).rejects.toThrow(
+          /уже существует|уже занят/,
+        );
+        expect(starts).toHaveBeenCalledOnce();
+      } else {
+        const repeated = await service.launch(request);
+        expect(starts).toHaveBeenCalledTimes(2);
+        expect(starts.mock.calls[1][2]).toBe(root);
+        await service.stop(repeated.id);
+      }
     } finally {
       vi.restoreAllMocks();
     }
@@ -2775,7 +2803,7 @@ it.each([
   "settings",
   "context",
 ] as const)(
-  "long-open form still rejects changed $0 before writes or start",
+  "long-open form only blocks real task writes or owner/branch violations ($0)",
   async (changed) => {
     const { service, project, repo, node, runner } = await setup(true);
     const start = vi.spyOn(runner, "start").mockImplementation(() => {
@@ -2839,24 +2867,36 @@ it.each([
         const { randomUUID } = await import("node:crypto");
         params.context = { ...context!, revision: randomUUID() };
       }
-      await expect(
-        service.launch({
-          ...params,
-          previewToken: preview.token,
-          task: "Draft must not be written",
-          taskVersion: document.version,
-          clean: false,
-          update: true,
-          confirmEmptyTask: false,
-          expectedBranch: selected.branch,
-          confirmBranchSwitch: false,
-          topic: {
-            mode: "existing",
-            branch: selected.branch,
-            topic: selected.topic,
-          },
-        }),
-      ).rejects.toThrow(
+      const launch = service.launch({
+        ...params,
+        previewToken: preview.token,
+        task: "Draft must not be written",
+        taskVersion: document.version,
+        clean: false,
+        update: true,
+        confirmEmptyTask: false,
+        expectedBranch: selected.branch,
+        confirmBranchSwitch: false,
+        topic: {
+          mode: "existing",
+          branch: selected.branch,
+          topic: selected.topic,
+        },
+      });
+      if (["definitions", "request", "settings"].includes(changed)) {
+        await expect(launch).rejects.toThrow("Unexpected synthetic launch");
+        expect(start).toHaveBeenCalledOnce();
+        expect(await readFile(taskFile, "utf8")).toBe(
+          "Draft must not be written",
+        );
+        expect(start.mock.calls[0][1].includes("--skip")).toBe(
+          changed === "request",
+        );
+        if (changed === "settings")
+          expect(start.mock.calls[0][1]).toContain("local");
+        return;
+      }
+      await expect(launch).rejects.toThrow(
         changed === "task"
           ? /задач.*измен|задач.*устарел/i
           : changed === "context"
@@ -2876,3 +2916,536 @@ it.each([
     }
   },
 );
+
+it("new dashboard reconnect checks the saved pin without starting or stopping Goga", async () => {
+  const f = await closeFixture();
+  await vi.waitFor(() => expect(f.service.runs()[0].url).toBeTruthy());
+  const live = (f.service as any).runList[0];
+  f.service.markDashboardOpened(live.id, live.url);
+  live.dashboardRecoveryVersion = 1;
+  live.process = {
+    version: 1,
+    runId: live.id,
+    ownerHash: (f.service as any).runOwnerHash(live),
+    cwd: f.repo,
+    nonce: "a".repeat(32),
+    rootHash: "b".repeat(64),
+  };
+  const { RunRecoveryManager } = await import("../src/host/run-recovery");
+  const recovery = new RunRecoveryManager(f.home);
+  vi.spyOn(recovery, "reconcile").mockResolvedValue({ state: "alive" });
+  vi.spyOn(recovery, "readDashboard").mockResolvedValue({
+    origin: live.url.replace(/\/$/, ""),
+    serverRunId: "fixture-run",
+  });
+  const save = vi.spyOn(recovery, "saveDashboard").mockResolvedValue();
+  (f.service as any).recovery = recovery;
+  const fetcher = vi
+    .spyOn(globalThis, "fetch")
+    .mockResolvedValue(
+      new Response(JSON.stringify({ run_id: "fixture-run", stages: [] })),
+    );
+  try {
+    const before = f.calls.length;
+    expect(await f.service.dashboardLoaded(live.id, live.url)).toBe(true);
+    expect(save).toHaveBeenCalledWith(live.process, live.url, "fixture-run");
+    expect(f.service.runs()[0]).toMatchObject({
+      dashboardReconnect: true,
+      dashboardRunId: "fixture-run",
+      status: "running",
+    });
+    expect(f.service.runs()[0].process).toBeUndefined();
+    fetcher.mockResolvedValue(
+      new Response(JSON.stringify({ run_id: "fixture-run", stages: [] })),
+    );
+    expect(await f.service.prepareDashboardReconnect(live.id)).toBe(
+      live.url.replace(/\/$/, ""),
+    );
+    expect(f.calls.length).toBe(before);
+    expect(live.status).toBe("running");
+    fetcher.mockResolvedValue(
+      new Response(JSON.stringify({ run_id: "foreign-run", stages: [] })),
+    );
+    await expect(f.service.prepareDashboardReconnect(live.id)).rejects.toThrow(
+      /Источник|панел/,
+    );
+    expect(live.status).toBe("running");
+  } finally {
+    fetcher.mockRestore();
+    (f.service as any).recovery = undefined;
+  }
+});
+
+it("old runs cannot acquire a reconnect claim from an arbitrary retry", async () => {
+  const f = await closeFixture();
+  await vi.waitFor(() => expect(f.service.runs()[0].url).toBeTruthy());
+  const source = (f.service as any).runList[0];
+  const { dashboardRecoveryVersion, ...live } = {
+    ...source,
+    id: "legacy-fixture",
+  };
+  (f.service as any).runList.push(live);
+  try {
+    await expect(f.service.prepareDashboardReconnect(live.id)).rejects.toThrow(
+      /нов|сохран|связ/,
+    );
+  } finally {
+    (f.service as any).runList.pop();
+  }
+});
+
+it("leave-running refuses unsupported runs before detaching and never falls back to stopping", async () => {
+  const f = await closeFixture();
+  const lease = await f.service.prepareShutdown();
+  try {
+    await expect(lease.validateKeep!()).rejects.toThrow();
+    expect(f.service.runs()[0].status).toBe("starting");
+    expect(lease.remaining()).toHaveLength(1);
+  } finally {
+    lease.release();
+  }
+});
+
+it("rejects a terminal receipt that arrives while dashboard identity is being read", async () => {
+  const f = await closeFixture();
+  await vi.waitFor(() => expect(f.service.runs()[0].url).toBeTruthy());
+  const live = (f.service as any).runList[0];
+  f.service.markDashboardOpened(live.id, live.url);
+  const { RunRecoveryManager } = await import("../src/host/run-recovery");
+  const recovery = new RunRecoveryManager(f.home);
+  live.process = {
+    version: 1,
+    runId: live.id,
+    ownerHash: (f.service as any).runOwnerHash(live),
+    cwd: f.repo,
+    nonce: "a".repeat(32),
+    rootHash: "b".repeat(64),
+  };
+  const terminal = {
+    state: "terminal" as const,
+    status: "exited" as const,
+    endedAt: new Date().toISOString(),
+    code: 0,
+    syncPending: true as const,
+  };
+  vi.spyOn(recovery, "reconcile")
+    .mockResolvedValueOnce({ state: "alive" })
+    .mockResolvedValue(terminal);
+  vi.spyOn(recovery, "readDashboard").mockResolvedValue({
+    origin: live.url,
+    serverRunId: "fixture-run",
+  });
+  (f.service as any).recovery = recovery;
+  const fetcher = vi
+    .spyOn(globalThis, "fetch")
+    .mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ run_id: "fixture-run", stages: [] })),
+    );
+  try {
+    await expect(f.service.prepareDashboardReconnect(live.id)).rejects.toThrow(
+      /Процесс|состояние|подключ/,
+    );
+  } finally {
+    fetcher.mockRestore();
+    (f.service as any).recovery = undefined;
+  }
+});
+
+// Launch intent is durable; only an explicit task write can conflict.
+it("launches an unchanged cached task from current disk even after its preview is lost", async () => {
+  const { service, project, repo } = await setup(true);
+  const file = path.join(
+    repo,
+    `.goga/history/${new Date().getFullYear()}/main/todo.md`,
+  );
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, "cached task");
+  const cached = await service.readTopicTask({
+    projectId: project.id,
+    branch: "main",
+    topic: "main",
+  });
+  await writeFile(file, "current external task");
+  const stamp = await stat(file);
+  const run = await service.launch({
+    projectId: project.id,
+    pipeline: "build",
+    workflow: "auto",
+    profile: "",
+    skips: [],
+    previewToken: "discarded-preview",
+    topic: { mode: "existing", branch: "main", topic: "main" },
+    task: cached.text,
+    confirmEmptyTask: false,
+    expectedBranch: "main",
+    confirmBranchSwitch: false,
+    clean: false,
+  });
+  expect(run.taskSnapshot?.text).toBe("current external task");
+  expect(await readFile(file, "utf8")).toBe("current external task");
+  expect((await stat(file)).ino).toBe(stamp.ino);
+  expect((await stat(file)).mtimeMs).toBe(stamp.mtimeMs);
+  await service.stop(run.id);
+});
+it("task write version survives unrelated commits and launch uses current composition", async () => {
+  const { service, project, repo, node } = await setup(true);
+  const file = path.join(
+    repo,
+    `.goga/history/${new Date().getFullYear()}/main/todo.md`,
+  );
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, "original");
+  const params = {
+    projectId: project.id,
+    pipeline: "build",
+    workflow: "auto",
+    profile: "",
+    skips: [],
+  };
+  const preview = await service.preview(params);
+  const doc = await service.readTopicTask({
+    projectId: project.id,
+    branch: "main",
+    topic: "main",
+  });
+  await writeFile(
+    path.join(repo, "unrelated.txt"),
+    "unrelated edit and commit",
+  );
+  await node.command("git", ["add", "unrelated.txt"], repo);
+  await node.command("git", ["commit", "-m", "unrelated"], repo);
+  expect(
+    (
+      await service.readTopicTask({
+        projectId: project.id,
+        branch: "main",
+        topic: "main",
+      })
+    ).version,
+  ).toBe(doc.version);
+  await writeFile(
+    path.join(repo, ".goga/workflows/build.yml"),
+    "profile: changed-profile\n",
+  );
+  const run = await service.launch({
+    ...params,
+    previewToken: preview.token,
+    topic: { mode: "existing", branch: "main", topic: "main" },
+    task: "my edited task",
+    taskVersion: doc.version,
+    confirmEmptyTask: false,
+    expectedBranch: "main",
+    confirmBranchSwitch: false,
+    clean: false,
+  });
+  expect(run.profile).toBe("changed-profile");
+  expect(await readFile(file, "utf8")).toBe("my edited task");
+  await service.stop(run.id);
+});
+it("only a real edited-task content conflict blocks a write and can retry without recreating preview", async () => {
+  const { service, project, repo } = await setup(true);
+  const file = path.join(
+    repo,
+    `.goga/history/${new Date().getFullYear()}/main/todo.md`,
+  );
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, "original");
+  const selection = { projectId: project.id, branch: "main", topic: "main" };
+  const doc = await service.readTopicTask(selection);
+  const request = {
+    projectId: project.id,
+    pipeline: "build",
+    workflow: "auto",
+    profile: "",
+    skips: [],
+    previewToken: "old-preview",
+    topic: { mode: "existing" as const, branch: "main", topic: "main" },
+    task: "preserved draft",
+    taskVersion: doc.version,
+    confirmEmptyTask: false,
+    expectedBranch: "main",
+    confirmBranchSwitch: false,
+    clean: false,
+  };
+  await writeFile(file, "external");
+  await expect(service.launch(request)).rejects.toThrow(
+    /задач.*измен.*файл не перезаписан/i,
+  );
+  expect(await readFile(file, "utf8")).toBe("external");
+  expect(request.task).toBe("preserved draft");
+  expect(service.runs()).toEqual([]);
+  const current = await service.readTopicTask(selection);
+  const run = await service.launch({
+    ...request,
+    taskVersion: current.version,
+  });
+  expect(await readFile(file, "utf8")).toBe("preserved draft");
+  await service.stop(run.id);
+});
+it("launch task ownership does not depend on a catalog row surviving after the form was opened", async () => {
+  const { service, project, repo, runner } = await setup(true);
+  const file = path.join(
+    repo,
+    `.goga/history/${new Date().getFullYear()}/main/todo.md`,
+  );
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, "current task");
+  const doc = await service.readTopicTask({
+    projectId: project.id,
+    topic: "main",
+    branch: "main",
+  });
+  const command = runner.command.bind(runner);
+  runner.command = async (exe, args, ...rest) =>
+    exe === "fake" && args.includes("board")
+      ? { stdout: "[]", stderr: "" }
+      : command(exe, args, ...rest);
+  const run = await service.launch({
+    projectId: project.id,
+    pipeline: "build",
+    workflow: "auto",
+    profile: "",
+    skips: [],
+    topic: { mode: "existing", topic: "main", branch: "main" },
+    task: doc.text,
+    expectedBranch: "main",
+    confirmBranchSwitch: false,
+    confirmEmptyTask: false,
+    clean: false,
+  });
+  expect(run.taskSnapshot?.text).toBe("current task");
+  await service.stop(run.id);
+});
+it("exact managed owner launches without metadata and does not initialize an unchanged missing task", async () => {
+  const { service, project, repo, runner } = await setup(true);
+  const owner = await service.createTopicContext({
+    projectId: project.id,
+    year: String(new Date().getFullYear()),
+    branch: "no-task-metadata",
+    baseRef: "HEAD",
+  });
+  const { worktreeContextRef } = await import("../src/shared/worktrees");
+  const context = worktreeContextRef(owner);
+  const document = await service.readTopicTask({
+    projectId: project.id,
+    context,
+    topic: owner.topic,
+    branch: owner.branch,
+  });
+  expect(document).toMatchObject({
+    exists: false,
+    text: "",
+    catalogState: "missing-local-metadata",
+  });
+  const command = runner.command.bind(runner);
+  runner.command = async (exe, args, ...rest) => {
+    if (exe === "fake" && args.includes("board"))
+      throw Error("Catalog is presentation, not launch authority");
+    return command(exe, args, ...rest);
+  };
+  const run = await service.launch({
+    projectId: project.id,
+    context,
+    pipeline: "build",
+    workflow: "auto",
+    profile: "",
+    skips: [],
+    topic: { mode: "existing", topic: owner.topic, branch: owner.branch },
+    task: "ignored cached text",
+    expectedBranch: owner.branch,
+    confirmBranchSwitch: false,
+    confirmEmptyTask: false,
+    clean: false,
+  });
+  expect(run.context).toMatchObject(context);
+  expect(run.taskSnapshot?.text).toBe("");
+  await expect(
+    stat(path.join(owner.path, document.path)),
+  ).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await service.checkoutBranch(project.id)).toBe("main");
+  expect((await service.listProjects())[0]?.path).toBe(repo);
+  await service.stop(run.id);
+});
+it.each([true, false])(
+  "task save detects an external write during staging (existing=%s) and preserves both texts",
+  async (exists) => {
+    const { service, project, repo } = await setup(true);
+    const file = path.join(
+      repo,
+      `.goga/history/${new Date().getFullYear()}/main/todo.md`,
+    );
+    await mkdir(path.dirname(file), { recursive: true });
+    if (exists) await writeFile(file, "original");
+    const document = await service.readTopicTask({
+      projectId: project.id,
+      topic: "main",
+      branch: "main",
+    });
+    const { readdir } = await import("node:fs/promises");
+    const original = (service as any).assertSettings.bind(service);
+    let changed = false;
+    (service as any).assertSettings = async (...args: any[]) => {
+      if (
+        !changed &&
+        (await readdir(path.dirname(file))).some(
+          (name) => name.startsWith("todo.md.") && name.endsWith(".tmp"),
+        )
+      ) {
+        changed = true;
+        await writeFile(file, "external during staging");
+      }
+      return original(...args);
+    };
+    const request = {
+      projectId: project.id,
+      pipeline: "build",
+      workflow: "auto",
+      profile: "",
+      skips: [],
+      topic: { mode: "existing" as const, topic: "main", branch: "main" },
+      task: "preserved draft",
+      taskVersion: document.version,
+      expectedBranch: "main",
+      confirmBranchSwitch: false,
+      confirmEmptyTask: false,
+      clean: false,
+    };
+    await expect(service.launch(request)).rejects.toThrow(
+      /задач.*измен.*файл не перезаписан/i,
+    );
+    expect(changed).toBe(true);
+    expect(await readFile(file, "utf8")).toBe("external during staging");
+    expect(request.task).toBe("preserved draft");
+    expect(service.runs()).toEqual([]);
+    expect(
+      (await readdir(path.dirname(file))).filter((name) =>
+        name.endsWith(".tmp"),
+      ),
+    ).toEqual([]);
+  },
+);
+it.each([false, true])(
+  "an unrelated commit during working-task launch read is not a task conflict (edited=%s)",
+  async (edited) => {
+    const { service, project, repo, node, runner } = await setup(true);
+    const file = path.join(
+      repo,
+      `.goga/history/${new Date().getFullYear()}/main/todo.md`,
+    );
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, "original task");
+    const document = await service.readTopicTask({
+      projectId: project.id,
+      branch: "main",
+      topic: "main",
+    });
+    const original = runner.command.bind(runner);
+    let changed = false;
+    runner.command = async (exe, args, ...rest) => {
+      const result = await original(exe, args, ...rest);
+      if (
+        !changed &&
+        exe === "git" &&
+        args[0] === "rev-parse" &&
+        args.includes("refs/heads/main^{commit}")
+      ) {
+        changed = true;
+        await node.command(
+          "git",
+          [
+            "commit",
+            "--allow-empty",
+            "-m",
+            "unrelated commit during launch task read",
+          ],
+          repo,
+        );
+      }
+      return result;
+    };
+    const run = await service.launch({
+      projectId: project.id,
+      pipeline: "build",
+      workflow: "auto",
+      profile: "",
+      skips: [],
+      topic: { mode: "existing", topic: "main", branch: "main" },
+      task: edited ? "edited task" : "old cached text",
+      ...(edited ? { taskVersion: document.version } : {}),
+      expectedBranch: "main",
+      confirmBranchSwitch: false,
+      confirmEmptyTask: false,
+      clean: false,
+    });
+    expect(changed).toBe(true);
+    expect(run.taskSnapshot?.text).toBe(
+      edited ? "edited task" : "original task",
+    );
+    expect(await readFile(file, "utf8")).toBe(
+      edited ? "edited task" : "original task",
+    );
+    await service.stop(run.id);
+  },
+);
+it("a failed display pipeline catalog cannot block the chosen command in its exact managed owner", async () => {
+  const { service, project, runner } = await setup(true);
+  const owner = await service.createTopicContext({
+    projectId: project.id,
+    year: String(new Date().getFullYear()),
+    branch: "catalog-independent",
+    baseRef: "HEAD",
+  });
+  const { worktreeContextRef } = await import("../src/shared/worktrees");
+  const context = worktreeContextRef(owner);
+  const original = runner.command.bind(runner);
+  runner.command = async (exe, args, ...rest) => {
+    if (exe === "fake" && args.includes("--list"))
+      throw Error("Display catalog unavailable");
+    return original(exe, args, ...rest);
+  };
+  const run = await service.launch({
+    projectId: project.id,
+    context,
+    pipeline: "build",
+    workflow: "auto",
+    profile: "",
+    skips: [],
+    topic: { mode: "existing", topic: owner.topic, branch: owner.branch },
+    task: "",
+    expectedBranch: owner.branch,
+    confirmBranchSwitch: false,
+    confirmEmptyTask: false,
+    clean: false,
+  });
+  expect(run.context).toMatchObject(context);
+  expect(run.pipeline).toBe("build");
+  await service.stop(run.id);
+});
+
+it("retains supplied catalog labels only for run presentation, never command selection or arguments", async () => {
+  const { service, project, runner } = await setup(true);
+  const start = vi.spyOn(runner, "start");
+  const run = await service.launch({
+    projectId: project.id,
+    pipeline: "build",
+    workflow: "auto",
+    profile: "",
+    skips: [],
+    pipelineName: "Редактор $(display-only)",
+    pipelineDescription: "Понятное описание",
+    topic: { mode: "none" },
+    task: "",
+    expectedBranch: "main",
+    confirmBranchSwitch: false,
+    confirmEmptyTask: false,
+    clean: false,
+  });
+  expect(run).toMatchObject({
+    pipeline: "build",
+    pipelineName: "Редактор $(display-only)",
+    pipelineDescription: "Понятное описание",
+  });
+  expect(start.mock.calls[0][1]).toEqual(["pipeline", "build"]);
+  await service.stop(run.id);
+});

@@ -162,7 +162,6 @@ it("shows home fallback warning in deletion dialog, cancel is inert and trash fa
       name: "Файл .goga/profiles/shared.yml",
     }),
   );
-  click("Открыть редактор");
   await waitFor(() => expect(store.get(source()).document).toBeDefined());
   act(() => store.edit(source(), "# retained\nvalue: 2"));
   click("Удалить");

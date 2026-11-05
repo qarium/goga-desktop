@@ -12,18 +12,20 @@ import {
   viewBounds,
 } from "./security";
 
-/** A page is created once per run; hiding a tab never unloads it. Preference-only preload exposes no APIs. */
+type DashboardPage = {
+  view: WebContentsView;
+  url: string;
+  failed: boolean;
+  loaded: boolean;
+  loading: Promise<void>;
+  cleanup: () => Promise<void>;
+};
+
+/** Healthy pages are retained per run; explicit restoration replaces only failed pages. */
 export class DashboardViews {
-  private pages = new Map<
-    string,
-    {
-      view: WebContentsView;
-      url: string;
-      failed: boolean;
-      loaded: boolean;
-      cleanup: () => void;
-    }
-  >();
+  private pages = new Map<string, DashboardPage>();
+  private restoring = new Map<string, Promise<boolean>>();
+  private cleanups = new Map<string, Promise<void>>();
   private allowed: Set<string> | null = null;
   private closed = new Set<string>();
   private disposed = false;
@@ -34,7 +36,8 @@ export class DashboardViews {
     private win: BrowserWindow,
     private onFocus: (id: string) => void,
     private onError: (id: string, error: string) => void,
-    private onOpened: (id: string, url: string) => boolean = () => true,
+    private onOpened: (id: string, url: string) => boolean | Promise<boolean> =
+      () => true,
   ) {
     win.on("resize", () => this.layout());
   }
@@ -47,7 +50,65 @@ export class DashboardViews {
       return;
     if (!allowedDashboardURL(url))
       throw new Error("Недопустимый адрес панели конвейера");
-    if (this.pages.has(id)) return;
+    const restoring = this.restoring.get(id);
+    if (restoring) {
+      await restoring;
+      return;
+    }
+    // A failed partition cleanup must not be bypassed by a later runs event.
+    if (this.cleanups.has(id)) return;
+    await this.createPage(id, url);
+  }
+  restore(id: string, url: string): Promise<boolean> {
+    if (!this.canRestore(id)) return Promise.resolve(false);
+    if (!allowedDashboardURL(url))
+      return Promise.reject(new Error("Недопустимый адрес панели конвейера"));
+    const pending = this.restoring.get(id);
+    if (pending) return pending;
+    // Install the flight before any cleanup can yield or another ensure can run.
+    const restoring = Promise.resolve().then(() => this.restorePage(id, url));
+    this.restoring.set(id, restoring);
+    const finished = () => {
+      if (this.restoring.get(id) === restoring) this.restoring.delete(id);
+    };
+    void restoring.then(finished, finished);
+    return restoring;
+  }
+  private canRestore(id: string) {
+    return (
+      !this.disposed && !this.closed.has(id) && this.allowed?.has(id) === true
+    );
+  }
+  private async restorePage(id: string, url: string): Promise<boolean> {
+    if (!this.canRestore(id)) return false;
+    const previous = this.pages.get(id);
+    if (
+      previous && !previous.failed && !previous.view.webContents.isDestroyed()
+    ) {
+      await previous.loading;
+      if (!this.canRestore(id) || this.pages.get(id) !== previous) return false;
+      if (
+        previous.loaded && !previous.failed &&
+        !previous.view.webContents.isDestroyed()
+      ) return true;
+    }
+    try {
+      // This is not a user close: retain selection and never add a closed tombstone.
+      // Partition handlers and storage belong to the old generation until cleanup settles.
+      await this.detach(id);
+      if (!this.canRestore(id)) return false;
+      await this.createPage(id, url);
+      const current = this.pages.get(id);
+      return (
+        this.canRestore(id) && !!current?.loaded && !current.failed &&
+        !current.view.webContents.isDestroyed()
+      );
+    } catch {
+      return false;
+    }
+  }
+  private createPage(id: string, url: string): Promise<void> {
+    if (this.pages.has(id)) return this.pages.get(id)!.loading;
     const isolated = session.fromPartition(`afm-${id}`);
     const view = new WebContentsView({
       webPreferences: {
@@ -138,19 +199,21 @@ export class DashboardViews {
           "Не удалось загрузить панель конвейера. Проверьте состояние процесса.",
         );
     });
-    this.pages.set(id, {
+    const entry: DashboardPage = {
       view,
       url,
       failed: false,
       loaded: false,
-      cleanup: () => {
+      loading: Promise.resolve(),
+      cleanup: async () => {
         isolated.setPermissionCheckHandler(() => false);
         isolated.setPermissionRequestHandler((_c, _p, cb) => cb(false));
         isolated.webRequest.onBeforeRequest(null);
         isolated.removeListener("will-download", denyDownload);
-        void isolated.clearStorageData().catch(() => {});
+        await isolated.clearStorageData();
       },
-    });
+    };
+    this.pages.set(id, entry);
     // BrowserWindow's own shell is a native child too. Dashboards must stay
     // above that opaque surface, but below any already-mounted topic overlay.
     const shellIndex =
@@ -161,25 +224,34 @@ export class DashboardViews {
     this.win.contentView.addChildView(view, shellIndex + 1);
     view.setVisible(false);
     this.layout();
-    try {
-      // System consent is a single Desktop preference, never a load prerequisite.
-      await wc.loadURL(url);
-      if (!alive() || this.pages.get(id)?.failed) return;
-      if (!sameDashboardOrigin(url, wc.getURL())) {
-        failed("Не удалось открыть доверенную страницу Dashboard.");
-        return;
+    entry.loading = (async () => {
+      try {
+        // System consent is a single Desktop preference, never a load prerequisite.
+        await wc.loadURL(url);
+        if (!alive() || entry.failed) return;
+        if (!sameDashboardOrigin(url, wc.getURL())) {
+          failed("Не удалось открыть доверенную страницу Dashboard.");
+          return;
+        }
+        const opened = await this.onOpened(id, url);
+        // The acknowledgement can outlive a failed/replaced/closed page. In
+        // particular, its false result must never remove a newer generation.
+        if (!alive() || entry.failed) return;
+        if (!opened) {
+          // An acknowledgement refusal rejects this attempt, not the live run.
+          // Only an authoritative remove/reconcile may leave a closed tombstone.
+          await this.detach(id);
+          return;
+        }
+        entry.loaded = true;
+        view.setVisible(this.selected === id);
+      } catch {
+        failed("Не удалось открыть панель конвейера.");
       }
-      if (!this.onOpened(id, url)) {
-        this.remove(id);
-        return;
-      }
-      if (!alive()) return;
-      this.pages.get(id)!.loaded = true;
-      view.setVisible(this.selected === id);
-    } catch {
-      failed("Не удалось открыть панель конвейера.");
-    }
+    })();
+    return entry.loading;
   }
+
   select(id: string | null) {
     if(this.selected!==id)this.cancelStageNavigation();
     this.selected = id && this.closed.has(id) ? null : id;
@@ -227,22 +299,35 @@ export class DashboardViews {
         height: Math.min(bounds.height, Math.max(0, h - y)),
       });
   }
-  remove(id: string) {
-    this.stageCancels.get(id)?.();
-    this.closed.add(id); // Prevent a stale runs event from recreating this page.
+  private detach(id: string): Promise<void> {
     const entry = this.pages.get(id);
-    this.pages.delete(id);
-    if (this.selected === id) this.selected = null;
-    if (!entry) return;
+    this.pages.delete(id); // Invalidate old load, focus, error and acknowledgement callbacks first.
+    this.stageCancels.get(id)?.();
+    if (!entry) return this.cleanups.get(id) ?? Promise.resolve();
     entry.view.setVisible(false);
     this.win.contentView.removeChildView(entry.view);
     if (!entry.view.webContents.isDestroyed()) entry.view.webContents.close();
-    entry.cleanup();
+    const cleanup = entry.cleanup();
+    this.cleanups.set(id, cleanup);
+    // Keep a rejected cleanup as a fail-closed barrier for the same partition.
+    void cleanup.then(
+      () => {
+        if (this.cleanups.get(id) === cleanup) this.cleanups.delete(id);
+      },
+      () => {},
+    );
+    return cleanup;
+  }
+  remove(id: string) {
+    this.closed.add(id); // Prevent a stale runs event from recreating this page.
+    if (this.selected === id) this.selected = null;
+    void this.detach(id).catch(() => {});
   }
   reconcile(ids: string[]) {
     const live = new Set(ids);
     this.allowed = live;
-    for (const id of this.pages.keys()) if (!live.has(id)) this.remove(id);
+    for (const id of new Set([...this.pages.keys(), ...this.restoring.keys()]))
+      if (!live.has(id)) this.remove(id);
   }
   dispose() {
     this.disposed = true;

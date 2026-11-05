@@ -294,31 +294,33 @@ export function TopicsBoard(props: Props) {
           setDragEpoch((n) => n + 1);
         }}
       >
-        <section
-          className="topic-board-unassigned"
-          role="region"
-          aria-label="Без категории"
-        >
-          <div className="topic-board-column-heading">
-            {selectColumn(board.unassigned)}
-            <strong>Без категории</strong>
-            <span className="hint">
-              Статусов: {board.unassigned.statuses.length}
-            </span>
-            <button
-              type="button"
-              className="topic-board-disclosure"
-              aria-label={expanded ? "Скрыть топики" : "Показать топики"}
-              aria-expanded={expanded}
-              onClick={() => setExpanded(!expanded)}
-            >
-              {expanded ? <ChevronDown /> : <ChevronRight />}
-              {expanded ? "Скрыть топики" : "Показать топики"} (
-              {board.unassigned.rows.length})
-            </button>
-          </div>
-          {content(board.unassigned, true)}
-        </section>
+        {board.unassigned.statuses.length > 0 && (
+          <section
+            className="topic-board-unassigned"
+            role="region"
+            aria-label="Без категории"
+          >
+            <div className="topic-board-column-heading">
+              {selectColumn(board.unassigned)}
+              <strong>Без категории</strong>
+              <span className="hint">
+                Статусов: {board.unassigned.statuses.length}
+              </span>
+              <button
+                type="button"
+                className="topic-board-disclosure"
+                aria-label={expanded ? "Скрыть топики" : "Показать топики"}
+                aria-expanded={expanded}
+                onClick={() => setExpanded(!expanded)}
+              >
+                {expanded ? <ChevronDown /> : <ChevronRight />}
+                {expanded ? "Скрыть топики" : "Показать топики"} (
+                {board.unassigned.rows.length})
+              </button>
+            </div>
+            {content(board.unassigned, true)}
+          </section>
+        )}
         <div
           className="topics-board"
           style={

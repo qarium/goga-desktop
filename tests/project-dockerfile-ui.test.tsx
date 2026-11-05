@@ -59,15 +59,18 @@ it("resolves only active image tab and creates raw plain text only on Save with 
     <ProjectDocuments project={project} tab="image" store={store} />,
   );
   await screen.findByText(/подключить вручную/i);
-  expect(screen.queryByRole("button", { name: "Обновить путь Dockerfile" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Открыть редактор" }));
+  expect(
+    screen.queryByRole("button", { name: "Обновить путь Dockerfile" }),
+  ).toBeNull();
   await waitFor(() => expect(view()).not.toBeNull());
   expect(api.saveProjectDocument).not.toHaveBeenCalled();
   expect(screen.queryByRole("button", { name: "Удалить" })).toBeNull();
   expect(view()!.contentDOM.getAttribute("aria-label")).toBe("Dockerfile");
   const text = "FROM alpine\r\nRUN {{ [ no yaml\r\n";
   act(() => view()!.dispatch({ changes: { from: 0, insert: text } }));
-  expect(view()!.contentDOM.querySelector(".dockerfile-keyword")?.textContent).toBe("FROM");
+  expect(
+    view()!.contentDOM.querySelector(".dockerfile-keyword")?.textContent,
+  ).toBe("FROM");
   fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() =>
     expect(api.saveProjectDocument).toHaveBeenCalledWith(
@@ -82,9 +85,6 @@ it("retains dirty old source across tabs when config changes, and explicitly dis
   const store = createSettingsDocuments();
   const rendered = render(
     <ProjectDocuments project={project} tab="image" store={store} />,
-  );
-  fireEvent.click(
-    await screen.findByRole("button", { name: "Открыть редактор" }),
   );
   await waitFor(() => expect(view()).not.toBeNull());
   act(() => view()!.dispatch({ changes: { from: 0, insert: "FROM draft" } }));
@@ -109,7 +109,7 @@ it("retains dirty old source across tabs when config changes, and explicitly dis
     }),
   );
   await screen.findByText("new/Dockerfile");
-  expect(view()).toBeNull();
+  await waitFor(() => expect(view()).not.toBeNull());
 });
 it("keys drafts by exact context and selected path", () => {
   const source = {
@@ -149,7 +149,6 @@ it("ignores late metadata from another owner and keeps source reads and drafts i
     resolveOld({ relativePath: "OLD.Dockerfile", configured: true }),
   );
   expect(screen.queryByText("OLD.Dockerfile")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Открыть редактор" }));
   await waitFor(() => expect(view()).not.toBeNull());
   expect(api.readProjectDocument).toHaveBeenCalledWith("q", {
     kind: "dockerfile",
@@ -159,8 +158,8 @@ it("ignores late metadata from another owner and keeps source reads and drafts i
   rendered.rerender(
     <ProjectDocuments project={project} tab="image" store={store} />,
   );
-  await screen.findByRole("button", { name: "Открыть редактор" });
-  expect(view()).toBeNull();
+  await waitFor(() => expect(view()).not.toBeNull());
+  expect(view()!.state.doc.toString()).not.toContain("FROM q draft");
 });
 
 it("places image immediately after pipelines and before tools in both settings contexts", async () => {
@@ -216,9 +215,8 @@ it("places image immediately after pipelines and before tools in both settings c
 
 it("retains a dirty fallback when null becomes an explicit selection of the same path", async () => {
   const store = createSettingsDocuments();
-  const rendered = render(<ProjectDocuments project={project} tab="image" store={store} />);
-  fireEvent.click(
-    await screen.findByRole("button", { name: "Открыть редактор" }),
+  const rendered = render(
+    <ProjectDocuments project={project} tab="image" store={store} />,
   );
   await waitFor(() => expect(view()).not.toBeNull());
   act(() =>
@@ -228,9 +226,15 @@ it("retains a dirty fallback when null becomes an explicit selection of the same
     relativePath: ".goga/Dockerfile",
     configured: true,
   });
-  rendered.rerender(<ProjectDocuments project={project} tab="launch" store={store} />);
-  rendered.rerender(<ProjectDocuments project={project} tab="image" store={store} />);
-  await waitFor(() => expect(api.resolveProjectDockerfile).toHaveBeenCalledTimes(2));
+  rendered.rerender(
+    <ProjectDocuments project={project} tab="launch" store={store} />,
+  );
+  rendered.rerender(
+    <ProjectDocuments project={project} tab="image" store={store} />,
+  );
+  await waitFor(() =>
+    expect(api.resolveProjectDockerfile).toHaveBeenCalledTimes(2),
+  );
   await screen.findByText(/Конфигурация Dockerfile изменилась/);
   expect(view()!.state.doc.toString()).toBe("FROM fallback draft");
   expect(
@@ -292,14 +296,101 @@ it("does not leak a late metadata rejection into a different context of the same
 
 it("automatically rereads path on reopening an image tab with a clean document", async () => {
   const store = createSettingsDocuments();
-  const rendered = render(<ProjectDocuments project={project} tab="image" store={store} />);
-  fireEvent.click(await screen.findByRole("button", { name: "Открыть редактор" }));
+  const rendered = render(
+    <ProjectDocuments project={project} tab="image" store={store} />,
+  );
   await waitFor(() => expect(view()).not.toBeNull());
-  rendered.rerender(<ProjectDocuments project={project} tab="launch" store={store} />);
-  api.resolveProjectDockerfile.mockResolvedValue({ relativePath: "next/Dockerfile", configured: true });
-  rendered.rerender(<ProjectDocuments project={project} tab="image" store={store} />);
+  rendered.rerender(
+    <ProjectDocuments project={project} tab="launch" store={store} />,
+  );
+  api.resolveProjectDockerfile.mockResolvedValue({
+    relativePath: "next/Dockerfile",
+    configured: true,
+  });
+  rendered.rerender(
+    <ProjectDocuments project={project} tab="image" store={store} />,
+  );
   await screen.findByText("next/Dockerfile");
   expect(api.resolveProjectDockerfile).toHaveBeenCalledTimes(2);
-  expect(view()).toBeNull();
+  await waitFor(() => expect(view()).not.toBeNull());
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
+it("explicitly discards and reopens a stale Dockerfile even when configuration selects the same path", async () => {
+  const store = createSettingsDocuments();
+  const rendered = render(
+    <ProjectDocuments project={project} tab="image" store={store} />,
+  );
+  await waitFor(() => expect(view()).not.toBeNull());
+  act(() =>
+    view()!.dispatch({ changes: { from: 0, insert: "FROM old draft\r\n" } }),
+  );
+  rendered.rerender(
+    <ProjectDocuments project={project} tab="launch" store={store} />,
+  );
+  api.resolveProjectDockerfile.mockResolvedValue({
+    relativePath: ".goga/Dockerfile",
+    configured: true,
+  });
+  rendered.rerender(
+    <ProjectDocuments project={project} tab="image" store={store} />,
+  );
+  await screen.findByText(/Конфигурация Dockerfile изменилась/);
+  api.readProjectDocument.mockResolvedValue({
+    text: "FROM actual\r\n",
+    exists: true,
+    version: "actual-version",
+    relativePath: ".goga/Dockerfile",
+  });
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Отбросить черновик и открыть актуальный файл",
+    }),
+  );
+  await waitFor(() =>
+    expect(view()?.state.doc.toString()).toBe("FROM actual\r\n"),
+  );
+  expect(api.readProjectDocument).toHaveBeenCalledTimes(2);
+  expect(api.readProjectDocument).toHaveBeenLastCalledWith("p", {
+    kind: "dockerfile",
+    path: ".goga/Dockerfile",
+  });
+  expect(api.saveProjectDocument).not.toHaveBeenCalled();
+  expect(
+    store.get({
+      scope: "project",
+      projectId: "p",
+      target: { kind: "dockerfile", path: ".goga/Dockerfile" },
+    }).document?.version,
+  ).toBe("actual-version");
+});
+
+it("automatically reopens a clean Dockerfile when configuration changes but keeps the same selected path", async () => {
+  const store = createSettingsDocuments();
+  const rendered = render(
+    <ProjectDocuments project={project} tab="image" store={store} />,
+  );
+  await waitFor(() => expect(view()).not.toBeNull());
+  rendered.rerender(
+    <ProjectDocuments project={project} tab="launch" store={store} />,
+  );
+  api.resolveProjectDockerfile.mockResolvedValue({
+    relativePath: ".goga/Dockerfile",
+    configured: true,
+  });
+  api.readProjectDocument.mockResolvedValue({
+    text: "FROM configured\r\n",
+    exists: true,
+    version: "configured-version",
+    relativePath: ".goga/Dockerfile",
+  });
+  rendered.rerender(
+    <ProjectDocuments project={project} tab="image" store={store} />,
+  );
+  await waitFor(() =>
+    expect(view()?.state.doc.toString()).toBe("FROM configured\r\n"),
+  );
+  expect(api.readProjectDocument).toHaveBeenCalledTimes(2);
+  expect(api.saveProjectDocument).not.toHaveBeenCalled();
   expect(screen.queryByRole("alert")).toBeNull();
 });

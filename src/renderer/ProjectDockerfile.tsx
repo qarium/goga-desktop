@@ -62,8 +62,12 @@ export function ProjectDockerfile({
             old &&
             (old.relativePath !== metadata.relativePath ||
               old.configured !== metadata.configured)
-          )
+          ) {
             store.discard(sourceFor(old));
+            // A deliberate metadata change starts a fresh read even if only
+            // configured changed and the exact document key stayed the same.
+            void store.open(sourceFor(metadata));
+          }
           store.selectDockerfile(scope, metadata);
         }
       },
@@ -104,6 +108,7 @@ export function ProjectDockerfile({
             onClick={() => {
               store.discard(sourceFor(active!));
               store.selectDockerfile(scope, latest!);
+              void store.open(sourceFor(latest!));
             }}
           >
             Отбросить черновик и открыть актуальный файл

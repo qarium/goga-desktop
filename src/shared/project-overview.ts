@@ -65,3 +65,45 @@ export interface OverviewFileActionResult {
   completedPaths: string[];
   message: string;
 }
+
+/** Main-process clipboard authority. Renderer callers never supply absolute sources. */
+export interface FileClipboard {
+  readFiles(): Promise<string[]>;
+  writeFiles(paths: string[]): Promise<void>;
+  /** Optional for injected legacy transports; native adapter always implements it. */
+  writeText?(text: string): Promise<void>;
+}
+export const overviewCopyPathsSchema = z
+  .array(overviewPathSchema)
+  .min(1)
+  .max(128);
+export interface OverviewPasteResult {
+  status: "done" | "partial" | "not-done" | "uncertain";
+  /** Complete top-level entries, relative to the requested workspace. */
+  completedPaths: string[];
+  /** Reserved top-level entries, including an interrupted partial copy. */
+  touchedPaths: string[];
+  message: string;
+}
+
+export interface OverviewPasteConflict {
+  path: string;
+  replaceable: boolean;
+}
+export interface OverviewPastePreview {
+  token: string;
+  conflicts: OverviewPasteConflict[];
+}
+export const overviewPasteDecisionsSchema = z
+  .array(
+    z
+      .object({
+        path: overviewPathSchema,
+        action: z.enum(["replace", "skip"]),
+      })
+      .strict(),
+  )
+  .max(10000);
+export type OverviewPasteDecision = z.infer<
+  typeof overviewPasteDecisionsSchema
+>[number];

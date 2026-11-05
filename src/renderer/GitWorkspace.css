@@ -120,12 +120,23 @@
   gap: 6px;
   min-width: 0;
 }
-.git-file-row > input {
+.git-file-row > input,
+.git-file-select-all > input {
   flex: 0 0 16px;
   width: 16px;
   height: 16px;
   margin: 0 2px;
   accent-color: var(--teal);
+}
+.git-file-select-all {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 12px;
 }
 .git-file-row > button {
   min-width: 0;
@@ -156,14 +167,6 @@
 }
 .git-commit-form p {
   margin: 0;
-}
-.git-commit-clear {
-  align-self: flex-start;
-  font-size: 11px;
-  padding: 2px 0;
-  border: 0;
-  background: transparent;
-  color: var(--muted);
 }
 .git-commit-preview {
   padding: 20px 24px;

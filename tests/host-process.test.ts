@@ -102,6 +102,66 @@ it("accepts actual status-shaped HTTP readiness only then publishes URL", async 
   if (result.kind === "ready")
     expect(result.url).toMatch(/^http:\/\/127.0.0.1:/);
 });
+it.each(["stdout", "stderr"] as const)(
+  "observes a split UTF-8 arrow on %s after build noise and owner wait, only after valid status",
+  async (stream) => {
+    const runner = new NodeRunner();
+    let child: ChildProcessWithoutNullStreams | undefined;
+    let output = "";
+    let outcome: Awaited<ReturnType<typeof observeDashboard>> | undefined;
+    let invalidStatus!: (value: { kind: "invalid-status" }) => void;
+    const invalid = new Promise<{ kind: "invalid-status" }>((resolve) => {
+      invalidStatus = resolve;
+    });
+    const observed = observeDashboard(
+      `let valid=false,requests=0;
+      process.stdin.once('data',()=>{valid=true});
+      require('node:http').createServer((q,s)=>{
+        if(q.url!=='/api/status'){s.writeHead(404);s.end();return}
+        requests++;
+        s.setHeader('content-type','application/json');
+        s.end(JSON.stringify(valid?{flow_name:'fixture',stages:[]}:{ok:true}));
+        if(!valid&&requests===2)console.log('fixture-invalid-status-verified');
+      }).listen(0,'127.0.0.1',function(){
+        console.log('building synthetic dashboard assets');
+        console.error('warning: waiting for synthetic owner to release; retrying');
+        const line=Buffer.from('\\x1b[32m  ➜  dashboard: http://127.0.0.1:'+this.address().port+'\\x1b[0m\\n');
+        const split=line.indexOf(Buffer.from('➜'))+1;
+        process.${stream}.write(line.subarray(0,split));
+        setTimeout(()=>process.${stream}.write(line.subarray(split)),10);
+      })`,
+      3000,
+      {
+        start: (executable, args, cwd, env) => {
+          child = runner.start(executable, args, cwd, env, undefined, true);
+          child.stdout.on("data", (chunk) => {
+            output += chunk.toString();
+            if (output.includes("fixture-invalid-status-verified"))
+              invalidStatus({ kind: "invalid-status" });
+          });
+          return child;
+        },
+        dispose: () => runner.dispose(),
+      },
+    ).then((result) => {
+      outcome = result;
+      return result;
+    });
+    try {
+      const first = await Promise.race([invalid, observed]);
+      expect(first.kind).toBe("invalid-status");
+      expect(outcome).toBeUndefined();
+      child!.stdin.write("ready\n");
+      const result = await observed;
+      expect(result.kind).toBe("ready");
+      if (result.kind === "ready")
+        expect(result.url).toMatch(/^http:\/\/127\.0\.0\.1:[0-9]+$/);
+    } finally {
+      if (child && !child.stdin.destroyed) child.stdin.write("ready\n");
+      await observed;
+    }
+  },
+);
 it("rejects actual exit before ready, does not publish generic localhost URL", async () => {
   const result = await observeDashboard(
     'console.log("server http://localhost:1234")',

@@ -1,6 +1,7 @@
-import { memo, useLayoutEffect, useRef } from "react";
+import { memo, useLayoutEffect, useRef, useState } from "react";
 import type { Run } from "../shared/types";
 import "./RunOutput.css";
+import { dashboardRecoveryAllowed } from "../shared/dashboard-connection";
 
 export function TerminalIcon() {
   return (
@@ -23,7 +24,7 @@ export function TerminalIcon() {
 
 export function dashboardReady(run: Run) {
   return (
-    !run.recovery &&
+    dashboardRecoveryAllowed(run) &&
     run.kind !== "build" &&
     run.status === "running" &&
     !!run.url &&
@@ -77,10 +78,31 @@ const OutputText = memo(function OutputText({
 export function RunOutput({
   run,
   viewError,
+  onRestore,
 }: {
   run: Run;
   viewError?: string;
+  onRestore?: () => Promise<void>;
 }) {
+  const [restoring, setRestoring] = useState(false);
+  const restoreFlight = useRef(false);
+  const [restoreError, setRestoreError] = useState("");
+  async function restore() {
+    if (restoreFlight.current || !onRestore) return;
+    restoreFlight.current = true;
+    setRestoring(true);
+    setRestoreError("");
+    try {
+      await onRestore();
+    } catch {
+      setRestoreError(
+        "Не удалось восстановить панель. Процесс не перезапускался; повторите подключение.",
+      );
+    } finally {
+      restoreFlight.current = false;
+      setRestoring(false);
+    }
+  }
   const isBuild = run.kind === "build";
   const unverified = run.recovery === "unverified";
   const confirmed = run.recovery === "confirmed";
@@ -145,12 +167,35 @@ export function RunOutput({
               {unverified
                 ? "Последний вывод сохранён. Desktop не подтверждает завершение процесса, не останавливает неизвестный процесс и не запускает повтор автоматически. Рабочая копия остаётся занятой до проверки."
                 : failure ||
+                  run.dashboardMessage ||
                   (confirmed
                     ? "Исходный вывод и Dashboard не восстановлены. Ниже — сохранённый журнал. Процесс не перезапускался."
                     : active
                       ? `${run.update ? "Запуск с обновлением образа." : "Обычный запуск."} Вывод появляется ниже по мере поступления.`
                       : "Вывод этого запуска сохранён ниже.")}
             </p>
+            {run.status === "running" &&
+              run.recovery !== "unverified" &&
+              run.dashboardRecoveryVersion === 1 &&
+              !isBuild &&
+              onRestore &&
+              (!ready || !!viewError) && (
+                <div className="run-output-reconnect">
+                  <button
+                    type="button"
+                    disabled={restoring}
+                    aria-busy={restoring}
+                    onClick={() => void restore()}
+                  >
+                    {restoring ? "Подключаем панель…" : "Восстановить панель"}
+                  </button>
+                  {restoreError && (
+                    <p className="error" role="alert">
+                      {restoreError}
+                    </p>
+                  )}
+                </div>
+              )}
             {active && !confirmed && !failure && !ready && !isBuild && (
               <p className="run-output-budget">
                 До открытия Dashboard — не более{" "}

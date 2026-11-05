@@ -457,6 +457,34 @@ function GitWorkspaceOwner({
   const fileStart = visibleFilePage * FILE_PAGE_SIZE;
   const linePageKey = JSON.stringify([file]);
   const body = active && open;
+  const selectedPaths = new Set(commit.paths);
+  const selectableFiles = (snapshot?.files ?? []).filter(
+    (entry) => !entry.submodule && entry.kind !== "conflict",
+  );
+  const selectedFileCount = selectableFiles.filter((entry) =>
+    selectedPaths.has(entry.path),
+  ).length;
+  const selectionBlocked =
+    !body ||
+    disabled ||
+    snapshotPending ||
+    snapshotFailed ||
+    !snapshot ||
+    documentScopeId(snapshot.scope) !== owner ||
+    snapshot.operation !== "none" ||
+    conflicts > 0 ||
+    branchPending ||
+    branchOverlay ||
+    discard.locked ||
+    !!commit.pending ||
+    !!commit.preview ||
+    conflictState.locked ||
+    conflictState.modalOpen ||
+    merge.locked ||
+    merge.modalOpen ||
+    rebaseMutationBlocked ||
+    rebase.modalOpen ||
+    sequencer.modalOpen;
   return (
     <>
       <div className="git-workspace-controls">
@@ -714,6 +742,33 @@ function GitWorkspaceOwner({
                       next="Следующие файлы"
                       onPage={setFilePage}
                     />
+                    {(commit.supported || discard.supported) && !isConflict && (
+                      <label
+                        className="git-file-select-all"
+                        title="Выбрать или снять выбор доступных файлов во всём списке, на всех страницах."
+                      >
+                        <input
+                          type="checkbox"
+                          aria-label="Выбрать все файлы"
+                          checked={
+                            selectableFiles.length > 0 &&
+                            selectedFileCount === selectableFiles.length
+                          }
+                          ref={(input) => {
+                            if (input)
+                              input.indeterminate =
+                                selectedFileCount > 0 &&
+                                selectedFileCount < selectableFiles.length;
+                          }}
+                          disabled={selectionBlocked || !selectableFiles.length}
+                          onChange={() => {
+                            if (!selectionBlocked && snapshot)
+                              commit.toggleAll(snapshot);
+                          }}
+                        />
+                        <span>Выбрать все файлы</span>
+                      </label>
+                    )}
                     {files
                       .slice(fileStart, fileStart + FILE_PAGE_SIZE)
                       .map((entry) => (
@@ -723,14 +778,11 @@ function GitWorkspaceOwner({
                               <input
                                 type="checkbox"
                                 aria-label={`Выбрать файл: ${entry.path}`}
-                                checked={commit.paths.includes(entry.path)}
+                                checked={selectedPaths.has(entry.path)}
                                 disabled={
-                                  discard.locked ||
-                                  !!commit.pending ||
-                                  !!commit.preview ||
+                                  selectionBlocked ||
                                   entry.kind === "conflict" ||
-                                  entry.submodule ||
-                                  snapshot?.operation !== "none"
+                                  entry.submodule
                                 }
                                 onChange={() => commit.toggle(entry.path)}
                               />

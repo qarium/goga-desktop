@@ -87,7 +87,6 @@ async function create(name: string) {
 }
 async function reveal(name: string) {
   click(`Файл .goga/pipelines/${name}.yml`);
-  click("Открыть редактор");
   await waitFor(() => expect(editor()).not.toBeNull());
 }
 function replace(text: string) {
@@ -191,7 +190,7 @@ beforeEach(() => {
   window.goga = api;
 });
 afterEach(cleanup);
-it("lists real pipeline files, protects unsupported files and reveals exact raw source explicitly", async () => {
+it("lists real pipeline files, protects unsupported files and automatically opens selected exact raw source", async () => {
   await setup();
   expect(api.readProjectDocument).not.toHaveBeenCalled();
   expect(
@@ -332,7 +331,6 @@ it("keeps pending reads and failed saves bound to their captured pipeline", asyn
   );
   await setup();
   click("Файл .goga/pipelines/existing.yml");
-  click("Открыть редактор");
   await create("another");
   replace("# another");
   await act(async () =>
@@ -509,7 +507,6 @@ it("can retry a failed pipeline read without affecting a separate draft", async 
   api.readProjectDocument.mockRejectedValueOnce(Error("read denied"));
   await setup();
   click("Файл .goga/pipelines/existing.yml");
-  click("Открыть редактор");
   await screen.findByText("read denied");
   await create("safe");
   replace(raw);

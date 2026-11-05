@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   act,
@@ -10,9 +11,12 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { GitWorkspace } from "../src/renderer/GitWorkspace";
+import { useGitCommit } from "../src/renderer/GitCommit";
+import type { ScopeRef } from "../src/shared/context";
+import type { GitWorkspaceSnapshot } from "../src/shared/git-workspace";
 let portal: HTMLDivElement, api: any;
 const rev = "a".repeat(64);
-function snapshot(scope = "p") {
+function snapshot(scope: ScopeRef = "p"): GitWorkspaceSnapshot {
   return {
     scope,
     root: "/fixture/" + scope,
@@ -83,14 +87,20 @@ afterEach(() => {
   portal.remove();
   vi.useRealTimers();
 });
-const view = (scope = "p", open = true) => (
+const view = (
+  scope: ScopeRef = "p",
+  open = true,
+  revision = 0,
+  disabled = false,
+) => (
   <GitWorkspace
     scope={scope}
     open={open}
     bodyContainer={portal}
     onOpen={vi.fn()}
     onClose={vi.fn()}
-    revision={0}
+    revision={revision}
+    disabled={disabled}
   />
 );
 async function draft() {
@@ -317,7 +327,7 @@ it("shows retained recovery diagnostics even when the commit and index were publ
     }).value,
   ).toBe("");
   fireEvent.click(
-    screen.getByRole("button", { name: "Закрыть результат коммита" }),
+    await screen.findByRole("button", { name: "Закрыть результат коммита" }),
   );
   expect(screen.queryByRole("dialog")).toBeNull();
 });
@@ -604,5 +614,456 @@ it("does not carry deselection of a pathname into another branch", async () => {
     expect(
       screen.getByRole("checkbox", { name: "Выбрать файл: one.txt" }),
     ).toHaveProperty("checked", true),
+  );
+});
+
+const bulk = () =>
+  screen.getByRole<HTMLInputElement>("checkbox", { name: "Выбрать все файлы" });
+const row = (path: string) =>
+  screen.getByRole<HTMLInputElement>("checkbox", {
+    name: `Выбрать файл: ${path}`,
+  });
+function enableDiscard() {
+  api.prepareGitDiscard = vi.fn(async (r: any) => ({
+    token: "e".repeat(64),
+    scope: r.scope,
+    root: "/fixture/p",
+    branch: "main",
+    head: "b".repeat(40),
+    paths: r.paths,
+    items: r.paths.map((path: string) => ({ path, action: "restore" })),
+    expiresAt: Date.now() + 300000,
+  }));
+  api.executeGitDiscard = vi.fn(async () => ({
+    scope: "p",
+    status: "not-discarded",
+    changedPaths: [],
+    trashedPaths: [],
+    indexPublished: false,
+    worktreePublished: false,
+    message: "Без изменений",
+    log: "",
+  }));
+}
+it("uses a native all/none/mixed header without reads, draft loss or diff navigation", async () => {
+  enableDiscard();
+  render(view());
+  await screen.findByRole("checkbox", { name: "Выбрать файл: one.txt" });
+  const all = bulk();
+  expect(all.type).toBe("checkbox");
+  expect(all.checked).toBe(true);
+  expect(all.indeterminate).toBe(false);
+  expect(all.closest("label")?.title ?? all.title).toMatch(/всех страницах/i);
+  expect(
+    all.compareDocumentPosition(row("one.txt")) &
+      Node.DOCUMENT_POSITION_FOLLOWING,
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: "Снять выбор файлов" }),
+  ).toBeNull();
+  fireEvent.change(screen.getByRole("textbox", { name: "Сообщение коммита" }), {
+    target: { value: "Retained message" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "one.txt" }));
+  await waitFor(() => expect(portal.textContent).toContain("+final one.txt"));
+  fireEvent.click(all);
+  expect(all.checked).toBe(false);
+  expect(all.indeterminate).toBe(false);
+  expect(row("one.txt").checked).toBe(false);
+  expect(row("other.txt").checked).toBe(false);
+  fireEvent.click(all);
+  expect(all.checked).toBe(true);
+  expect(row("one.txt").checked).toBe(true);
+  expect(row("other.txt").checked).toBe(true);
+  fireEvent.click(row("other.txt"));
+  expect(all.checked).toBe(false);
+  expect(all.indeterminate).toBe(true);
+  fireEvent.click(all);
+  expect(all.checked).toBe(true);
+  expect(all.indeterminate).toBe(false);
+  expect(row("other.txt").checked).toBe(true);
+  expect(
+    screen
+      .getByRole("button", { name: "one.txt" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  expect(portal.textContent).toContain("+final one.txt");
+  expect(
+    screen.getByRole("textbox", { name: "Сообщение коммита" }),
+  ).toHaveProperty("value", "Retained message");
+  expect(api.readGitWorkspace).toHaveBeenCalledTimes(1);
+  expect(api.readGitDiff).toHaveBeenCalledTimes(1);
+  expect(api.prepareGitCommit).not.toHaveBeenCalled();
+  expect(api.executeGitCommit).not.toHaveBeenCalled();
+  expect(api.prepareGitDiscard).not.toHaveBeenCalled();
+  expect(api.executeGitDiscard).not.toHaveBeenCalled();
+});
+it("selects all pages for the same commit/discard selection without changing either pagination", async () => {
+  enableDiscard();
+  const value = snapshot();
+  value.files = Array.from({ length: 203 }, (_, i) => ({
+    ...value.files[0],
+    path: `file-${i}.txt`,
+    submodule: i === 202,
+  }));
+  api.readGitWorkspace.mockResolvedValue(value);
+  api.readGitDiff.mockImplementation(async (r: any) => ({
+    ...r,
+    changes: {
+      kind: "patch",
+      text: Array.from({ length: 501 }, (_, i) => `+line ${i}`).join("\n"),
+    },
+  }));
+  render(view());
+  await screen.findByRole("checkbox", { name: "Выбрать файл: file-0.txt" });
+  fireEvent.click(screen.getByRole("button", { name: "Следующие файлы" }));
+  fireEvent.click(screen.getByRole("button", { name: "file-201.txt" }));
+  await screen.findByLabelText("Различия файла");
+  fireEvent.click(screen.getByRole("button", { name: "Следующие строки" }));
+  expect(screen.getByLabelText("Различия файла").textContent).toBe("+line 500");
+  fireEvent.click(bulk());
+  expect(row("file-200.txt").checked).toBe(false);
+  expect(row("file-201.txt").checked).toBe(false);
+  expect(screen.getByText(/^Выбрано файлов: 0\./)).toBeTruthy();
+  expect(screen.getByText(/Файлы 201–203 из 203/)).toBeTruthy();
+  expect(screen.getByLabelText("Различия файла").textContent).toBe("+line 500");
+  fireEvent.click(bulk());
+  expect(row("file-201.txt").checked).toBe(true);
+  expect(row("file-202.txt").checked).toBe(false);
+  expect(row("file-202.txt").disabled).toBe(true);
+  fireEvent.change(screen.getByRole("textbox", { name: "Сообщение коммита" }), {
+    target: { value: "All pages" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Создать коммит…" }));
+  await screen.findByRole("dialog", { name: "Подтвердить коммит" });
+  const paths = value.files
+    .filter((file) => !file.submodule)
+    .map((file) => file.path);
+  expect(api.prepareGitCommit).toHaveBeenCalledWith({
+    scope: "p",
+    revision: rev,
+    paths,
+    message: "All pages",
+  });
+  fireEvent.click(
+    screen.getByRole("button", { name: "Закрыть подтверждение коммита" }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Отменить изменения…" }));
+  await screen.findByRole("dialog", { name: "Подтвердить отмену изменений" });
+  expect(api.prepareGitDiscard).toHaveBeenCalledWith({
+    scope: "p",
+    revision: rev,
+    paths,
+  });
+  expect(api.executeGitCommit).not.toHaveBeenCalled();
+  expect(api.executeGitDiscard).not.toHaveBeenCalled();
+  expect(api.readGitWorkspace).toHaveBeenCalledTimes(1);
+  expect(api.readGitDiff).toHaveBeenCalledTimes(1);
+});
+it("excludes submodules and offers shared bulk selection when only discard is supported", async () => {
+  enableDiscard();
+  delete api.prepareGitCommit;
+  delete api.executeGitCommit;
+  const value = snapshot();
+  value.files[1].submodule = true;
+  api.readGitWorkspace.mockResolvedValue(value);
+  render(view());
+  await screen.findByRole("checkbox", { name: "Выбрать файл: one.txt" });
+  expect(bulk().checked).toBe(true);
+  fireEvent.click(bulk());
+  fireEvent.click(bulk());
+  expect(bulk().checked).toBe(true);
+  expect(bulk().indeterminate).toBe(false);
+  expect(row("other.txt").checked).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "Отменить изменения…" }));
+  await screen.findByRole("dialog", { name: "Подтвердить отмену изменений" });
+  expect(api.prepareGitDiscard).toHaveBeenCalledWith({
+    scope: "p",
+    revision: rev,
+    paths: ["one.txt"],
+  });
+});
+it("disables bulk selection when every changed entry is a submodule", async () => {
+  const value = snapshot();
+  value.files.forEach((file) => {
+    file.submodule = true;
+  });
+  api.readGitWorkspace.mockResolvedValue(value);
+  render(view());
+  await screen.findByRole("checkbox", { name: "Выбрать файл: one.txt" });
+  expect(bulk().disabled).toBe(true);
+  expect(bulk().checked).toBe(false);
+  expect(bulk().indeterminate).toBe(false);
+  fireEvent.click(bulk());
+  expect(row("one.txt").checked).toBe(false);
+  expect(row("other.txt").checked).toBe(false);
+});
+it.each(["merge", "rebase", "cherry-pick", "revert", "unknown"] as const)(
+  "blocks bulk selection during %s even without conflict rows",
+  async (operation) => {
+    api.readGitWorkspace.mockResolvedValue({ ...snapshot(), operation });
+    render(view());
+    await screen.findByRole("checkbox", { name: "Выбрать файл: one.txt" });
+    expect(bulk().disabled).toBe(true);
+    fireEvent.click(bulk());
+    expect(row("one.txt").checked).toBe(false);
+    expect(api.prepareGitCommit).not.toHaveBeenCalled();
+  },
+);
+it("blocks bulk selection for a conflict anywhere in the snapshot", async () => {
+  const value = snapshot();
+  value.files[1].kind = "conflict";
+  api.readGitWorkspace.mockResolvedValue(value);
+  render(view());
+  await screen.findByRole("checkbox", { name: "Выбрать файл: one.txt" });
+  expect(bulk().disabled).toBe(true);
+  fireEvent.click(bulk());
+  expect(row("one.txt").checked).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "other.txt" }));
+  expect(
+    screen.queryByRole("checkbox", { name: "Выбрать все файлы" }),
+  ).toBeNull();
+});
+it("does not offer bulk selection for unsupported, loading, failed or unavailable workspaces", async () => {
+  delete api.prepareGitCommit;
+  delete api.executeGitCommit;
+  const v = render(view());
+  await screen.findByRole("button", { name: "one.txt" });
+  expect(
+    screen.queryByRole("checkbox", { name: "Выбрать все файлы" }),
+  ).toBeNull();
+  api.prepareGitCommit = vi.fn(async (r: any) => preview(r));
+  api.executeGitCommit = vi.fn();
+  v.rerender(view("p", true, 0, true));
+  expect(
+    screen.queryByRole("checkbox", { name: "Выбрать все файлы" }),
+  ).toBeNull();
+  const pending = deferred();
+  api.readGitWorkspace.mockImplementationOnce(() => pending.promise);
+  v.rerender(view());
+  expect(
+    screen.getByRole("status", { name: "Загрузка изменений" }),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole("checkbox", { name: "Выбрать все файлы" }),
+  ).toBeNull();
+  await act(async () => pending.resolve(snapshot()));
+  expect(bulk().checked).toBe(true);
+  api.readGitWorkspace.mockRejectedValueOnce(Error("read unavailable"));
+  fireEvent.click(screen.getByRole("button", { name: "Обновить изменения" }));
+  await screen.findByRole("dialog", { name: "Не удалось прочитать изменения" });
+  expect(
+    screen.queryByRole("checkbox", { name: "Выбрать все файлы" }),
+  ).toBeNull();
+});
+it.each(["commit", "discard"] as const)(
+  "keeps bulk selection inert during %s prepare, confirmation and execution",
+  async (kind) => {
+    const user = userEvent.setup();
+    enableDiscard();
+    const preparing = deferred(),
+      executing = deferred();
+    const prepareMethod =
+      kind === "commit" ? api.prepareGitCommit : api.prepareGitDiscard;
+    const executeMethod =
+      kind === "commit" ? api.executeGitCommit : api.executeGitDiscard;
+    prepareMethod.mockImplementationOnce(() => preparing.promise);
+    executeMethod.mockImplementationOnce(() => executing.promise);
+    render(view());
+    await draft();
+    expect(bulk().indeterminate).toBe(true);
+    const start = kind === "commit" ? "Создать коммит…" : "Отменить изменения…";
+    const confirm =
+      kind === "commit"
+        ? "Создать локальный коммит"
+        : "Отменить выбранные изменения";
+    fireEvent.click(screen.getByRole("button", { name: start }));
+    const assertInert = async () => {
+      expect(bulk().disabled).toBe(true);
+      await user.click(bulk());
+      expect(row("one.txt").checked).toBe(true);
+      expect(row("other.txt").checked).toBe(false);
+      expect(bulk().indeterminate).toBe(true);
+    };
+    await assertInert();
+    const request = prepareMethod.mock.calls[0][0];
+    await act(async () =>
+      preparing.resolve(
+        kind === "commit"
+          ? preview(request)
+          : {
+              ...request,
+              token: "e".repeat(64),
+              root: "/fixture/p",
+              branch: "main",
+              head: "b".repeat(40),
+              items: [{ path: "one.txt", action: "restore" }],
+              expiresAt: Date.now() + 300000,
+            },
+      ),
+    );
+    await assertInert();
+    fireEvent.click(screen.getByRole("button", { name: confirm }));
+    await assertInert();
+    await act(async () =>
+      executing.resolve(
+        kind === "commit"
+          ? {
+              scope: "p",
+              status: "not-committed",
+              indexPublished: false,
+              message: "Без изменений",
+              log: "",
+            }
+          : {
+              scope: "p",
+              status: "not-discarded",
+              indexPublished: false,
+              worktreePublished: false,
+              changedPaths: [],
+              trashedPaths: [],
+              message: "Без изменений",
+              log: "",
+            },
+      ),
+    );
+    expect(prepareMethod).toHaveBeenCalledTimes(1);
+    expect(executeMethod).toHaveBeenCalledTimes(1);
+  },
+);
+it("retains bulk-empty and partial intent across reopening, revisions and file changes", async () => {
+  const scope = {
+    projectId: "p",
+    year: "2026",
+    topic: "feature",
+    branch: "main",
+    contextId: "ctx-" + "a".repeat(64),
+    revision: "11111111-1111-4111-8111-111111111111",
+  };
+  api.readGitWorkspace.mockImplementation(async (s: ScopeRef) => snapshot(s));
+  const v = render(view(scope));
+  await screen.findByRole("checkbox", { name: "Выбрать файл: one.txt" });
+  fireEvent.click(bulk());
+  fireEvent.change(screen.getByRole("textbox", { name: "Сообщение коммита" }), {
+    target: { value: "Keep owner" },
+  });
+  v.rerender(view(scope, false));
+  v.rerender(view(scope));
+  await screen.findByRole("checkbox", { name: "Выбрать файл: one.txt" });
+  expect(bulk().checked).toBe(false);
+  expect(bulk().indeterminate).toBe(false);
+  const newerScope = {
+    ...scope,
+    revision: "22222222-2222-4222-8222-222222222222",
+  };
+  v.rerender(view(newerScope, true, 1));
+  await screen.findByRole("checkbox", { name: "Выбрать файл: one.txt" });
+  expect(row("one.txt").checked).toBe(false);
+  expect(row("other.txt").checked).toBe(false);
+  expect(
+    screen.getByRole("textbox", { name: "Сообщение коммита" }),
+  ).toHaveProperty("value", "Keep owner");
+  fireEvent.click(row("other.txt"));
+  const next = snapshot(newerScope);
+  next.files = [next.files[0], { ...next.files[0], path: "new.txt" }];
+  api.readGitWorkspace.mockResolvedValue(next);
+  fireEvent.click(screen.getByRole("button", { name: "Обновить изменения" }));
+  await screen.findByRole("checkbox", { name: "Выбрать файл: new.txt" });
+  expect(row("one.txt").checked).toBe(false);
+  expect(row("new.txt").checked).toBe(true);
+  expect(bulk().indeterminate).toBe(true);
+  expect(screen.getByText(/^Выбрано файлов: 1\./)).toBeTruthy();
+  fireEvent.click(bulk());
+  expect(bulk().checked).toBe(true);
+  fireEvent.click(row("new.txt"));
+  api.readGitWorkspace.mockResolvedValue({ ...next, branch: "next" });
+  fireEvent.click(screen.getByRole("button", { name: "Обновить изменения" }));
+  await screen.findByRole("checkbox", { name: "Выбрать файл: new.txt" });
+  expect(bulk().checked).toBe(true);
+  expect(row("new.txt").checked).toBe(true);
+});
+it("never transfers bulk-empty intent or draft to another exact context owner", async () => {
+  const scope = {
+    projectId: "p",
+    year: "2026",
+    topic: "feature",
+    branch: "main",
+    contextId: "ctx-" + "a".repeat(64),
+    revision: "11111111-1111-4111-8111-111111111111",
+  };
+  api.readGitWorkspace.mockImplementation(async (s: ScopeRef) => snapshot(s));
+  const v = render(view(scope));
+  await screen.findByRole("checkbox", { name: "Выбрать файл: one.txt" });
+  fireEvent.click(bulk());
+  fireEvent.change(screen.getByRole("textbox", { name: "Сообщение коммита" }), {
+    target: { value: "Owner a" },
+  });
+  v.rerender(view({ ...scope, contextId: "ctx-" + "b".repeat(64) }));
+  await screen.findByRole("checkbox", { name: "Выбрать файл: one.txt" });
+  expect(bulk().checked).toBe(true);
+  expect(row("one.txt").checked).toBe(true);
+  expect(
+    screen.getByRole("textbox", { name: "Сообщение коммита" }),
+  ).toHaveProperty("value", "");
+});
+
+// Exercise the retained hook's public selection command independently of disabled DOM controls.
+let retainedCommit: ReturnType<typeof useGitCommit>;
+function CommitSelectionOwner({ scope = "p" }: { scope?: ScopeRef }) {
+  retainedCommit = useGitCommit(scope, () => {});
+  return <output>{retainedCommit.paths.join(",")}</output>;
+}
+it("defends bulk selection itself against foreign snapshots, operations, conflicts and stale owners", () => {
+  const v = render(<CommitSelectionOwner />);
+  act(() => retainedCommit.initializeSelection(snapshot()));
+  const before = retainedCommit;
+  act(() => retainedCommit.toggleAll(snapshot("q")));
+  expect(screen.getByRole("status").textContent).toBe("one.txt,other.txt");
+  act(() => retainedCommit.toggleAll({ ...snapshot(), operation: "merge" }));
+  const conflict = snapshot();
+  conflict.files[1].kind = "conflict";
+  act(() => retainedCommit.toggleAll(conflict));
+  expect(retainedCommit.paths).toEqual(["one.txt", "other.txt"]);
+  v.rerender(<CommitSelectionOwner scope="q" />);
+  act(() => before.toggleAll(snapshot()));
+  expect(retainedCommit.paths).toEqual(["one.txt", "other.txt"]);
+  v.unmount();
+  act(() => before.toggleAll(snapshot()));
+  expect(api.prepareGitCommit).not.toHaveBeenCalled();
+});
+it("defends the bulk command against synchronous prepare/execute flight and an open preview", async () => {
+  const preparing = deferred(),
+    executing = deferred();
+  api.prepareGitCommit.mockImplementationOnce(() => preparing.promise);
+  api.executeGitCommit.mockImplementationOnce(() => executing.promise);
+  render(<CommitSelectionOwner />);
+  act(() => retainedCommit.initializeSelection(snapshot()));
+  act(() => retainedCommit.toggle("other.txt"));
+  const beforePrepare = retainedCommit;
+  act(() => {
+    void beforePrepare.prepare(snapshot());
+    beforePrepare.toggleAll(snapshot());
+  });
+  expect(retainedCommit.paths).toEqual(["one.txt"]);
+  await act(async () =>
+    preparing.resolve(preview({ scope: "p", paths: ["one.txt"], message: "" })),
+  );
+  act(() => retainedCommit.toggleAll(snapshot()));
+  expect(retainedCommit.paths).toEqual(["one.txt"]);
+  act(() => beforePrepare.toggleAll(snapshot()));
+  expect(retainedCommit.paths).toEqual(["one.txt"]);
+  act(() => {
+    void retainedCommit.execute();
+    retainedCommit.toggleAll(snapshot());
+  });
+  expect(retainedCommit.paths).toEqual(["one.txt"]);
+  await act(async () =>
+    executing.resolve({
+      scope: "p",
+      status: "not-committed",
+      indexPublished: false,
+      message: "Без изменений",
+      log: "",
+    }),
   );
 });

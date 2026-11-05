@@ -24,6 +24,8 @@ export function useGitCommit(scope: ScopeRef, onCommitted: () => void) {
   const done = useRef(onCommitted);
   done.current = onCommitted;
   const owner = documentScopeId(scope);
+  const selectionOwner = useRef({ owner, preview });
+  selectionOwner.current = { owner, preview };
   const supported =
     typeof window.goga.prepareGitCommit === "function" &&
     typeof window.goga.executeGitCommit === "function";
@@ -133,6 +135,25 @@ export function useGitCommit(scope: ScopeRef, onCommitted: () => void) {
     uncertain,
     supported,
     toggle,
+    toggleAll: (snapshot: GitWorkspaceSnapshot) => {
+      if (
+        !alive.current ||
+        flight.current ||
+        selectionOwner.current.preview ||
+        selectionOwner.current.owner !== owner ||
+        documentScopeId(snapshot.scope) !== owner ||
+        snapshot.operation !== "none" ||
+        snapshot.files.some((file) => file.kind === "conflict")
+      )
+        return;
+      const eligible = snapshot.files
+        .filter((file) => !file.submodule)
+        .map((file) => file.path);
+      setPaths((current) => {
+        const selected = new Set(current);
+        return eligible.every((path) => selected.has(path)) ? [] : eligible;
+      });
+    },
     initializeSelection: (snapshot: GitWorkspaceSnapshot) => {
       if (
         flight.current ||
@@ -168,9 +189,6 @@ export function useGitCommit(scope: ScopeRef, onCommitted: () => void) {
         setPaths((current) =>
           current.filter((path) => !removed.includes(path)),
         );
-    },
-    clearPaths: () => {
-      if (!flight.current && !preview) setPaths([]);
     },
     manualRefresh: () => {
       if (!flight.current) setUncertain(false);
@@ -244,16 +262,6 @@ export function GitCommitFooter({
                 ? "Сначала обновите изменения и проверьте состояние Git. Автоматического повтора не будет."
                 : `Выбрано файлов: ${commit.paths.length}. Коммит содержит файлы целиком и не публикуется на сервер.`}
         </p>
-        {!!commit.paths.length && (
-          <button
-            type="button"
-            className="git-commit-clear"
-            disabled={disabled || !!commit.pending || !!commit.preview}
-            onClick={commit.clearPaths}
-          >
-            Снять выбор файлов
-          </button>
-        )}
       </div>
       {visible && commit.preview && (
         <TopicModal

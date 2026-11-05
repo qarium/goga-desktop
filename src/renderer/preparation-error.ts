@@ -2,7 +2,7 @@
 export function preparationErrorMessage(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
   return text.replace(
-    /^Error invoking remote method 'goga:(?:save-project-settings|save-project-document|save-overview-file|save-settings|read-request|read-overview-schema|read-overview-contract|ensure-topic-context|resolve-topic-context|check-topic-context-readiness|create-topic-context)': (?:Error: )?/,
+    /^Error invoking remote method 'goga:(?:launch|save-project-settings|save-project-document|save-overview-file|save-settings|read-request|read-overview-schema|read-overview-contract|ensure-topic-context|resolve-topic-context|check-topic-context-readiness|create-topic-context|copy-overview-entries|paste-overview-entries|copy-overview-paths|prepare-overview-paste|execute-overview-paste)': (?:Error: )?/,
     "",
   );
 }

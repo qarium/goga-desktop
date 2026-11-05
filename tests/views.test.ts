@@ -57,6 +57,7 @@ describe("independent AFM views", () => {
     fake.created.length = 0;
     fake.sessions.length = 0;
     fake.loads.length = 0;
+    ipcMain.removeAllListeners("goga:afm-stage-selected");
   });
   function fixture() {
     const win = Object.assign(new EventEmitter(), {
@@ -69,7 +70,9 @@ describe("independent AFM views", () => {
     });
     const focus = vi.fn(),
       error = vi.fn(),
-      opened = vi.fn(() => true);
+      opened = vi.fn<(_id: string, _url: string) => boolean | Promise<boolean>>(
+        () => true,
+      );
     return {
       views: new DashboardViews(win as any, focus, error, opened),
       win,
@@ -78,6 +81,340 @@ describe("independent AFM views", () => {
       opened,
     };
   }
+  function deferred<T>() {
+    let resolve!: (value: T) => void;
+    let reject!: (error: Error) => void;
+    const promise = new Promise<T>((r, j) => {
+      resolve = r;
+      reject = j;
+    });
+    return { promise, resolve, reject };
+  }
+  it("awaits async browser acknowledgement before revealing a current page", async () => {
+    const { views, opened } = fixture();
+    const acknowledgement = deferred<boolean>();
+    opened.mockReturnValue(acknowledgement.promise);
+    views.select("a");
+    const loading = views.ensure("a", "http://localhost:4101");
+    await vi.waitFor(() => expect(opened).toHaveBeenCalledOnce());
+    expect(fake.created[0].visible).toBe(false);
+    expect(views.isSelected("a")).toBe(false);
+    acknowledgement.resolve(true);
+    await loading;
+    expect(fake.created[0].visible).toBe(true);
+  });
+  it("never reveals a page after async acknowledgement rejects or the page fails while waiting", async () => {
+    const { views, opened } = fixture();
+    const rejected = deferred<boolean>();
+    opened.mockReturnValueOnce(rejected.promise);
+    views.select("a");
+    const loading = views.ensure("a", "http://localhost:4101");
+    await vi.waitFor(() => expect(opened).toHaveBeenCalledOnce());
+    rejected.resolve(false);
+    await loading;
+    expect(fake.created[0].visible).toBe(false);
+    expect(fake.created[0].webContents.close).toHaveBeenCalledOnce();
+    const acknowledged = deferred<boolean>();
+    opened.mockReturnValueOnce(acknowledged.promise);
+    views.select("b");
+    const failing = views.ensure("b", "http://localhost:4102");
+    await vi.waitFor(() => expect(opened).toHaveBeenCalledTimes(2));
+    fake.created[1].webContents.emit("render-process-gone");
+    acknowledged.resolve(true);
+    await failing;
+    expect(fake.created[1].visible).toBe(false);
+    expect(views.isSelected("b")).toBe(false);
+  });
+  it("retains healthy pages exactly once when ensuring or restoring the same live run", async () => {
+    const { views, opened } = fixture();
+    views.reconcile(["a"]);
+    const navigation = deferred<void>();
+    fake.loads.push(() => navigation.promise);
+    const loading = views.ensure("a", "http://localhost:4101");
+    const restoring = views.restore("a", "http://localhost:4101");
+    navigation.resolve();
+    await loading;
+    expect(await restoring).toBe(true);
+    expect(await views.restore("a", "http://localhost:4101")).toBe(true);
+    await views.ensure("a", "http://localhost:4101");
+    expect(fake.created).toHaveLength(1);
+    expect(opened).toHaveBeenCalledOnce();
+    expect(fake.created[0].webContents.loadURL).toHaveBeenCalledOnce();
+  });
+  it("replaces a failed page without closing the live run or losing selection and viewport", async () => {
+    const { views, opened, win } = fixture();
+    views.reconcile(["a", "b"]);
+    await views.ensure("a", "http://localhost:4101");
+    await views.ensure("b", "http://localhost:4102");
+    views.select("a");
+    views.setViewport({ x: 100, y: 200, width: 1000, height: 650 });
+    const failed = fake.created[0];
+    failed.webContents.emit("render-process-gone");
+    expect(await views.restore("a", "http://localhost:4101")).toBe(true);
+    expect(fake.created).toHaveLength(3);
+    expect(failed.webContents.close).toHaveBeenCalledOnce();
+    expect(win.contentView.removeChildView).toHaveBeenCalledWith(failed);
+    expect(fake.sessions[0].clearStorageData).toHaveBeenCalledOnce();
+    const replacement = fake.created[2];
+    expect(replacement.visible).toBe(true);
+    expect(replacement.bounds).toEqual({
+      x: 100,
+      y: 200,
+      width: 1000,
+      height: 650,
+    });
+    expect(views.isSelected("a")).toBe(true);
+    expect(fake.created[1].webContents.close).not.toHaveBeenCalled();
+    expect(opened).toHaveBeenCalledTimes(3);
+    await views.ensure("a", "http://localhost:4101");
+    expect(fake.created).toHaveLength(3);
+  });
+  it("single-flights restoration and blocks ensure until old partition cleanup completes", async () => {
+    const { views, opened } = fixture();
+    views.reconcile(["a"]);
+    await views.ensure("a", "http://localhost:4101");
+    fake.created[0].webContents.emit("render-process-gone");
+    const cleanup = deferred<void>();
+    fake.sessions[0].clearStorageData.mockReturnValue(cleanup.promise);
+    const first = views.restore("a", "http://localhost:4101");
+    const second = views.restore("a", "http://localhost:4101");
+    expect(second).toBe(first);
+    const ensuring = views.ensure("a", "http://localhost:4101");
+    await vi.waitFor(() =>
+      expect(fake.sessions[0].clearStorageData).toHaveBeenCalledOnce(),
+    );
+    expect(fake.created).toHaveLength(1);
+    expect(opened).toHaveBeenCalledOnce();
+    cleanup.resolve();
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+    await ensuring;
+    expect(fake.created).toHaveLength(2);
+    expect(opened).toHaveBeenCalledTimes(2);
+  });
+  it.each(["remove", "dispose", "reconcile"] as const)(
+    "cannot resurrect a restoring page after %s during cleanup",
+    async (action) => {
+      const { views, opened } = fixture();
+      views.reconcile(["a"]);
+      await views.ensure("a", "http://localhost:4101");
+      fake.created[0].webContents.emit("render-process-gone");
+      const cleanup = deferred<void>();
+      fake.sessions[0].clearStorageData.mockReturnValue(cleanup.promise);
+      const restoring = views.restore("a", "http://localhost:4101");
+      await vi.waitFor(() =>
+        expect(fake.sessions[0].clearStorageData).toHaveBeenCalledOnce(),
+      );
+      if (action === "remove") views.remove("a");
+      else if (action === "dispose") views.dispose();
+      else {
+        views.reconcile([]);
+        views.reconcile(["a"]);
+      }
+      cleanup.resolve();
+      expect(await restoring).toBe(false);
+      await views.ensure("a", "http://localhost:4101");
+      expect(fake.created).toHaveLength(1);
+      expect(opened).toHaveBeenCalledOnce();
+    },
+  );
+  it.each(["remove", "dispose"] as const)(
+    "reports false after %s while replacement load is pending",
+    async (action) => {
+      const { views, opened } = fixture();
+      views.reconcile(["a"]);
+      await views.ensure("a", "http://localhost:4101");
+      fake.created[0].webContents.emit("render-process-gone");
+      const navigation = deferred<void>();
+      fake.loads.push(() => navigation.promise);
+      const restoring = views.restore("a", "http://localhost:4101");
+      await vi.waitFor(() => expect(fake.created).toHaveLength(2));
+      if (action === "remove") views.remove("a");
+      else views.dispose();
+      navigation.resolve();
+      expect(await restoring).toBe(false);
+      expect(fake.created[1].visible).toBe(false);
+      expect(fake.created[1].webContents.close).toHaveBeenCalledOnce();
+      expect(opened).toHaveBeenCalledOnce();
+    },
+  );
+  it("ignores an old load and async false acknowledgement after a replacement is current", async () => {
+    const { views, opened, error, focus } = fixture();
+    views.reconcile(["a"]);
+    views.select("a");
+    const acknowledgement = deferred<boolean>();
+    opened.mockReturnValueOnce(acknowledgement.promise);
+    const loading = views.ensure("a", "http://localhost:4101");
+    await vi.waitFor(() => expect(opened).toHaveBeenCalledOnce());
+    const old = fake.created[0];
+    old.webContents.emit("render-process-gone");
+    expect(await views.restore("a", "http://localhost:4101")).toBe(true);
+    error.mockClear();
+    acknowledgement.resolve(false);
+    await loading;
+    old.webContents.emit("focus");
+    old.webContents.emit("dom-ready");
+    old.webContents.emit("render-process-gone");
+    old.webContents.emit(
+      "did-fail-load",
+      {},
+      -2,
+      "failed",
+      "http://localhost:4101",
+      true,
+    );
+    expect(error).not.toHaveBeenCalled();
+    expect(focus).not.toHaveBeenCalled();
+    expect(old.webContents.insertCSS).not.toHaveBeenCalled();
+    expect(fake.created[1].webContents.close).not.toHaveBeenCalled();
+    expect(fake.created[1].visible).toBe(true);
+    expect(views.isSelected("a")).toBe(true);
+  });
+  it("ignores a rejected old navigation after its failed page is replaced", async () => {
+    const { views, opened, error } = fixture();
+    views.reconcile(["a"]);
+    const navigation = deferred<void>();
+    fake.loads.push(() => navigation.promise);
+    const loading = views.ensure("a", "http://localhost:4101");
+    fake.created[0].webContents.emit("render-process-gone");
+    expect(await views.restore("a", "http://localhost:4101")).toBe(true);
+    error.mockClear();
+    navigation.reject(Error("old navigation aborted"));
+    await loading;
+    expect(opened).toHaveBeenCalledOnce();
+    expect(error).not.toHaveBeenCalled();
+  });
+  it("cancels old stage acknowledgements before replacement and never accepts them for its new page", async () => {
+    const { views } = fixture();
+    views.reconcile(["a"]);
+    await views.ensure("a", "http://localhost:4101");
+    views.select("a");
+    const old = fake.created[0].webContents;
+    old.mainFrame = { url: "http://localhost:4101" };
+    old.send = vi.fn();
+    const pending = views.focusStage("a", "worker");
+    const oldCommand = old.send.mock.calls[0][1];
+    old.emit("render-process-gone");
+    expect(await views.restore("a", "http://localhost:4101")).toBe(true);
+    expect(await pending).toBe(false);
+    expect(old.send).toHaveBeenLastCalledWith(
+      "goga:afm-cancel-stage",
+      oldCommand.requestId,
+    );
+    const current = fake.created[1].webContents;
+    current.mainFrame = { url: "http://localhost:4101" };
+    current.send = vi.fn();
+    const next = views.focusStage("a", "worker");
+    const command = current.send.mock.calls[0][1];
+    ipcMain.emit(
+      "goga:afm-stage-selected",
+      { sender: old, senderFrame: old.mainFrame },
+      { ...oldCommand, selected: true },
+    );
+    ipcMain.emit(
+      "goga:afm-stage-selected",
+      { sender: old, senderFrame: old.mainFrame },
+      { ...command, selected: true },
+    );
+    expect(ipcMain.listenerCount("goga:afm-stage-selected")).toBe(1);
+    ipcMain.emit(
+      "goga:afm-stage-selected",
+      { sender: current, senderFrame: current.mainFrame },
+      { ...command, selected: true },
+    );
+    expect(await next).toBe(true);
+    expect(ipcMain.listenerCount("goga:afm-stage-selected")).toBe(0);
+  });
+  it("reports false when a replacement cannot load or acknowledge its page", async () => {
+    const { views, error, opened } = fixture();
+    views.reconcile(["a"]);
+    await views.ensure("a", "http://localhost:4101");
+    fake.created[0].webContents.emit("render-process-gone");
+    error.mockClear();
+    fake.loads.push(async () => {
+      throw Error("replacement refused");
+    });
+    expect(await views.restore("a", "http://localhost:4101")).toBe(false);
+    expect(error).toHaveBeenCalledWith("a", expect.any(String));
+    expect(opened).toHaveBeenCalledOnce();
+    opened.mockResolvedValue(false);
+    expect(await views.restore("a", "http://localhost:4101")).toBe(false);
+    expect(fake.created[2].visible).toBe(false);
+    expect(fake.created[2].webContents.close).toHaveBeenCalledOnce();
+  });
+  it.each(["false", "async false", "rejection"] as const)(
+    "allows another live restoration after an acknowledgement %s",
+    async (result) => {
+      const { views, opened } = fixture();
+      views.reconcile(["a"]);
+      views.select("a");
+      await views.ensure("a", "http://localhost:4101");
+      fake.created[0].webContents.emit("render-process-gone");
+      opened.mockImplementationOnce(() => {
+        if (result === "rejection") return Promise.reject(Error("attempt refused"));
+        return result === "async false" ? Promise.resolve(false) : false;
+      });
+      expect(await views.restore("a", "http://localhost:4101")).toBe(false);
+      expect(fake.created[1].visible).toBe(false);
+      expect(views.isSelected("a")).toBe(false);
+      views.reconcile(["a"]);
+      expect(await views.restore("a", "http://localhost:4101")).toBe(true);
+      expect(fake.created).toHaveLength(3);
+      expect(fake.created[1].webContents.close).toHaveBeenCalledOnce();
+      expect(fake.created[2].visible).toBe(true);
+      expect(views.isSelected("a")).toBe(true);
+      expect(opened).toHaveBeenCalledTimes(3);
+    },
+  );
+  it("does not replace a page when its partition cleanup fails", async () => {
+    const { views } = fixture();
+    views.reconcile(["a"]);
+    await views.ensure("a", "http://localhost:4101");
+    fake.created[0].webContents.emit("render-process-gone");
+    fake.sessions[0].clearStorageData.mockRejectedValue(
+      Error("cleanup failed"),
+    );
+    expect(await views.restore("a", "http://localhost:4101")).toBe(false);
+    expect(fake.created).toHaveLength(1);
+    await views.ensure("a", "http://localhost:4101");
+    expect(fake.created).toHaveLength(1);
+    expect(await views.restore("a", "http://localhost:4101")).toBe(false);
+    expect(fake.created).toHaveLength(1);
+  });
+  it("restores only explicitly live nonclosed runs and preserves URL isolation", async () => {
+    const { views } = fixture();
+    expect(await views.restore("a", "http://localhost:4101")).toBe(false);
+    views.reconcile(["a", "b"]);
+    expect(await views.restore("unknown", "http://localhost:4101")).toBe(false);
+    await expect(views.restore("a", "https://evil.test")).rejects.toThrow();
+    views.remove("b");
+    expect(await views.restore("b", "http://localhost:4102")).toBe(false);
+    expect(await views.restore("a", "http://localhost:4101")).toBe(true);
+    const page = fake.created[0],
+      wc = page.webContents;
+    expect(page.options.webPreferences).toMatchObject({
+      sandbox: true,
+      contextIsolation: true,
+      nodeIntegration: false,
+      webSecurity: true,
+      allowRunningInsecureContent: false,
+      devTools: false,
+    });
+    const event = { preventDefault: vi.fn() };
+    wc.emit("will-navigate", event, "https://evil.test");
+    wc.emit("will-redirect", event, "https://evil.test");
+    wc.emit("will-frame-navigate", { ...event, url: "https://evil.test" });
+    wc.emit("will-attach-webview", event);
+    expect(event.preventDefault).toHaveBeenCalledTimes(4);
+    const filter = fake.sessions[0].webRequest.onBeforeRequest.mock.calls[0][1],
+      checked = vi.fn();
+    filter({ url: "https://evil.test" }, checked);
+    expect(checked).toHaveBeenLastCalledWith({ cancel: true });
+    filter({ url: "http://localhost:4101/api" }, checked);
+    expect(checked).toHaveBeenLastCalledWith({ cancel: false });
+    views.dispose();
+    expect(await views.restore("a", "http://localhost:4101")).toBe(false);
+  });
   it("fits the measured shell viewport through sidebar collapse and window resize", async () => {
     const { views, win } = fixture();
     await views.ensure("a", "http://localhost:4101");

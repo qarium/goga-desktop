@@ -9,28 +9,50 @@ import {
   fireEvent,
   waitFor,
   act,
+  within,
 } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { undo, undoDepth } from "@codemirror/commands";
 import { installHistoryWorker } from "./helpers/history-worker";
 import { ProjectOverview } from "../src/renderer/overview/ProjectOverview";
 vi.mock("../src/renderer/overview/SchemaGraph", () => ({
-  SchemaGraph: ({ onContract, scope }: any) => (
+  SchemaGraph: ({ onContract, onDrill, scope }: any) => (
     <div>
       Граф<output aria-label="Область схемы">{scope}</output>
       <button onClick={() => onContract(".")}>Контракт узла</button>
+      <button onClick={() => onContract("B")}>Контракт области B</button>
+      <button onClick={() => onDrill("B")}>Войти в область B</button>
     </div>
   ),
   IconButton: ({ label, onClick, disabled, children }: any) => (
-    <button aria-label={label} onClick={onClick} disabled={disabled}>
+    <button
+      className="ov-icon"
+      aria-label={label}
+      title={label}
+      onClick={onClick}
+      disabled={disabled}
+    >
       {children}
     </button>
   ),
 }));
 vi.mock("../src/renderer/overview/FileTree", () => ({
-  FileTree: ({ onFile, setExpanded, load, onNavigate, onContextMenu }: any) => (
+  FileTree: ({
+    onFile,
+    setExpanded,
+    load,
+    onNavigate,
+    onContextMenu,
+    scope,
+  }: any) => (
     <>
       <button onClick={() => onFile("main.go")}>main.go</button>
+      {scope !== "B" && (
+        <button onClick={() => onFile("A/file.txt")}>Файл области A</button>
+      )}
+      {scope === "B" && (
+        <button onClick={() => onFile("B/file.txt")}>Файл области B</button>
+      )}
       <button
         onClick={() =>
           onContextMenu?.({
@@ -110,6 +132,22 @@ function setup(
           : path === "other.md"
             ? "# Other"
             : file.text,
+    })),
+    copyOverviewEntries: vi.fn(async (_scope: unknown, _paths: string[]) => {}),
+    copyOverviewPaths: vi.fn(
+      async (_scope: unknown, _paths: string[], _absolute: boolean) => {},
+    ),
+    prepareOverviewPaste: vi.fn(
+      async (_scope: unknown, _directory: string) => ({
+        token: "paste-token",
+        conflicts: [],
+      }),
+    ),
+    executeOverviewPaste: vi.fn(async () => ({
+      status: "done",
+      completedPaths: [],
+      touchedPaths: [],
+      message: "done",
     })),
     saveOverviewFile: vi.fn(async () => file),
     createOverviewEntry: vi.fn(async () => file),
@@ -191,17 +229,22 @@ it("uses one search field without an inner focus ring even when shared styles lo
     styles.remove();
   }
 });
-it("forwards the workspace root to the full-path context menu", async () => {
+it("forwards the current owner to Host full-path copying without browser permission", async () => {
   const writeText = vi.fn(async () => {});
   vi.stubGlobal("navigator", { clipboard: { writeText } });
-  setup(schema, "/fixture/current-copy");
+  const api = setup(schema, "/fixture/current-copy");
   fireEvent.click(screen.getByText("Меню main.go"));
   fireEvent.click(
     screen.getByRole("menuitem", { name: "Скопировать полный путь" }),
   );
   await waitFor(() =>
-    expect(writeText).toHaveBeenCalledWith("/fixture/current-copy/main.go"),
+    expect(api.copyOverviewPaths).toHaveBeenCalledExactlyOnceWith(
+      "p",
+      ["main.go"],
+      true,
+    ),
   );
+  expect(writeText).not.toHaveBeenCalled();
 });
 it("offers a graph action next to the contract for the current tree slice", async () => {
   const api = setup([{ ...schema[0], cell: "src/api", children: [] }]);
@@ -322,6 +365,224 @@ const overviewEditor = () => {
     ?.shadowRoot?.querySelector(".cm-content");
   return content ? EditorView.findFromDOM(content as HTMLElement) : null;
 };
+it("keeps all source actions in one nonwrapping file toolbar with a truncating path", async () => {
+  const styles = document.createElement("style");
+  styles.textContent = readFileSync(
+    `${process.cwd()}/src/renderer/overview/overview.css`,
+    "utf8",
+  );
+  document.head.appendChild(styles);
+  try {
+    setup();
+    fireEvent.click(screen.getByText("main.go"));
+    await waitFor(() => expect(overviewEditor()?.state.readOnly).toBe(false));
+    const toolbar = document.querySelector<HTMLElement>(".ov-file-toolbar")!;
+    for (const name of [
+      "Найти в файле",
+      "Заменить в файле",
+      "Обновить файл с диска",
+      "Закрыть без сохранения",
+      "Сохранить",
+    ]) {
+      const button = within(toolbar).getByRole("button", { name });
+      expect(button.closest(".ov-file-toolbar")).toBe(toolbar);
+      expect(button.getAttribute("title")).toBeTruthy();
+    }
+    expect(document.querySelector(".ov-editor-tools")).toBeNull();
+    expect(getComputedStyle(toolbar).flexWrap).toBe("nowrap");
+    expect(
+      getComputedStyle(toolbar.querySelector(".ov-file-actions")!).flexShrink,
+    ).toBe("0");
+    const path = toolbar.querySelector(".ov-file-path > span")!;
+    expect(path.textContent).toBe("main.go");
+    expect(getComputedStyle(path).textOverflow).toBe("ellipsis");
+    expect(getComputedStyle(path).whiteSpace).toBe("nowrap");
+  } finally {
+    styles.remove();
+  }
+});
+
+it("neutralizes only the Overview host focus glow even when shared editor styles load last", async () => {
+  const styles = document.createElement("style");
+  styles.textContent =
+    readFileSync(
+      `${process.cwd()}/src/renderer/overview/overview.css`,
+      "utf8",
+    ) +
+    readFileSync(`${process.cwd()}/src/renderer/YamlEditor.css`, "utf8") +
+    readFileSync(`${process.cwd()}/src/renderer/style.css`, "utf8");
+  document.head.appendChild(styles);
+  try {
+    setup();
+    fireEvent.click(screen.getByText("main.go"));
+    await waitFor(() => expect(overviewEditor()?.state.readOnly).toBe(false));
+    const scoped = Array.from(styles.sheet!.cssRules).find(
+      (rule) =>
+        "selectorText" in rule &&
+        rule.selectorText ===
+          ".ov-source-editor .yaml-code-editor:focus-within",
+    ) as CSSStyleRule | undefined;
+    expect(scoped?.style.boxShadow).toBe("none");
+    expect(scoped?.style.outline).toBe("none");
+    const shared = Array.from(styles.sheet!.cssRules).find(
+      (rule) =>
+        "selectorText" in rule &&
+        rule.selectorText === ".yaml-code-editor:focus-within",
+    ) as CSSStyleRule;
+    expect(shared.style.boxShadow).toBe("0 0 0 2px #6da9ff66");
+    const find = screen.getByRole("button", { name: "Найти в файле" });
+    fireEvent.keyDown(document, { key: "Tab", code: "Tab" });
+    find.focus();
+    expect(find.matches(":focus-visible")).toBe(true);
+    // jsdom does not resolve the variable-based outline shorthand here.
+    const buttonFocus = Array.from(styles.sheet!.cssRules).find(
+      (rule) =>
+        "selectorText" in rule &&
+        typeof rule.selectorText === "string" &&
+        rule.selectorText
+          .split(",")
+          .some((selector) => selector.trim() === "button:focus-visible"),
+    ) as CSSStyleRule;
+    expect(buttonFocus.style.outline).toBe("2px solid var(--teal)");
+    expect(getComputedStyle(find).outline).not.toBe("none");
+  } finally {
+    styles.remove();
+  }
+});
+
+it("routes toolbar search to the current file and restores source history, selection and scroll on return", async () => {
+  const api = setup();
+  api.readOverviewFile.mockImplementation(async (_scope, path) => ({
+    ...file,
+    relativePath: path,
+    text: path === "README.md" ? "# readme readme" : "main main",
+  }));
+  fireEvent.click(screen.getByText("main.go"));
+  await waitFor(() =>
+    expect(overviewEditor()?.state.doc.toString()).toBe("main main"),
+  );
+  const toolbar = document.querySelector<HTMLElement>(".ov-file-toolbar")!;
+  const first = overviewEditor()!;
+  fireEvent.click(
+    within(toolbar).getByRole("button", { name: "Заменить в файле" }),
+  );
+  fireEvent.input(first.dom.querySelector('input[name="search"]')!, {
+    target: { value: "main" },
+  });
+  fireEvent.input(first.dom.querySelector('input[name="replace"]')!, {
+    target: { value: "draft" },
+  });
+  fireEvent.click(first.dom.querySelector('button[name="replaceAll"]')!);
+  act(() => first.dispatch({ selection: { anchor: 3 } }));
+  first.scrollDOM.scrollTop = 61;
+  first.scrollDOM.scrollLeft = 17;
+  const depth = undoDepth(first.state);
+  fireEvent.click(screen.getByText("README.md"));
+  await waitFor(() =>
+    expect(overviewEditor()?.state.doc.toString()).toBe("# readme readme"),
+  );
+  const second = overviewEditor()!;
+  fireEvent.click(
+    within(document.querySelector<HTMLElement>(".ov-file-toolbar")!).getByRole(
+      "button",
+      { name: "Найти в файле" },
+    ),
+  );
+  fireEvent.input(second.dom.querySelector('input[name="search"]')!, {
+    target: { value: "readme" },
+  });
+  fireEvent.click(second.dom.querySelector('button[name="next"]')!);
+  expect(
+    second.state.sliceDoc(
+      second.state.selection.main.from,
+      second.state.selection.main.to,
+    ),
+  ).toBe("readme");
+  expect(first.state.doc.toString()).toBe("draft draft");
+  fireEvent.click(screen.getByRole("tab", { name: "main.go" }));
+  await waitFor(() =>
+    expect(overviewEditor()?.state.doc.toString()).toBe("draft draft"),
+  );
+  const restored = overviewEditor()!;
+  expect(restored.state.selection.main.anchor).toBe(3);
+  expect(undoDepth(restored.state)).toBe(depth);
+  expect(restored.scrollDOM.scrollTop).toBe(61);
+  expect(restored.scrollDOM.scrollLeft).toBe(17);
+  fireEvent.click(
+    within(document.querySelector<HTMLElement>(".ov-file-toolbar")!).getByRole(
+      "button",
+      { name: "Заменить в файле" },
+    ),
+  );
+  expect(
+    (restored.dom.querySelector('input[name="search"]') as HTMLInputElement)
+      .value,
+  ).toBe("main");
+  act(() => expect(undo(restored)).toBe(true));
+  expect(restored.state.doc.toString()).toBe("main main");
+  expect(api.saveOverviewFile).not.toHaveBeenCalled();
+});
+
+it("disables source search while loading or previewing and binds the replacement editor after refresh", async () => {
+  const api = setup();
+  let finish!: (value: typeof file) => void;
+  api.readOverviewFile.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = resolve;
+      }),
+  );
+  fireEvent.click(screen.getByText("README.md"));
+  await waitFor(() => expect(api.readOverviewFile).toHaveBeenCalledTimes(1));
+  for (const name of ["Найти в файле", "Заменить в файле"])
+    expect(
+      (
+        within(
+          document.querySelector<HTMLElement>(".ov-file-toolbar")!,
+        ).getByRole("button", { name }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  await act(async () =>
+    finish({ ...file, text: "# initial", relativePath: "README.md" }),
+  );
+  await waitFor(() => expect(overviewEditor()?.state.readOnly).toBe(false));
+  const initial = overviewEditor()!;
+  fireEvent.click(
+    screen.getByRole("button", { name: "Предпросмотр Markdown" }),
+  );
+  await screen.findByRole("heading", { name: "initial" });
+  for (const name of ["Найти в файле", "Заменить в файле"])
+    expect(
+      (
+        within(
+          document.querySelector<HTMLElement>(".ov-file-toolbar")!,
+        ).getByRole("button", { name }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
+  fireEvent.click(
+    screen.getByRole("button", { name: "Показать исходник Markdown" }),
+  );
+  await waitFor(() =>
+    expect(overviewEditor()?.state.doc.toString()).toBe("# initial"),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: "Обновить файл с диска" }),
+  );
+  await waitFor(() =>
+    expect(overviewEditor()?.state.doc.toString()).toContain("# Readme"),
+  );
+  const reloaded = overviewEditor()!;
+  expect(reloaded).not.toBe(initial);
+  fireEvent.click(
+    within(document.querySelector<HTMLElement>(".ov-file-toolbar")!).getByRole(
+      "button",
+      { name: "Заменить в файле" },
+    ),
+  );
+  expect(reloaded.dom.querySelector('input[name="replace"]')).not.toBeNull();
+  expect(initial.dom.querySelector('input[name="search"]')).toBeNull();
+});
+
 it("collapses the schema to its heading without closing the file and restores it", async () => {
   setup();
   fireEvent.click(screen.getByText("main.go"));
@@ -678,4 +939,166 @@ it("retains a trashed draft visibly but disables in-place saving and offers a co
       .disabled,
   ).toBe(true);
   expect(screen.getByRole("button", { name: "Сохранить копию…" })).toBeTruthy();
+});
+
+const clipboardNavigationSchema = [
+  { ...schema[0], children: [{ ...schema[0], cell: "B", children: [] }] },
+];
+it.each(["contract", "graph"])(
+  "routes paste to the visible scope after %s navigation, not a hidden old selection",
+  async (kind) => {
+    const api = setup(clipboardNavigationSchema);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Файл области A" }),
+    );
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: kind === "contract" ? "Контракт области B" : "Войти в область B",
+      }),
+    );
+    await waitFor(() =>
+      expect(api.listOverviewDirectory).toHaveBeenCalledWith("p", "B"),
+    );
+    expect(screen.queryByRole("button", { name: "Файл области A" })).toBeNull();
+    const pane = document.querySelector<HTMLElement>(".ov-files")!;
+    pane.focus();
+    fireEvent.copy(pane);
+    await act(async () => {});
+    fireEvent.paste(pane);
+    await waitFor(() =>
+      expect(api.prepareOverviewPaste).toHaveBeenCalledExactlyOnceWith(
+        "p",
+        "B",
+      ),
+    );
+    expect(api.copyOverviewEntries).not.toHaveBeenCalled();
+  },
+);
+it.each(["breadcrumb", "scope-chip"])(
+  "clears a hidden folder's selection on root navigation via %s",
+  async (kind) => {
+    const api = setup(clipboardNavigationSchema);
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Войти в область B" }),
+    );
+    fireEvent.click(
+      await screen.findByRole("button", { name: "Файл области B" }),
+    );
+    if (kind === "breadcrumb")
+      fireEvent.click(screen.getByRole("button", { name: "Корень проекта" }));
+    else
+      fireEvent.click(
+        document.querySelector<HTMLButtonElement>(".ov-file-scope > button")!,
+      );
+    const pane = document.querySelector<HTMLElement>(".ov-files")!;
+    pane.focus();
+    fireEvent.copy(pane);
+    await act(async () => {});
+    fireEvent.paste(pane);
+    await waitFor(() =>
+      expect(api.prepareOverviewPaste).toHaveBeenCalledExactlyOnceWith("p", ""),
+    );
+    expect(api.copyOverviewEntries).not.toHaveBeenCalled();
+  },
+);
+it("clears selection when a file filter changes, so hidden entries cannot be copied or chosen as paste target", async () => {
+  const api = setup(clipboardNavigationSchema);
+  api.searchOverviewFiles.mockResolvedValue({
+    entries: [{ path: "B/new.txt", name: "new.txt", kind: "file" }],
+    truncated: false,
+  } as any);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Файл области A" }),
+  );
+  fireEvent.change(screen.getByRole("textbox", { name: "Поиск файлов" }), {
+    target: { value: "new" },
+  });
+  await screen.findByRole("button", { name: /new.txt/ });
+  expect(screen.queryByRole("button", { name: "Файл области A" })).toBeNull();
+  const pane = document.querySelector<HTMLElement>(".ov-files")!;
+  pane.focus();
+  fireEvent.copy(pane);
+  await act(async () => {});
+  fireEvent.paste(pane);
+  await waitFor(() =>
+    expect(api.prepareOverviewPaste).toHaveBeenCalledExactlyOnceWith("p", ""),
+  );
+  expect(api.copyOverviewEntries).not.toHaveBeenCalled();
+});
+it("keeps an explicitly navigated current directory as a valid clipboard selection", async () => {
+  const api = setup(clipboardNavigationSchema);
+  fireEvent.click(await screen.findByRole("button", { name: "В область api" }));
+  const pane = document.querySelector<HTMLElement>(".ov-files")!;
+  pane.focus();
+  fireEvent.copy(pane);
+  await act(async () => {});
+  expect(api.copyOverviewEntries).toHaveBeenCalledExactlyOnceWith("p", [
+    "src/api",
+  ]);
+  fireEvent.paste(pane);
+  await waitFor(() =>
+    expect(api.prepareOverviewPaste).toHaveBeenCalledExactlyOnceWith(
+      "p",
+      "src/api",
+    ),
+  );
+});
+it("does not turn an editor tab's graph highlight into a hidden file-tree clipboard selection", async () => {
+  const api = setup(clipboardNavigationSchema);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Файл области A" }),
+  );
+  await waitFor(() =>
+    expect(
+      document.querySelector('[role="tab"][title="A/file.txt"]'),
+    ).not.toBeNull(),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Войти в область B" }));
+  fireEvent.click(screen.getByRole("button", { name: "Файл области B" }));
+  await waitFor(() =>
+    expect(
+      document.querySelector('[role="tab"][title="B/file.txt"]'),
+    ).not.toBeNull(),
+  );
+  fireEvent.click(
+    document.querySelector<HTMLButtonElement>(
+      '[role="tab"][title="A/file.txt"]',
+    )!,
+  );
+  const pane = document.querySelector<HTMLElement>(".ov-files")!;
+  pane.focus();
+  fireEvent.copy(pane);
+  await act(async () => {});
+  fireEvent.paste(pane);
+  await waitFor(() =>
+    expect(api.prepareOverviewPaste).toHaveBeenCalledExactlyOnceWith("p", "B"),
+  );
+  expect(api.copyOverviewEntries).toHaveBeenCalledExactlyOnceWith("p", [
+    "B/file.txt",
+  ]);
+  expect(api.copyOverviewEntries).not.toHaveBeenCalledWith("p", ["A/file.txt"]);
+});
+it("explicit show-file-in-tree navigation selects the shown file's parent rather than the previous scope", async () => {
+  const api = setup(clipboardNavigationSchema);
+  fireEvent.click(
+    await screen.findByRole("button", { name: "Файл области A" }),
+  );
+  await waitFor(() =>
+    expect(
+      document.querySelector('[role="tab"][title="A/file.txt"]'),
+    ).not.toBeNull(),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Войти в область B" }));
+  fireEvent.click(screen.getByRole("button", { name: "A/file.txt" }));
+  const pane = document.querySelector<HTMLElement>(".ov-files")!;
+  pane.focus();
+  fireEvent.copy(pane);
+  await act(async () => {});
+  fireEvent.paste(pane);
+  await waitFor(() =>
+    expect(api.prepareOverviewPaste).toHaveBeenCalledExactlyOnceWith("p", "A"),
+  );
+  expect(api.copyOverviewEntries).toHaveBeenCalledExactlyOnceWith("p", [
+    "A/file.txt",
+  ]);
 });

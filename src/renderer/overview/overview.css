@@ -159,6 +159,11 @@
 .ov-tree-scroll > div {
   width: 100%;
 }
+.ov-tree-row,
+.ov-search-results > button {
+  -webkit-user-select: none;
+  user-select: none;
+}
 .ov-tree-row {
   width: 100%;
   display: flex;
@@ -237,7 +242,7 @@
   overflow: hidden;
 }
 .ov-map:has(+ .ov-splitter) {
-  flex: none;
+  flex: 0 1 auto;
 }
 .ov-map-actions {
   display: flex;
@@ -449,7 +454,10 @@
   display: flex;
   flex-direction: column;
   flex: 1;
-  min-height: 0;
+  /* Keep source lines beneath the single toolbar and optional search panel. */
+  container-type: inline-size;
+  container-name: overview-document;
+  min-height: 300px;
   min-width: 0;
   overflow: hidden;
   background: #0a1221;
@@ -506,31 +514,57 @@
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   padding: 7px 12px;
   border-bottom: 1px solid #25364d;
   flex: none;
   background: #0b1424;
 }
-.ov-file-toolbar > div {
+.ov-file-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   margin-left: auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
 }
 .ov-file-toolbar button {
   font-size: 10px;
   padding: 5px 8px;
+  flex-shrink: 0;
 }
 .ov-file-toolbar .ov-file-path {
   padding: 0;
   border: 0;
   background: transparent;
   justify-content: flex-start;
-  max-width: 100%;
-  overflow-wrap: anywhere;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
   color: #9dbbd4;
+}
+.ov-file-path > svg {
+  flex-shrink: 0;
+}
+.ov-file-path > span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.ov-file-toolbar .ov-labeled-action {
+  height: 28px;
+  white-space: nowrap;
+}
+@container overview-document (max-width: 560px) {
+  .ov-file-toolbar .ov-labeled-action {
+    width: 28px;
+    padding: 4px;
+    gap: 0;
+  }
+  .ov-labeled-action > span {
+    display: none;
+  }
 }
 .ov-file-toolbar .ov-close-without-save {
   border: 0;
@@ -813,6 +847,10 @@
   max-height: 58%;
   flex: none;
 }
+.ov-inline-contract:has(+ .ov-splitter) {
+  min-height: 160px;
+  flex-shrink: 1;
+}
 .ov-inline-contract .ov-contract {
   flex: 1;
 }
@@ -1091,4 +1129,83 @@
 .ov-modal {
   max-height: calc(100vh - 40px);
   overflow-y: auto;
+}
+
+.ov-source-editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.ov-source-editor .yaml-code-editor:focus-within {
+  outline: none;
+  box-shadow: none;
+}
+
+.ov-search-results > button.ov-tree-selected {
+  background: #183b3f;
+  color: #7ae3ce;
+  box-shadow: inset 0 0 0 1px #316966;
+}
+
+.ov-paste-dialog {
+  max-width: 640px;
+}
+.ov-paste-activity {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 0 12px 10px;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.ov-paste-activity > svg {
+  flex: none;
+  margin-top: 1px;
+}
+.ov-paste-activity > span {
+  min-width: 0;
+}
+.ov-paste-destination {
+  display: block;
+  overflow-wrap: anywhere;
+}
+@media (prefers-reduced-motion: reduce) {
+  .ov-paste-activity .ov-spin {
+    animation: none;
+  }
+}
+.ov-paste-text,
+.ov-paste-intro {
+  display: flex;
+  flex-direction: column;
+}
+.ov-paste-text {
+  gap: 16px;
+}
+.ov-paste-intro {
+  gap: 8px;
+}
+.ov-paste-text p {
+  margin: 0;
+  line-height: 1.55;
+}
+.ov-paste-conflict-path {
+  overflow-wrap: anywhere;
+}
+.ov-paste-dialog .ov-paste-apply-all {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 20px 0;
+}
+.ov-paste-dialog > footer {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 24px;
 }

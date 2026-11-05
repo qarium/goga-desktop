@@ -475,3 +475,120 @@ describe("unexpected guardian loss", () => {
     );
   });
 });
+
+describe("private new-run dashboard claim", () => {
+  async function claimFixture() {
+    const f = await setup();
+    const { createHash } = await import("node:crypto");
+    const metadata: RunProcessMetadata = {
+      version: 1,
+      runId: "r",
+      ownerHash,
+      cwd: f.cwd,
+      nonce: "1".repeat(32),
+      rootHash: createHash("sha256").update(f.home).digest("hex"),
+    };
+    const dir = path.join(f.home, ".goga/desktop/recovery", metadata.nonce);
+    await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+    return { ...f, metadata, dir };
+  }
+  it("persists the immutable origin/server pin bound to full private process identity", async () => {
+    const f = await claimFixture();
+    await f.manager.saveDashboard(
+      f.metadata,
+      "http://127.0.0.1:8123/",
+      "afm-1",
+    );
+    const reopened = new RunRecoveryManager(f.home);
+    expect(await reopened.readDashboard(f.metadata, ownerHash, f.cwd)).toEqual({
+      origin: "http://127.0.0.1:8123",
+      serverRunId: "afm-1",
+    });
+    expect(
+      (await fs.stat(path.join(f.dir, "dashboard.json"))).mode & 0o777,
+    ).toBe(0o600);
+    await expect(
+      reopened.saveDashboard(f.metadata, "http://127.0.0.1:8124", "afm-other"),
+    ).rejects.toThrow();
+    await expect(
+      reopened.readDashboard(
+        { ...f.metadata, ownerHash: "b".repeat(64) },
+        "b".repeat(64),
+        f.cwd,
+      ),
+    ).rejects.toThrow();
+  });
+  it("does not infer connections for old records and rejects foreign paths and malformed claims", async () => {
+    const f = await claimFixture();
+    expect(
+      await f.manager.readDashboard(f.metadata, ownerHash, f.cwd),
+    ).toBeUndefined();
+    await expect(
+      f.manager.saveDashboard(f.metadata, "http://example.com:8123", "afm-1"),
+    ).rejects.toThrow();
+    await fs.writeFile(
+      path.join(f.dir, "dashboard.json"),
+      JSON.stringify({ version: 999 }),
+      { mode: 0o600 },
+    );
+    await expect(
+      f.manager.readDashboard(f.metadata, ownerHash, f.cwd),
+    ).rejects.toThrow();
+  });
+  it("rejects symlinks and hardlinks rather than reading or replacing them", async () => {
+    const f = await claimFixture(),
+      target = path.join(f.dir, "dashboard.json"),
+      other = path.join(f.root, "outside");
+    await fs.writeFile(other, "{}", { mode: 0o600 });
+    await fs.symlink(other, target);
+    await expect(
+      f.manager.readDashboard(f.metadata, ownerHash, f.cwd),
+    ).rejects.toThrow();
+    await expect(
+      f.manager.saveDashboard(f.metadata, "http://localhost:8123", "afm-1"),
+    ).rejects.toThrow();
+    await fs.unlink(target);
+    await fs.link(other, target);
+    await expect(
+      f.manager.readDashboard(f.metadata, ownerHash, f.cwd),
+    ).rejects.toThrow();
+    expect(await fs.readFile(other, "utf8")).toBe("{}");
+  });
+});
+
+it("keeps a new supervised payload alive after Desktop-side streams detach and a second manager reconnects", async () => {
+  const f = await setup(),
+    marker = path.join(f.cwd, "heartbeat");
+  const launched = await launch(
+    f,
+    `const fs=require('fs');setInterval(()=>fs.writeFileSync(${JSON.stringify(marker)},String(Date.now())),40);`,
+  );
+  await eventually(
+    () => fs.readFile(marker, "utf8").catch(() => ""),
+    (value) => !!value,
+  );
+  await f.manager.saveDashboard(
+    launched.metadata,
+    "http://127.0.0.1:8123",
+    "afm-new",
+  );
+  const before = await fs.readFile(marker, "utf8");
+  launched.child.stdin.destroy();
+  launched.child.stdout.destroy();
+  launched.child.stderr.destroy();
+  launched.child.unref();
+  await eventually(
+    () => fs.readFile(marker, "utf8"),
+    (value) => value !== before,
+  );
+  const reopened = new RunRecoveryManager(f.home);
+  expect(
+    await reopened.reconcile(launched.metadata, ownerHash, f.cwd),
+  ).toMatchObject({ state: "alive" });
+  expect(
+    await reopened.readDashboard(launched.metadata, ownerHash, f.cwd),
+  ).toEqual({ origin: "http://127.0.0.1:8123", serverRunId: "afm-new" });
+  expect(
+    await reopened.stop(launched.metadata, ownerHash, f.cwd),
+  ).toMatchObject({ state: "terminal", status: "stopped" });
+});

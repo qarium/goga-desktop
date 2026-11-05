@@ -295,7 +295,7 @@ it.each(["workflow", "pipeline", "profile"] as const)(
     ).toBeTruthy();
   },
 );
-it("YAML explicit read uses shared loader without loading unopened files", async () => {
+it("selected Project YAML automatically reads through the shared loader", async () => {
   const d = deferred();
   api.readProjectDocument = vi.fn(() => d.promise);
   const store = createSettingsDocuments();
@@ -308,8 +308,9 @@ it("YAML explicit read uses shared loader without loading unopened files", async
       description="Description"
     />,
   );
-  expect(api.readProjectDocument).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "Открыть редактор" }));
+  expect(api.readProjectDocument).toHaveBeenCalledExactlyOnceWith("p", {
+    kind: "config",
+  });
   loading();
   expect(screen.queryByRole("button", { name: /Читаем/ })).toBeNull();
   await act(async () => d.reject(Error("denied")));

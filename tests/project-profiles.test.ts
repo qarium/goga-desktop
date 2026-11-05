@@ -263,7 +263,7 @@ it("blocks project profile deletion during an active run without stopping it", a
     (f.host as any).runList.length = 0;
   }
 });
-it("save and deletion invalidate old previews only for future launches", async () => {
+it("profile save permits launch with current bytes; deletion reports the actual missing profile", async () => {
   const f = await setup();
   await f.file(f.root, "shared.yml");
   await mkdir(path.join(f.root, ".goga/workflows"));
@@ -276,14 +276,23 @@ it("save and deletion invalidate old previews only for future launches", async (
     skips: [],
   };
   const first = await f.host.preview(request);
-  expect((f.host as any).previews.has(first.token)).toBe(true);
+  const launch = {
+    ...request,
+    previewToken: first.token,
+    topic: { mode: "none" as const },
+    task: "",
+    confirmEmptyTask: false,
+    expectedBranch: "main",
+    confirmBranchSwitch: false,
+    clean: false,
+  };
   const doc = await f.host.readProjectDocument("p", target());
   await f.host.saveProjectDocument("p", target(), "updated: true", doc.version);
-  expect((f.host as any).previews.has(first.token)).toBe(false);
-  const second = await f.host.preview(request);
+  await expect(f.host.launch(launch)).rejects.toThrow("No real launch");
+  expect(f.runner.start).toHaveBeenCalledOnce();
   const ticket = await f.host.prepareDocumentDeletion(source());
-  await f.host.deleteDocument(ticket.token);
-  expect((f.host as any).previews.has(second.token)).toBe(false);
+  expect((await f.host.deleteDocument(ticket.token)).status).toBe("trashed");
+  await expect(f.host.launch(launch)).rejects.toThrow(/профиль/i);
   await expect(f.host.preview(request)).rejects.toThrow(/профиль/i);
-  expect(f.runner.start).not.toHaveBeenCalled();
+  expect(f.runner.start).toHaveBeenCalledOnce();
 });

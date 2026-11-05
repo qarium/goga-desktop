@@ -276,6 +276,7 @@ it("binds full pipeline preview/task/start to the owner rather than primary", as
     "Owner task\n",
   );
   const base = f.runner.command;
+  const catalogCwds: string[] = [];
   f.runner.command = async (exe, args, cwd, env) => {
     if (exe !== "git" && args.includes("board")) {
       const branch = (
@@ -295,12 +296,14 @@ it("binds full pipeline preview/task/start to the owner rather than primary", as
         stderr: "",
       };
     }
-    if (exe !== "git" && args.includes("--list"))
+    if (exe !== "git" && args.includes("--list")) {
+      catalogCwds.push(cwd);
       return {
         stdout:
           "* build\n    name: Owner pipeline\n    description: Owner description\n",
         stderr: "",
       };
+    }
     if (exe !== "git" && args.includes("--info"))
       return {
         stdout: "name: Build\n---\n* work:\n    title: Work\n",
@@ -317,6 +320,12 @@ it("binds full pipeline preview/task/start to the owner rather than primary", as
       profile: "",
       skips: [],
     },
+    // The renderer captures optional display labels from this owner catalog,
+    // not from an execution-authorizing preview cache.
+    discovery = await f.service.discover(context),
+    selectedPipeline = discovery.pipelines.find(
+      (p) => p.id === request.pipeline,
+    ),
     preview = await f.service.preview(request),
     task = await f.service.readTopicTask({
       projectId: f.a.projectId,
@@ -324,8 +333,15 @@ it("binds full pipeline preview/task/start to the owner rather than primary", as
       branch: f.a.branch,
       topic: f.a.topic,
     });
+  expect(selectedPipeline).toMatchObject({
+    name: "Owner pipeline",
+    description: "Owner description",
+  });
+  expect(catalogCwds).toEqual([f.a.path]);
   const run = await f.service.launch({
     ...request,
+    pipelineName: selectedPipeline?.name,
+    pipelineDescription: selectedPipeline?.description,
     topic: { mode: "existing", branch: f.a.branch, topic: f.a.topic },
     clean: false,
     expectedBranch: f.a.branch,
@@ -339,6 +355,8 @@ it("binds full pipeline preview/task/start to the owner rather than primary", as
   expect(run.context?.contextId).toBe(context.contextId);
   expect(run.pipelineName).toBe("Owner pipeline");
   expect(run.pipelineDescription).toBe("Owner description");
+  // Preview and execution do not issue another display-only catalog read.
+  expect(catalogCwds).toEqual([f.a.path]);
   await f.service.stop(run.id);
   expect(
     hasRunSyncCall(after.mock.calls, f.a.projectPath, context, run.id),
@@ -404,7 +422,9 @@ it("allows versioned content saves but blocks stop and close for an unreconciled
       doc.text + "# saved while process state is unverified\n",
       doc.version,
     ),
-  ).resolves.toMatchObject({ text: doc.text + "# saved while process state is unverified\n" });
+  ).resolves.toMatchObject({
+    text: doc.text + "# saved while process state is unverified\n",
+  });
   await recovered.dispose();
   // Simulate the old host being gone; it must not write with an obsolete CAS revision.
   for (const entry of (f.service as any).children.values()) {

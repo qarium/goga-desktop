@@ -6,6 +6,8 @@ import { confirmCloseRun } from "./confirm-close";
 import {
   app,
   BrowserWindow,
+  clipboard,
+  ClipboardItem,
   dialog,
   ipcMain,
   Menu,
@@ -17,6 +19,7 @@ import path from "node:path";
 import os from "node:os";
 import { mkdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
+import { createFileClipboard } from "./file-clipboard";
 import { HostService } from "../host/service";
 import { SettingsStore } from "../host/settings";
 import { TopicPopup } from "./topic-popup";
@@ -104,6 +107,7 @@ if (!app.requestSingleInstanceLock()) {
       const service = new HostService({
         dataDir: app.getPath("userData"),
         settings,
+        fileClipboard: createFileClipboard(clipboard, data => new ClipboardItem(data)),
         showItemInFolder: (absolutePath) =>
           shell.showItemInFolder(absolutePath),
         trashItem: (absolutePath) =>
@@ -123,7 +127,7 @@ if (!app.requestSingleInstanceLock()) {
           send("view-error", { id, error });
           void service.dashboardFailed(id, error).catch(() => {});
         },
-        (id, url) => service.markDashboardOpened(id, url),
+        (id, url) => service.dashboardLoaded(id, url),
       );
       const html = path.join(__dirname, "../dist/index.html"),
         shellURL = pathToFileURL(html).href;
@@ -203,6 +207,10 @@ if (!app.requestSingleInstanceLock()) {
           return result.canceled ? null : (result.filePaths[0] ?? null);
         },
         confirmClose: (run) => confirmCloseRun(win, run),
+        restoreDashboard: async (id) => {
+          const url=await service.prepareDashboardReconnect(id);
+          if(!(await views.restore(id,url)))throw Error("Не удалось восстановить панель. Процесс не перезапускался.");
+        },
         select: (id) => views.select(id),
         viewport: (bounds) => views.setViewport(bounds),
         stop: async (id) => {
@@ -218,7 +226,7 @@ if (!app.requestSingleInstanceLock()) {
           if (result.response === 1) await service.stop(id);
         },
       });
-      service.on("runs", (runs) => {
+      const presentRuns = (runs: ReturnType<HostService["runs"]>) => {
         monitor.reconcile(runs);
         views.reconcile(runs.map((run: { id: string }) => run.id));
         send("runs", runs);
@@ -235,7 +243,9 @@ if (!app.requestSingleInstanceLock()) {
               void service.dashboardFailed(run.id, error).catch(() => {});
             });
         }
-      });
+      };
+      service.on("runs", presentRuns);
+      presentRuns(service.runs());
       win.webContents.on("will-navigate", (event) => event.preventDefault());
       win.webContents.on("will-attach-webview", (event) =>
         event.preventDefault(),
@@ -262,15 +272,15 @@ if (!app.requestSingleInstanceLock()) {
         confirm: async (items) => {
           const answer = await dialog.showMessageBox(win, {
             type: "warning",
-            message: "Завершить запуски и терминалы и закрыть Goga Desktop?",
+            message: "Закрыть Goga Desktop?",
             detail:
               items.map((item) => item.label).join("\n") +
-              "\n\nИзменения файлов сохранятся. Вкладки терминала восстановятся при следующем запуске, но процессы не будут перезапущены.",
-            buttons: ["Остаться", "Завершить и выйти"],
+              "\n\nМожно оставить новые управляемые конвейеры работать и подключиться к ним при следующем открытии. Терминалы в обоих случаях будут завершены; их вкладки сохранятся, но процессы не перезапускаются. Если безопасное сохранение запуска невозможно, приложение останется открытым.",
+            buttons: ["Остаться", "Оставить запуски работать и выйти", "Завершить и выйти"],
             defaultId: 0,
             cancelId: 0,
           });
-          return answer.response === 1;
+          return answer.response === 1 ? "keep" : answer.response === 2;
         },
         finalize: async () => {
           overviewExit.validate();
@@ -301,7 +311,7 @@ if (!app.requestSingleInstanceLock()) {
               (result.message ?? "Приложение остаётся открытым.") +
               (result.inventoryComplete === false
                 ? "\nНе удалось проверить полный список процессов. Отсутствие процессов не подтверждено."
-                : `\nЗавершено: ${result.completed.length}. Осталось: ${result.remaining.length}.`),
+                : `\nЗавершено: ${result.completed.length}. Осталось: ${result.remaining.length}.` + (result.retained?.length ? `\nОставлены работать: ${result.retained.length}.` : "")),
             buttons: ["Закрыть"],
           });
         },

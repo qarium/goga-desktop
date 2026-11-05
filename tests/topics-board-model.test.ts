@@ -49,7 +49,7 @@ it("deduplicates a topic within each column but shares it across matching column
   ]);
   expect(b.columns[0].statuses.find((s) => s.name === "todo")?.count).toBe(1);
 });
-it("keeps unknown chips visible under filters and no-status topics unassigned", () => {
+it("keeps unknown chips visible under filters and maps no-status topics to empty", () => {
   const all = [row("a", ["review"]), row("b", [])];
   const b = projectTopicsBoard([], all, defaultBoardPreferences());
   expect(b.unassigned.statuses).toEqual([{ name: "review", count: 1 }]);
@@ -58,7 +58,7 @@ it("keeps unknown chips visible under filters and no-status topics unassigned", 
     projectTopicsBoard(all, all, defaultBoardPreferences()).unassigned.rows.map(
       (r) => r.topic,
     ),
-  ).toEqual(["a", "b"]);
+  ).toEqual(["a"]);
 });
 it("moves statuses without changing source rows, including prototype-like object keys", () => {
   const p = defaultBoardPreferences(),
@@ -105,4 +105,22 @@ it("selects just a column's filtered topics and never clears hidden selections",
   expect(columnChecked([a, b], s)).toBe(true);
   expect([...toggleColumn([a, b], s)]).toEqual(["hidden"]);
   expect([...s]).toContain("hidden");
+});
+
+it("keeps statusless topics in the category of the built-in empty status", () => {
+  const rows = [row("no-status", [])];
+  const projected = projectTopicsBoard(rows, rows, defaultBoardPreferences());
+  expect(projected.unassigned.statuses).toEqual([]);
+  expect(projected.unassigned.rows).toEqual([]);
+  expect(projected.columns[0].rows.map((r) => r.topic)).toEqual(["no-status"]);
+  expect(
+    projected.columns[0].statuses.find((s) => s.name === "empty")?.count,
+  ).toBe(1);
+  const withoutPlanned = removeBoardColumn(
+    defaultBoardPreferences(),
+    "planned",
+  );
+  expect(
+    projectTopicsBoard(rows, rows, withoutPlanned).unassigned.rows,
+  ).toEqual(rows);
 });

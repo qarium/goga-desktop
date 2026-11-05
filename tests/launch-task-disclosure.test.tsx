@@ -100,8 +100,8 @@ it.each(["saved task", ""])(
     await waitFor(() => expect(api.launch).toHaveBeenCalledTimes(1));
     expect(api.launch.mock.calls[0][0]).toMatchObject({
       task: text,
-      taskVersion: "v1",
     });
+    expect(api.launch.mock.calls[0][0]).not.toHaveProperty("taskVersion");
   },
 );
 it("toggles the same editor without reading again, preserves edits and sends them while collapsed", async () => {
@@ -266,10 +266,10 @@ it.each([
     expect(api.launch.mock.calls[0][0]).toMatchObject({
       context: owner,
       task: document.text,
-      taskVersion: "v1",
       confirmEmptyTask: false,
       topic: { mode: "existing", topic: "main", branch: "main" },
     });
+    expect(api.launch.mock.calls[0][0]).not.toHaveProperty("taskVersion");
   },
 );
 

@@ -537,7 +537,7 @@ it("blocks deletion while launch is pending and then active, without stopping or
   expect(runner.kill).not.toHaveBeenCalled();
   expect(f.calls).toHaveLength(0);
 });
-it("launch waits behind an in-flight trash operation and rejects its invalidated preview", async () => {
+it("launch waits behind in-flight trash and reports the actual deleted workflow", async () => {
   const { runner } = fakeRunner();
   const g = gate(),
     f = await setup(async (p) => {
@@ -546,12 +546,14 @@ it("launch waits behind an in-flight trash operation and rejects its invalidated
       await rename(p, p + ".trashed");
     }, runner);
   await f.file(".goga/workflows/build.yml");
-  const launch = await launchRequest(f.host);
+  const launch = { ...(await launchRequest(f.host)), workflow: "build" };
   const ticket = await f.host.prepareDocumentDeletion(f.source);
   const deletion = f.host.deleteDocument(ticket.token);
   await g.reached;
   const pending = f.host.launch(launch);
-  const failure = expect(pending).rejects.toThrow(/Предпросмотр устарел/);
+  const failure = expect(pending).rejects.toThrow(
+    /Рабочий процесс отсутствует/,
+  );
   expect(runner.start).not.toHaveBeenCalled();
   g.release();
   await deletion;
@@ -595,7 +597,7 @@ it.each(["preview", "discover", "suggestions"] as const)(
     await failed;
   },
 );
-it("home profile deletion invalidates all project previews but leaves bindings untouched", async () => {
+it("home profile deletion leaves bindings untouched and launch reports the missing selected profile", async () => {
   const { runner } = fakeRunner();
   const f = await setup(undefined, runner);
   await f.file(".goga/workflows/build.yml");
@@ -615,7 +617,7 @@ it("home profile deletion invalidates all project previews but leaves bindings u
   expect((await f.host.deleteDocument(ticket.token)).status).toBe("trashed");
   expect((await f.host.readProjectSettings("p")).value.profile).toBe("build");
   expect((await f.host.readProjectSettings("p")).version).toBe(binding.version);
-  await expect(f.host.launch(launch)).rejects.toThrow(/Предпросмотр устарел/);
+  await expect(f.host.launch(launch)).rejects.toThrow(/профиль/i);
   expect(runner.start).not.toHaveBeenCalled();
 });
 it.each(["café", "cafe\u0301", "Σ", "ς"] as const)(
@@ -703,8 +705,8 @@ it("does not retain a usable preview from a snapshot whose project lookup crosse
   expect((await f.host.deleteDocument(ticket.token)).status).toBe("uncertain");
   g.release();
   await failure;
-  // Capabilities must be invalidated even when the caller never received their token.
-  expect((f.host as any).previews.size).toBe(0);
+  // A failed informational preview never grants any write or launch authority.
+  expect(runner.start).not.toHaveBeenCalled();
 });
 it.each(["workflow", "profile"] as const)(
   "preparation for absent %s never creates directories",

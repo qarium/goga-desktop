@@ -3,6 +3,7 @@ import {
   parseCatalog,
   parseCard,
   DashboardParser,
+  dashboardUrl,
   pipelineArgs,
 } from "../src/host/parsers";
 describe("Goga protocols", () => {
@@ -45,6 +46,79 @@ describe("Goga protocols", () => {
       "https://localhost:1234",
     ])
       expect(p.push("stdout", `dashboard: ${url}\n`)).toEqual([]);
+  });
+  it("accepts the dashboard arrow marker and preserves legacy loopback origins", () => {
+    for (const host of ["localhost", "127.0.0.1", "[::1]"])
+      for (const prefix of ["dashboard: ", "  ➜  dashboard: "])
+        expect(dashboardUrl(`${prefix}http://${host}:1234`)).toBe(
+          `http://${host}:1234`,
+        );
+    expect(
+      dashboardUrl("\u001b[32m  ➜  dashboard: http://localhost:1234\u001b[0m"),
+    ).toBe("http://localhost:1234");
+  });
+  it.each(["stdout", "stderr"] as const)(
+    "buffers arrow and legacy lines at every %s chunk boundary, including ANSI",
+    (stream) => {
+      const other = stream === "stdout" ? "stderr" : "stdout";
+      for (const prefix of ["dashboard: ", "  ➜  dashboard: "])
+        for (const line of [
+          `${prefix}http://localhost:1234\n`,
+          `\u001b[32m${prefix}http://localhost:1234\u001b[0m\r\n`,
+        ])
+          for (let split = 0; split < line.length; split++) {
+            const parser = new DashboardParser();
+            expect(parser.push(stream, line.slice(0, split))).toEqual([]);
+            expect(parser.push(other, "unrelated build output\n")).toEqual([]);
+            expect(parser.push(stream, line.slice(split))).toEqual([
+              "http://localhost:1234",
+            ]);
+            expect(parser.flush(stream)).toEqual([]);
+          }
+    },
+  );
+  it("keeps decorated dashboard lines anchored and rejects unsafe URL variants", () => {
+    for (const prefix of ["dashboard: ", "  ➜  dashboard: "])
+      for (const url of [
+        "http://evil.com:1234",
+        "http://localhost.evil:1234",
+        "http://evil@localhost:1234",
+        "http://user:pass@127.0.0.1:1234",
+        "http://127.0.0.1:1234/path",
+        "http://localhost:1234/",
+        "http://localhost:1234?query=1",
+        "http://localhost:1234#fragment",
+        "http://2130706433:1234",
+        "http://0.0.0.0:1234",
+        "https://localhost:1234",
+        "http://localhost",
+        "http://localhost:0",
+        "http://localhost:65536",
+        "http://localhost:123456",
+        "http://localhost:-1",
+        "http://localhost:abc",
+        "http://localhost:1234 trailing text",
+      ]) {
+        const line = `\u001b[32m${prefix}${url}\u001b[0m`;
+        expect(dashboardUrl(line), line).toBeUndefined();
+        expect(new DashboardParser().push("stdout", `${line}\n`), line).toEqual(
+          [],
+        );
+      }
+    for (const prefix of [
+      "server ",
+      "unrelated dashboard: ",
+      "unrelated ➜ dashboard: ",
+      "➜dashboard: ",
+      "➜ ➜ dashboard: ",
+      "→ dashboard: ",
+    ]) {
+      const line = `${prefix}http://localhost:1234`;
+      expect(dashboardUrl(line), line).toBeUndefined();
+      expect(new DashboardParser().push("stderr", `${line}\n`), line).toEqual(
+        [],
+      );
+    }
   });
   it("uses same composition argv for preview and run", () => {
     const r = {

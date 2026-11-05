@@ -1,7 +1,8 @@
+import { pipelineDisplayMetadata } from "../shared/pipeline-display";
 import { preparationErrorMessage } from "./preparation-error";
 import type { TopicContextRef } from "../shared/worktrees";
 import { contextRef, contextRequestKey, draftKey } from "./topic-context";
-import { useReadScope } from "./read-request";
+import { readRequest, useReadScope } from "./read-request";
 import { LoadingBoundary } from "./LoadingBoundary";
 import { useEffect, useRef, useState, useId } from "react";
 import type {
@@ -50,14 +51,16 @@ export function LaunchForm({
   onOpenTopic,
   onPrepared,
   onBusyChange,
+  onLaunchStarted,
 }: {
   project: Project;
   owner?: TopicContextRef;
   blocked?: boolean | string;
-  onLaunched: (run: Run, stale?: boolean) => void;
+  onLaunched: (run: Run, stale?: boolean) => void | Promise<void>;
   onTopicsChanged?: () => void;
   onCancel: () => void;
   onBusyChange?: (projectId: string, busy: boolean) => void;
+  onLaunchStarted?: () => void;
   draftStore?: DraftStore;
   settingsRevision?: string;
   suspended?: boolean;
@@ -88,6 +91,8 @@ export function LaunchForm({
   const [data, setData] = useState<Discovery | null>(null),
     [error, setError] = useState(""),
     [pipeline, setPipeline] = useState("");
+  // Catalog/preview refreshes must not erase a failed submitted operation.
+  const [launchError, setLaunchError] = useState("");
   const [workflow, setWorkflow] = useState("auto"),
     [profile, setProfile] = useState(initial?.profile ?? ""),
     [skips, setSkips] = useState<string[]>([]);
@@ -371,6 +376,7 @@ export function LaunchForm({
     appliedCatalogEpoch,
   ]);
   const resetComposition = (fn: () => void, local = false) => {
+    setLaunchError("");
     generation.current++;
     setPreviewRefresh(local ? "pipeline" : null);
     setPending(true);
@@ -564,8 +570,7 @@ export function LaunchForm({
   const resetDraft = resetTaskKey ? drafts.tasks.get(resetTaskKey) : undefined;
   // Capture every resettable value and a monotonic identity. Returning to an
   // earlier selection must not revive an older operation or its consent.
-  const resetSignature = JSON.stringify([
-    suspended,
+  const formSignature = JSON.stringify([
     ownerKey,
     taskKey,
     mode,
@@ -581,6 +586,7 @@ export function LaunchForm({
     confirmEmpty,
     data?.currentBranch,
   ]);
+  const resetSignature = JSON.stringify([suspended, formSignature]);
   const resetSnapshot = useRef<{
     signature: string;
     draft: TaskDraft | undefined;
@@ -777,6 +783,7 @@ export function LaunchForm({
       setPending(false);
       setResetNote("");
       setError("");
+      setLaunchError("");
       drafts.listeners.forEach((fn) => fn());
     } catch (e) {
       if (current()) setError(preparationErrorMessage(e));
@@ -837,8 +844,7 @@ export function LaunchForm({
     suspended,
     settingsRefreshing,
   ]);
-  const ready =
-    !suspended &&
+  const launchReady =
     !blocked &&
     !settingsRefreshing &&
     !settingsRefreshError &&
@@ -850,15 +856,14 @@ export function LaunchForm({
     !pending &&
     !topicPreparationPending &&
     preview.stages.length > 0;
+  const ready = !suspended && launchReady;
   const validTopic =
     mode === "none" || (mode === "new" ? name.trim().length > 0 : !!topic);
   // Identity is monotonic even for A→B→A changes. Consent never attaches to
   // a later draft, preview or catalog that merely has equivalent visible text.
   const launchSignature = JSON.stringify([
-    resetSignature,
+    formSignature,
     settingsRevision,
-    suspended,
-    ready,
     validTopic,
     taskReady,
     preview?.token,
@@ -887,8 +892,40 @@ export function LaunchForm({
       store: drafts,
     };
   const launchSnapshot = launchContext.current;
+  // An accepted operation owns an immutable request. Only genuine draft edits
+  // protect a newer draft from its completion; presentation refreshes do not.
+  const draftIntentSignature = JSON.stringify([
+    ownerKey,
+    mode,
+    pipeline,
+    workflow,
+    profile,
+    skips,
+    clean,
+    confirmEmpty,
+    mode === "existing" ? [topic?.branch, topic?.topic] : null,
+    mode === "new" ? [name, baseRef] : null,
+  ]);
+  const draftIntentRef = useRef<{
+    signature: string;
+    draft: TaskDraft | undefined;
+    store: DraftStore;
+  } | null>(null);
+  if (
+    !draftIntentRef.current ||
+    draftIntentRef.current.signature !== draftIntentSignature ||
+    draftIntentRef.current.draft !== editor.draft ||
+    draftIntentRef.current.store !== drafts
+  )
+    draftIntentRef.current = {
+      signature: draftIntentSignature,
+      draft: editor.draft,
+      store: drafts,
+    };
+  const draftIntent = draftIntentRef.current;
   type LaunchIntent = {
     context: typeof launchSnapshot;
+    draftContext: typeof draftIntent;
     request: LaunchRequest;
     saveTask: boolean;
     from: string;
@@ -900,7 +937,7 @@ export function LaunchForm({
   useEffect(() => {
     pendingLaunch.current = null;
     setLaunchConfirmation(null);
-  }, [launchSnapshot]);
+  }, [launchSnapshot, suspended]);
   const canLaunch =
     ready &&
     !!preview &&
@@ -918,8 +955,12 @@ export function LaunchForm({
       resetOperation.current
     )
       return;
+    const selectedPipeline = data.pipelines.find(
+      (item) => item.id === pipeline,
+    );
     const intent: LaunchIntent = {
       context: launchSnapshot,
+      draftContext: draftIntent,
       creating: mode === "new",
       from:
         mode === "new"
@@ -934,12 +975,16 @@ export function LaunchForm({
         projectId: project.id,
         ...(owner ? { context: contextRef(owner) } : {}),
         pipeline,
+        ...pipelineDisplayMetadata({
+          pipelineName: selectedPipeline?.name,
+          pipelineDescription: selectedPipeline?.description,
+        }),
         workflow,
         ...profileRequest,
         skips: [...skips],
         previewToken: preview.token,
         task,
-        ...(mode === "existing"
+        ...(mode === "existing" && editor.dirty
           ? { taskVersion: editor.draft!.document!.version }
           : {}),
         confirmEmptyTask: mode !== "none" && confirmEmpty,
@@ -980,32 +1025,42 @@ export function LaunchForm({
     launchInFlight.current = true;
     const submittedForm = drafts.forms.get(storageKey);
     setLaunching(true);
+    onLaunchStarted?.();
     setError("");
+    setLaunchError("");
     try {
-      const branch = await read(
+      // This preflight belongs to the accepted operation, not a cancellable
+      // view read. Navigation, UI busy flags and preview refreshes cannot revoke
+      // it; Host validates the captured exact owner and request.
+      const branch = await readRequest(
         "checkoutBranch",
         intent.request.context ?? intent.request.projectId,
       );
-      if (!mounted.current || launchContext.current !== intent.context) return;
       if (branch !== intent.request.expectedBranch) {
-        updateBranch(branch);
+        if (mounted.current && draftIntentRef.current === intent.draftContext)
+          updateBranch(branch);
         throw new Error(
           "Текущая ветка изменилась. Проверьте параметры и подтвердите запуск повторно.",
         );
       }
       const run = await window.goga.launch(intent.request);
-      if (mounted.current) {
-        const stale = launchContext.current !== intent.context;
-        if (!stale) {
-          editor.clear();
-          if (drafts.forms.get(storageKey) === submittedForm)
-            drafts.forms.delete(storageKey);
-        }
-        onLaunched(run, stale);
+      const stale =
+        !mounted.current || draftIntentRef.current !== intent.draftContext;
+      if (!stale) {
+        editor.clear();
+        // Catalog refresh can recreate this presentation record unchanged.
+        if (
+          JSON.stringify(drafts.forms.get(storageKey)) ===
+          JSON.stringify(submittedForm)
+        )
+          drafts.forms.delete(storageKey);
       }
+      // The source App still registers the exact result even if this view was
+      // unmounted; a genuine newer draft remains protected by stale=true.
+      await onLaunched(run, stale);
     } catch (e) {
-      if (mounted.current && launchContext.current === intent.context) {
-        setError(message(e));
+      if (mounted.current && draftIntentRef.current === intent.draftContext) {
+        setLaunchError(message(e));
         try {
           const branch = await read(
             "checkoutBranch",
@@ -1013,7 +1068,7 @@ export function LaunchForm({
           );
           if (
             mounted.current &&
-            launchContext.current === intent.context &&
+            draftIntentRef.current === intent.draftContext &&
             branch !== intent.request.expectedBranch
           )
             updateBranch(branch);
@@ -1048,7 +1103,8 @@ export function LaunchForm({
     (!data && !catalogLoading ? error : "") ||
     (!settingsPreviewFailure ? settingsRefreshError : "") ||
     (editor.draft?.status === "error" ? editor.draft.error : "");
-  const correctionError = settingsPreviewFailure ? settingsRefreshError : error;
+  const correctionError =
+    launchError || (settingsPreviewFailure ? settingsRefreshError : error);
   const formLoading =
     !suspended &&
     !loadFailure &&
@@ -1104,8 +1160,12 @@ export function LaunchForm({
         </button>
       </div>
       <LoadingBoundary
-        pending={formLoading}
-        label="Загружаем параметры конвейера…"
+        pending={formLoading || launching}
+        label={
+          launching
+            ? "Подготавливаем запуск…"
+            : "Загружаем параметры конвейера…"
+        }
         error={loadFailure}
         retryLabel={
           settingsRefreshError ? "Повторить обновление каталога" : undefined
@@ -1473,7 +1533,9 @@ export function LaunchForm({
                 listLabel="Рабочие процессы"
                 value={workflow}
                 disabled={launching || suspended || settingsRefreshing}
-                onChange={(value) => resetComposition(() => setWorkflow(value))}
+                onChange={(value) =>
+                  resetComposition(() => setWorkflow(value), true)
+                }
                 entries={[
                   {
                     value: "auto",
@@ -1495,7 +1557,9 @@ export function LaunchForm({
                 listLabel="Профили"
                 value={profile}
                 disabled={launching || suspended || settingsRefreshing}
-                onChange={(value) => resetComposition(() => setProfile(value))}
+                onChange={(value) =>
+                  resetComposition(() => setProfile(value), true)
+                }
                 entries={[
                   ...(data.projectSettings
                     ? [
@@ -1670,7 +1734,7 @@ export function LaunchForm({
           onConfirm={() => void resetForm(resetConfirmation)}
         />
       )}
-      <div className="form-actions" hidden={formLoading}>
+      <div className="form-actions" hidden={formLoading || launching}>
         <button
           className="quiet"
           onClick={() => {

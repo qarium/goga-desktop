@@ -6,6 +6,7 @@ import {
   type Dispatch,
   type SetStateAction,
 } from "react";
+import { selectOverviewRows } from "./selection";
 import { useTree } from "@headless-tree/react";
 import {
   syncDataLoaderFeature,
@@ -68,6 +69,9 @@ export function FileTree({
 }) {
   const ref = useRef<HTMLDivElement>(null);
   const anchor = useRef<string | null>(null);
+  useEffect(() => {
+    anchor.current = null;
+  }, [scope]);
   const selected = selectedPaths ?? (selection ? [selection] : []);
   const entries = useMemo(
     () =>
@@ -86,6 +90,8 @@ export function FileTree({
       selectedItems: selected,
     },
     setExpandedItems: setExpanded,
+    setSelectedItems: (value) =>
+      onSelectedPaths?.(typeof value === "function" ? value(selected) : value),
     getItemName: (item) => item.getItemData().name,
     isItemFolder: (item) => item.getItemData().kind === "directory",
     dataLoader: {
@@ -147,23 +153,19 @@ export function FileTree({
     path: string,
     event: { shiftKey: boolean; metaKey: boolean; ctrlKey: boolean },
   ) => {
-    let next = [path];
-    if (event.shiftKey && anchor.current) {
-      const paths = items.map((item) => item.getId());
-      const a = paths.indexOf(anchor.current),
-        b = paths.indexOf(path);
-      if (a >= 0 && b >= 0)
-        next = paths.slice(Math.min(a, b), Math.max(a, b) + 1);
-    } else if (event.metaKey || event.ctrlKey) {
-      next = selected.includes(path)
-        ? selected.filter((p) => p !== path)
-        : [...selected, path];
-      anchor.current = path;
-    } else anchor.current = path;
-    onSelectedPaths?.(next);
+    const next = selectOverviewRows(
+      items.map((item) => item.getId()),
+      selected,
+      anchor.current,
+      path,
+      event,
+    );
+    anchor.current = next.anchor;
+    onSelectedPaths?.(next.paths);
   };
   const menu = (e: OverviewEntry, x: number, y: number) => {
     const paths = selected.includes(e.path) ? selected : [e.path];
+    if (!selected.includes(e.path)) anchor.current = e.path;
     onSelectedPaths?.(paths);
     onContextMenu?.({
       paths,
@@ -210,7 +212,8 @@ export function FileTree({
                 if (!event.metaKey && !event.ctrlKey && !event.shiftKey)
                   item.primaryAction();
               }}
-              onDoubleClick={() => {
+              onDoubleClick={(event) => {
+                if (event.metaKey || event.ctrlKey || event.shiftKey) return;
                 if (folder) onNavigate?.(e.path);
               }}
               onContextMenu={(event) => {

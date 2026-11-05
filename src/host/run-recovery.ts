@@ -1,5 +1,5 @@
 import { constants } from "node:fs";
-import { lstat, mkdir, open, realpath } from "node:fs/promises";
+import { lstat, mkdir, open, realpath, link, unlink } from "node:fs/promises";
 import path from "node:path";
 import {
   createHash,
@@ -13,6 +13,10 @@ import {
   type ChildProcessWithoutNullStreams,
 } from "node:child_process";
 import { z } from "zod";
+import {
+  allowedDashboardURL,
+  dashboardServerId,
+} from "../shared/dashboard-connection";
 import { noSymlinks } from "./settings";
 import { childEnvironment } from "./process-environment";
 
@@ -203,6 +207,105 @@ export class RunRecoveryManager {
     } finally {
       await handle.close();
     }
+  }
+  /** Immutable first-observed connection, private and bound to the supervisor nonce. */
+  async saveDashboard(
+    metadata: RunRecoveryMetadata,
+    origin: string,
+    serverRunId: string,
+  ): Promise<void> {
+    if (
+      !allowedDashboardURL(origin) ||
+      !dashboardServerId(serverRunId) ||
+      !(await this.valid(metadata, metadata.ownerHash, metadata.cwd))
+    )
+      throw Error("Недопустимая связь панели с запуском.");
+    await this.directories(metadata, false);
+    const claim = {
+      version: 1 as const,
+      metadata,
+      origin: new URL(origin).origin,
+      serverRunId,
+    };
+    const existing = await this.readDashboard(
+      metadata,
+      metadata.ownerHash,
+      metadata.cwd,
+    );
+    if (existing) {
+      if (
+        existing.origin !== claim.origin ||
+        existing.serverRunId !== serverRunId
+      )
+        throw Error("Источник панели изменился. Переподключение отменено.");
+      return;
+    }
+    const target = path.join(this.dir(metadata), "dashboard.json"),
+      temp = target + "." + randomBytes(12).toString("hex");
+    const handle = await open(
+      temp,
+      constants.O_WRONLY |
+        constants.O_CREAT |
+        constants.O_EXCL |
+        constants.O_NOFOLLOW,
+      0o600,
+    );
+    try {
+      await handle.writeFile(JSON.stringify(claim));
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    try {
+      // Publish create-only: a concurrent writer cannot replace the original pin.
+      await link(temp, target);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      const current = await this.readDashboard(
+        metadata,
+        metadata.ownerHash,
+        metadata.cwd,
+      );
+      if (
+        current?.origin !== claim.origin ||
+        current.serverRunId !== serverRunId
+      )
+        throw Error("Источник панели изменился. Переподключение отменено.");
+    } finally {
+      await unlink(temp);
+    }
+    const directory = await open(
+      this.dir(metadata),
+      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+    );
+    try {
+      await directory.sync();
+    } finally {
+      await directory.close();
+    }
+  }
+  async readDashboard(
+    metadata: RunRecoveryMetadata,
+    ownerHash: string,
+    cwd: string,
+  ): Promise<{ origin: string; serverRunId: string } | undefined> {
+    if (!(await this.valid(metadata, ownerHash, cwd)))
+      throw Error("Владелец панели не подтверждён.");
+    await this.directories(metadata, false);
+    const value = await this.document(metadata, "dashboard.json");
+    if (value === undefined) return;
+    const claim = z
+      .object({
+        version: z.literal(1),
+        metadata: runRecoveryMetadataSchema,
+        origin: z.string().refine(allowedDashboardURL),
+        serverRunId: z.string().refine(dashboardServerId),
+      })
+      .strict()
+      .parse(value);
+    if (!same(claim.metadata, metadata))
+      throw Error("Владелец панели изменился.");
+    return { origin: claim.origin, serverRunId: claim.serverRunId };
   }
   private async request(
     metadata: RunRecoveryMetadata,

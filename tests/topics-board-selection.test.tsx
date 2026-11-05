@@ -64,9 +64,9 @@ it("reports hidden selection and keeps it across reset, but resets on year chang
   fireEvent.change(screen.getByRole("searchbox"), {
     target: { value: "not-found" },
   });
-  expect(screen.getByText(/Скрыто фильтрами: 3/)).toBeTruthy();
+  expect(screen.getByText(/Скрыто фильтрами: 4/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Сбросить фильтры" }));
-  expect(screen.getByText(/Выбрано: 3/)).toBeTruthy();
+  expect(screen.getByText(/Выбрано: 4/)).toBeTruthy();
   fireEvent.change(screen.getByRole("textbox", { name: "Год" }), {
     target: { value: "2025" },
   });
@@ -123,7 +123,12 @@ it("offers selected deletion and clear in the real filter bar without using filt
   expect(window.goga.prepareTopicRemoval).toHaveBeenCalledWith(
     expect.objectContaining({
       action: "delete",
-      topics: ["history-search", "report-export", "dependency-audit"],
+      topics: [
+        "history-search",
+        "report-export",
+        "dependency-audit",
+        "log-structure",
+      ],
     }),
   );
 });

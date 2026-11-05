@@ -6,6 +6,9 @@ import type {
   OverviewFileActionRequest,
   OverviewFileActionPreview,
   OverviewFileActionResult,
+  OverviewPasteResult,
+  OverviewPastePreview,
+  OverviewPasteDecision,
 } from "./project-overview";
 import type { SchemaCell, CellContract } from "./project-architecture";
 import type {
@@ -178,6 +181,21 @@ export interface DesktopAPI {
   ): Promise<OverviewFileActionPreview>;
   executeOverviewFileAction(token: string): Promise<OverviewFileActionResult>;
   revealOverviewEntry(scope: ScopeRef, path: string): Promise<void>;
+  copyOverviewPaths(
+    scope: ScopeRef,
+    paths: string[],
+    absolute: boolean,
+  ): Promise<void>;
+  prepareOverviewPaste(
+    scope: ScopeRef,
+    directory: string,
+  ): Promise<OverviewPastePreview>;
+  executeOverviewPaste(
+    token: string,
+    decisions: OverviewPasteDecision[],
+  ): Promise<OverviewPasteResult>;
+  copyOverviewEntries(scope: ScopeRef, paths: string[]): Promise<void>;
+  pasteOverviewEntries(scope: ScopeRef, destinationDirectory: string): Promise<OverviewPasteResult>;
 
   saveOverviewFile(
     scope: ScopeRef,
@@ -391,6 +409,7 @@ export interface DesktopAPI {
   runs(): Promise<Run[]>;
   closeRun(id: string): Promise<boolean>;
   stopRun(id: string): Promise<void>;
+  restoreDashboard?(id: string): Promise<void>;
   selectRun(id: string | null): Promise<void>;
   setDashboardViewport?(bounds: DashboardViewport): Promise<void>;
   listSettings(): Promise<{ profiles: string[] }>;

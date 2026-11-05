@@ -1,9 +1,17 @@
+import { pipelineDisplayMetadata } from "../shared/pipeline-display";
 import { topicRemovalRequestSchema, topicRemovalTokenSchema, topicCloneCleanupRequestSchema, type TopicRemovalRequest, type TopicCloneCleanupRequest } from "../shared/topic-removal";
 import { TopicRemovalDomain, ownTopicRefs, type TopicRemovalAccess, type RemovalInventory } from "./topic-removal";
 import { readTopicRefInventory, readTopicMutationSnapshot } from "./topics";
 import {
   overviewFileActionRequestSchema,
   overviewFileActionTokenSchema,
+  overviewCopyPathsSchema,
+  overviewDirectorySchema,
+  overviewPasteDecisionsSchema,
+  type OverviewPastePreview,
+  type OverviewPasteDecision,
+  type FileClipboard,
+  type OverviewPasteResult,
   type OverviewFileActionRequest,
   type OverviewFileActionResult,
 } from "../shared/project-overview";
@@ -12,6 +20,11 @@ import {
   prepareOverviewAction,
   checkedOverviewEntry,
 } from "./overview-file-actions";
+import {
+  copyOverviewEntries as pasteOverviewFiles,
+  prepareOverviewPaste as prepareOverviewFiles,
+  type PreparedOverviewPaste,
+} from "./overview-paste";
 import { withNativeGitCompletion } from "./git-native-completion";
 import { NativeGitSequence } from "./git-native-sequence";
 import { createGogaPathReader, gogaEnvironment } from "./goga-environment";
@@ -222,7 +235,7 @@ import { GitHistoryReader } from "./git-history-reader";
 import { withTrustedGitIndex } from "./git-index-scope";
 import type { GitMergeContext } from "./git-merge-safety";
 import { preserveGitMergeCleanupError } from "./git-merge-safety";
-import { NativeGitWorkspaceActions } from "./git-native-commit";
+import { GitCommitCoordinator } from "./git-commit-coordinator";
 import { NativeGitConflictActions } from "./git-native-conflict-save";
 import { createNativeGitCapability, nativeIntent } from "./git-native-context";
 import { NativeGitDiscardActions } from "./git-native-discard";
@@ -268,6 +281,7 @@ import {
   sanitizeRepositoryLog,
 } from "./repository-actions";
 import { captureRunOutput } from "./run-output";
+import { readDashboardIdentity } from "../shared/dashboard-connection";
 import { RunRecoveryManager } from "./run-recovery";
 import {
   SettingsStore,
@@ -276,7 +290,7 @@ import {
   noSymlinks,
   optionalText,
 } from "./settings";
-import type { PreparedShutdown } from "./shutdown";
+import { ShutdownKeepError, type PreparedShutdown } from "./shutdown";
 import {
   prepareTerminalEnvironment,
   type TerminalLaunch,
@@ -302,12 +316,6 @@ const slug = (name: string) =>
     .replace(/[^\x00-\x7f]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
-interface SavedPreview {
-  metadata?: Pipeline;
-  request: PipelineRequest;
-  fingerprint: string;
-  preview: Preview;
-}
 export class HostService extends EventEmitter {
   private overviewSchemaIssued = new Map<string, number>();
   private overviewSchemas = new Map<
@@ -326,6 +334,13 @@ export class HostService extends EventEmitter {
   private lastRunSave = "";
   private initialized = false;
   private recovery?: RunRecoveryManager;
+  private dashboardFlights = new Map<
+    string,
+    { controller: AbortController; promise: Promise<string> }
+  >();
+  private recoveryPoll?: ReturnType<typeof setInterval>;
+  private recoveryPolling = false;
+  private detachedRuns = new Set<string>();
   private sync: ContextSyncManager;
   private selectedContext: TopicContextRef | null = null;
   private selectionEpoch = 0;
@@ -374,12 +389,17 @@ export class HostService extends EventEmitter {
         }),
       ),
   });
-  private gitActions = new NativeGitWorkspaceActions({
+  private gitActions = new GitCommitCoordinator({
     context: (scope, action) => this.gitCommitContext(scope, action),
   });
   private personalSettings: SettingsStore;
   private gitDiscardActions: NativeGitDiscardActions;
   private trashItem?: TrashItem;
+  private fileClipboard?: FileClipboard;
+  private overviewPasteTickets = new Map<
+    string,
+    { scope: ScopeRef; root: string; prepared: PreparedOverviewPaste }
+  >();
   private showItemInFolder?: (absolutePath: string) => void;
   private terminalLeases = new Map<string, number>();
   private operationTail: Promise<unknown> = Promise.resolve();
@@ -402,7 +422,6 @@ export class HostService extends EventEmitter {
   private settingsLocks = new Map<string, Promise<unknown>>();
   private documentSaveRevisions = new Map<string, number>();
   private runList: Run[] = [];
-  private previews = new Map<string, SavedPreview>();
   private locks = new Map<string, Promise<unknown>>();
   private children = new Map<
     string,
@@ -431,6 +450,7 @@ export class HostService extends EventEmitter {
     runner?: Runner;
     settings?: SettingsStore;
     trashItem?: TrashItem;
+    fileClipboard?: FileClipboard;
     showItemInFolder?: (absolutePath: string) => void;
     recovery?: RunRecoveryManager;
   }) {
@@ -441,6 +461,7 @@ export class HostService extends EventEmitter {
     });
     this.personalSettings = options.settings ?? new SettingsStore(this.home);
     this.trashItem = options.trashItem;
+    this.fileClipboard = options.fileClipboard;
     this.showItemInFolder = options.showItemInFolder;
     this.gitDiscardActions = new NativeGitDiscardActions({
       context: (scope, action) => this.gitCommitContext(scope, action, true),
@@ -503,6 +524,24 @@ export class HostService extends EventEmitter {
     ))
       await this.reconcileStoredRun(run);
     await this.persistRuns();
+    this.recoveryPoll = setInterval(() => {
+      if (this.disposed || this.shutdownAdmission || this.recoveryPolling)
+        return;
+      this.recoveryPolling = true;
+      void Promise.all(
+        this.runList
+          .filter(
+            (r) =>
+              r.dashboardRecoveryVersion === 1 &&
+              !this.children.has(r.id) &&
+              ["starting", "running"].includes(r.status),
+          )
+          .map((r) => this.reconcileRun(r.id).catch(() => {})),
+      ).finally(() => {
+        this.recoveryPolling = false;
+      });
+    }, 3000);
+    this.recoveryPoll.unref();
     await this.sync.recover(await this.listProjects());
     for (const run of this.runList.filter(
       (r) =>
@@ -526,8 +565,17 @@ export class HostService extends EventEmitter {
     );
     const signature = JSON.stringify(
       rows.map(
-        ({ output, url, error, persistenceError, recoveryMessage, ...row }) =>
-          row,
+        ({
+          output,
+          url,
+          error,
+          persistenceError,
+          recoveryMessage,
+          dashboardReconnect,
+          dashboardRunId,
+          dashboardMessage,
+          ...row
+        }) => row,
       ),
     );
     if (signature === this.lastRunSave) return this.runSaveTail;
@@ -584,6 +632,12 @@ export class HostService extends EventEmitter {
     const members = this.activeKeys.get(key);
     members?.delete(id);
     if (!members?.size) this.activeKeys.delete(key);
+  }
+  /** Keep removes the observer, not live checkout membership. Release it only
+   * after recovery has authoritatively confirmed a terminal process result. */
+  private releaseRecoveredTerminalRun(id: string) {
+    for (const key of this.activeKeys.keys()) this.removeActiveRun(key, id);
+    this.detachedRuns.delete(id);
   }
   private check() {
     if (this.disposed) throw new Error("Приложение завершает работу");
@@ -867,9 +921,6 @@ export class HostService extends EventEmitter {
         value,
         version,
       );
-      for (const [key, preview] of this.previews)
-        if (preview.request.projectId === scopeProjectId(id))
-          this.previews.delete(key);
       return { ...document, profiles };
     });
   }
@@ -962,10 +1013,11 @@ export class HostService extends EventEmitter {
       overviewFiles.readOverviewFile(this.root(project), p),
     );
   }
+  // A running payload is not a file lock. Overview writes retain exact-owner,
+  // settings and path/version guards without requiring an idle process context.
   private overviewWrite<T>(
     scope: ScopeRef,
     action: (root: string, guard: () => Promise<void>) => Promise<T>,
-    allowActiveRun = false,
   ) {
     this.assertLaunchAllowed();
     return this.operation(() =>
@@ -976,7 +1028,6 @@ export class HostService extends EventEmitter {
             this.assertLaunchAllowed();
             assertReadActive();
             this.assertCatalog(epoch);
-            if (!allowActiveRun) this.assertScopeWritable(project);
             await this.validateBinding(project);
             await this.assertSettings(project.id);
           };
@@ -989,12 +1040,8 @@ export class HostService extends EventEmitter {
     );
   }
   saveOverviewFile(scope: ScopeRef, p: string, text: string, version: string) {
-    // A running payload is not a file lock. Content saves retain exact-owner
-    // validation and optimistic file versions; structural actions still require idle.
-    return this.overviewWrite(
-      scope,
-      (root, guard) => overviewFiles.saveOverviewFile(root, p, text, version, guard),
-      true,
+    return this.overviewWrite(scope, (root, guard) =>
+      overviewFiles.saveOverviewFile(root, p, text, version, guard),
     );
   }
   createOverviewEntry(
@@ -1007,6 +1054,144 @@ export class HostService extends EventEmitter {
       overviewFiles.createOverviewEntry(root, p, kind, text, guard),
     );
   }
+  async copyOverviewPaths(
+    scope: ScopeRef,
+    paths: string[],
+    absolute: boolean,
+  ): Promise<void> {
+    const selected = structuredClone(this.parseScope(scope));
+    const unique = [...new Set(overviewCopyPathsSchema.parse(paths))];
+    if (typeof absolute !== "boolean") throw Error("Недопустимый формат пути.");
+    if (!this.fileClipboard?.writeText)
+      throw Error("Текстовый буфер обмена недоступен.");
+    return this.overviewRead(selected, async (project) => {
+      const root = this.root(project);
+      const entries = await Promise.all(
+        unique.map((p) => checkedOverviewEntry(root, p)),
+      );
+      await this.validateBinding(project);
+      await this.assertSettings(project.id);
+      for (const entry of entries) await entry.verify();
+      await this.validateBinding(project);
+      await this.fileClipboard!.writeText!(
+        unique.map((p) => (absolute ? path.join(root, p) : p)).join("\n"),
+      );
+    });
+  }
+  async prepareOverviewPaste(
+    scope: ScopeRef,
+    directory: string,
+  ): Promise<OverviewPastePreview> {
+    const selected = structuredClone(this.parseScope(scope));
+    const destination = overviewDirectorySchema.parse(directory);
+    if (!this.fileClipboard) throw Error("Файловый буфер обмена недоступен.");
+    const expectedRoot = await this.overviewRead(selected, async (project) => {
+      await this.validateBinding(project);
+      await this.assertSettings(project.id);
+      return this.root(project);
+    });
+    const sources = [...(await this.fileClipboard.readFiles())];
+    return this.overviewRead(selected, async (project) => {
+      await this.validateBinding(project);
+      await this.assertSettings(project.id);
+      const root = this.root(project);
+      if (root !== expectedRoot)
+        throw Error(
+          "Рабочая папка проекта изменилась. Повторите вставку в выбранной папке.",
+        );
+      const prepared = await prepareOverviewFiles(root, sources, destination);
+      await this.validateBinding(project);
+      await this.assertSettings(project.id);
+      while (this.overviewPasteTickets.size >= 128)
+        this.overviewPasteTickets.delete(
+          this.overviewPasteTickets.keys().next().value!,
+        );
+      const token = randomUUID();
+      this.overviewPasteTickets.set(token, { scope: selected, root, prepared });
+      return {
+        token,
+        conflicts: prepared.conflicts.map((conflict) => ({ ...conflict })),
+      };
+    });
+  }
+  async executeOverviewPaste(
+    token: string,
+    decisions: OverviewPasteDecision[],
+  ): Promise<OverviewPasteResult> {
+    // Consume synchronously before admission: duplicate calls never retry writes.
+    const pending = overviewFileActionTokenSchema.safeParse(token).success
+      ? this.overviewPasteTickets.get(token)
+      : undefined;
+    this.overviewPasteTickets.delete(token);
+    const notDone = (): OverviewPasteResult => ({
+      status: "not-done",
+      completedPaths: [],
+      touchedPaths: [],
+      message:
+        "Подтверждение устарело или уже использовано. Обновите список и повторите вставку.",
+    });
+    if (!pending) return notDone();
+    let observed: OverviewPasteResult | undefined;
+    try {
+      const parsed = overviewPasteDecisionsSchema.parse(decisions);
+      return await this.overviewWrite(pending.scope, async (root, guard) => {
+        if (root !== pending.root)
+          throw Error("Рабочая папка проекта изменилась.");
+        observed = await pending.prepared.perform(parsed, guard);
+        return observed;
+      });
+    } catch {
+      return observed
+        ? {
+            ...observed,
+            status: "uncertain",
+            message:
+              observed.status === "uncertain"
+                ? observed.message
+                : "Результат копирования не подтверждён. Проверьте дерево; автоматического повтора и удаления не будет.",
+          }
+        : notDone();
+    }
+  }
+  async copyOverviewEntries(scope: ScopeRef, paths: string[]): Promise<void> {
+    const selected = structuredClone(this.parseScope(scope));
+    const parsed = overviewCopyPathsSchema.parse(paths);
+    const unique = [...new Set(parsed)].filter(p => !parsed.some(parent => parent !== p && p.startsWith(parent + "/")));
+    if (!this.fileClipboard) throw Error("Файловый буфер обмена недоступен.");
+    return this.overviewRead(selected, async project => {
+      const root = this.root(project);
+      const entries = await Promise.all(unique.map(p => checkedOverviewEntry(root, p, true)));
+      await this.validateBinding(project);
+      await this.assertSettings(project.id);
+      for (const entry of entries) await entry.verify();
+      await this.validateBinding(project);
+      await this.fileClipboard!.writeFiles(unique.map(p => path.join(root, p)));
+    });
+  }
+  async pasteOverviewEntries(scope: ScopeRef, destinationDirectory: string): Promise<OverviewPasteResult> {
+    const selected = structuredClone(this.parseScope(scope));
+    const destination = overviewDirectorySchema.parse(destinationDirectory);
+    if (!this.fileClipboard) throw Error("Файловый буфер обмена недоступен.");
+    // Capture authority before the native clipboard await. A later selection is
+    // never used as a fallback destination for this operation.
+    const expectedRoot = await this.overviewRead(selected, async project => {
+      await this.validateBinding(project);
+      await this.assertSettings(project.id);
+      return this.root(project);
+    });
+    const sources = [...await this.fileClipboard.readFiles()];
+    let observed: OverviewPasteResult | undefined;
+    try {
+      return await this.overviewWrite(selected, async (root, guard) => {
+        if (root !== expectedRoot) throw Error("Рабочая папка проекта изменилась. Повторите вставку в выбранной папке.");
+        observed = await pasteOverviewFiles(root, sources, destination, guard);
+        return observed;
+      });
+    } catch (error) {
+      if (!observed) throw error;
+      return { ...observed, status: "uncertain", message: "Результат копирования не подтверждён. Проверьте дерево; автоматического повтора и удаления не будет." };
+    }
+  }
   async prepareOverviewFileAction(
     scope: ScopeRef,
     request: OverviewFileActionRequest,
@@ -1015,7 +1200,6 @@ export class HostService extends EventEmitter {
     const selected = structuredClone(this.parseScope(scope));
     const parsed = overviewFileActionRequestSchema.parse(request);
     return this.overviewRead(selected, async (project) => {
-      this.assertScopeWritable(project);
       await this.validateBinding(project);
       const root = this.root(project);
       const prepared = await prepareOverviewAction(root, parsed);
@@ -1211,9 +1395,6 @@ export class HostService extends EventEmitter {
         scopeProjectId(id),
         (this.documentSaveRevisions.get(scopeProjectId(id)) ?? 0) + 1,
       );
-      for (const [key, preview] of this.previews)
-        if (preview.request.projectId === scopeProjectId(id))
-          this.previews.delete(key);
       return document;
     });
   }
@@ -1330,7 +1511,6 @@ export class HostService extends EventEmitter {
         // while the adapter is working, must never publish pre-deletion results.
         this.deleting = true;
         this.catalogEpoch++;
-        this.previews.clear();
         if (pending.source.scope === "project")
           this.documentSaveRevisions.set(
             pending.source.projectId,
@@ -1359,7 +1539,6 @@ export class HostService extends EventEmitter {
           };
         } finally {
           this.catalogEpoch++;
-          this.previews.clear();
           this.deleting = false;
         }
       };
@@ -1568,7 +1747,7 @@ export class HostService extends EventEmitter {
   }
   private async readTopicTaskWithSettings(
     request: TopicTaskRequest,
-    verifyLaunchReadiness = false,
+    forLaunch = false,
   ): Promise<TopicTaskDocument> {
     if (
       !request ||
@@ -1593,7 +1772,7 @@ export class HostService extends EventEmitter {
     // resolution still check live paths. The launch path deliberately revalidates.
     const snapshot = this.context.getStore();
     const p =
-      !verifyLaunchReadiness && snapshot?.projectId === request.projectId
+      !forLaunch && snapshot?.projectId === request.projectId
         ? snapshot.scopedProject
         : await this.project(request.projectId);
     await guardedProject(this.root(p));
@@ -1606,18 +1785,16 @@ export class HostService extends EventEmitter {
       (taskOwner.topic !== request.topic || taskOwner.branch !== request.branch)
     )
       throw Error("Задача относится к другому контексту.");
-    // Opening the editor needs a scoped task snapshot, not repeated full
-    // readiness scans. The private launch path opts into those before writing.
-    const readiness =
-      taskOwner && verifyLaunchReadiness
-        ? await this.readyTopicContext(topicContextRefSchema.parse(taskOwner))
-        : undefined;
-    const matches = (await this.topics(p, taskOwner?.year)).filter(
-      (t) => t.branch === request.branch && t.topic === request.topic,
-    );
-    if (matches.length > 1)
+    // Catalog rows describe presentation, not authority to launch in an already
+    // resolved checkout. Launch reads only this task and validates the live owner.
+    const matches = forLaunch
+      ? undefined
+      : (await this.topics(p, taskOwner?.year)).filter(
+          (t) => t.branch === request.branch && t.topic === request.topic,
+        );
+    if (matches && matches.length > 1)
       throw new Error("Топик неоднозначен. Обновите каталог.");
-    if (matches.length === 0 && !taskOwner)
+    if (matches?.length === 0 && !taskOwner)
       throw new Error(
         "Данные задачи выбранного топика не найдены. Обновите каталог.",
       );
@@ -1650,13 +1827,16 @@ export class HostService extends EventEmitter {
           );
     if (
       (await git(["branch", "--show-current"])).trim() !== current ||
-      (
-        await git([
-          "rev-parse",
-          "--verify",
-          `refs/heads/${request.branch}^{commit}`,
-        ])
-      ).trim() !== commit ||
+      // A working task is not pinned to an unrelated HEAD revision. Only
+      // display/committed reads need their exact ref to remain coherent.
+      ((!forLaunch || current !== request.branch) &&
+        (
+          await git([
+            "rev-parse",
+            "--verify",
+            `refs/heads/${request.branch}^{commit}`,
+          ])
+        ).trim() !== commit) ||
       taskPath(
         request.topic,
         request.context?.year ?? this.context.getStore()?.binding?.year,
@@ -1665,13 +1845,13 @@ export class HostService extends EventEmitter {
       throw new Error(
         "Ветка или задача изменились во время чтения. Откройте задачу заново.",
       );
-    await readiness?.verify();
+    if (forLaunch) await this.validateBinding(p);
     assertReadActive();
     if (taskOwner) await this.resolveTopicContext(taskOwner);
     assertReadActive();
     return taskDocument(this.root(p), request.branch, commit, relative, {
       ...value,
-      ...(!matches.length
+      ...(matches?.length === 0
         ? { catalogState: "missing-local-metadata" as const }
         : {}),
     });
@@ -3285,7 +3465,9 @@ export class HostService extends EventEmitter {
   ): ContextDeletionPreview {
     return {
       token: plan.token,
-      ...(plan.flow === "clone-after-topic" ? { purpose: "clone-after-topic" as const } : {}),
+      ...(plan.flow === "clone-after-topic"
+        ? { purpose: "clone-after-topic" as const }
+        : {}),
       contextId: plan.owner.contextId,
       stage: plan.stage,
       switchBranch: plan.primarySwitch?.to,
@@ -3604,7 +3786,11 @@ export class HostService extends EventEmitter {
             beforeTrash: async (latest) => {
               if (this.deletionGuards(plan.owner).active)
                 throw Error("Активный контекст нельзя удалить.");
-              if (latest.flow === "clone-after-topic") await this.assertCleanupTopicAbsent(latest.owner, latest.projectPath);
+              if (latest.flow === "clone-after-topic")
+                await this.assertCleanupTopicAbsent(
+                  latest.owner,
+                  latest.projectPath,
+                );
               else await this.contextTopicDeletion(latest);
             },
             stopIdleTerminals: async () => {
@@ -3623,7 +3809,6 @@ export class HostService extends EventEmitter {
           input.allowAhead,
         );
         this.catalogEpoch++;
-        this.previews.clear();
         return {
           projectId: input.projectId,
           status: result.status,
@@ -3683,7 +3868,6 @@ export class HostService extends EventEmitter {
           },
         );
         this.catalogEpoch++;
-        this.previews.clear();
         return {
           projectId: input.projectId,
           status: result.status,
@@ -4369,107 +4553,228 @@ export class HostService extends EventEmitter {
       return details;
     });
   }
-  private async assertCleanupTopicAbsent(owner: TopicContextRef, expectedPath?: string) {
+  private async assertCleanupTopicAbsent(
+    owner: TopicContextRef,
+    expectedPath?: string,
+  ) {
     return this.snapshot(owner.projectId, async () => {
       const project = await this.project(owner.projectId);
-      if (expectedPath && project.path !== expectedPath) throw Error("Основная папка изменилась.");
+      if (expectedPath && project.path !== expectedPath)
+        throw Error("Основная папка изменилась.");
       const d = await this.topicsContext(owner.projectId);
       if (ownTopicRefs(await readTopicRefInventory(d.git), owner.topic).length)
-        throw Error("Собственная ветка топика существует. Очистка копии не разрешена.");
+        throw Error(
+          "Собственная ветка топика существует. Очистка копии не разрешена.",
+        );
       const remotes = (await d.git(["remote"])).split("\n");
-      if (remotes.includes("origin") && (await d.git(["ls-remote", "--heads", "--", "origin", `refs/heads/${owner.branch}`])).trim())
+      if (
+        remotes.includes("origin") &&
+        (
+          await d.git([
+            "ls-remote",
+            "--heads",
+            "--",
+            "origin",
+            `refs/heads/${owner.branch}`,
+          ])
+        ).trim()
+      )
         throw Error("Ветка на origin существует; копия сохранена.");
     });
   }
-  private async topicRemovalAccess(projectId: string, year: string): Promise<TopicRemovalAccess> {
+  private async topicRemovalAccess(
+    projectId: string,
+    year: string,
+  ): Promise<TopicRemovalAccess> {
     const project = await this.project(projectId);
-    const owners = async () => (await this.clones.list(projectId)).filter(o => o.year === year && o.storageKind === "clone" && o.ownership === "managed" && !o.deletedAt);
+    const owners = async () =>
+      (await this.clones.list(projectId)).filter(
+        (o) =>
+          o.year === year &&
+          o.storageKind === "clone" &&
+          o.ownership === "managed" &&
+          !o.deletedAt,
+      );
     const inventory = async (): Promise<RemovalInventory> => {
       // Mutation admission needs public Git state and registry ownership, not
       // repeated Goga status projections from every clone in the display table.
       const before = await this.clones.reconcile(projectId);
-      const d = await this.topicsContext(projectId), local = await readTopicMutationSnapshot(d, year);
+      const d = await this.topicsContext(projectId),
+        local = await readTopicMutationSnapshot(d, year);
       const after = await this.clones.list(projectId);
-      if (JSON.stringify(before) !== JSON.stringify(after)) throw Error("Каталог контекстов изменился.");
-      return { projectId, projectPath: project.path, year,
-        revision: digest(JSON.stringify([local.revision, before.map(r => [r.contextId,r.revision,r.state])])),
-        refs: local.refs, owners: before.filter(o => o.year === year && o.storageKind === "clone" && o.ownership === "managed" && !o.deletedAt) };
+      if (JSON.stringify(before) !== JSON.stringify(after))
+        throw Error("Каталог контекстов изменился.");
+      return {
+        projectId,
+        projectPath: project.path,
+        year,
+        revision: digest(
+          JSON.stringify([
+            local.revision,
+            before.map((r) => [r.contextId, r.revision, r.state]),
+          ]),
+        ),
+        refs: local.refs,
+        owners: before.filter(
+          (o) =>
+            o.year === year &&
+            o.storageKind === "clone" &&
+            o.ownership === "managed" &&
+            !o.deletedAt,
+        ),
+      };
     };
     const nativeContext = async (before: RemovalInventory) => {
-      if (before.projectPath !== project.path) throw Error("Основная папка изменилась.");
+      if (before.projectPath !== project.path)
+        throw Error("Основная папка изменилась.");
       const d = await this.topicsContext(projectId);
-      if (d.owner || d.root !== project.path) throw Error("Подмена основной папки рабочей копией запрещена.");
+      if (d.owner || d.root !== project.path)
+        throw Error("Подмена основной папки рабочей копией запрещена.");
       d.removalFlow = true;
       d.assertPrimaryOwnerAvailable = async () => {
         const fresh = await owners();
-        const key = (rows: WorktreeRecord[]) => JSON.stringify([...rows].sort((a,b) => a.contextId.localeCompare(b.contextId)));
-        if (fresh.some(o => o.projectPath !== project.path) || key(fresh) !== key(before.owners))
-          throw Error("Владельцы рабочих копий изменились. Подтвердите удаление заново.");
+        const key = (rows: WorktreeRecord[]) =>
+          JSON.stringify(
+            [...rows].sort((a, b) => a.contextId.localeCompare(b.contextId)),
+          );
+        if (
+          fresh.some((o) => o.projectPath !== project.path) ||
+          key(fresh) !== key(before.owners)
+        )
+          throw Error(
+            "Владельцы рабочих копий изменились. Подтвердите удаление заново.",
+          );
       };
       return d;
     };
     return {
       inventory,
-      inspect: async owner => {
-        if (this.deletionGuards(owner).active) throw Error("В копии есть активные сессии.");
+      inspect: async (owner) => {
+        if (this.deletionGuards(owner).active)
+          throw Error("В копии есть активные сессии.");
         const recovery = await this.contextDeletionRecovery(owner);
         if (recovery) throw Error("Есть незавершённое удаление копии.");
         return this.clones.captureRemovalBaseline(owner);
       },
       prepareNative: async (request, before) => {
-        const d = await nativeContext(before), local = await this.topicDomain.board(d, year);
-        const topics = request.action === "delete" ? request.topics.filter(topic =>
-          ownTopicRefs(before.refs, topic).length || !before.owners.some(o => o.topic === topic)) : [];
+        const d = await nativeContext(before),
+          local = await this.topicDomain.board(d, year);
+        const topics =
+          request.action === "delete"
+            ? request.topics.filter(
+                (topic) =>
+                  ownTopicRefs(before.refs, topic).length ||
+                  !before.owners.some((o) => o.topic === topic),
+              )
+            : [];
         if (request.action === "delete" && !topics.length) return null;
-        return this.topicDomain.prepare(d, { ...request, ...(request.action === "delete" ? { topics } : {}), expectedRevision: local.revision });
+        return this.topicDomain.prepare(d, {
+          ...request,
+          ...(request.action === "delete" ? { topics } : {}),
+          expectedRevision: local.revision,
+        });
       },
       executeNative: async (token, before) => {
-        const d = await nativeContext(before), key = await this.key(project);
+        const d = await nativeContext(before),
+          key = await this.key(project);
         const previous = this.locks.get(key) ?? Promise.resolve();
-        const next = previous.catch(() => {}).then(() => this.topicDomain.execute(d, token));
+        const next = previous
+          .catch(() => {})
+          .then(() => this.topicDomain.execute(d, token));
         this.locks.set(key, next);
-        try { return await next; } finally { if (this.locks.get(key) === next) this.locks.delete(key); }
+        try {
+          return await next;
+        } finally {
+          if (this.locks.get(key) === next) this.locks.delete(key);
+        }
       },
       prepareCleanup: async (owner, baseline) => {
         await this.assertCleanupTopicAbsent(owner, project.path);
-        const plan = await this.clones.prepareContextCleanup(owner, this.deletionGuards(owner), baseline);
+        const plan = await this.clones.prepareContextCleanup(
+          owner,
+          this.deletionGuards(owner),
+          baseline,
+        );
         return this.contextDeletionPreview(plan);
       },
     };
   }
   async prepareTopicRemoval(input: TopicRemovalRequest) {
-    if (this.context.getStore()?.binding) throw Error("Удаление доступно только для основной папки проекта.");
+    if (this.context.getStore()?.binding)
+      throw Error("Удаление доступно только для основной папки проекта.");
     const request = topicRemovalRequestSchema.parse(input);
-    return this.operation(() => this.exclusive(request.projectId, () => this.snapshot(request.projectId, async () =>
-      this.topicRemovals.prepare(await this.topicRemovalAccess(request.projectId, request.year), request))));
+    return this.operation(() =>
+      this.exclusive(request.projectId, () =>
+        this.snapshot(request.projectId, async () =>
+          this.topicRemovals.prepare(
+            await this.topicRemovalAccess(request.projectId, request.year),
+            request,
+          ),
+        ),
+      ),
+    );
   }
   async executeTopicRemoval(input: { projectId: string; token: string }) {
-    if (this.context.getStore()?.binding) throw Error("Удаление доступно только для основной папки проекта.");
-    const parsed = topicRemovalTokenSchema.parse(input), prepared = this.topicRemovals.take(parsed.projectId, parsed.token);
-    return this.operation(() => this.exclusive(parsed.projectId, () => this.snapshot(parsed.projectId, async () => {
-      const result = await this.topicRemovals.execute(await this.topicRemovalAccess(parsed.projectId, prepared.request.year), prepared);
-      this.previews.clear();
-      return result;
-    }, false)));
+    if (this.context.getStore()?.binding)
+      throw Error("Удаление доступно только для основной папки проекта.");
+    const parsed = topicRemovalTokenSchema.parse(input),
+      prepared = this.topicRemovals.take(parsed.projectId, parsed.token);
+    return this.operation(() =>
+      this.exclusive(parsed.projectId, () =>
+        this.snapshot(
+          parsed.projectId,
+          async () => {
+            const result = await this.topicRemovals.execute(
+              await this.topicRemovalAccess(
+                parsed.projectId,
+                prepared.request.year,
+              ),
+              prepared,
+            );
+            return result;
+          },
+          false,
+        ),
+      ),
+    );
   }
-  async prepareTopicCloneCleanup(input: TopicCloneCleanupRequest): Promise<ContextDeletionPreview> {
-    const request = topicCloneCleanupRequestSchema.parse(input), owner = request.owner;
-    return this.operation(() => this.exclusive(owner.projectId, () => this.snapshot(owner.projectId, async () => {
-      const recovery = await this.contextDeletionRecovery(owner);
-      if (recovery) {
-        if (recovery.purpose !== "clone-after-topic") throw Error("Сначала завершите прежнее удаление этого контекста.");
-        // A prepared cleanup has not moved any data: an explicit recheck must
-        // bind a new snapshot/consent. Later stages keep their original journal.
-        if (recovery.stage !== "prepared") return recovery;
-      }
-      const row = await this.resolveTopicContext(owner);
-      await this.assertCleanupTopicAbsent(owner, row.projectPath);
-      const baseline = request.operationToken ? this.topicRemovals.baseline(request.operationToken, owner) : undefined;
-      return this.contextDeletionPreview(await this.clones.prepareContextCleanup(owner, this.deletionGuards(owner), baseline));
-    })));
+  async prepareTopicCloneCleanup(
+    input: TopicCloneCleanupRequest,
+  ): Promise<ContextDeletionPreview> {
+    const request = topicCloneCleanupRequestSchema.parse(input),
+      owner = request.owner;
+    return this.operation(() =>
+      this.exclusive(owner.projectId, () =>
+        this.snapshot(owner.projectId, async () => {
+          const recovery = await this.contextDeletionRecovery(owner);
+          if (recovery) {
+            if (recovery.purpose !== "clone-after-topic")
+              throw Error(
+                "Сначала завершите прежнее удаление этого контекста.",
+              );
+            // A prepared cleanup has not moved any data: an explicit recheck must
+            // bind a new snapshot/consent. Later stages keep their original journal.
+            if (recovery.stage !== "prepared") return recovery;
+          }
+          const row = await this.resolveTopicContext(owner);
+          await this.assertCleanupTopicAbsent(owner, row.projectPath);
+          const baseline = request.operationToken
+            ? this.topicRemovals.baseline(request.operationToken, owner)
+            : undefined;
+          return this.contextDeletionPreview(
+            await this.clones.prepareContextCleanup(
+              owner,
+              this.deletionGuards(owner),
+              baseline,
+            ),
+          );
+        }),
+      ),
+    );
   }
   async prepareTopicOperation(request: TopicOperationRequest) {
-    if (request?.action === "clear") throw Error("Используйте отдельное подтверждение очистки топиков.");
+    if (request?.action === "clear")
+      throw Error("Используйте отдельное подтверждение очистки топиков.");
     return this.operation(() =>
       this.exclusive(request?.projectId, () =>
         this.snapshot(request?.context ?? request?.projectId, async () => {
@@ -4680,13 +4985,13 @@ export class HostService extends EventEmitter {
         this.names(path.join(this.root(p), ".goga/workflows")),
         this.profiles(p),
       ] as const;
-      const [help, branch, refs, workflows, profiles] = await Promise.all(reads).catch(
-        async (error) => {
-          // Peers can still hold settings locks; retain ownership until all settle.
-          await Promise.allSettled(reads);
-          throw error;
-        },
-      );
+      const [help, branch, refs, workflows, profiles] = await Promise.all(
+        reads,
+      ).catch(async (error) => {
+        // Peers can still hold settings locks; retain ownership until all settle.
+        await Promise.allSettled(reads);
+        throw error;
+      });
       const runtime = {
         ...(await buildHomeEnvironment(this.home)),
         ...Object.fromEntries(
@@ -5299,11 +5604,6 @@ export class HostService extends EventEmitter {
     const epoch = this.context.getStore()!.catalogEpoch;
     this.assertCatalog(epoch);
     const before = await this.fingerprint(p);
-    const metadata = r.context
-      ? parseCatalog(await this.cmd(p, ["pipeline", "--list", "--info"])).find(
-          (row) => row.id === r.pipeline,
-        )
-      : undefined;
     const composed = await this.compose(p, r);
     if (before !== (await this.fingerprint(p)))
       throw new Error(
@@ -5311,12 +5611,6 @@ export class HostService extends EventEmitter {
       );
     this.assertCatalog(epoch);
     const result = { ...composed, token: randomUUID() };
-    this.previews.set(result.token, {
-      request: r,
-      ...(metadata ? { metadata } : {}),
-      fingerprint: before,
-      preview: result,
-    });
     return result;
   }
   private publicRun(run: Run): Run {
@@ -5362,6 +5656,7 @@ export class HostService extends EventEmitter {
             ]
           : null,
         t ? [t.text, t.year, t.topic, t.branch] : null,
+        ...(run.dashboardRecoveryVersion ? [run.dashboardRecoveryVersion] : []),
       ]),
     );
   }
@@ -5388,8 +5683,19 @@ export class HostService extends EventEmitter {
     });
     return launched.child;
   }
+  private clearDashboard(run: Run) {
+    delete run.url;
+    delete run.dashboardReconnect;
+    delete run.dashboardRunId;
+    delete run.dashboardMessage;
+  }
   private async reconcileStoredRun(run: Run) {
+    const active = () =>
+      this.runList.includes(run) &&
+      ["starting", "running"].includes(run.status);
+    if (!active()) return;
     if (!this.recovery) {
+      this.clearDashboard(run);
       run.recovery = "unverified";
       run.recoveryMessage =
         "Нет проверяемого канала восстановления этого запуска.";
@@ -5413,23 +5719,42 @@ export class HostService extends EventEmitter {
         this.runOwnerHash(run),
         this.root(p),
       );
+      if (!active()) return;
       if (result.state === "terminal") {
         run.status = result.status;
         run.endedAt = result.endedAt;
         delete run.recovery;
         delete run.recoveryMessage;
-        delete run.url;
+        this.clearDashboard(run);
         run.dashboardOpened = false;
+        this.releaseRecoveredTerminalRun(run.id);
         if (run.context) run.syncPending = true;
       } else if (result.state === "alive") {
         run.recovery = "confirmed";
         run.recoveryMessage =
           "Владелец supervisor подтверждён. Процесс продолжает работу; его можно безопасно остановить.";
+        if (
+          run.dashboardRecoveryVersion === 1 &&
+          run.kind !== "build" &&
+          run.process
+        ) {
+          try {
+            await this.restoreSavedDashboard(run);
+          } catch {
+            if (!active()) return;
+            this.clearDashboard(run);
+            run.dashboardMessage =
+              "Панель пока недоступна или её источник изменился. Можно повторить подключение; процесс не перезапускался.";
+          }
+        }
       } else {
+        this.clearDashboard(run);
         run.recovery = "unverified";
         run.recoveryMessage = result.message;
       }
     } catch {
+      if (!active()) return;
+      this.clearDashboard(run);
       run.recovery = "unverified";
       run.recoveryMessage =
         "Исходный контекст или сохранённые данные процесса недоступны. Никакой процесс не остановлен; восстановите исходную копию и повторите проверку.";
@@ -5484,13 +5809,13 @@ export class HostService extends EventEmitter {
     if (
       typeof request.confirmEmptyTask !== "boolean" ||
       "confirmTaskOverwrite" in request ||
-      (request.topic?.mode === "existing"
-        ? typeof request.taskVersion !== "string" ||
-          !/^[a-f0-9]{64}$/.test(request.taskVersion)
-        : request.taskVersion !== undefined)
+      (request.taskVersion !== undefined &&
+        (request.topic?.mode !== "existing" ||
+          typeof request.taskVersion !== "string" ||
+          !/^[a-f0-9]{64}$/.test(request.taskVersion)))
     )
       throw new Error(
-        "Задача устарела или отсутствует версия. Откройте её заново.",
+        "Некорректная версия записи задачи. Черновик не сохранён.",
       );
     if (
       request.topic?.mode === "none" &&
@@ -5522,11 +5847,9 @@ export class HostService extends EventEmitter {
     primary: Project,
     pipeline: PipelineRequest,
     request: LaunchRequest,
-    approved: SavedPreview,
   ): Promise<Run> {
     if (request.topic.mode !== "new" || this.binding(primary))
       throw Error("Новый топик должен создаваться из исходного проекта.");
-    const documentVersion = this.context.getStore()!.document.version;
     const base = (
       await this.cmd(
         primary,
@@ -5539,12 +5862,6 @@ export class HostService extends EventEmitter {
         true,
       )
     ).trim();
-    if (approved.fingerprint !== (await this.fingerprint(primary)))
-      throw Error(
-        "Предпросмотр устарел. Обновите стадии перед созданием копии.",
-      );
-    // Never replay a creation intent after an uncertain/partial preparation.
-    this.previews.delete(request.previewToken);
     const owner = await this.clones.create(primary, {
       year: String(new Date().getFullYear()),
       branch: request.topic.name,
@@ -5552,26 +5869,11 @@ export class HostService extends EventEmitter {
     });
     try {
       await this.assertSettings(primary.id);
-      if (approved.fingerprint !== (await this.fingerprint(primary)))
-        throw Error(
-          "Исходный проект изменился во время подготовки копии. Обновите параметры запуска.",
-        );
       const context = worktreeContextRef(owner);
       return await this.snapshot(
         context,
         async () => {
-          if (this.context.getStore()!.document.version !== documentVersion)
-            throw Error(
-              "Настройки проекта изменились во время подготовки копии.",
-            );
           const scoped = { ...pipeline, context };
-          const preview = await this.previewWithSettings(scoped);
-          const composition = ({ stages, workflow, profile }: Preview) =>
-            JSON.stringify({ stages, workflow, profile });
-          if (composition(preview) !== composition(approved.preview))
-            throw Error(
-              "В копии изменились стадии/рабочий процесс/профиль. Обновите предпросмотр перед запуском.",
-            );
           const task = await this.readTopicTaskWithSettings(
             {
               projectId: primary.id,
@@ -5584,7 +5886,6 @@ export class HostService extends EventEmitter {
           return this.launchWithSettings({
             ...request,
             ...scoped,
-            previewToken: preview.token,
             topic: {
               mode: "existing",
               topic: owner.topic,
@@ -5611,16 +5912,6 @@ export class HostService extends EventEmitter {
   ): Promise<Run> {
     this.check();
     this.assertRunAdmission(p, key, "pipeline");
-    const saved = this.previews.get(request.previewToken);
-    // Freshness depends on project state, not time spent editing the form.
-    if (
-      !saved ||
-      JSON.stringify(saved.request) !== JSON.stringify(r) ||
-      saved.fingerprint !== (await this.fingerprint(p))
-    )
-      throw new Error("Предпросмотр устарел. Обновите стадии перед запуском.");
-    if (!saved.preview.stages.length)
-      throw new Error("Нельзя запустить пустой набор стадий");
     validateTaskText(request.task);
     const selection = request.topic;
     if (!selection || !["none", "existing", "new"].includes(selection.mode))
@@ -5665,47 +5956,18 @@ export class HostService extends EventEmitter {
     let branch: string, topic: string, launchTaskPath: string | undefined;
     let mutated = false;
     let taskSnapshot: TopicTaskDocument | undefined;
-    const assertTask = async (
-      expected:
-        Pick<TopicTaskDocument, "text" | "exists"> | undefined = taskSnapshot,
-    ) => {
-      if (!taskSnapshot || !expected) return;
-      if (taskPath(topic, this.binding(p)?.year) !== taskSnapshot.path)
-        throw new Error("Год задачи изменился. Откройте её заново.");
-      const commit = (
-        await this.cmd(
-          p,
-          ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`],
-          true,
-        )
-      ).trim();
-      if (this.binding(p)) {
-        const rows = (await this.topics(p, this.binding(p)!.year)).filter(
-          (row) => row.topic === topic && row.branch === branch,
-        );
-        // A confirmed task version includes whether native metadata was absent.
-        // Only our own subsequent todo write may turn that absence into a row.
-        const expectedMissing =
-          expected === taskSnapshot &&
-          taskSnapshot.catalogState === "missing-local-metadata";
-        if (rows.length > 1 || (rows.length === 0) !== expectedMissing)
-          throw Error("Каталог топика изменился. Откройте задачу заново.");
-      }
+    const taskConflict = () =>
+      Error(
+        "Задача изменена вне приложения. Файл не перезаписан; ваш черновик сохранён в форме. Перечитайте задачу и разрешите конфликт перед сохранением.",
+      );
+    const assertTaskWrite = async () => {
+      if (!taskSnapshot || request.taskVersion === undefined) return;
       const actual = await readWorkingTask(this.root(p), taskSnapshot.path);
       if (
-        taskDocument(
-          this.root(p),
-          branch,
-          commit,
-          taskSnapshot.path,
-          taskSnapshot,
-        ).version !== taskSnapshot.version ||
-        actual.exists !== expected.exists ||
-        actual.text !== expected.text
+        actual.text !== taskSnapshot.text ||
+        actual.exists !== taskSnapshot.exists
       )
-        throw new Error(
-          "Задача или ветка изменены извне. Запуск отменён; откройте задачу заново.",
-        );
+        throw taskConflict();
     };
     try {
       if (selection.mode === "new") {
@@ -5798,7 +6060,7 @@ export class HostService extends EventEmitter {
         this.check();
         await assertBranch(current);
         await this.assertSettings(p.id);
-        return this.launchNewTopicInClone(p, r, request, saved);
+        return this.launchNewTopicInClone(p, r, request);
       } else if (selection.mode === "none") {
         // Primary checkout only: no topic lookup, task write, clone or checkout.
         branch = current;
@@ -5811,17 +6073,27 @@ export class HostService extends EventEmitter {
           true,
         );
         launchTaskPath = taskSnapshot.path;
-        if (taskSnapshot.version !== request.taskVersion)
-          throw new Error(
-            "Задача изменена извне или устарела. Откройте её заново.",
-          );
         if (
+          request.taskVersion !== undefined &&
+          request.task !== taskSnapshot.text &&
+          taskSnapshot.version !== request.taskVersion
+        )
+          throw taskConflict();
+        if (
+          request.taskVersion !== undefined &&
           taskSnapshot.text.trim() &&
           !request.task.trim() &&
           !request.confirmEmptyTask
         )
           throw new Error("Подтвердите замену задачи пустым текстом.");
         if (branch !== current) {
+          const targetRef = (
+            await this.cmd(
+              p,
+              ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`],
+              true,
+            )
+          ).trim();
           if ((await this.cmd(p, ["status", "--porcelain"], true)).trim())
             throw new Error(
               "Есть незакоммиченные изменения. Сохраните или уберите их перед переключением ветки.",
@@ -5829,8 +6101,13 @@ export class HostService extends EventEmitter {
           this.check();
           await assertBranch(current);
           if (
-            (await this.readTopicTask({ projectId: p.id, branch, topic }))
-              .version !== taskSnapshot.version
+            (
+              await this.cmd(
+                p,
+                ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`],
+                true,
+              )
+            ).trim() !== targetRef
           )
             throw new Error(
               "Задача или ветка изменились перед переключением. Откройте задачу заново.",
@@ -5851,45 +6128,51 @@ export class HostService extends EventEmitter {
       ).trim();
       if (actual !== branch)
         throw new Error("Текущая ветка изменилась вне приложения");
-      await assertTask();
-      const compositionFingerprint = await this.fingerprint(p);
+      // Preview is presentation only. Compose the chosen command against the
+      // current checkout rather than comparing it to a cached admission token.
       const composed = await this.compose(p, r);
-      if (compositionFingerprint !== (await this.fingerprint(p)))
-        throw new Error(
-          "Определения изменились во время финального предпросмотра. Обновите стадии.",
-        );
-      if (
-        JSON.stringify(composed) !==
-        JSON.stringify({
-          stages: saved.preview.stages,
-          workflow: saved.preview.workflow,
-          profile: saved.preview.profile,
-        })
-      )
-        throw new Error(
-          "После выбора ветки изменились стадии/рабочий процесс/профиль. Обновите предпросмотр.",
-        );
+      if (!composed.stages.length)
+        throw Error("Нельзя запустить пустой набор стадий");
       this.check();
       await assertBranch(branch);
-      await assertTask();
-      await assertBranch(branch);
-      if (taskSnapshot && request.task !== taskSnapshot.text) {
-        this.check();
+      if (
+        taskSnapshot &&
+        request.taskVersion !== undefined &&
+        request.task !== taskSnapshot.text
+      ) {
         await this.assertSettings(p.id);
-        await atomicWrite(
-          path.join(this.root(p), taskSnapshot.path),
-          request.task,
-        );
+        await assertTaskWrite();
+        try {
+          await atomicWrite(
+            path.join(this.root(p), taskSnapshot.path),
+            request.task,
+            {
+              createOnly: !taskSnapshot.exists,
+              beforeCommit: async () => {
+                this.check();
+                await assertBranch(branch);
+                await this.assertSettings(p.id);
+                await this.validateBinding(p);
+                await assertTaskWrite();
+              },
+            },
+          );
+        } catch (error) {
+          if (
+            !taskSnapshot.exists &&
+            (error as NodeJS.ErrnoException).code === "EEXIST"
+          )
+            throw taskConflict();
+          throw error;
+        }
         mutated = true;
+        const written = await readWorkingTask(this.root(p), taskSnapshot.path);
+        if (!written.exists || written.text !== request.task)
+          throw Error(
+            "Задача изменилась во время сохранения. Проверьте todo.md; запуск не выполнен, черновик сохранён в форме.",
+          );
       }
       await assertBranch(branch);
-      // Optimistic final check: preserve the original revision even after our save.
-      // External writers remain possible between this check and process spawn.
-      await assertTask(
-        taskSnapshot && request.task !== taskSnapshot.text
-          ? { text: request.task, exists: true }
-          : taskSnapshot,
-      );
       await this.assertSettings(p.id);
       // No topic means no implicit todo/history read or snapshot. The pipeline
       // itself still executes its configured stages in the admitted checkout.
@@ -5902,7 +6185,11 @@ export class HostService extends EventEmitter {
         launchTaskPath === undefined
           ? undefined
           : await readWorkingTask(this.root(p), launchTaskPath);
-      if (taskSnapshot && startedTask?.text !== request.task)
+      if (
+        taskSnapshot &&
+        request.taskVersion !== undefined &&
+        startedTask?.text !== request.task
+      )
         throw new Error(
           "Задача изменена извне перед запуском. Откройте её заново.",
         );
@@ -5924,12 +6211,7 @@ export class HostService extends EventEmitter {
           : {}),
         projectId: p.id,
         pipeline: r.pipeline,
-        ...(saved.metadata
-          ? {
-              pipelineName: saved.metadata.name,
-              pipelineDescription: saved.metadata.description,
-            }
-          : {}),
+        ...pipelineDisplayMetadata(request),
         topic,
         branch,
         status: "starting",
@@ -5940,6 +6222,7 @@ export class HostService extends EventEmitter {
           (invocation.value.startupTimeoutMinutes ??
             DEFAULT_STARTUP_TIMEOUT_MINUTES) * 60000,
         update: request.update === true,
+        dashboardRecoveryVersion: 1,
         dashboardOpened: false,
         output: { text: "", truncated: false },
       };
@@ -5980,7 +6263,6 @@ export class HostService extends EventEmitter {
       }
       this.addActiveRun(key, run.id);
       if (!this.runList.includes(run)) this.runList.push(run);
-      this.previews.delete(request.previewToken);
       // Capture only child output, never command arguments/environment metadata.
       const secrets = [
         ...invocation.value.env.map((e) => e.value),
@@ -6083,6 +6365,7 @@ export class HostService extends EventEmitter {
         // A completed observer may have updated the status while consent was open.
         if (this.children.has(id))
           throw new Error("Процесс ещё работает; вкладка сохранена.");
+        this.dashboardFlights.get(id)?.controller.abort();
         this.runList = this.runList.filter((r) => r.id !== id);
         this.buildRequests.delete(id);
         this.emitRuns();
@@ -6092,20 +6375,180 @@ export class HostService extends EventEmitter {
     this.closeFlights.set(id, operation);
     return operation;
   }
+  private async restoreSavedDashboard(
+    run: Run,
+    signal?: AbortSignal,
+  ): Promise<string> {
+    if (
+      !this.recovery ||
+      !run.process ||
+      run.dashboardRecoveryVersion !== 1 ||
+      run.kind === "build"
+    )
+      throw Error("Для этого запуска не сохранена новая связь с панелью.");
+    const owner = this.runOwnerHash(run),
+      metadata = run.process;
+    const claim = await this.recovery.readDashboard(
+      metadata,
+      owner,
+      metadata.cwd,
+    );
+    if (!claim) throw Error("Для этого запуска не сохранена связь с панелью.");
+    const pin = await readDashboardIdentity(claim.origin, signal);
+    // The payload may finish while HTTP is in flight. A status response is not
+    // authority to open a panel after its supervised process has terminated.
+    const processState = await this.recovery.reconcile(
+      metadata,
+      owner,
+      metadata.cwd,
+    );
+    if (processState.state !== "alive")
+      throw Error(
+        "Процесс больше не подтверждён как работающий. Подключение отменено.",
+      );
+    if (
+      signal?.aborted ||
+      !this.runList.includes(run) ||
+      this.runOwnerHash(run) !== owner ||
+      run.process !== metadata ||
+      !["starting", "running"].includes(run.status) ||
+      this.stopFlights.has(run.id)
+    )
+      throw Error("Состояние запуска изменилось. Подключение отменено.");
+    if (pin !== claim.serverRunId)
+      throw Error("Источник панели изменился. Подключение отменено.");
+    run.url = claim.origin;
+    run.dashboardRunId = pin;
+    run.dashboardReconnect = true;
+    delete run.dashboardMessage;
+    return claim.origin;
+  }
+  /** Trusted main only. First page success must not depend on AFM exposing a run_id. */
+  async dashboardLoaded(id: string, url: string): Promise<boolean> {
+    if (!this.markDashboardOpened(id, url)) return false;
+    const run = this.runList.find((r) => r.id === id)!;
+    if (run.recovery === "confirmed") {
+      try {
+        await this.restoreSavedDashboard(run);
+        return true;
+      } catch {
+        return false;
+      }
+    }
+    if (
+      run.dashboardRecoveryVersion !== 1 ||
+      !run.process ||
+      !this.recovery ||
+      run.dashboardReconnect
+    )
+      return true;
+    const owner = this.runOwnerHash(run),
+      metadata = run.process;
+    try {
+      const pin = await readDashboardIdentity(url);
+      if (
+        !this.runList.includes(run) ||
+        this.runOwnerHash(run) !== owner ||
+        run.process !== metadata ||
+        run.url !== url ||
+        run.status !== "running" ||
+        this.stopFlights.has(id)
+      )
+        return false;
+      await this.recovery.saveDashboard(metadata, url, pin);
+      if (
+        !this.runList.includes(run) ||
+        run.status !== "running" ||
+        this.stopFlights.has(id)
+      )
+        return false;
+      run.dashboardReconnect = true;
+      run.dashboardRunId = pin;
+      delete run.dashboardMessage;
+      await this.persistRuns();
+    } catch {
+      if (
+        !this.runList.includes(run) ||
+        run.status !== "running" ||
+        this.runOwnerHash(run) !== owner ||
+        run.process !== metadata
+      )
+        return false;
+      run.dashboardMessage =
+        "Переподключение после выхода недоступно: не удалось сохранить проверяемую связь с панелью. Сам конвейер продолжает работу.";
+    }
+    this.emitRuns();
+    return this.runList.includes(run) && run.status === "running";
+  }
+  prepareDashboardReconnect(id: string): Promise<string> {
+    this.check();
+    if (this.shutdownAdmission)
+      return Promise.reject(Error("Приложение готовится к выходу."));
+    const previous = this.dashboardFlights.get(id);
+    if (previous) return previous.promise;
+    const controller = new AbortController();
+    const promise = Promise.resolve()
+      .then(async () => {
+        const run = this.runList.find((r) => r.id === id);
+        if (
+          !run ||
+          run.dashboardRecoveryVersion !== 1 ||
+          !this.recovery ||
+          !run.process
+        )
+          throw Error("Для этого запуска не сохранена новая связь с панелью.");
+        const owner = this.runOwnerHash(run);
+        const p = await this.project(
+          run.context
+            ? {
+                projectId: run.context.projectId,
+                year: run.context.year,
+                topic: run.context.topic,
+                branch: run.context.branch,
+                contextId: run.context.contextId,
+                revision: run.context.revision,
+              }
+            : run.projectId,
+        );
+        const result = await this.recovery.reconcile(
+          run.process,
+          owner,
+          this.root(p),
+        );
+        if (result.state !== "alive") {
+          if (result.state === "terminal") await this.reconcileRun(id);
+          throw Error(
+            "Процесс не подтверждён как работающий. Панель не подключена; повторного запуска не было.",
+          );
+        }
+        if (controller.signal.aborted || this.runOwnerHash(run) !== owner)
+          throw Error("Подключение отменено.");
+        const url = await this.restoreSavedDashboard(run, controller.signal);
+        this.emitRuns();
+        return url;
+      })
+      .finally(() => {
+        if (this.dashboardFlights.get(id)?.controller === controller)
+          this.dashboardFlights.delete(id);
+      });
+    this.dashboardFlights.set(id, { controller, promise });
+    return promise;
+  }
   /** Trusted main-process acknowledgement, never exposed through renderer IPC. */
   markDashboardOpened(id: string, url: string): boolean {
     const run = this.runList.find((r) => r.id === id),
       entry = this.children.get(id);
     if (
       !run ||
-      !entry ||
-      run.status !== "starting" ||
+      (!entry && !(run.recovery === "confirmed" && run.dashboardReconnect)) ||
+      !["starting", "running"].includes(run.status) ||
       run.url !== url ||
       run.error ||
       this.stopFlights.has(id)
     )
       return false;
-    if (performance.now() >= entry.deadlineAt) {
+    if (run.status === "running") return true;
+    if (!entry || performance.now() >= entry.deadlineAt) {
       this.expireStartup(id);
       return false;
     }
@@ -6181,7 +6624,8 @@ export class HostService extends EventEmitter {
         recovered.endedAt = result.endedAt;
         delete recovered.recovery;
         delete recovered.recoveryMessage;
-        delete recovered.url;
+        this.clearDashboard(recovered);
+        this.releaseRecoveredTerminalRun(recovered.id);
         if (recovered.context) recovered.syncPending = true;
         await this.persistRuns();
         await this.syncCompletedRun(recovered);
@@ -6306,6 +6750,49 @@ export class HostService extends EventEmitter {
         )
           throw Error("Состояние запуска не подтверждено. Выход отменён.");
       };
+      const validateKeep = async () => {
+        validate();
+        for (const run of active()) {
+          if (
+            run.kind === "build" ||
+            run.dashboardRecoveryVersion !== 1 ||
+            !run.process ||
+            !this.recovery ||
+            run.status !== "running"
+          )
+            throw new ShutdownKeepError("unsupported");
+          try {
+            const p = await this.project(
+              run.context
+                ? {
+                    projectId: run.context.projectId,
+                    year: run.context.year,
+                    topic: run.context.topic,
+                    branch: run.context.branch,
+                    contextId: run.context.contextId,
+                    revision: run.context.revision,
+                  }
+                : run.projectId,
+            );
+            const result = await this.recovery.reconcile(
+              run.process,
+              this.runOwnerHash(run),
+              this.root(p),
+            );
+            if (result.state !== "alive")
+              throw new ShutdownKeepError("unavailable");
+            await this.restoreSavedDashboard(run);
+          } catch {
+            throw new ShutdownKeepError("unavailable");
+          }
+        }
+        validate();
+        try {
+          await this.persistRuns();
+        } catch {
+          throw new ShutdownKeepError("unavailable");
+        }
+      };
       validate();
       return {
         items: active().map((run) => ({
@@ -6314,6 +6801,33 @@ export class HostService extends EventEmitter {
         })),
         requiresConfirmation: planned.size > 0,
         validate,
+        validateKeep,
+        keep: async () => {
+          await validateKeep();
+          validate();
+          const remaining = active();
+          // No await between inventory proof and observer detachment. Never signal
+          // the detached supervisor or its guardian, including error fallback.
+          for (const run of remaining) {
+            const entry = this.children.get(run.id);
+            if (entry) {
+              entry.cancel();
+              entry.output.dispose();
+              entry.child.stdin.destroy();
+              entry.child.stdout.destroy();
+              entry.child.stderr.destroy();
+              entry.child.unref();
+              this.children.delete(run.id);
+            }
+            run.recovery = "confirmed";
+            this.detachedRuns.add(run.id);
+          }
+          await this.persistRuns();
+        },
+        retained: () =>
+          active()
+            .filter((run) => this.detachedRuns.has(run.id))
+            .map((run) => `run:${run.id}`),
         stop: async () => {
           validate();
           for (const run of active()) await this.stop(run.id);
@@ -6336,21 +6850,29 @@ export class HostService extends EventEmitter {
       throw error;
     }
   }
-  /** Unified exit has already stopped all runs. Persist before irreversible cleanup.
-   * Runner.dispose failures retain ownership and reopen its admissions for a retry.
+  /** Unified exit has stopped or explicitly detached every owned run.
+   * Persist before cleanup; a runner failure keeps the app and recovery poll alive.
    */
   async finalizeShutdown(): Promise<void> {
     if (
       !this.shutdownAdmission ||
       this.children.size ||
-      this.runList.some((run) => ["starting", "running"].includes(run.status))
+      this.runList.some(
+        (run) =>
+          ["starting", "running"].includes(run.status) &&
+          !this.detachedRuns.has(run.id),
+      )
     )
       throw Error("Сначала требуется завершить запуски приложения.");
     await this.operationTail;
+    await this.persistRuns();
     await this.runSaveTail;
+    for (const flight of this.dashboardFlights.values())
+      flight.controller.abort();
     this.disposed = true;
     try {
       await this.runner.dispose?.();
+      clearInterval(this.recoveryPoll);
     } catch (error) {
       this.disposed = false;
       throw error;
@@ -6358,6 +6880,9 @@ export class HostService extends EventEmitter {
   }
   async dispose(): Promise<void> {
     this.disposed = true;
+    clearInterval(this.recoveryPoll);
+    for (const flight of this.dashboardFlights.values())
+      flight.controller.abort();
     // Cancel observers before any termination signal: intentional shutdown is not
     // a pipeline failure. Keep failed kills visible and retain their checkout locks.
     for (const entry of this.children.values()) entry.cancel();

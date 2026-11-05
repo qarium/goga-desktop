@@ -68,28 +68,29 @@ export function projectTopicsBoard(
   const unique = (rows: TopicBoardRecord[]) => [
     ...new Map(rows.map((r) => [r.topic, r])).values(),
   ];
+  // A missing status is the built-in empty state, not an unknown status.
+  const rowStatuses = (row: TopicBoardRecord) =>
+    row.statuses.length ? row.statuses : ["empty"];
   const statuses = [
     ...new Set([
       ...Object.keys(initialStatusCategory),
       ...Object.keys(prefs.statusCategory),
-      ...all.flatMap((r) => r.statuses),
+      ...all.flatMap(rowStatuses),
     ]),
   ];
   const build = (id: string | null, name: string): TopicsBoardColumn => ({
     id: id ?? "unassigned",
     name,
     rows: unique(
-      visible.filter(
-        (r) =>
-          (!r.statuses.length && id === null) ||
-          r.statuses.some((s) => statusCategory(prefs, s) === id),
+      visible.filter((r) =>
+        rowStatuses(r).some((s) => statusCategory(prefs, s) === id),
       ),
     ),
     statuses: statuses
       .filter((s) => statusCategory(prefs, s) === id)
       .map((s) => ({
         name: s,
-        count: unique(all.filter((r) => r.statuses.includes(s))).length,
+        count: unique(all.filter((r) => rowStatuses(r).includes(s))).length,
       })),
   });
   return {

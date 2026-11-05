@@ -460,3 +460,12 @@ it.each([
     }
   },
 );
+
+it('reads foreground arrivals for the verified same run after Desktop reconnects',async()=>{
+  const f=viewingSetup();f.focus(true);
+  f.changeRun({...run,recovery:'confirmed',dashboardRecoveryVersion:1,dashboardReconnect:true,dashboardRunId:'afm-1'});
+  await f.nav.setViewedRun('r');
+  expect(f.rows[0].readAt).toBe('read');expect(f.nav.isViewingRecord(record)).toBe(true);
+  f.changeRun({...run,recovery:'confirmed'});
+  expect(f.nav.isViewingRecord(record)).toBe(false);
+});

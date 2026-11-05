@@ -85,7 +85,7 @@ export function pipelineArgs(r: PipelineRequest, info: boolean): string[] {
 }
 export function dashboardUrl(line: string): string | undefined {
   const m = stripVTControlCharacters(line).match(
-    /^\s*dashboard: (http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):[0-9]{1,5})\s*$/,
+    /^\s*(?:➜\s+)?dashboard: (http:\/\/(?:localhost|127\.0\.0\.1|\[::1\]):[0-9]{1,5})\s*$/,
   );
   if (!m) return;
   try {

@@ -27,6 +27,10 @@ const editor = () => {
     ?.shadowRoot?.querySelector('[role="textbox"]');
   return el ? EditorView.findFromDOM(el as HTMLElement)! : null;
 };
+async function projectEditor() {
+  await waitFor(() => expect(editor()).not.toBeNull());
+  return editor()!;
+}
 async function reveal() {
   fireEvent.click(screen.getByRole("button", { name: "Открыть редактор" }));
   await waitFor(() => expect(editor()).not.toBeNull());
@@ -147,7 +151,7 @@ it("lists actual tools with all folders collapsed and retains full-path drafts a
   fireEvent.click(
     screen.getByRole("button", { name: "Файл env/local/config.yml" }),
   );
-  const local = await reveal();
+  const local = await projectEditor();
   act(() =>
     local.dispatch({ changes: { from: 0, insert: "# local draft\n" } }),
   );
@@ -155,7 +159,7 @@ it("lists actual tools with all folders collapsed and retains full-path drafts a
   fireEvent.click(
     screen.getByRole("button", { name: "Файл env/ci/config.yml" }),
   );
-  await reveal();
+  await projectEditor();
   expect(editor()!.state.doc.toString()).not.toContain("local draft");
   fireEvent.click(
     screen.getByRole("button", { name: "Файл env/local/config.yml" }),
@@ -205,7 +209,7 @@ it("shows empty tools and missing config with explicit save only", async () => {
   });
   expect(screen.getByText(/пока нет конфигурационных файлов/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
-  await reveal();
+  await projectEditor();
   expect(screen.getByText(/будет создан/)).toBeTruthy();
   expect(api.saveProjectDocument).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
@@ -303,12 +307,11 @@ it("keeps late tool reads under their original full-path identity", async () => 
   fireEvent.click(
     screen.getByRole("button", { name: "Файл env/local/config.yml" }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "Открыть редактор" }));
   fireEvent.click(screen.getByRole("button", { name: "Папка env/ci" }));
   fireEvent.click(
     screen.getByRole("button", { name: "Файл env/ci/config.yml" }),
   );
-  await reveal();
+  await projectEditor();
   const ci = editor()!;
   act(() => ci.dispatch({ changes: { from: 0, insert: "# ci draft\n" } }));
   await act(async () =>
@@ -341,7 +344,7 @@ it("retains failed save A and its version while selecting B, blocking App naviga
   fireEvent.click(
     screen.getByRole("button", { name: "Файл env/local/config.yml" }),
   );
-  const view = await reveal();
+  const view = await projectEditor();
   act(() => view.dispatch({ changes: { from: 0, insert: "# unsaved A\r\n" } }));
   const textA = view.state.doc.toString();
   fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
@@ -360,7 +363,7 @@ it("retains failed save A and its version while selecting B, blocking App naviga
   fireEvent.click(
     screen.getByRole("button", { name: "Файл env/ci/config.yml" }),
   );
-  const b = await reveal();
+  const b = await projectEditor();
   act(() => b.dispatch({ changes: { from: 0, insert: "# draft B\n" } }));
   const textB = b.state.doc.toString();
   await act(async () => fail(Error("Файл изменился вне приложения")));
@@ -398,7 +401,7 @@ it("uses the returned version after successful A save while B remains selected",
   );
   await projectTools();
   fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
-  const a = await reveal();
+  const a = await projectEditor();
   act(() => a.dispatch({ changes: { from: 0, insert: "# A\r\n" } }));
   const text = a.state.doc.toString();
   fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));

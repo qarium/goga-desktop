@@ -10,16 +10,24 @@ import {
   unlink,
   rename,
   link,
+  stat,
+  lstat,
 } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
+import { saveProjectDocument } from "../src/host/project-documents";
 import { HostService } from "../src/host/service";
 import { DesktopStateStore } from "../src/host/desktop-state";
 import type { ProjectDocumentTarget } from "../src/shared/project-documents";
-// The rename gate below controls scheduling only; every filesystem operation remains real.
+// Scheduling/race gates delegate to real filesystem operations; no safety checks are mocked away.
 vi.mock("node:fs/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:fs/promises")>();
-  return { ...actual, rename: vi.fn(actual.rename) };
+  return {
+    ...actual,
+    rename: vi.fn(actual.rename),
+    link: vi.fn(actual.link),
+    lstat: vi.fn(actual.lstat),
+  };
 });
 const dirs: string[] = [];
 const services: HostService[] = [];
@@ -29,6 +37,8 @@ afterEach(async () => {
       "node:fs/promises",
     );
   vi.mocked(rename).mockImplementation(actual.rename);
+  vi.mocked(link).mockImplementation(actual.link);
+  vi.mocked(lstat).mockImplementation(actual.lstat);
   await Promise.all(services.splice(0).map((s) => s.dispose()));
   await Promise.all(
     dirs.splice(0).map((d) => rm(d, { recursive: true, force: true })),
@@ -144,15 +154,110 @@ it("reads missing config without creating anything and creates only on explicit 
     "{}\n",
   );
 });
-it("never creates missing tool files or nested directories", async () => {
+it("keeps missing tool reads strict and never creates missing parent directories or tools", async () => {
   const { host, id, root } = await setup();
-  for (const target of [tool(), tool("missing/child.yml")]) {
+  for (const target of [
+    tool("missing/child.yml"),
+    tool("config.yml", "absent-tool"),
+  ]) {
     await expect(host.readProjectDocument(id, target)).rejects.toThrow();
     await expect(
       host.saveProjectDocument(id, target, "{}", "missing"),
     ).rejects.toThrow();
   }
   expect(await readdir(path.join(root, ".goga/tools/sample-tool"))).toEqual([]);
+});
+it("creates only an explicitly saved missing tool leaf with exact bytes and private mode", async () => {
+  const { host, id, root } = await setup();
+  const text = "\ufeff# exact 🙂\r\n- quoted: 'value'\r\n";
+  await expect(host.readProjectDocument(id, tool())).rejects.toThrow();
+  expect(await readdir(path.join(root, ".goga/tools/sample-tool"))).toEqual([]);
+  const saved = await host.saveProjectDocument(id, tool(), text, "missing");
+  expect(saved).toMatchObject({
+    text,
+    exists: true,
+    relativePath: ".goga/tools/sample-tool/config.yml",
+  });
+  expect(saved.version).not.toBe("missing");
+  const file = path.join(root, saved.relativePath);
+  expect(await readFile(file)).toEqual(Buffer.from(text));
+  expect((await stat(file)).mode & 0o777).toBe(0o600);
+  expect(await readdir(path.dirname(file))).toEqual(["config.yml"]);
+});
+it("saves a missing nested leaf only inside existing validated directories", async () => {
+  const { host, id, root } = await setup();
+  await mkdir(path.join(root, ".goga/tools/sample-tool/nested"));
+  const saved = await host.saveProjectDocument(
+    id,
+    tool("nested/new.yaml"),
+    "",
+    "missing",
+  );
+  expect(saved).toMatchObject({ text: "", exists: true });
+  expect(await readFile(path.join(root, saved.relativePath), "utf8")).toBe("");
+  await expect(
+    host.saveProjectDocument(
+      id,
+      tool("nested/absent/child.yml"),
+      "",
+      "missing",
+    ),
+  ).rejects.toThrow();
+  expect(
+    await readdir(path.join(root, ".goga/tools/sample-tool/nested")),
+  ).toEqual(["new.yaml"]);
+});
+it.each([0, 1, 2])(
+  "does not overwrite a tool leaf appearing at save guard %s",
+  async (appearance) => {
+    const { root, file } = await setup();
+    const leaf = path.join(root, ".goga/tools/sample-tool/config.yml");
+    if (!appearance)
+      await file(".goga/tools/sample-tool/config.yml", "external: true\n");
+    let guards = 0;
+    await expect(
+      saveProjectDocument(
+        root,
+        tool(),
+        "draft: true\n",
+        "missing",
+        async () => {
+          if (++guards === appearance)
+            await writeFile(leaf, "external: true\n");
+        },
+      ),
+    ).rejects.toThrow(/Конфликт|измен/);
+    expect(await readFile(leaf, "utf8")).toBe("external: true\n");
+    expect(await readdir(path.dirname(leaf))).toEqual(["config.yml"]);
+  },
+);
+it.each([1, 2])(
+  "honors late authority failure at missing tool save guard %s and leaves no artifact",
+  async (failure) => {
+    const { root } = await setup();
+    let guards = 0;
+    await expect(
+      saveProjectDocument(root, tool(), "true\n", "missing", async () => {
+        if (++guards === failure) throw new Error("owner changed");
+      }),
+    ).rejects.toThrow("owner changed");
+    expect(guards).toBe(failure);
+    expect(await readdir(path.join(root, ".goga/tools/sample-tool"))).toEqual(
+      [],
+    );
+  },
+);
+it("rejects a replaced parent identity during missing tool creation without writing to the replacement", async () => {
+  const { root } = await setup();
+  const parent = path.join(root, ".goga/tools/sample-tool");
+  await expect(
+    saveProjectDocument(root, tool(), "true\n", "missing", async () => {
+      await rename(parent, parent + "-old");
+      await mkdir(parent);
+    }),
+  ).rejects.toThrow(/измен/);
+  expect(await readdir(parent)).toEqual([]);
+  expect(await readdir(parent + "-old")).toEqual([]);
 });
 it.each([
   "../outside.yml",
@@ -373,21 +478,29 @@ it("reports traversal depth and entry limits rather than silently truncating", a
     await file(`.goga/tools/sample-tool/file-${i}.md`);
   await expect(host.listProjectTools(id)).rejects.toThrow(/числ|лимит/);
 });
-it("invalidates this project's prepared launches only after a successful document save", async () => {
+it("a successful document save changes its file version without a launch capability cache", async () => {
   const { host, id, file } = await setup();
   await file(".goga/config.yml");
   const before = await host.readProjectDocument(id, config);
-  const previews = (host as any).previews as Map<string, any>;
-  previews.set("same", { request: { projectId: id } });
-  previews.set("other", { request: { projectId: "other" } });
   await expect(
     host.saveProjectDocument(id, config, "a: [", before.version),
   ).rejects.toThrow();
-  expect(previews.has("same")).toBe(true);
-  await host.saveProjectDocument(id, config, "{}\n", before.version);
-  expect(previews.has("same")).toBe(false);
-  expect(previews.has("other")).toBe(true);
+  expect((await host.readProjectDocument(id, config)).version).toBe(
+    before.version,
+  );
+  const saved = await host.saveProjectDocument(
+    id,
+    config,
+    "updated: true\n",
+    before.version,
+  );
+  expect(saved.text).toBe("updated: true\n");
+  expect(saved.version).not.toBe(before.version);
+  expect((await host.readProjectDocument(id, config)).version).toBe(
+    saved.version,
+  );
 });
+
 it.each(["C:/x.yml", "a\u0085.yml"])(
   "rejects non-POSIX or control-containing path even when the file exists: %j",
   async (name) => {
@@ -535,5 +648,113 @@ it.for([
     const saved = result.find((item) => item.status === "fulfilled")!;
     if (saved.status === "fulfilled")
       expect(await readFile(p, "utf8")).toBe(saved.value.text);
+  },
+);
+
+it("uses atomic no-clobber creation if an external tool file appears after the final snapshot", async () => {
+  const { root } = await setup();
+  const destination = path.join(root, ".goga/tools/sample-tool/config.yml");
+  const actual =
+    await vi.importActual<typeof import("node:fs/promises")>(
+      "node:fs/promises",
+    );
+  let attempted = false;
+  vi.mocked(link).mockImplementation(async (from, to) => {
+    expect(String(to)).toBe(destination);
+    attempted = true;
+    await writeFile(destination, "external: true\r\n");
+    return actual.link(from, to);
+  });
+  await expect(
+    saveProjectDocument(root, tool(), "draft: true\n", "missing"),
+  ).rejects.toMatchObject({ code: "EEXIST" });
+  expect(attempted).toBe(true);
+  expect(await readFile(destination, "utf8")).toBe("external: true\r\n");
+  expect(await readdir(path.dirname(destination))).toEqual(["config.yml"]);
+});
+it("rechecks a queued missing tool leaf's parent identity before starting its save", async () => {
+  const { root } = await setup();
+  const parent = path.join(root, ".goga/tools/sample-tool");
+  let entered!: () => void, release!: () => void;
+  const inside = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  const gate = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const first = saveProjectDocument(
+    root,
+    tool(),
+    "first: true\n",
+    "missing",
+    async () => {
+      entered();
+      await gate;
+    },
+  );
+  await inside;
+  const actual =
+    await vi.importActual<typeof import("node:fs/promises")>(
+      "node:fs/promises",
+    );
+  let queued!: () => void;
+  const snapshotted = new Promise<void>((resolve) => {
+    queued = resolve;
+  });
+  vi.mocked(lstat).mockImplementation((async (file, options) => {
+    const result = await actual.lstat(file, options);
+    if (String(file) === parent) queued();
+    return result;
+  }) as typeof lstat);
+  const second = saveProjectDocument(
+    root,
+    tool("second.yml"),
+    "second: true\n",
+    "missing",
+  );
+  const results = Promise.allSettled([first, second]);
+  // The second promise has captured its queue parent before the replacement.
+  await snapshotted;
+  await rename(parent, parent + "-old");
+  await mkdir(parent);
+  release();
+  const finished = await results;
+  expect(finished.map((result) => result.status)).toEqual([
+    "rejected",
+    "rejected",
+  ]);
+  expect(await readdir(parent)).toEqual([]);
+  expect(await readdir(parent + "-old")).toEqual([]);
+});
+it("allows a missing tool leaf beside a symlink without following or changing its sibling", async () => {
+  const { root, file } = await setup();
+  const outside = await file("outside.yml", "private: true\n");
+  await symlink(
+    outside,
+    path.join(root, ".goga/tools/sample-tool/sibling.yml"),
+  );
+  const saved = await saveProjectDocument(
+    root,
+    tool(),
+    "new: true\n",
+    "missing",
+  );
+  expect(saved.exists).toBe(true);
+  expect(await readFile(outside, "utf8")).toBe("private: true\n");
+  expect(await readdir(path.join(root, ".goga/tools/sample-tool"))).toEqual([
+    "config.yml",
+    "sibling.yml",
+  ]);
+});
+it.each(["bad: [", "bad: \0", "bad: \ud800", "#".repeat(1024 * 1024 + 1)])(
+  "rejects invalid new tool source without creating a leaf %#",
+  async (text) => {
+    const { root } = await setup();
+    await expect(
+      saveProjectDocument(root, tool(), text, "missing"),
+    ).rejects.toThrow();
+    expect(await readdir(path.join(root, ".goga/tools/sample-tool"))).toEqual(
+      [],
+    );
   },
 );

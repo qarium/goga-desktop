@@ -22,6 +22,11 @@ beforeEach(() => {
       version: "v1",
       profiles: [],
     })),
+    readProjectDocument: vi.fn(async () => ({
+      text: "{}\n",
+      version: "v1",
+      exists: true,
+    })),
     listProjectTools: vi.fn(async () => [
       { name: "fixture-tool", entries: [] },
     ]),

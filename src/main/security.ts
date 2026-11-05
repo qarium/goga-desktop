@@ -1,18 +1,4 @@
-/** These policies are deliberately narrower than URL's permissive host normalisation. */
-export function allowedDashboardURL(value: string): boolean {
-  if (
-    !/^http:\/\/(localhost|127\.0\.0\.1|\[::1\]):[1-9][0-9]{0,4}\/?$/.test(
-      value,
-    )
-  )
-    return false;
-  try {
-    const u = new URL(value);
-    return Number(u.port) > 0 && Number(u.port) <= 65535;
-  } catch {
-    return false;
-  }
-}
+export { allowedDashboardURL } from "../shared/dashboard-connection";
 export function sameDashboardOrigin(
   origin: string,
   target: string,

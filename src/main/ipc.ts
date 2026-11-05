@@ -1,3 +1,4 @@
+import { PIPELINE_DISPLAY_LIMITS } from "../shared/pipeline-display";
 import { topicRemovalRequestSchema, topicRemovalTokenSchema, topicCloneCleanupRequestSchema } from "../shared/topic-removal";
 import {
   dashboardViewportSchema,
@@ -11,6 +12,8 @@ import {
   overviewKindSchema,
   overviewFileActionRequestSchema,
   overviewFileActionTokenSchema,
+  overviewCopyPathsSchema,
+  overviewPasteDecisionsSchema,
 } from "../shared/project-overview";
 import {
   gitHistoryRequestSchema,
@@ -176,7 +179,9 @@ const launch = pipeline
     update: z.boolean().optional(),
     expectedBranch: z.string().max(256),
     confirmBranchSwitch: z.boolean(),
-    previewToken: id,
+    previewToken: id.optional(),
+    pipelineName: z.string().max(PIPELINE_DISPLAY_LIMITS.name).refine(value => !value.includes("\0")).optional(),
+    pipelineDescription: z.string().max(PIPELINE_DISPLAY_LIMITS.description).refine(value => !value.includes("\0")).optional(),
     task: z.string().max(100000),
     taskVersion: z
       .string()
@@ -191,11 +196,10 @@ const launch = pipeline
   })
   .refine(
     (value) =>
-      value.topic.mode === "existing"
-        ? value.taskVersion !== undefined
-        : value.taskVersion === undefined,
+      // A version denotes an actual task edit, not a launch admission ticket.
+      value.topic.mode === "existing" || value.taskVersion === undefined,
     {
-      message: "Версия задачи обязательна только для существующего топика",
+      message: "Версия записи задачи допустима только для существующего топика",
       path: ["taskVersion"],
     },
   )
@@ -218,6 +222,7 @@ interface Dependencies {
   window: BrowserWindow;
   shellURL: string;
   choose: () => Promise<string | null>;
+  restoreDashboard?: (id:string)=>Promise<void>;
   select: (id: string | null) => void;
   viewport?: (bounds: DashboardViewport) => void;
   confirmClose: (run: Run) => Promise<boolean>;
@@ -258,6 +263,11 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   handle("prepare-build-repeat", (runId) =>
     d.service.prepareBuildRepeat(id.parse(runId)),
   );
+  handle("restore-dashboard", (runId) => {
+    const value=id.parse(runId);
+    if(!d.service.runs().some(run=>run.id===value)||!d.restoreDashboard)throw Error("Панель запуска недоступна.");
+    return d.restoreDashboard(value);
+  });
   handle("reconcile-run", (runId) => d.service.reconcileRun(id.parse(runId)));
   const reads = new Map<string, { controller: AbortController }>();
   const requestId = z.string().regex(/^[a-zA-Z0-9-]{1,80}$/);
@@ -692,6 +702,31 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
       scopeRefSchema.parse(scope),
       overviewPathSchema.parse(p),
     ),
+  );
+  handle("copy-overview-paths", (scope, paths, absolute) =>
+    d.service.copyOverviewPaths(
+      scopeRefSchema.parse(scope),
+      overviewCopyPathsSchema.parse(paths),
+      z.boolean().parse(absolute),
+    ),
+  );
+  handle("prepare-overview-paste", (scope, directory) =>
+    d.service.prepareOverviewPaste(
+      scopeRefSchema.parse(scope),
+      overviewDirectorySchema.parse(directory),
+    ),
+  );
+  handle("execute-overview-paste", (token, decisions) =>
+    d.service.executeOverviewPaste(
+      overviewFileActionTokenSchema.parse(token),
+      overviewPasteDecisionsSchema.parse(decisions),
+    ),
+  );
+  handle("copy-overview-entries", (scope, paths) =>
+    d.service.copyOverviewEntries(scopeRefSchema.parse(scope), overviewCopyPathsSchema.parse(paths)),
+  );
+  handle("paste-overview-entries", (scope, directory) =>
+    d.service.pasteOverviewEntries(scopeRefSchema.parse(scope), overviewDirectorySchema.parse(directory)),
   );
   handle("read-overview-schema", (scope) =>
     d.service.readOverviewSchema(scopeRefSchema.parse(scope)),

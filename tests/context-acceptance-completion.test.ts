@@ -244,7 +244,7 @@ it("reads committed task bytes in the owner even when every ambient and explicit
   expect(process.env.GIT_DIR).toBe(pollution.GIT_DIR);
 });
 
-it("rejects clone A's preview token for clone B despite identical task bytes, stages and options", async () => {
+it("informational preview A grants no authority; exact request B runs only B and forged task writes still fail", async () => {
   const f = await fixture(),
     a = worktreeContextRef(f.a),
     b = worktreeContextRef(f.b);
@@ -276,8 +276,33 @@ it("rejects clone A's preview token for clone B despite identical task bytes, st
       confirmEmptyTask: false,
       topic: { mode: "existing", branch: "second", topic: "second" },
     }),
-  ).rejects.toThrow(/Предпросмотр устарел/);
-  expect(f.runner.start).not.toHaveBeenCalled();
+  ).rejects.toThrow("No payload is allowed in CWD contract tests");
+  expect(f.runner.start).toHaveBeenCalledOnce();
+  expect(vi.mocked(f.runner.start).mock.calls[0]?.[2]).toBe(f.b.path);
+  const otherTask = await f.service.readTopicTask({
+    ...request,
+    context: a,
+    branch: "first",
+    topic: "first",
+  });
+  await expect(
+    f.service.launch({
+      ...request,
+      context: b,
+      expectedBranch: "second",
+      clean: false,
+      confirmBranchSwitch: false,
+      previewToken: preview.token,
+      task: "Forged cross-owner write",
+      taskVersion: otherTask.version,
+      confirmEmptyTask: false,
+      topic: { mode: "existing", branch: "second", topic: "second" },
+    }),
+  ).rejects.toThrow(/Задача изменена/);
+  expect(f.runner.start).toHaveBeenCalledOnce();
+  expect(await readFile(path.join(f.b.path, task.path), "utf8")).toBe(
+    "Идентичная задача\n",
+  );
 });
 
 it("keeps discovery, workflow suggestions and document reads distinct for primary, A and B", async () => {

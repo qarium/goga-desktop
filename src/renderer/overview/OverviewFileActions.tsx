@@ -1,8 +1,19 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type RefObject,
+} from "react";
 import { createPortal } from "react-dom";
 import type { DesktopAPI } from "../../shared/bridge";
 import type { ScopeRef } from "../../shared/context";
-import type { OverviewFileActionPreview } from "../../shared/project-overview";
+import { PasteConflictDialog } from "./PasteConflictDialog";
+import type {
+  OverviewPastePreview,
+  OverviewPasteDecision,
+  OverviewFileActionPreview,
+} from "../../shared/project-overview";
 import type { OverviewStore } from "./store";
 import type { FileTreeMenu } from "./FileTree";
 import { useViewActive } from "../RetainedViews";
@@ -12,18 +23,36 @@ const parent = (p: string) =>
   p.includes("/") ? p.slice(0, p.lastIndexOf("/")) : "";
 const inside = (p: string, root: string) =>
   p === root || p.startsWith(root + "/");
+export interface OverviewPasteActivity {
+  owner: string;
+  destination: string;
+  phase: "preparing" | "copying" | "refreshing";
+}
+interface PasteActivityOperation {
+  owner: string;
+  destination: string;
+  generation: number;
+}
 export function OverviewFileActions({
   api,
   scope,
-  workspacePath,
   store,
   menu,
   onCloseMenu,
   onCreate,
   onNavigate,
   onBusy,
+  onPasteActivity,
   onApplied,
+  filePaneRef,
+  filePaneVisible = true,
+  treeScope = "",
+  selectedPaths = [],
 }: {
+  filePaneRef?: RefObject<HTMLElement | null>;
+  filePaneVisible?: boolean;
+  treeScope?: string;
+  selectedPaths?: string[];
   api: DesktopAPI;
   scope: ScopeRef;
   workspacePath?: string;
@@ -33,6 +62,7 @@ export function OverviewFileActions({
   onCreate: (kind: "file" | "directory", parent: string) => void;
   onNavigate: (p: string) => void;
   onBusy: (busy: boolean) => void;
+  onPasteActivity?: (activity: OverviewPasteActivity | null) => void;
   onApplied?: (
     kind: "rename" | "trash",
     paths: string[],
@@ -41,6 +71,37 @@ export function OverviewFileActions({
 }) {
   const active = useViewActive(),
     key = JSON.stringify(scope);
+  const activityCallback = useRef(onPasteActivity),
+    activityOperation = useRef<PasteActivityOperation | null>(null),
+    currentView = useRef({ key, active });
+  activityCallback.current = onPasteActivity;
+  currentView.current = { key, active };
+  const clearPasteActivity = (operation?: PasteActivityOperation) => {
+    if (
+      activityOperation.current &&
+      (!operation || activityOperation.current === operation)
+    ) {
+      activityOperation.current = null;
+      activityCallback.current?.(null);
+    }
+  };
+  const reportPasteActivity = (
+    operation: PasteActivityOperation,
+    phase: OverviewPasteActivity["phase"],
+  ) => {
+    if (
+      operation.generation !== generation.current ||
+      operation.owner !== currentView.current.key ||
+      !currentView.current.active
+    )
+      return;
+    activityOperation.current = operation;
+    activityCallback.current?.({
+      owner: operation.owner,
+      destination: operation.destination,
+      phase,
+    });
+  };
   const previewRead = useRef(new AbortController());
   const generation = useRef(0),
     menuRef = useRef<HTMLDivElement>(null),
@@ -53,17 +114,33 @@ export function OverviewFileActions({
     [name, setName] = useState(""),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
+  const [pastePreview, setPastePreview] = useState<{
+    preview: OverviewPastePreview;
+    owner: ScopeRef;
+    store: OverviewStore;
+    generation: number;
+    activity: PasteActivityOperation;
+  } | null>(null);
   const [point, setPoint] = useState({ x: 0, y: 0 });
   useEffect(() => {
     generation.current++;
+    clearPasteActivity();
     previewRead.current.abort();
     previewRead.current = new AbortController();
     setPreview(null);
     setRename(null);
+    setPastePreview(null);
     setError("");
     onCloseMenu();
   }, [key, active]);
-  useEffect(() => () => previewRead.current.abort(), []);
+  useEffect(
+    () => () => {
+      generation.current++;
+      clearPasteActivity();
+      previewRead.current.abort();
+    },
+    [],
+  );
   const prepare = (
     request: Parameters<DesktopAPI["prepareOverviewFileAction"]>[1],
   ) =>
@@ -196,6 +273,159 @@ export function OverviewFileActions({
       if (id === generation.current) await execute(ticket);
     });
   };
+  const pasteTarget = (
+    paths: string[],
+    fallback: string,
+    entry?: FileTreeMenu["entry"],
+  ) => {
+    if (paths.length !== 1) return fallback;
+    const selected =
+      entry ??
+      Object.values(store.getSnapshot().directories)
+        .flatMap((d) => d.entries)
+        .find((e) => e.path === paths[0]);
+    return selected?.kind === "directory" || paths[0] === fallback
+      ? paths[0]
+      : parent(paths[0]);
+  };
+  const copyEntries = (paths: string[]) => {
+    if (!paths.length) return;
+    const owner = structuredClone(scope),
+      captured = [...paths];
+    void guarded(async () => {
+      await api.copyOverviewEntries(owner, captured);
+    });
+  };
+  const blockedPasteTarget = (path: string) => {
+    const state = store.getSnapshot();
+    return state.order.some(
+      (p) =>
+        inside(p, path) &&
+        (state.files[p].busy ||
+          state.files[p].text !== state.files[p].document.text),
+    );
+  };
+  const executePaste = async (
+    pending: NonNullable<typeof pastePreview>,
+    decisions: OverviewPasteDecision[],
+  ) => {
+    // A confirmation belongs to its prepared owner, never the currently selected tab.
+    if (pending.generation !== generation.current) return;
+    const replacements = decisions
+      .filter((d) => d.action === "replace")
+      .map((d) => d.path);
+    if (replacements.some(blockedPasteTarget))
+      throw Error(
+        "Файл содержит несохранённые изменения или сохраняется. Черновик не перезаписан. Сохраните его или повторите вставку, пропустив файл.",
+      );
+    reportPasteActivity(pending.activity, "copying");
+    try {
+      let result;
+      try {
+        result = await api.executeOverviewPaste(
+          pending.preview.token,
+          decisions,
+        );
+      } catch (error) {
+        reportPasteActivity(pending.activity, "refreshing");
+        await pending.store.applyPaste([], pending.owner);
+        throw error;
+      }
+      reportPasteActivity(pending.activity, "refreshing");
+      await pending.store.applyPaste(result.touchedPaths, pending.owner);
+      if (result.status !== "done") throw Error(result.message);
+    } finally {
+      clearPasteActivity(pending.activity);
+    }
+  };
+  const pasteEntries = (destination: string) => {
+    const owner = structuredClone(scope),
+      targetStore = store,
+      id = generation.current;
+    const activity = {
+      owner: JSON.stringify(owner),
+      destination,
+      generation: id,
+    };
+    void guarded(async () => {
+      reportPasteActivity(activity, "preparing");
+      try {
+        const preview = await api.prepareOverviewPaste(owner, destination);
+        if (id !== generation.current) return;
+        const pending = {
+          preview,
+          owner,
+          store: targetStore,
+          generation: id,
+          activity,
+        };
+        if (preview.conflicts.length) setPastePreview(pending);
+        else await executePaste(pending, []);
+      } finally {
+        clearPasteActivity(activity);
+      }
+    });
+  };
+  useEffect(() => {
+    const pane = filePaneRef?.current;
+    if (!pane || !active || !filePaneVisible) return;
+    const eligible = (event: Event) => {
+      const target = event.target;
+      return (
+        !preview &&
+        !rename &&
+        !pastePreview &&
+        !running.current &&
+        pane.isConnected &&
+        target instanceof HTMLElement &&
+        pane.contains(target) &&
+        !target.closest(
+          'input,textarea,[contenteditable="true"],[role="dialog"]',
+        ) &&
+        !!document.activeElement &&
+        pane.contains(document.activeElement) &&
+        !pane.closest("[hidden],[inert]")
+      );
+    };
+    const copy = (event: Event) => {
+      if (!eligible(event) || !selectedPaths.length) return;
+      event.preventDefault();
+      event.stopPropagation();
+      copyEntries(selectedPaths);
+    };
+    const paste = (event: Event) => {
+      if (!eligible(event)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      pasteEntries(pasteTarget(selectedPaths, treeScope));
+    };
+    const key = (event: KeyboardEvent) => {
+      if (event.altKey || event.shiftKey || !(event.ctrlKey || event.metaKey))
+        return;
+      if (event.key.toLowerCase() === "c") copy(event);
+      if (event.key.toLowerCase() === "v") paste(event);
+    };
+    pane.addEventListener("keydown", key, true);
+    pane.addEventListener("copy", copy, true);
+    pane.addEventListener("paste", paste, true);
+    return () => {
+      pane.removeEventListener("keydown", key, true);
+      pane.removeEventListener("copy", copy, true);
+      pane.removeEventListener("paste", paste, true);
+    };
+  }, [
+    active,
+    key,
+    filePaneRef,
+    filePaneVisible,
+    treeScope,
+    selectedPaths.join("\0"),
+    store,
+    api,
+    preview,
+    rename,
+    pastePreview,
+  ]);
   const selected = menu?.paths ?? [],
     one = selected.length === 1,
     entry = menu?.entry;
@@ -216,6 +446,20 @@ export function OverviewFileActions({
   };
   const items = menu
     ? [
+        ...(selected.length && entry?.kind !== "unsupported"
+          ? [{ label: "Копировать", action: () => copyEntries(selected) }]
+          : []),
+        {
+          label: "Вставить",
+          action: () =>
+            pasteEntries(
+              pasteTarget(
+                selected,
+                selected.length === 1 ? menu.parent : treeScope,
+                entry,
+              ),
+            ),
+        },
         ...(selected.length <= 1
           ? [
               {
@@ -264,23 +508,20 @@ export function OverviewFileActions({
           : []),
         ...(selected.length
           ? [
-              ...(workspacePath
-                ? [
-                    {
-                      label:
-                        selected.length > 1
-                          ? "Скопировать полные пути"
-                          : "Скопировать полный путь",
-                      action: () =>
-                        void guarded(async () => {
-                          const root = workspacePath.replace(/\/+$/, "");
-                          await navigator.clipboard.writeText(
-                            selected.map((p) => root + "/" + p).join("\n"),
-                          );
-                        }),
-                    },
-                  ]
-                : []),
+              {
+                label:
+                  selected.length > 1
+                    ? "Скопировать полные пути"
+                    : "Скопировать полный путь",
+                action: () =>
+                  void guarded(async () => {
+                    await api.copyOverviewPaths(
+                      structuredClone(scope),
+                      [...selected],
+                      true,
+                    );
+                  }),
+              },
               {
                 label:
                   selected.length > 1
@@ -288,7 +529,11 @@ export function OverviewFileActions({
                     : "Скопировать относительный путь",
                 action: () =>
                   void guarded(async () => {
-                    await navigator.clipboard.writeText(selected.join("\n"));
+                    await api.copyOverviewPaths(
+                      structuredClone(scope),
+                      [...selected],
+                      false,
+                    );
                   }),
               },
             ]
@@ -308,6 +553,19 @@ export function OverviewFileActions({
     : [];
   return (
     <>
+      {pastePreview && active && (
+        <PasteConflictDialog
+          key={pastePreview.preview.token}
+          conflicts={pastePreview.preview.conflicts}
+          blocked={blockedPasteTarget}
+          onCancel={() => setPastePreview(null)}
+          onConfirm={(decisions) => {
+            const pending = pastePreview;
+            setPastePreview(null);
+            void guarded(() => executePaste(pending, decisions));
+          }}
+        />
+      )}
       {menu &&
         active &&
         createPortal(

@@ -1,3 +1,4 @@
+import {dashboardRecoveryAllowed} from "../shared/dashboard-connection";
 import { createHash } from "node:crypto";
 import {
   NotificationInputSchema,
@@ -146,7 +147,7 @@ function metadata(run: Run): Metadata {
   return result;
 }
 const ownerKey = (run: Run) => JSON.stringify(metadata(run));
-const pipeline = (run: Run) => run.kind !== "build" && !run.recovery;
+const pipeline = (run: Run) => run.kind !== "build" && dashboardRecoveryAllowed(run);
 const active = (run: Run) =>
   run.status === "starting" || run.status === "running";
 function attention(
@@ -234,6 +235,7 @@ export class NotificationMonitor {
         run,
         key: this.key(run),
         url: new URL(run.url!).origin,
+        pin: run.dashboardRunId,
         seen: new Set(),
         stopped: false,
         attempts: 0,
@@ -266,7 +268,7 @@ export class NotificationMonitor {
     );
   }
   private key(run: Run): string {
-    return JSON.stringify([run.url, ownerKey(run)]);
+    return JSON.stringify([run.url, ownerKey(run), run.dashboardRunId ?? null]);
   }
   private live(observer: Observer): boolean {
     return (

@@ -1,3 +1,4 @@
+import {dashboardRecoveryAllowed} from "../shared/dashboard-connection";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { BrowserWindow, IpcMain, IpcMainInvokeEvent } from "electron";
@@ -96,7 +97,7 @@ export class NotificationNavigation {
       !run ||
       this.viewedRun?.id !== id ||
       this.viewedRun.owner !== owner(run) ||
-      run.recovery
+      !dashboardRecoveryAllowed(run)
     )
       return false;
     if (["exited", "failed", "stopped"].includes(run.status)) return true;
@@ -170,7 +171,7 @@ export class NotificationNavigation {
       !!r &&
       r.status === "running" &&
       !!r.url &&
-      !r.recovery &&
+      dashboardRecoveryAllowed(r) &&
       r.dashboardOpened !== false;
     if (live()) {
       if (!this.d.isSelected(r.id))

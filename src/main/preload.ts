@@ -153,6 +153,14 @@ const api: DesktopAPI = {
     invoke("execute-overview-file-action", token),
   revealOverviewEntry: (scope, path) =>
     invoke("reveal-overview-entry", scope, path),
+  copyOverviewPaths: (scope, paths, absolute) =>
+    invoke("copy-overview-paths", scope, paths, absolute),
+  prepareOverviewPaste: (scope, directory) =>
+    invoke("prepare-overview-paste", scope, directory),
+  executeOverviewPaste: (token, decisions) =>
+    invoke("execute-overview-paste", token, decisions),
+  copyOverviewEntries: (scope, paths) => invoke("copy-overview-entries", scope, paths),
+  pasteOverviewEntries: (scope, directory) => invoke("paste-overview-entries", scope, directory),
   readOverviewSchema: (scope) => invoke("read-overview-schema", scope),
   readOverviewContract: (scope, cell) =>
     invoke("read-overview-contract", scope, cell),
@@ -172,6 +180,7 @@ const api: DesktopAPI = {
   runs: () => invoke("runs"),
   closeRun: (id) => invoke("close-run", id),
   stopRun: (id) => invoke("stop-run", id),
+  restoreDashboard: (id) => invoke("restore-dashboard", id),
   selectRun: (id) => invoke("select-run", id),
   setDashboardViewport: (bounds) => invoke("set-dashboard-viewport", bounds),
   listSettings: () => invoke("list-settings"),

@@ -232,9 +232,6 @@ it.each(cases)(
         );
       }
       expect(api.saveProjectDocument).not.toHaveBeenCalled();
-      fireEvent.click(
-        await screen.findByRole("button", { name: "Открыть редактор" }),
-      );
       await waitFor(() =>
         expect(api.readProjectDocument).toHaveBeenCalledWith(
           owner ?? project.id,
@@ -566,19 +563,24 @@ it("retains selected subsection, editor DOM and its draft across project navigat
   const f = render(ui("a"));
   await ready();
   fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
-  const button = await screen.findByRole("button", {
-    name: "Открыть редактор",
-  });
+  await waitFor(() =>
+    expect(store.get(source(a, { kind: "config" })).document).toBeTruthy(),
+  );
+  const button = screen.getByRole("button", { name: "Отменить изменения" });
   const reads = api.readProjectSettings.mock.calls.length;
   f.rerender(ui("b"));
   await ready();
   f.rerender(ui("a"));
-  expect(screen.getByRole("button", { name: "Открыть редактор" })).toBe(button);
+  expect(screen.getByRole("button", { name: "Отменить изменения" })).toBe(
+    button,
+  );
   expect(api.readProjectSettings.mock.calls).toHaveLength(reads + 1);
   // Returning within Project also preserves the exact subsection view.
   fireEvent.click(screen.getByRole("button", { name: "Запуск" }));
   fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
-  expect(screen.getByRole("button", { name: "Открыть редактор" })).toBe(button);
+  expect(screen.getByRole("button", { name: "Отменить изменения" })).toBe(
+    button,
+  );
 });
 
 it("reconciles stale project-wide settings after another scope saved without losing either edit", async () => {

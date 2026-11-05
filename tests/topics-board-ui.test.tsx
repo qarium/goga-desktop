@@ -101,3 +101,69 @@ it("status click does not reassign; keyboard moving and column order work", () =
     screen.getAllByRole("region").map((r) => r.getAttribute("aria-label")),
   ).toEqual(["Без категории", "В работе", "Запланировано", "Завершено"]);
 });
+
+it("hides the unassigned region when all statuses have a category and restores it for unknown statuses even under filters", () => {
+  const known = topicsBoardV4().entries.filter((row) =>
+    row.statuses.every(
+      (status) => status in defaultBoardPreferences().statusCategory,
+    ),
+  );
+  const props = {
+    projectId: "p",
+    year: "2026",
+    rows: known,
+    allRows: known,
+    preferences: defaultBoardPreferences(),
+    onPreferences: vi.fn(),
+    selected: new Set<string>(),
+    onSelection: vi.fn(),
+    onOpen: vi.fn(),
+  };
+  const view = render(<TopicsBoard {...props} />);
+  expect(screen.queryByRole("region", { name: "Без категории" })).toBeNull();
+  view.rerender(
+    <TopicsBoard {...props} rows={[]} allRows={topicsBoardV4().entries} />,
+  );
+  expect(screen.getByRole("region", { name: "Без категории" })).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: /Перетащить статус security-review/ }),
+  ).toBeTruthy();
+  view.rerender(<TopicsBoard {...props} />);
+  expect(screen.queryByRole("region", { name: "Без категории" })).toBeNull();
+});
+
+it("reveals an empty unassigned area after keyboard unassign and hides it after the last status is assigned", () => {
+  const rows = topicsBoardV4().entries.filter((row) =>
+    row.statuses.every(
+      (status) => status in defaultBoardPreferences().statusCategory,
+    ),
+  );
+  function Known() {
+    const [preferences, onPreferences] = useState(defaultBoardPreferences());
+    return (
+      <TopicsBoard
+        projectId="p"
+        year="2026"
+        rows={rows}
+        allRows={rows}
+        preferences={preferences}
+        onPreferences={onPreferences}
+        selected={new Set()}
+        onSelection={vi.fn()}
+        onOpen={vi.fn()}
+      />
+    );
+  }
+  render(<Known />);
+  expect(screen.queryByRole("region", { name: "Без категории" })).toBeNull();
+  fireEvent.keyDown(
+    screen.getByRole("button", { name: /Перетащить статус empty/ }),
+    { key: "ArrowLeft", altKey: true },
+  );
+  const unassigned = screen.getByRole("region", { name: "Без категории" });
+  fireEvent.keyDown(
+    within(unassigned).getByRole("button", { name: /Перетащить статус empty/ }),
+    { key: "ArrowRight", altKey: true },
+  );
+  expect(screen.queryByRole("region", { name: "Без категории" })).toBeNull();
+});

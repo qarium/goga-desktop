@@ -1,3 +1,4 @@
+import { useViewActive } from "./RetainedViews";
 import { useSettingsEditorViewport } from "./useSettingsEditorViewport";
 import { LoadingBoundary } from "./LoadingBoundary";
 import { isDeletableDocument } from "../shared/document-deletion";
@@ -37,6 +38,35 @@ export function SettingsDocument({
     source.scope === "project" && source.target.kind === "workflow";
   const draft = useSyncExternalStore(store.subscribe, () => store.get(source));
   const key = documentKey(source);
+  const active = useViewActive();
+  // One automatic attempt per selected source. Busy/error updates and retained
+  // view activation must not retry a failed read or reopen a deleted selection.
+  const reveal = useRef({
+    store,
+    key,
+    revision: store.removalRevision(),
+    attempted: false,
+  });
+  if (reveal.current.store !== store || reveal.current.key !== key)
+    reveal.current = {
+      store,
+      key,
+      revision: store.removalRevision(),
+      attempted: false,
+    };
+  useEffect(() => {
+    if (!active || source.scope !== "project" || reveal.current.attempted)
+      return;
+    reveal.current.attempted = true;
+    if (
+      draft.document ||
+      draft.busy ||
+      draft.error ||
+      store.wasRemovedSince(source, reveal.current.revision)
+    )
+      return;
+    void store.open(source);
+  }, [store, key, active]);
   const pane = useRef<HTMLElement>(null);
   const editorHeight = useSettingsEditorViewport(
     pane,
@@ -112,23 +142,25 @@ export function SettingsDocument({
           />
         )}
         {!draft.document ? (
-          <div className="privacy-note">
-            <h3>Содержимое пока скрыто</h3>
-            <p className="hint">
-              Файл может содержать секретные переменные окружения. Открывайте
-              редактор только там, где экран не виден посторонним. Значения не
-              отправляются в телеметрию.
-            </p>
-            <div className="document-reveal-actions">
-              <button
-                disabled={draft.busy}
-                onClick={() => void store.open(source)}
-              >
-                {draft.busy ? "Читаем…" : "Открыть редактор"}
-              </button>
-              {deleteButton}
+          source.scope === "home" ? (
+            <div className="privacy-note">
+              <h3>Содержимое пока скрыто</h3>
+              <p className="hint">
+                Файл может содержать секретные переменные окружения. Открывайте
+                редактор только там, где экран не виден посторонним. Значения не
+                отправляются в телеметрию.
+              </p>
+              <div className="document-reveal-actions">
+                <button
+                  disabled={draft.busy}
+                  onClick={() => void store.open(source)}
+                >
+                  {draft.busy ? "Читаем…" : "Открыть редактор"}
+                </button>
+                {deleteButton}
+              </div>
             </div>
-          </div>
+          ) : null
         ) : (
           <>
             {draft.document.exists === false && (
@@ -172,9 +204,15 @@ export function SettingsDocument({
                   <div className="document-save-primary-actions">
                     <button
                       disabled={draft.busy}
-                      onClick={() => store.discard(source)}
+                      onClick={() =>
+                        source.scope === "project"
+                          ? store.reset(source)
+                          : store.discard(source)
+                      }
                     >
-                      Скрыть без сохранения
+                      {source.scope === "project"
+                        ? "Отменить изменения"
+                        : "Скрыть без сохранения"}
                     </button>
                     <button
                       className="primary"

@@ -1,4 +1,7 @@
 import { afterEach, expect, it } from "vitest";
+import { nativeGitGuard } from "../src/host/git-native-context";
+import { NativeGitJournal } from "../src/host/git-native-journal";
+import type { NativeGitClient } from "../src/host/git-native-client";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { createHash } from "node:crypto";
@@ -429,3 +432,141 @@ it("canonicalizes owner fields before hashing without changing validated snapsho
     }),
   ).not.toBe(legacyKey);
 });
+
+it("forwards each fresh observation's ephemeral flags to recovery without persisting them", async () => {
+  const f = await fixture();
+  const supplied: (Buffer | undefined)[] = [];
+  const observed: Buffer[] = [];
+  const state = await captureNativeGitState({
+    ...f.options,
+    observe: async () => {
+      const flags = Buffer.from("h a\0");
+      observed.push(flags);
+      return {
+        ...(await f.options.observe()),
+        index: Buffer.alloc(0),
+        indexFlags: flags,
+      };
+    },
+    indexRecovery: async (_index: Buffer, flags?: Buffer) => {
+      supplied.push(flags);
+      return { flags: flags?.toString("base64") ?? "", objects: [] };
+    },
+  });
+  expect(supplied).toHaveLength(2);
+  expect(supplied[0]).toBe(observed[0]);
+  expect(supplied[1]).toBe(observed[1]);
+  expect(observed[0]).not.toBe(observed[1]);
+  expect(state.indexRecovery?.flags).toBe(
+    Buffer.from("h a\0").toString("base64"),
+  );
+  expect(state).not.toHaveProperty("indexFlags");
+  expect(JSON.stringify(state)).not.toContain("indexFlags");
+});
+it.each(["invalid", "oversized"])(
+  "rejects %s ephemeral flags before recovery",
+  async (kind) => {
+    const f = await fixture();
+    let recovered = false;
+    await expect(
+      captureNativeGitState({
+        ...f.options,
+        observe: async () => ({
+          ...(await f.options.observe()),
+          indexFlags: (kind === "invalid"
+            ? "flags"
+            : Buffer.alloc(8 * 1024 * 1024 + 1)) as Buffer,
+        }),
+        indexRecovery: async () => {
+          recovered = true;
+          return { flags: "", objects: [] };
+        },
+      }),
+    ).rejects.toThrow();
+    expect(recovered).toBe(false);
+  },
+);
+
+it.each(["legacy", "commit"] as const)(
+  "retains %s guard admission and two independent observations per capture",
+  async (provider) => {
+    const f = await fixture();
+    const calls: string[] = [];
+    const client: NativeGitClient = {
+      gitVersion: "fixture",
+      inTemporaryIndex: async () => {
+        throw Error("not used");
+      },
+      inTemporaryRepository: async () => {
+        throw Error("not used");
+      },
+      run: async (r: { command: string }) => {
+        calls.push(r.command);
+        return {
+          stdout:
+            r.command === "rev-parse"
+              ? Buffer.from("a".repeat(40) + "\n")
+              : Buffer.alloc(0),
+          stderr: Buffer.alloc(0),
+          exitCode: 0,
+          signal: null,
+          processSettled: true,
+        };
+      },
+    };
+    const guard = await nativeGitGuard({
+      root: f.root,
+      paths: [],
+      configuration: [],
+      recoverIndex: true,
+      capability: {
+        client: async () => client,
+        owner: f.options.owner,
+        journal: new NativeGitJournal({
+          directory: path.join(f.base, "journal"),
+        }),
+      },
+      verify: async () => {
+        calls.push("verify");
+      },
+      ...(provider === "legacy"
+        ? {
+            admittedStatus: async () => {
+              calls.push("admittedStatus");
+              return { data: Buffer.alloc(0), headRef: null };
+            },
+            policy: async () => hash("policy"),
+          }
+        : {
+            freshBatchRecovery: true,
+            observe: async (received: NativeGitClient) => {
+              expect(received).toBe(client);
+              calls.push("customObserve");
+              return {
+                ...(await f.options.observe()),
+                index: Buffer.alloc(0),
+                indexFlags: Buffer.from("h a\0"),
+              };
+            },
+          }),
+    });
+    const state = await guard.capture();
+    expect(calls.filter((c) => c === "verify")).toHaveLength(4);
+    if (provider === "legacy") {
+      expect(calls.filter((c) => c === "admittedStatus")).toHaveLength(2);
+      expect(calls.filter((c) => c === "ls-files")).toHaveLength(4);
+    } else {
+      expect(calls).toEqual([
+        "verify",
+        "verify",
+        "customObserve",
+        "verify",
+        "verify",
+        "customObserve",
+      ]);
+      expect(state.indexRecovery?.flags).toBe(
+        Buffer.from("h a\0").toString("base64"),
+      );
+    }
+  },
+);

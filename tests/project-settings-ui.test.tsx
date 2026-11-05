@@ -575,39 +575,61 @@ async function launchThenEditSettings() {
   fireEvent.change(screen.getByLabelText("Исполняемый файл"), {
     target: { value: "keep these settings" },
   });
-  return resolve;
+  return (run: typeof launchedRun) =>
+    resolve({
+      ...run,
+      kind: "pipeline",
+      // The real host returns the captured scoped owner, not a primary run
+      // whose topic text only happens to match the preparation's clone.
+      context: api.launch.mock.calls[0][0].context,
+    });
 }
-it("guards a late launch completion before leaving dirty project settings", async () => {
+it("registers a late launch without interrupting settings and guards explicit run selection on cancel", async () => {
   const resolve = await launchThenEditSettings();
   api.selectRun.mockClear();
   await act(async () => resolve(launchedRun));
-  expect(await screen.findByRole("dialog")).toBeTruthy();
+  expect(screen.queryByRole("dialog")).toBeNull();
   expect(
     (screen.getByLabelText("Исполняемый файл") as HTMLInputElement).value,
   ).toBe("keep these settings");
   expect(api.selectRun).not.toHaveBeenCalledWith("late-run");
+  const runTab = screen.getByRole("tab", { name: "build · topic · main" });
+  expect(runTab.getAttribute("aria-selected")).toBe("false");
+  fireEvent.click(runTab);
+  expect(await screen.findByRole("dialog")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Отмена" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
   expect(
     (screen.getByLabelText("Исполняемый файл") as HTMLInputElement).value,
   ).toBe("keep these settings");
-  act(() => focusRun("late-run"));
-  fireEvent.click(
-    screen.getByRole("button", { name: "Не сохранять и перейти" }),
-  );
-  expect(
-    await screen.findByRole("tab", { name: "build · topic · main" }),
-  ).toBeTruthy();
+  expect(runTab.getAttribute("aria-selected")).toBe("false");
+  expect(api.selectRun).not.toHaveBeenCalledWith("late-run");
+  expect(api.saveProjectSettings).not.toHaveBeenCalled();
 });
 it("selects a late launched run only after explicit permission to discard settings", async () => {
   const resolve = await launchThenEditSettings();
+  api.selectRun.mockClear();
   await act(async () => resolve(launchedRun));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(api.selectRun).not.toHaveBeenCalledWith("late-run");
+  expect(
+    (screen.getByLabelText("Исполняемый файл") as HTMLInputElement).value,
+  ).toBe("keep these settings");
+  fireEvent.click(screen.getByRole("tab", { name: "build · topic · main" }));
   fireEvent.click(
     await screen.findByRole("button", { name: "Не сохранять и перейти" }),
   );
   await waitFor(() =>
     expect(api.selectRun).toHaveBeenLastCalledWith("late-run"),
   );
-  expect(screen.queryByLabelText("Исполняемый файл")).toBeNull();
+  expect(
+    screen.queryByRole("textbox", { name: "Исполняемый файл" }),
+  ).toBeNull();
+  expect(
+    screen
+      .getByRole("tab", { name: "build · topic · main" })
+      .getAttribute("aria-selected"),
+  ).toBe("true");
   expect(api.saveProjectSettings).not.toHaveBeenCalled();
 });
 it("registers late launch without interrupting pending settings save or leaving stale busy state", async () => {

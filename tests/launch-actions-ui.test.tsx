@@ -58,14 +58,16 @@ beforeEach(() => {
   window.goga = api;
 });
 afterEach(cleanup);
-async function setup() {
+async function setup(
+  onLaunched: (run: any, stale?: boolean) => void = () => {},
+) {
   const store = createDraftStore();
   const view = render(
     <LaunchForm
       project={project}
       draftStore={store}
       onCancel={() => {}}
-      onLaunched={() => {}}
+      onLaunched={onLaunched}
     />,
   );
   await waitFor(() =>
@@ -228,27 +230,145 @@ it("stale modal cannot be revived after task edit and reverting text", async () 
   expect(screen.queryByRole("dialog")).toBeNull();
   expect(api.launch).not.toHaveBeenCalled();
 });
-it("context change while checking checkout prevents launch and preserves draft", async () => {
-  const { view } = await setup();
-  let resolve!: (b: string) => void;
+it("accepted launch survives a settings/preview refresh and replaces only its source draft", async () => {
+  const launched = vi.fn();
+  const { view, store } = await setup(launched);
+  let resolve!: (branch: string) => void;
   api.checkoutBranch.mockImplementationOnce(
     () =>
-      new Promise<string>((r) => {
-        resolve = r;
+      new Promise<string>((done) => {
+        resolve = done;
+      }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+  api.preview.mockResolvedValue({
+    ...preview,
+    token: "presentation-only-refresh",
+  });
+  view.rerender(
+    <LaunchForm
+      project={project}
+      draftStore={store}
+      settingsRevision="changed"
+      onCancel={() => {}}
+      onLaunched={launched}
+    />,
+  );
+  await waitFor(() => expect(api.preview.mock.calls.length).toBeGreaterThan(1));
+  await act(async () => resolve("main"));
+  await waitFor(() => expect(api.launch).toHaveBeenCalledOnce());
+  expect(api.launch.mock.calls[0][0]).toMatchObject({
+    projectId: project.id,
+    pipeline: "build",
+    previewToken: "token",
+  });
+  expect(launched).toHaveBeenCalledWith({ id: "run" }, false);
+  expect(store.forms.has(project.id)).toBe(false);
+});
+it("accepted launch delegates changed UI blocked state to Host rather than silently revoking intent", async () => {
+  const launched = vi.fn();
+  const { view, store } = await setup(launched);
+  let resolve!: (branch: string) => void;
+  api.checkoutBranch.mockImplementationOnce(
+    () =>
+      new Promise<string>((done) => {
+        resolve = done;
       }),
   );
   fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
   view.rerender(
     <LaunchForm
       project={project}
+      draftStore={store}
+      blocked="Состояние запуска проверяется хостом"
+      onCancel={() => {}}
+      onLaunched={launched}
+    />,
+  );
+  await act(async () => resolve("main"));
+  await waitFor(() => expect(api.launch).toHaveBeenCalledOnce());
+  expect(launched).toHaveBeenCalledWith({ id: "run" }, false);
+});
+it("an accepted launch reports its Host error after a settings presentation refresh", async () => {
+  const { view, store } = await setup();
+  let resolve!: (branch: string) => void;
+  api.checkoutBranch.mockImplementationOnce(
+    () =>
+      new Promise<string>((done) => {
+        resolve = done;
+      }),
+  );
+  api.launch.mockRejectedValueOnce(
+    Error(
+      "Error invoking remote method 'goga:launch': Error: Actual selected command failed",
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+  view.rerender(
+    <LaunchForm
+      project={project}
+      draftStore={store}
       settingsRevision="changed"
       onCancel={() => {}}
       onLaunched={() => {}}
     />,
   );
+  await waitFor(() => expect(api.preview.mock.calls.length).toBeGreaterThan(1));
   await act(async () => resolve("main"));
-  expect(api.launch).not.toHaveBeenCalled();
+  await screen.findByText("Actual selected command failed");
+  expect(store.forms.has(project.id)).toBe(true);
 });
+it.each(["checkout", "launch"] as const)(
+  "accepted intent completes and registers its exact result after unmount during %s",
+  async (phase) => {
+    const launched = vi.fn();
+    const { view } = await setup(launched);
+    let resolve!: (value: any) => void;
+    if (phase === "checkout")
+      api.checkoutBranch.mockImplementationOnce(
+        () =>
+          new Promise((done) => {
+            resolve = done;
+          }),
+      );
+    else
+      api.launch.mockImplementationOnce(
+        () =>
+          new Promise((done) => {
+            resolve = done;
+          }),
+      );
+    fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+    await waitFor(() => expect(resolve).toBeTypeOf("function"));
+    view.unmount();
+    await act(async () =>
+      resolve(phase === "checkout" ? "main" : { id: "run" }),
+    );
+    await waitFor(() => expect(api.launch).toHaveBeenCalledOnce());
+    expect(launched).toHaveBeenCalledWith({ id: "run" }, true);
+  },
+);
+it("passes the selected existing catalog labels as display-only launch metadata", async () => {
+  api.discover.mockResolvedValue({
+    ...data,
+    pipelines: [
+      {
+        ...data.pipelines[0],
+        name: "Редактор $(not-a-command)",
+        description: "Человекочитаемое описание",
+      },
+    ],
+  });
+  await setup();
+  fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+  await waitFor(() => expect(api.launch).toHaveBeenCalledOnce());
+  expect(api.launch.mock.calls[0][0]).toMatchObject({
+    pipeline: "build",
+    pipelineName: "Редактор $(not-a-command)",
+    pipelineDescription: "Человекочитаемое описание",
+  });
+});
+
 it("new branch approval captures base, task and ordinary mode only once", async () => {
   await setup();
   await newBranch();
@@ -333,7 +453,7 @@ it("menu supports Enter/Space activation, Tab and outside dismissal", async () =
   expect(await screen.findByRole("dialog")).toBeTruthy();
   expect(api.launch).not.toHaveBeenCalled();
 });
-it.each(["clean", "branch", "settings"])(
+it.each(["clean", "branch", "settings", "suspended"])(
   "stale %s consent never survives A→B→A",
   async (kind) => {
     const { view, store } = await setup();
@@ -357,6 +477,17 @@ it.each(["clean", "branch", "settings"])(
             project={project}
             draftStore={store}
             settingsRevision={revision}
+            onCancel={() => {}}
+            onLaunched={() => {}}
+          />,
+        );
+    if (kind === "suspended")
+      for (const suspended of [true, false])
+        view.rerender(
+          <LaunchForm
+            project={project}
+            draftStore={store}
+            suspended={suspended}
             onCancel={() => {}}
             onLaunched={() => {}}
           />,
@@ -503,8 +634,8 @@ it("owned clone cannot select no-topic launch or lose its scoped owner", async (
     context: owner,
     topic: { mode: "existing", branch: owner.branch, topic: owner.topic },
     task: "saved task",
-    taskVersion: "v1",
   });
+  expect(api.launch.mock.calls[0][0]).not.toHaveProperty("taskVersion");
 });
 
 it.each(["preview-first", "task-first"])(
@@ -573,8 +704,8 @@ it.each(["preview-first", "task-first"])(
     expect(api.launch.mock.calls[0][0]).toMatchObject({
       topic: { mode: "existing", branch: "main", topic: "main" },
       task: task.text,
-      taskVersion: task.version,
     });
+    expect(api.launch.mock.calls[0][0]).not.toHaveProperty("taskVersion");
   },
 );
 

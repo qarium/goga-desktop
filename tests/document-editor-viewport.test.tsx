@@ -22,6 +22,8 @@ const store = {
   get: () => draft,
   subscribe: () => () => {},
   cancelDeletion: vi.fn(),
+  removalRevision: () => 0,
+  wasRemovedSince: () => false,
 } as any;
 let top: number, footer: number, scroll: number;
 function content() {

@@ -618,7 +618,11 @@ describe(
           };
           const startsBefore = f.starts.length;
           await expect(
-            f.service.launch({ ...request, taskVersion: "a".repeat(64) }),
+            f.service.launch({
+              ...request,
+              task: "Edited text must not overwrite another file",
+              taskVersion: "a".repeat(64),
+            }),
           ).rejects.toThrow(/устарел|изменен|изменён/i);
           if (context)
             await expect(
@@ -867,7 +871,8 @@ describe.each([0, 1])(
           config.version,
         ),
       ).resolves.toMatchObject({
-        text: config.text + "# versioned content save while sibling is active\n",
+        text:
+          config.text + "# versioned content save while sibling is active\n",
       });
       // Check membership independently of run-list fallback guards.
       const memberships = (
@@ -1081,7 +1086,9 @@ describe(
           "\n",
       );
       expect(task.text).toBe("alpha task\n");
-      expect(calls.filter((call) => call.exe === "git").length).toBeLessThanOrEqual(33);
+      expect(
+        calls.filter((call) => call.exe === "git").length,
+      ).toBeLessThanOrEqual(33);
       expect(boards).toHaveLength(1);
       expect(boards[0]?.cwd).toBe(f.a.path);
       expect(await bytes(f.primary)).toEqual(before);
@@ -1091,7 +1098,7 @@ describe(
 );
 
 it.each(["task", "branch", "owner", "catalog"])(
-  "rechecks %s at launch after a lightweight ready-clone form read",
+  "launch rechecks task/branch/owner, not presentation catalog (%s)",
   { timeout: gitIntegrationBudget(30000) },
   async (change) => {
     const f = await fixture();
@@ -1121,6 +1128,20 @@ it.each(["task", "branch", "owner", "catalog"])(
     }
     const before = await fs.readFile(taskPath, "utf8");
     const primary = await bytes(f.primary);
+    if (change === "catalog") {
+      const run = await f.service.launch({
+        ...request,
+        task: "Explicit draft saved in owner only\n",
+      });
+      expect(f.starts).toHaveLength(1);
+      expect(f.starts[0]?.cwd).toBe(f.a.path);
+      expect(await fs.readFile(taskPath, "utf8")).toBe(
+        "Explicit draft saved in owner only\n",
+      );
+      expect(await bytes(f.primary)).toEqual(primary);
+      await f.service.stop(run.id);
+      return;
+    }
     await expect(
       f.service.launch({ ...request, task: "Must not be saved\n" }),
     ).rejects.toThrow();
@@ -1131,7 +1152,7 @@ it.each(["task", "branch", "owner", "catalog"])(
 );
 
 it(
-  "runs fresh readiness before launch composition or any task write",
+  "launch reads current task and composes the exact owner without catalog readiness gates",
   { timeout: gitIntegrationBudget(30000) },
   async () => {
     const f = await fixture();
@@ -1152,13 +1173,17 @@ it(
       return result;
     };
     f.calls.length = 0;
-    await expect(
-      f.service.launch({ ...request, task: "Must not be saved\n" }),
-    ).rejects.toThrow(/измен/);
-    expect(boards).toBe(2);
-    expect(f.calls.some((call) => call.args[0] === "pipeline")).toBe(false);
-    expect(f.starts).toHaveLength(0);
-    expect(await fs.readFile(taskPath, "utf8")).toBe(before);
+    const run = await f.service.launch({
+      ...request,
+      task: "Explicit edited task\n",
+    });
+    expect(boards).toBe(0);
+    expect(f.calls.some((call) => call.args[0] === "pipeline")).toBe(true);
+    expect(f.starts).toHaveLength(1);
+    expect(f.starts[0]?.cwd).toBe(f.a.path);
+    expect(await fs.readFile(taskPath, "utf8")).toBe("Explicit edited task\n");
+    expect(before).not.toBe("Explicit edited task\n");
+    await f.service.stop(run.id);
   },
 );
 

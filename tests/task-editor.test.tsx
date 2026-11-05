@@ -127,7 +127,7 @@ it("loads full task, no writes while typing, explicit versioned save+launch", as
     ),
   );
 });
-it("unchanged launch carries original text and snapshot", async () => {
+it("unchanged launch uses current disk task rather than a cached write version", async () => {
   form();
   await loaded();
   fireEvent.click(executionButton());
@@ -135,10 +135,36 @@ it("unchanged launch carries original text and snapshot", async () => {
     expect(api.launch).toHaveBeenCalledWith(
       expect.objectContaining({
         task: "full\noriginal\n",
-        taskVersion: "version-1",
       }),
     ),
   );
+});
+it("reopened cached form launches without treating the cached task as a write", async () => {
+  const drafts = createDraftStore();
+  const view = render(
+    <LaunchForm
+      project={p}
+      draftStore={drafts}
+      onCancel={() => {}}
+      onLaunched={() => {}}
+    />,
+  );
+  await loaded();
+  view.unmount();
+  api.readTopicTask.mockResolvedValue(doc("new disk task"));
+  render(
+    <LaunchForm
+      project={p}
+      draftStore={drafts}
+      onCancel={() => {}}
+      onLaunched={() => {}}
+    />,
+  );
+  await loaded();
+  fireEvent.click(executionButton());
+  await waitFor(() => expect(api.launch).toHaveBeenCalled());
+  expect(api.launch.mock.calls[0][0]).not.toHaveProperty("taskVersion");
+  expect(api.readTopicTask).toHaveBeenCalledTimes(1);
 });
 it("retains drafts across topic switches and ignores late reads from previous topic", async () => {
   let late: any;
@@ -219,7 +245,9 @@ it("requires explicit confirmation to save empty text", async () => {
 });
 it("preserves conflicting draft and requires confirmation before reread", async () => {
   api.launch.mockRejectedValueOnce(
-    new Error("Задача изменилась вне приложения"),
+    new Error(
+      "Error invoking remote method 'goga:launch': Error: Задача изменилась вне приложения",
+    ),
   );
   form();
   await loaded();
@@ -229,7 +257,10 @@ it("preserves conflicting draft and requires confirmation before reread", async 
   );
   await screen.findByText("Задача изменилась вне приложения");
   expect(edit().value).toBe("my conflicting text");
-  api.readTopicTask.mockResolvedValueOnce(doc("external"));
+  api.readTopicTask.mockResolvedValueOnce({
+    ...doc("external"),
+    version: "version-2",
+  });
   fireEvent.click(screen.getByRole("button", { name: "Перечитать задачу" }));
   expect(edit().value).toBe("my conflicting text");
   expect(api.readTopicTask).toHaveBeenCalledTimes(1);
@@ -238,6 +269,15 @@ it("preserves conflicting draft and requires confirmation before reread", async 
   );
   await waitFor(() => expect(edit().value).toBe("external"));
   expect(document.querySelectorAll("textarea")).toHaveLength(1);
+  fireEvent.change(edit(), { target: { value: "resolved task" } });
+  fireEvent.click(
+    screen.getByRole("button", { name: "Сохранить и запустить" }),
+  );
+  await waitFor(() => expect(api.launch).toHaveBeenCalledTimes(2));
+  expect(api.launch.mock.calls[1][0]).toMatchObject({
+    task: "resolved task",
+    taskVersion: "version-2",
+  });
 });
 it("renders unified radio topic block and renamed workspace", async () => {
   const shell = render(<App />);
@@ -346,22 +386,62 @@ it("late launch completion cannot erase newer text or close a reopened editor", 
   await openPrototypeLaunch();
   await waitFor(() => expect(edit().value).toBe("newer draft"));
 });
-it("late launch of a reused unedited draft cannot strand the reopened editor", async () => {
+it("reopening a pending unchanged launch retains its loader and replaces only its preparation after success", async () => {
   let finish: any;
   api.launch.mockImplementationOnce(() => new Promise((r) => (finish = r)));
   render(<App />);
   await openPrototypeLaunch();
   await loaded();
+  const task = edit();
   fireEvent.click(executionButton());
   await waitFor(() => expect(api.launch).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: "Проект" }));
   await openPrototypeLaunch();
-  await loaded();
+  expect(
+    screen.getByRole("status", { name: "Подготавливаем запуск…" }),
+  ).toBeTruthy();
+  expect(
+    screen.queryByRole("textbox", { name: "Что нужно сделать?" }),
+  ).toBeNull();
+  expect(task.value).toBe("full\noriginal\n");
+  expect((task.closest("fieldset") as HTMLFieldSetElement).disabled).toBe(true);
+  expect(task.closest(".loading-content")?.hasAttribute("hidden")).toBe(true);
+  const request = api.launch.mock.calls[0][0];
+  expect(request).not.toHaveProperty("taskVersion");
+  expect(request).toMatchObject({
+    task: "full\noriginal\n",
+    context: expect.objectContaining({
+      projectId: p.id,
+      topic: "main",
+      branch: "main",
+    }),
+  });
   await act(async () =>
-    finish({ id: "late", projectId: p.id, status: "exited" }),
+    finish({
+      id: "late",
+      kind: "pipeline",
+      projectId: p.id,
+      pipeline: request.pipeline,
+      topic: request.context.topic,
+      branch: request.context.branch,
+      context: request.context,
+      status: "exited",
+      startedAt: "now",
+      workflow: null,
+      profile: null,
+    }),
   );
-  expect(edit().disabled).toBe(false);
-  expect(edit().value).toBe("full\noriginal\n");
+  expect(screen.queryByRole("tab", { name: /^Новый конвейер · / })).toBeNull();
+  expect(
+    screen.queryByRole("textbox", { name: "Что нужно сделать?" }),
+  ).toBeNull();
+  expect(
+    screen
+      .getByRole("tab", { name: "build · main · main" })
+      .getAttribute("aria-selected"),
+  ).toBe("true");
+  expect(api.launch).toHaveBeenCalledTimes(1);
+  expect(api.readTopicTask).toHaveBeenCalledTimes(1);
 });
 
 const reread = () =>

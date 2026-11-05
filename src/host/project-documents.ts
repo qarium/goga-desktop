@@ -214,6 +214,7 @@ async function read(
   relative: string,
   allowMissing: boolean,
   rawSource = false,
+  allowMissingLeaf = allowMissing,
 ): Promise<ReadResult> {
   const parent = await directories(root, path.dirname(relative), allowMissing);
   const missing = (): ReadResult => ({
@@ -234,7 +235,7 @@ async function read(
   try {
     initial = await lstat(file);
   } catch (error) {
-    if (allowMissing && absent(error)) {
+    if (allowMissingLeaf && absent(error)) {
       await verifyDirectories(parent.identities);
       return missing();
     }
@@ -402,6 +403,7 @@ async function saveSourceDocument(
       relative,
       target.kind !== "tool",
       isFlatDocument(target) || target.kind === "source",
+      target.kind !== "tool" || expectedVersion === "missing",
     );
     if (initial.document.version !== expectedVersion) throw saveConflict();
     await beforeMutation?.();
@@ -414,7 +416,8 @@ async function saveSourceDocument(
     // Flat source directories may be created ONLY by an explicit, validated save.
     if (isFlatDocument(target))
       await createFlatDirectories(root, target.kind, initial.directories);
-    // Configuration creation still requires an existing .goga; tools cannot be created.
+    // Configuration creation still requires an existing .goga. Tool saves may
+    // create only the missing leaf; their validated parent must already exist.
     const parent = await directories(root, path.dirname(relative));
     await verifyDirectories(initial.directories);
     const tmp = path.join(
@@ -454,6 +457,7 @@ async function saveSourceDocument(
         relative,
         target.kind !== "tool",
         isFlatDocument(target) || target.kind === "source",
+        target.kind !== "tool" || expectedVersion === "missing",
       );
       if (current.document.version !== expectedVersion) throw saveConflict();
       const staged = await lstat(tmp);

@@ -482,3 +482,89 @@ it("moves an open menu back into the shell when the native pipeline surface fini
   expect(screen.queryByRole("alert")).toBeNull();
   expect(window.open).toHaveBeenCalledTimes(1);
 });
+
+it("copies already-loaded shell CSS into the child instead of re-fetching obsolete build assets", async () => {
+  const source = document.createElement("link");
+  source.rel = "stylesheet";
+  source.href = "file:///fixture/assets/obsolete-hash.css";
+  source.media = "screen";
+  const rules = [{ cssText: ".notifications-panel { color: rgb(1, 2, 3); }" }];
+  Object.defineProperty(source, "sheet", {
+    value: { cssRules: rules, disabled: false },
+  });
+  const copies: Array<{
+    options: CSSStyleSheetInit;
+    replaceSync: ReturnType<typeof vi.fn>;
+  }> = [];
+  Object.defineProperty(child.window, "CSSStyleSheet", {
+    configurable: true,
+    value: class {
+      replaceSync = vi.fn();
+      constructor(public options: CSSStyleSheetInit) {
+        copies.push(this);
+      }
+    },
+  });
+  document.head.append(source);
+  try {
+    mount();
+    await waitFor(() => expect(api.setTopicPopupBounds).toHaveBeenCalled());
+    expect(child.window.document.querySelector("link")).toBeNull();
+    expect(copies).toHaveLength(1);
+    expect(copies[0].options).toMatchObject({
+      baseURL: source.href,
+      media: "screen",
+    });
+    expect(copies[0].replaceSync).toHaveBeenCalledWith(rules[0].cssText);
+    expect(child.window.document.adoptedStyleSheets).toEqual(copies);
+    expect(screen.queryByRole("alert")).toBeNull();
+  } finally {
+    source.remove();
+  }
+});
+
+it("preserves stylesheet cascade order when a later shell sheet is still pending", async () => {
+  const first = document.createElement("link"),
+    second = document.createElement("link");
+  for (const [link, name] of [
+    [first, "loaded"],
+    [second, "pending"],
+  ] as const) {
+    link.rel = "stylesheet";
+    link.href = `file:///fixture/${name}.css`;
+    document.head.append(link);
+  }
+  Object.defineProperty(first, "sheet", {
+    value: {
+      cssRules: [{ cssText: ".panel { color: red; }" }],
+      disabled: false,
+    },
+  });
+  const construct = vi.fn();
+  Object.defineProperty(child.window, "CSSStyleSheet", {
+    configurable: true,
+    value: class {
+      replaceSync = vi.fn();
+      constructor() {
+        construct();
+      }
+    },
+  });
+  try {
+    mount();
+    const links = [...child.window.document.querySelectorAll("link")];
+    expect(links.map((n) => n.href)).toEqual([first.href, second.href]);
+    expect(construct).not.toHaveBeenCalled();
+    await act(async () => {
+      links[0].dispatchEvent(new child.window.Event("load"));
+    });
+    expect(api.setTopicPopupBounds).not.toHaveBeenCalled();
+    await act(async () => {
+      links[1].dispatchEvent(new child.window.Event("load"));
+    });
+    await waitFor(() => expect(api.setTopicPopupBounds).toHaveBeenCalled());
+  } finally {
+    first.remove();
+    second.remove();
+  }
+});

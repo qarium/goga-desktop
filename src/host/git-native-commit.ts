@@ -13,6 +13,8 @@ import { nativeGitGuard, nativeIntent } from "./git-native-context";
 import {
   assertNativeGitState,
   assertNoNativeGitLocks,
+  fingerprintNativeGitControls,
+  readNativeGitObservation,
   type NativeGitState,
 } from "./git-native-state";
 import { GitMergeSafety, type GitMergeContext } from "./git-merge-safety";
@@ -94,50 +96,64 @@ export class NativeGitWorkspaceActions extends GitWorkspaceActions {
       recoverIndex: true,
       configuration: n.configuration,
       verify: () => c.verify(),
-      admittedStatus: async () => {
-        // Between native commit and native index update a new file legitimately
-        // has both a staged deletion and an untracked row. This is not a display
-        // snapshot: preserve Git's raw public status instead of deduplicating it.
-        const raw = await this.withPolicy(c, async (policy) => {
-          const value = await policy.git([
+      freshBatchRecovery: true,
+      observe: (client) =>
+        this.withPolicy(c, async (policy) => {
+          // The ref/index gap can legitimately contain two status rows for one
+          // path. Keep raw private status, never display-snapshot canonicalization.
+          const raw = await policy.git([
             "status",
             "--porcelain=v2",
             "-z",
             "--branch",
             "--untracked-files=all",
           ]);
+          let headRef: string | null = null;
+          try {
+            headRef = (
+              await this.git(c, [
+                "symbolic-ref",
+                "--quiet",
+                "--no-recurse",
+                "HEAD",
+              ])
+            ).stdout.trim();
+          } catch (error) {
+            if (!(error instanceof CommandExitError) || error.exitCode !== 1)
+              throw error;
+          }
+          const flags = await client.run({
+            policy: "local-read",
+            command: "ls-files",
+            args: ["-v", "-z"],
+          });
+          const unselectedFlags = checked(flags)
+            .split("\0")
+            .filter((s) => s && !selected.includes(s.slice(2)));
+          const attributes = (
+            await this.git(c, ["check-attr", "-z", "--stdin", "--all"], [], {
+              stdin: gitLiteralPaths(selected).toString("utf8"),
+            })
+          ).stdout;
+          const observation = await readNativeGitObservation(
+            client,
+            {
+              headRef,
+              policyFingerprint: nativeIntent([
+                policy.configuration,
+                attributes,
+                unselectedFlags,
+              ]),
+              controlFingerprint: await fingerprintNativeGitControls(c.root),
+            },
+            async () => Buffer.from(raw),
+          );
+          // Verify the captured effective config and attribute sources AFTER all
+          // observation reads, not merely after private status. No scope is shared
+          // with recovery, another observation, a capture or a later write stage.
           await policy.verify();
-          return value;
-        });
-        let headRef: string | null = null;
-        try {
-          headRef = (
-            await this.git(c, [
-              "symbolic-ref",
-              "--quiet",
-              "--no-recurse",
-              "HEAD",
-            ])
-          ).stdout.trim();
-        } catch (error) {
-          if (!(error instanceof CommandExitError) || error.exitCode !== 1)
-            throw error;
-        }
-        return { data: Buffer.from(raw), headRef };
-      },
-      policy: async () => {
-        const config = (await this.git(c, ["config", "--null", "--list"]))
-          .stdout;
-        const attributes = (
-          await this.git(c, ["check-attr", "-z", "--stdin", "--all"], [], {
-            stdin: gitLiteralPaths(selected).toString("utf8"),
-          })
-        ).stdout;
-        const flags = (await this.git(c, ["ls-files", "-v", "-z"])).stdout
-          .split("\0")
-          .filter((s) => s && !selected.includes(s.slice(2)));
-        return nativeIntent([config, attributes, flags]);
-      },
+          return { ...observation, indexFlags: flags.stdout };
+        }),
     });
   }
   override async prepare(input: GitCommitRequest) {

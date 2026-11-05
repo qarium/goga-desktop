@@ -319,7 +319,7 @@ it("resolves registered IDs only and preserves config/tool YAML validation", asy
     ).rejects.toThrow(/YAML/);
   }
 });
-it("discovers a saved workflow and rejects an old real preview before spawn", async () => {
+it("discovers a saved workflow and launches current data without a preview admission token", async () => {
   const { host, id, start } = await setup();
   const request = {
     projectId: id,
@@ -336,7 +336,6 @@ it("discovers a saved workflow and rejects an old real preview before spawn", as
     "missing",
   );
   expect((await host.discover(id)).workflows).toContain("Created");
-  expect((host as any).previews.has(preview.token)).toBe(false);
   await expect(
     host.launch({
       ...request,
@@ -344,12 +343,12 @@ it("discovers a saved workflow and rejects an old real preview before spawn", as
       clean: false,
       expectedBranch: "main",
       confirmBranchSwitch: false,
-      confirmEmptyTask: true,
+      confirmEmptyTask: false,
       task: "",
-      topic: { mode: "new", name: "new", baseRef: "main" },
+      topic: { mode: "none" },
     }),
-  ).rejects.toThrow(/Предпросмотр устарел/);
-  expect(start).not.toHaveBeenCalled();
+  ).rejects.toThrow(/Never spawn a pipeline in this test/);
+  expect(start).toHaveBeenCalledOnce();
 });
 it("catalog disables uppercase-extension aliases and does not permit changing their lowercase twin", async () => {
   const { host, id, file } = await setup();
@@ -397,7 +396,7 @@ it("does not clobber an external file created immediately before the atomic crea
     "Build.yml",
   ]);
 });
-it("launch waits for a pending save and then rejects its invalidated preview before commands or spawn", async () => {
+it("launch waits for a pending save and then executes current data, not an invalidated preview", async () => {
   const { host, id, file, runner, start } = await setup();
   await file(".goga/workflows/Build.yml", "original");
   const request = {
@@ -439,11 +438,13 @@ it("launch waits for a pending save and then rejects its invalidated preview bef
     clean: false,
     expectedBranch: "main",
     confirmBranchSwitch: false,
-    confirmEmptyTask: true,
+    confirmEmptyTask: false,
     task: "",
-    topic: { mode: "new", name: "new", baseRef: "main" },
+    topic: { mode: "none" },
   });
-  const rejected = expect(launch).rejects.toThrow(/Предпросмотр устарел/);
+  const rejected = expect(launch).rejects.toThrow(
+    /Never spawn a pipeline in this test/,
+  );
   try {
     await new Promise((resolve) => setTimeout(resolve, 40));
     expect(vi.mocked(runner.command).mock.calls).toHaveLength(commands);
@@ -453,7 +454,7 @@ it("launch waits for a pending save and then rejects its invalidated preview bef
   }
   await save;
   await rejected;
-  expect(start).not.toHaveBeenCalled();
+  expect(start).toHaveBeenCalledOnce();
 });
 it("leaves no workflow directory when guarded .goga creation is not writable", async () => {
   const { host, root, id } = await setup();

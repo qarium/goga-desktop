@@ -983,3 +983,40 @@ describe("shared Host and AFM terminal retry regressions", () => {
     expect(f.add).toHaveBeenCalledTimes(2);
   });
 });
+
+it("observes only newly verified recovered panels and seeds their saved server pin", async () => {
+  const f = fixture(
+    vi.fn<typeof fetch>().mockImplementation(async () => response(snapshot())),
+  );
+  f.monitor.reconcile([
+    run({
+      recovery: "confirmed",
+      dashboardRecoveryVersion: 1,
+      dashboardReconnect: true,
+      dashboardRunId: "afm-1",
+    }),
+  ]);
+  await settle();
+  expect(f.records).toHaveLength(1);
+  const other = fixture(
+    vi
+      .fn<typeof fetch>()
+      .mockImplementation(async () =>
+        response(snapshot(undefined, { run_id: "foreign" })),
+      ),
+  );
+  other.monitor.reconcile([
+    run({
+      recovery: "confirmed",
+      dashboardRecoveryVersion: 1,
+      dashboardReconnect: true,
+      dashboardRunId: "afm-1",
+    }),
+  ]);
+  await settle();
+  expect(other.records).toHaveLength(0);
+  expect(other.errors).toHaveBeenCalledWith(
+    "run-1",
+    expect.stringContaining("Источник"),
+  );
+});

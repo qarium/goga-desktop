@@ -79,8 +79,16 @@ function terminalFixture() {
 }
 const completions = new Map<string, (run: any, stale: boolean) => void>();
 vi.mock("../src/renderer/LaunchForm", () => ({
-  LaunchForm: ({ owner, onLaunched, blocked }: any) => {
-    completions.set(`pipeline:${owner?.contextId ?? "primary"}`, onLaunched);
+  LaunchForm: ({ owner, onLaunched, onLaunchStarted, blocked }: any) => {
+    completions.set(`pipeline:${owner?.contextId ?? "primary"}`, (run, stale) => {
+      // This stub settles an accepted launch directly; preserve the real form's
+      // synchronous submission notification before delivering its result.
+      onLaunchStarted?.();
+      // Presentation admission is driven by App's effects, not this stub's
+      // synthetic write promise. Awaiting it inside act would prevent the very
+      // commit/effects that settle that independent UI phase.
+      void onLaunched(run, stale);
+    });
     return (
       <textarea
         aria-label="Pipeline draft"

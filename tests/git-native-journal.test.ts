@@ -2626,3 +2626,41 @@ it.each(["recordHash", "intentFingerprint", "currentRevision"])(
     expect(await fs.readFile(path.join(f.root, "a"), "utf8")).toBe("draft");
   },
 );
+
+it.each(["wrong-intent", "expired", "forged-proof"])(
+  "commit journal rejects %s and consumes its ticket without a native attempt",
+  async (kind) => {
+    const f = await fixture();
+    const token = f.journal.prepare(
+      "commit",
+      f.snapshot,
+      hash("commit-intent"),
+    );
+    if (kind === "expired") f.expire();
+    const proveBefore = vi.fn(
+      async () =>
+        ({
+          ...f.snapshot,
+          phase: "admit",
+        }) as unknown as import("../src/host/git-commit-proof").CommitFreshProof,
+    );
+    const options = {
+      token,
+      intentFingerprint: hash(
+        kind === "wrong-intent" ? "wrong" : "commit-intent",
+      ),
+      proveBefore,
+      attemptScope: async <T>(action: () => Promise<T>) => action(),
+      run: f.run,
+      proveResult: async (): Promise<never> => {
+        throw Error("must not reach result proof");
+      },
+      deferRecoveryCleanup: vi.fn(),
+    };
+    await expect(f.journal.executeCommit(options)).rejects.toThrow();
+    expect(f.run).not.toHaveBeenCalled();
+    expect(proveBefore).toHaveBeenCalledTimes(kind === "forged-proof" ? 1 : 0);
+    await expect(f.journal.executeCommit(options)).rejects.toThrow();
+    expect(f.run).not.toHaveBeenCalled();
+  },
+);

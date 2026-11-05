@@ -76,3 +76,21 @@ it("does not disguise an uncertain write outcome as a pre-write file conflict", 
     "Error invoking remote method 'goga:unknown-save': Error: stop";
   expect(documentSaveErrorMessage(Error(unknown))).toBe(unknown);
 });
+
+it.each([
+  "copy-overview-paths",
+  "prepare-overview-paste",
+  "execute-overview-paste",
+])(
+  "shows the precise %s host reason without the Electron wrapper",
+  (channel) => {
+    const reason = "Файл изменился во время копирования. Вставка остановлена.";
+    expect(
+      preparationErrorMessage(
+        Error(
+          `Error invoking remote method 'goga:${channel}': Error: ${reason}`,
+        ),
+      ),
+    ).toBe(reason);
+  },
+);
