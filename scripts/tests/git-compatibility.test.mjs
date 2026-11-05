@@ -6,12 +6,14 @@ import {
   runGitCompatibility,
 } from "../test-git-compatibility.mjs";
 
-test("compatibility covers native reads, branches, sequence, commit, discard and conflict save", async () => {
+test("compatibility covers native reads, branches, sequence, commit, discard and conflict save with independently schedulable large encoding parity", async () => {
   assert.deepEqual(compatibilityFiles, [
     "tests/git-native-contract.test.ts",
     "tests/git-native-branches.test.ts",
     "tests/git-native-sequence.test.ts",
     "tests/git-native-commit.test.ts",
+    "tests/git-native-commit-encoding-legacy.test.ts",
+    "tests/git-native-commit-encoding-coordinator.test.ts",
     "tests/git-native-discard.test.ts",
     "tests/git-native-conflict-save.test.ts",
   ]);
@@ -51,7 +53,10 @@ test("compatibility runs all selected files once and propagates failures", () =>
   assert.equal(code, 7);
   assert.equal(calls.length, 2);
   assert.equal(calls[1].executable, process.execPath);
-  assert.deepEqual(calls[1].args.slice(2, 8), compatibilityFiles);
+  assert.deepEqual(
+    calls[1].args.slice(2, 2 + compatibilityFiles.length),
+    compatibilityFiles,
+  );
   const args = calls[1].args.join(" ");
   assert.match(args, /--maxWorkers=3/);
   assert.match(args, /--testTimeout=15000/);
@@ -59,6 +64,7 @@ test("compatibility runs all selected files once and propagates failures", () =>
     args,
     /--(?:exclude|retry|bail|passWithNoTests|shard)| -t /,
   );
+  assert.equal(calls[1].options.env.GOGA_CI_WEIGHTED_SORT, "1");
   assert.equal(
     calls[1].options.env.GOGA_TOPIC_READONLY_CLI,
     "/nonexistent/disabled",
@@ -74,7 +80,7 @@ test("compatibility runs all selected files once and propagates failures", () =>
   );
 });
 
-test("compatibility subgroups retain the same six files exactly once and reject malformed input", () => {
+test("compatibility subgroups retain the same eight files exactly once and reject malformed input", () => {
   const selected = [];
   for (const shard of ["1/3", "2/3", "3/3"]) {
     runGitCompatibility({
@@ -88,7 +94,7 @@ test("compatibility subgroups retain the same six files exactly once and reject 
     });
   }
   assert.deepEqual(selected.sort(), [...compatibilityFiles].sort());
-  for (const shard of ["0/3", "4/3", "1/0", "1/7", "bad"]) {
+  for (const shard of ["0/3", "4/3", "1/0", "1/9", "bad"]) {
     let calls = 0;
     assert.throws(() =>
       runGitCompatibility({

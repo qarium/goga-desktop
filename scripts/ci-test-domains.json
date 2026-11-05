@@ -20,6 +20,8 @@
     "tests/git-history-ui.test.tsx",
     "tests/git-native-branches.test.ts",
     "tests/git-native-commit.test.ts",
+    "tests/git-native-commit-encoding-legacy.test.ts",
+    "tests/git-native-commit-encoding-coordinator.test.ts",
     "tests/git-native-discard.test.ts",
     "tests/git-summary-ui.test.tsx",
     "tests/git-workspace-commit-ui.test.tsx",

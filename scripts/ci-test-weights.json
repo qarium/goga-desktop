@@ -17,6 +17,8 @@
   "tests/git-merge-operations-host.test.ts": 475,
   "tests/git-native-branches.test.ts": 636,
   "tests/git-native-commit.test.ts": 529,
+  "tests/git-native-commit-encoding-legacy.test.ts": 430,
+  "tests/git-native-commit-encoding-coordinator.test.ts": 220,
   "tests/git-native-conflict-membership.test.ts": 274,
   "tests/git-native-conflict-save.test.ts": 349,
   "tests/git-native-contract.test.ts": 105,

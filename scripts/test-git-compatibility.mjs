@@ -8,6 +8,8 @@ export const compatibilityFiles = Object.freeze([
   "tests/git-native-branches.test.ts",
   "tests/git-native-sequence.test.ts",
   "tests/git-native-commit.test.ts",
+  "tests/git-native-commit-encoding-legacy.test.ts",
+  "tests/git-native-commit-encoding-coordinator.test.ts",
   "tests/git-native-discard.test.ts",
   "tests/git-native-conflict-save.test.ts",
 ]);
@@ -50,7 +52,11 @@ export function runGitCompatibility({ run = spawnSync, shard } = {}) {
       cwd,
       stdio: "inherit",
       timeout: 30 * 60 * 1000,
-      env: { ...process.env, GOGA_TOPIC_READONLY_CLI: "/nonexistent/disabled" },
+      env: {
+        ...process.env,
+        GOGA_TOPIC_READONLY_CLI: "/nonexistent/disabled",
+        GOGA_CI_WEIGHTED_SORT: "1",
+      },
     },
   );
   return Number.isInteger(result.status) ? result.status : 1;

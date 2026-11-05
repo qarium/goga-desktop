@@ -146,3 +146,51 @@ test("Host new-topic clone launch integrations use the measured topic domain", a
     .map(([domain]) => domain);
   assert.deepEqual(owners, ["topics"]);
 });
+
+test("compatibility uses real longest-first scheduling without filtering or partitioning its eight files", async () => {
+  const { spawnSync } = await import("node:child_process");
+  const { fileURLToPath } = await import("node:url");
+  const p = spawnSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `
+    import {createVitest} from 'vitest/node';
+    import {readFileSync} from 'node:fs';
+    import {compatibilityFiles} from './scripts/test-git-compatibility.mjs';
+    delete process.env.GOGA_CI_DOMAIN;
+    process.env.GOGA_CI_WEIGHTED_SORT='1';
+    const ctx=await createVitest({watch:false});
+    try {
+      const specs=(await ctx.globTestSpecifications()).filter(s=>compatibilityFiles.includes(s.moduleId.slice(ctx.config.root.length+1)));
+      const sequencer=new ctx.config.sequence.sequencer(ctx);
+      const selected=await sequencer.shard(specs);
+      const sorted=await sequencer.sort(selected);
+      console.log(JSON.stringify({before:specs.map(s=>s.moduleId.slice(ctx.config.root.length+1)),after:sorted.map(s=>s.moduleId.slice(ctx.config.root.length+1))}));
+    } finally {await ctx.close();}
+  `,
+    ],
+    {
+      cwd: fileURLToPath(new URL("../../", import.meta.url)),
+      encoding: "utf8",
+      timeout: 30000,
+    },
+  );
+  assert.equal(p.status, 0, p.stderr);
+  const { before, after } = JSON.parse(p.stdout);
+  assert.equal(before.length, 8);
+  assert.deepEqual([...after].sort(), [...before].sort());
+  assert.equal(new Set(after).size, 8);
+  const weights = JSON.parse(
+    await readFile(
+      new URL("../ci-test-weights-arm64.json", import.meta.url),
+      "utf8",
+    ),
+  );
+  for (let i = 1; i < after.length; i++)
+    assert.ok(
+      (weights[after[i - 1]] ?? 1) >= (weights[after[i]] ?? 1),
+      "Compatibility files must run longest-first",
+    );
+});

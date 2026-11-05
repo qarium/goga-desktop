@@ -12,7 +12,11 @@ export class CiSequencer extends BaseSequencer {
   async sort(
     specifications: TestSpecification[],
   ): Promise<TestSpecification[]> {
-    if (!process.env.GOGA_CI_DOMAIN) return super.sort(specifications);
+    if (
+      !process.env.GOGA_CI_DOMAIN &&
+      process.env.GOGA_CI_WEIGHTED_SORT !== "1"
+    )
+      return super.sort(specifications);
     // File size is not the cost of native Git/Host scenarios. Start measured
     // long files first so they cannot become a serial tail after workers idle.
     const key = (spec: TestSpecification) =>
