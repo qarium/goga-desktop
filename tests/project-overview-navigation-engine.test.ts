@@ -1,4 +1,5 @@
-import { test } from "vitest";
+import { test, vi } from "vitest";
+import { ensureSyntaxTree } from "@codemirror/language";
 import assert from "node:assert/strict";
 import { EditorState } from "@codemirror/state";
 import {
@@ -10,7 +11,10 @@ import type {
   NavigationResult,
 } from "../src/renderer/overview/navigation/types";
 const supports = await loadNavigationSupports();
-import { resolveLocal } from "../src/renderer/overview/navigation/resolver";
+import {
+  limits,
+  resolveLocal,
+} from "../src/renderer/overview/navigation/resolver";
 
 function marked(input: string) {
   let source = "",
@@ -405,6 +409,25 @@ test("javascript: object-literal method is a candidate, not receiver inference",
 test("javascript: value expressions in objects retain outer lexical scope", () =>
   check("javascript", "function ⟦greet⟧(){}; const obj={value:⟨greet⟩()};"));
 
+// These fixtures verify semantic targets, not machine throughput. Parse the real tree
+// first and hold only the index clock still: budget refusal is tested separately below.
+function resolveLargeFixture(
+  state: EditorState,
+  lang: NavigationLanguage,
+  position: number,
+) {
+  assert.ok(
+    ensureSyntaxTree(state, state.doc.length, 2000),
+    "real fixture must fully parse",
+  );
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+  try {
+    return resolveLocal(state, lang, position);
+  } finally {
+    clock.mockRestore();
+  }
+}
+
 for (const lang of Object.keys(cases) as NavigationLanguage[])
   for (const f of getFixtures(lang))
     test(`${lang}: showcase ${f.id}`, () => {
@@ -413,7 +436,10 @@ for (const lang of Object.keys(cases) as NavigationLanguage[])
         extensions: [supports[lang]],
       });
       const position = state.doc.toString().lastIndexOf(f.needle) + 1;
-      const result = resolveLocal(state, lang, position);
+      const result =
+        f.id === "large"
+          ? resolveLargeFixture(state, lang, position)
+          : resolveLocal(state, lang, position);
       assert.equal(result.kind, f.expected, JSON.stringify(result));
       if (f.id === "shadow" && f.expected === "resolved") {
         const parameter = f.source.indexOf("render", f.source.indexOf("preview("));
@@ -432,6 +458,42 @@ for (const lang of Object.keys(cases) as NavigationLanguage[])
         }
       }
     });
+
+for (const lang of Object.keys(cases) as NavigationLanguage[])
+  test(`${lang}: large fixture respects the unchanged index deadline`, () => {
+    const fixture = getFixtures(lang).find(
+      (fixture) => fixture.id === "large",
+    )!;
+    const state = EditorState.create({
+      doc: fixture.source,
+      extensions: [supports[lang]],
+    });
+    assert.ok(ensureSyntaxTree(state, state.doc.length, 2000));
+    let ticks = 0;
+    const clock = vi
+      .spyOn(performance, "now")
+      .mockImplementation(() => ticks++ * (limits.indexMs + 1));
+    try {
+      const position = fixture.source.lastIndexOf(fixture.needle) + 1;
+      const result = resolveLocal(state, lang, position);
+      assert.equal(result.kind, "unavailable");
+      assert.equal(result.reason, "index-budget-exceeded");
+      assert.deepEqual(
+        result.targets,
+        [],
+        "a partial index must not produce navigation targets",
+      );
+      const reads = ticks;
+      assert.equal(resolveLocal(state, lang, position), result);
+      assert.equal(
+        ticks,
+        reads,
+        "unchanged hover must not repeat an over-budget index",
+      );
+    } finally {
+      clock.mockRestore();
+    }
+  });
 
 test("swift: conditional singleton remains a candidate", () =>
   check(
