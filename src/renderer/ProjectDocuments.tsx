@@ -1,3 +1,5 @@
+import { ProjectSpecifications } from "./ProjectSpecifications";
+import type { SpecificationsStateStore } from "./project-specifications-state";
 import { useViewActive } from "./RetainedViews";
 import { ProjectHistory } from "./ProjectHistory";
 import { ProjectDockerfile } from "./ProjectDockerfile";
@@ -21,12 +23,14 @@ export function ProjectDocuments({
   tab,
   store,
   savedSettingsVersion,
+  specificationsState,
 }: {
   project: Project;
   owner?: TopicContextRef;
   tab: string;
   store: SettingsDocuments;
   savedSettingsVersion?: string;
+  specificationsState?: SpecificationsStateStore;
 }) {
   const viewActive = useViewActive();
   const scope = owner ? contextRef(owner) : project.id;
@@ -97,6 +101,8 @@ export function ProjectDocuments({
     };
   }, [scopeKey, tab, attempt, revision, viewActive]);
   if (tab === "launch") return null;
+  if (tab === "specifications")
+    return <ProjectSpecifications project={project} owner={owner} refreshRevision={revision} stateStore={specificationsState}/>;
   if (tab === "history")
     return (
       <ProjectHistory

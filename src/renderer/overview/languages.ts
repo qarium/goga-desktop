@@ -5,11 +5,31 @@ import {
   StreamLanguage,
 } from "@codemirror/language";
 import { languages } from "@codemirror/language-data";
+import type { NavigationLanguage } from "./navigation/types";
 import { tags } from "@lezer/highlight";
 
 // Descriptions contain local dynamic imports. Choosing a filename never reads
 // source text or loads its grammar; LanguageDescription caches a requested mode.
-const supportedLanguages = languages;
+const kotlin = LanguageDescription.of({
+  name: "Kotlin",
+  extensions: ["kt", "kts"],
+  load: () =>
+    import("@codincod/codemirror-lang-kotlin").then(({ kotlin }) => kotlin()),
+});
+const swift = LanguageDescription.of({
+  name: "Swift",
+  extensions: ["swift"],
+  load: () =>
+    import("@codincod/codemirror-lang-swift").then(({ swift }) => swift()),
+});
+// Stable descriptions override only the legacy Kotlin/Swift token streams.
+const supportedLanguages = [
+  kotlin,
+  swift,
+  ...languages.filter(
+    (item) => item.name !== "Kotlin" && item.name !== "Swift",
+  ),
+];
 const jsonc = LanguageDescription.of({
   name: "JSONC",
   extensions: ["jsonc"],
@@ -46,6 +66,23 @@ export function resolveOverviewLanguage(
       basename.toLowerCase(),
     )
   );
+}
+
+const navigationLanguages: Readonly<Record<string, NavigationLanguage>> = {
+  Python: "python",
+  JavaScript: "javascript",
+  TypeScript: "typescript",
+  Go: "go",
+  Kotlin: "kotlin",
+  Swift: "swift",
+};
+
+export function resolveNavigationLanguage(
+  path: string,
+): NavigationLanguage | null {
+  const description = resolveOverviewLanguage(path);
+  // JSX and TSX keep their existing highlighting, but are not V1 navigation modes.
+  return description ? (navigationLanguages[description.name] ?? null) : null;
 }
 
 export async function loadOverviewLanguage(

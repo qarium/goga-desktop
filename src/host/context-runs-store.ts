@@ -1,5 +1,6 @@
 import { runRecoveryMetadataSchema } from "./run-recovery";
 import { buildRepeatSnapshotSchema } from "../shared/build-repeat";
+import { pipelineRepeatSnapshotSchema } from "../shared/pipeline-repeat";
 import { constants } from "node:fs";
 import { mkdir, open, link, rename, unlink } from "node:fs/promises";
 import path from "node:path";
@@ -49,6 +50,7 @@ const taskSchema = z.object({
   branch: text(256, 1),
 });
 const runSchema = z.object({
+  pipelineRepeat: pipelineRepeatSnapshotSchema.optional(),
   buildRepeat: buildRepeatSnapshotSchema.optional(),
   process: runRecoveryMetadataSchema.optional(),
   id: text(256, 1),
@@ -128,6 +130,7 @@ function identity(run: Snapshot) {
         run.startupTimeoutMs ?? null,
         run.update ?? null,
         ...(run.buildRepeat ? [run.buildRepeat] : []),
+        ...(run.pipelineRepeat ? [run.pipelineRepeat] : []),
         ...(run.dashboardRecoveryVersion ? [run.dashboardRecoveryVersion] : []),
       ]),
     )
@@ -138,6 +141,7 @@ function validateRuns(runs: Snapshot[]) {
   for (const run of runs) {
     if (ids.has(run.id)) throw invalid();
     ids.add(run.id);
+    if (run.pipelineRepeat && run.kind === "build") throw ownerChanged();
     if (run.process && run.process.runId !== run.id) throw ownerChanged();
     if (
       run.buildRepeat &&

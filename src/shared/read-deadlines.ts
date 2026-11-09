@@ -27,6 +27,8 @@ export const READ_BUDGETS = {
   readGitConflict: 30000,
   readGitDiff: 30000,
   prepareHistoryPrune: 300000,
+  listProjectSpecifications: 30000,
+  readProjectSpecification: 30000,
   listHistoryYears: 30000,
   listHistoryEntries: 30000,
   listHistoryArtifacts: 30000,

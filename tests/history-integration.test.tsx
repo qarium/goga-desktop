@@ -55,7 +55,7 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
-it("History is between Image and Tools in project and uses the approved browser", async () => {
+it("History follows Specifications and precedes Tools, using the approved browser", async () => {
   render(
     <ProjectSettings
       project={project}
@@ -72,7 +72,7 @@ it("History is between Image and Tools in project and uses the approved browser"
     .map((e) => e.textContent);
   expect(
     tabs.slice(tabs.indexOf("Образ"), tabs.indexOf("Инструменты") + 1),
-  ).toEqual(["Образ", "История", "Инструменты"]);
+  ).toEqual(["Образ", "Спецификации", "История", "Инструменты"]);
   fireEvent.click(screen.getByRole("button", { name: "История" }));
   const entry = await screen.findByLabelText("Запись истории");
   await waitFor(() =>

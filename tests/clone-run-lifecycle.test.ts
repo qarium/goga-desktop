@@ -434,3 +434,63 @@ it("allows versioned content saves but blocks stop and close for an unreconciled
   (f.service as any).children.clear();
   (f.service as any).disposed = true;
 });
+
+it("repeats a pipeline in its recorded clone without recreating topics or following the current selector", async () => {
+  vi.spyOn(ContextSyncManager.prototype, "afterRun").mockResolvedValue(
+    {} as any,
+  );
+  const f = await fixture();
+  const originalCommand = f.runner.command;
+  f.runner.command = async (exe, args, cwd, env) => {
+    if (exe !== "git" && args[0] === "pipeline" && args.includes("--info"))
+      return {
+        stdout:
+          "name: Editor\n---\n* work:\n  title: Work\n* review:\n  title: Review\n",
+        stderr: "",
+      };
+    return originalCommand(exe, args, cwd, env);
+  };
+  const first = await f.service.launch({
+    projectId: f.a.projectId,
+    context: worktreeContextRef(f.a),
+    pipeline: "editor",
+    workflow: "none",
+    profile: "",
+    profileMode: "auto",
+    skips: ["review"],
+    clean: false,
+    update: true,
+    expectedBranch: f.a.branch,
+    confirmBranchSwitch: false,
+    topic: { mode: "existing", topic: f.a.topic, branch: f.a.branch },
+    task: "",
+    confirmEmptyTask: false,
+  });
+  await f.service.stop(first.id);
+  await f.service.selectTopicContext(worktreeContextRef(f.b));
+  const create = vi
+    .spyOn(CloneManager.prototype, "create")
+    .mockRejectedValue(Error("must not create"));
+  const ensure = vi
+    .spyOn(CloneManager.prototype, "ensure")
+    .mockRejectedValue(Error("must not ensure"));
+  const next = await f.service.repeatPipeline(first.id);
+  expect(next.context).toEqual(first.context);
+  expect(f.starts.map((start) => start.cwd)).toEqual([f.a.path, f.a.path]);
+  expect(f.starts[1].args).toEqual(f.starts[0].args);
+  expect(create).not.toHaveBeenCalled();
+  expect(ensure).not.toHaveBeenCalled();
+  expect(
+    (
+      await f.native.command(
+        "git",
+        ["branch", "--show-current"],
+        f.a.projectPath,
+      )
+    ).stdout.trim(),
+  ).toBe("main");
+  await f.service.stop(next.id);
+  await rm(f.a.path, { recursive: true, force: true });
+  await expect(f.service.repeatPipeline(first.id)).rejects.toThrow();
+  expect(f.starts).toHaveLength(2);
+});

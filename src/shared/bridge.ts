@@ -1,3 +1,4 @@
+import type { SpecificationCatalog, SpecificationDocument } from "./project-specifications";
 import type { TopicRemovalRequest, TopicRemovalPreview, TopicRemovalResult, TopicCloneCleanupRequest } from "./topic-removal";
 import type { DashboardViewport } from "./dashboard-viewport";
 import type {
@@ -265,6 +266,7 @@ export interface DesktopAPI {
   closeTopicPopup?(id: string): Promise<void>;
   onTopicPopupClosed?(callback: (id: string) => void): () => void;
   prepareBuildRepeat?(runId: string): Promise<BuildRepeatPreparation>;
+  repeatPipeline?(runId: string): Promise<Run>;
   reconcileRun?(runId: string): Promise<Run>;
   createTopicContext(input: {
     projectId: string;
@@ -328,6 +330,8 @@ export interface DesktopAPI {
     year: string,
   ): Promise<HistoryPrunePreview>;
   pruneHistory(projectId: string, token: string): Promise<HistoryPruneResult>;
+  listProjectSpecifications(scope: ScopeRef): Promise<SpecificationCatalog>;
+  readProjectSpecification(scope: ScopeRef, path: string): Promise<SpecificationDocument>;
   listHistoryYears(scope: ScopeRef): Promise<string[]>;
   listHistoryEntries(scope: ScopeRef, year: string): Promise<string[]>;
   listHistoryArtifacts(

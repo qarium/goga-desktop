@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import "./helpers/overview-browser-fixture";
 import React from "react";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   act,
@@ -822,4 +823,31 @@ it("removes only the duplicated tools overview when a source is selected, retain
   expect(
     screen.getByText("Файлы выбранного инструмента в проекте Fixture."),
   ).toBeTruthy();
+});
+
+it("keeps the tool toolbar separated from the selected file after immediate Cancel without rereading or saving", async () => {
+  const style = document.createElement("style");
+  style.textContent = readFileSync("src/renderer/style.css", "utf8");
+  document.head.append(style);
+  try {
+    await mount();
+    click("Файл café.yml");
+    await waitFor(() => expect(editor()).not.toBeNull());
+    const view = editor()!;
+    const original = view.state.doc.toString();
+    click("Отменить изменения");
+    expect(editor()).toBe(view);
+    expect(view.state.doc.toString()).toBe(original);
+    expect(api.readProjectDocument).toHaveBeenCalledTimes(1);
+    expect(api.saveProjectDocument).not.toHaveBeenCalled();
+    const detail = document.querySelector<HTMLElement>(".tool-files-detail")!;
+    expect(
+      parseFloat(getComputedStyle(detail).marginTop) || 0,
+    ).toBeGreaterThanOrEqual(24);
+    expect(
+      screen.queryByText("Файлы выбранного инструмента в проекте Fixture."),
+    ).toBeNull();
+  } finally {
+    style.remove();
+  }
 });

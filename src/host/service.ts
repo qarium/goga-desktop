@@ -1,4 +1,6 @@
+import * as specifications from "./project-specifications";
 import { pipelineDisplayMetadata } from "../shared/pipeline-display";
+import { capturePipelineRepeat, pipelineRepeatSnapshotSchema } from "../shared/pipeline-repeat";
 import { topicRemovalRequestSchema, topicRemovalTokenSchema, topicCloneCleanupRequestSchema, type TopicRemovalRequest, type TopicCloneCleanupRequest } from "../shared/topic-removal";
 import { TopicRemovalDomain, ownTopicRefs, type TopicRemovalAccess, type RemovalInventory } from "./topic-removal";
 import { readTopicRefInventory, readTopicMutationSnapshot } from "./topics";
@@ -437,6 +439,7 @@ export class HostService extends EventEmitter {
   >();
   private closeFlights = new Map<string, Promise<boolean>>();
   private stopFlights = new Map<string, Promise<void>>();
+  private pipelineRepeatFlights = new Map<string, Promise<Run>>();
   private activeKeys = new Map<string, Set<string>>();
   private worktrees: WorktreeManager;
   private contextPreparations = new Map<string, Promise<WorktreeRecord>>();
@@ -1748,6 +1751,7 @@ export class HostService extends EventEmitter {
   private async readTopicTaskWithSettings(
     request: TopicTaskRequest,
     forLaunch = false,
+    launchYear?: string,
   ): Promise<TopicTaskDocument> {
     if (
       !request ||
@@ -1800,7 +1804,7 @@ export class HostService extends EventEmitter {
       );
     const relative = taskPath(
       request.topic,
-      request.context?.year ?? this.context.getStore()?.binding?.year,
+      request.context?.year ?? this.context.getStore()?.binding?.year ?? launchYear,
     );
     const git = (args: string[]) => this.cmd(p, args, true);
     const current = (await git(["branch", "--show-current"])).trim();
@@ -1839,7 +1843,7 @@ export class HostService extends EventEmitter {
         ).trim() !== commit) ||
       taskPath(
         request.topic,
-        request.context?.year ?? this.context.getStore()?.binding?.year,
+        request.context?.year ?? this.context.getStore()?.binding?.year ?? launchYear,
       ) !== relative
     )
       throw new Error(
@@ -4305,6 +4309,26 @@ export class HostService extends EventEmitter {
       return { status: "error", changed, error: message, log: message };
     }
   }
+  private async specificationsRead<T>(scope: ScopeRef, action: (project: Project) => Promise<T>) {
+    this.check();
+    const parsed = this.parseScope(scope);
+    if (typeof parsed === "string" && this.context.getStore()?.binding)
+      throw Error("Для рабочей копии требуется точный контекст топика.");
+    return withOfflineGitReadScope(() => this.snapshot(parsed, async () => {
+      const project = await this.project(parsed);
+      assertReadActive();
+      const result = await action(project);
+      await this.validateBinding(project);
+      assertReadActive();
+      return result;
+    }));
+  }
+  listProjectSpecifications(scope: ScopeRef) {
+    return this.specificationsRead(scope, project => specifications.listProjectSpecifications(this.root(project)));
+  }
+  readProjectSpecification(scope: ScopeRef, relative: string) {
+    return this.specificationsRead(scope, project => specifications.readProjectSpecification(this.root(project), relative));
+  }
   private async historyRead<T>(
     scope: ScopeRef,
     action: (project: Project) => Promise<T>,
@@ -5656,6 +5680,7 @@ export class HostService extends EventEmitter {
             ]
           : null,
         t ? [t.text, t.year, t.topic, t.branch] : null,
+        ...(run.pipelineRepeat ? [run.pipelineRepeat] : []),
         ...(run.dashboardRecoveryVersion ? [run.dashboardRecoveryVersion] : []),
       ]),
     );
@@ -5795,7 +5820,51 @@ export class HostService extends EventEmitter {
       ),
     );
   }
-  private async launchWithSettings(request: LaunchRequest): Promise<Run> {
+  /** Repeat choices, not a cached launch request or a second launch implementation. */
+  repeatPipeline(id: string): Promise<Run> {
+    const pending = this.pipelineRepeatFlights.get(id);
+    if (pending) return pending;
+    const operation = Promise.resolve().then(() => {
+      this.assertLaunchAllowed();
+      const source = this.runList.find((run) => run.id === id);
+      if (!source || source.kind === "build") throw Error("Исходный запуск конвейера отсутствует.");
+      if (!source.pipelineRepeat) throw Error("Для этого запуска не сохранены полные параметры повтора. Создайте новый запуск.");
+      const context = source.context ? {
+        projectId: source.context.projectId,
+        year: source.context.year,
+        topic: source.context.topic,
+        branch: source.context.branch,
+        contextId: source.context.contextId,
+        revision: source.context.revision,
+      } : undefined;
+      const scope = context ?? source.projectId;
+      return this.operation(() => this.exclusive(source.projectId, () => this.snapshot(scope, async () => {
+        this.assertLaunchAllowed();
+        if (!this.runList.includes(source)) throw Error("Исходный запуск уже закрыт.");
+        if (["starting", "running"].includes(source.status) || source.recovery === "unverified" || this.children.has(id) || this.stopFlights.has(id))
+          throw Error("Дождитесь подтверждённого завершения исходного запуска. Для работающего конвейера можно восстановить панель.");
+        const options = pipelineRepeatSnapshotSchema.parse(source.pipelineRepeat);
+        const { version: _version, ...choices } = options;
+        return this.launchWithSettings({
+          ...choices,
+          projectId: source.projectId,
+          ...(context ? { context } : {}),
+          pipeline: source.pipeline,
+          ...pipelineDisplayMetadata(source),
+          expectedBranch: source.branch,
+          confirmBranchSwitch: false,
+          topic: source.topic ? { mode: "existing", topic: source.topic, branch: source.branch } : { mode: "none" },
+          task: "",
+          confirmEmptyTask: false,
+        }, source.taskSnapshot?.year);
+      }, false)));
+    }).finally(() => {
+      if (this.pipelineRepeatFlights.get(id) === operation) this.pipelineRepeatFlights.delete(id);
+    });
+    this.pipelineRepeatFlights.set(id, operation);
+    return operation;
+  }
+  private async launchWithSettings(request: LaunchRequest, taskYear?: string): Promise<Run> {
     this.assertLaunchAllowed();
     assertEnvironmentTransport(this.context.getStore()!.document.value.env);
     if (typeof request?.clean !== "boolean")
@@ -5834,7 +5903,7 @@ export class HostService extends EventEmitter {
     const previous = this.locks.get(key) ?? Promise.resolve();
     const next = previous
       .catch(() => {})
-      .then(() => this.prepare(p, key, r, request));
+      .then(() => this.prepare(p, key, r, request, taskYear));
     this.locks.set(key, next);
     try {
       return await next;
@@ -5909,6 +5978,7 @@ export class HostService extends EventEmitter {
     key: string,
     r: PipelineRequest,
     request: LaunchRequest,
+    taskYear?: string,
   ): Promise<Run> {
     this.check();
     this.assertRunAdmission(p, key, "pipeline");
@@ -6071,6 +6141,7 @@ export class HostService extends EventEmitter {
         taskSnapshot = await this.readTopicTaskWithSettings(
           { projectId: p.id, branch, topic },
           true,
+          taskYear,
         );
         launchTaskPath = taskSnapshot.path;
         if (
@@ -6178,7 +6249,7 @@ export class HostService extends EventEmitter {
       // itself still executes its configured stages in the admitted checkout.
       if (
         launchTaskPath !== undefined &&
-        taskPath(topic, this.binding(p)?.year) !== launchTaskPath
+        taskPath(topic, this.binding(p)?.year ?? taskYear) !== launchTaskPath
       )
         throw new Error("Год задачи изменился. Откройте её заново.");
       const startedTask =
@@ -6222,6 +6293,7 @@ export class HostService extends EventEmitter {
           (invocation.value.startupTimeoutMinutes ??
             DEFAULT_STARTUP_TIMEOUT_MINUTES) * 60000,
         update: request.update === true,
+        pipelineRepeat: capturePipelineRepeat({ ...r, clean: request.clean, update: request.update }),
         dashboardRecoveryVersion: 1,
         dashboardOpened: false,
         output: { text: "", truncated: false },

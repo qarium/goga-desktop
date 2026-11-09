@@ -32,6 +32,7 @@ import {
   ChevronDown,
   Eye,
   ArrowLeft,
+  CornerDownRight,
 } from "lucide-react";
 import type { ScopeRef } from "../../shared/context";
 import type { DesktopAPI } from "../../shared/bridge";
@@ -45,6 +46,9 @@ import {
 } from "../HistoryScrollPane";
 import "../ProjectHistory.css";
 import { OverviewEditor, type OverviewEditorCommands } from "./OverviewEditor";
+import type { YamlEditorMemory } from "../YamlEditor";
+import type { NavigationPresentation } from "./navigation/types";
+import { resolveNavigationLanguage } from "./languages";
 import { FileTree, type FileTreeMenu } from "./FileTree";
 import {
   OverviewFileActions,
@@ -174,6 +178,33 @@ export function ProjectOverview({
     (p) => state.files[p].text !== state.files[p].document.text,
   );
   const file = state.active ? state.files[state.active] : null;
+  const navigationOwner = useMemo(
+    () =>
+      file && state.active ? { path: state.active, memory: file.memory } : null,
+    [state.active, file?.memory],
+  );
+  const latestNavigationOwner = useRef(navigationOwner);
+  latestNavigationOwner.current = navigationOwner;
+  const [navigationReport, setNavigationReport] = useState<{
+    owner: { path: string; memory: YamlEditorMemory };
+    presentation: NavigationPresentation;
+  } | null>(null);
+  const reportNavigation = useCallback(
+    (presentation: NavigationPresentation) => {
+      // A clean refresh can replace memory without changing the relative path.
+      // Reports from that old editor must not enable Back or replace this footer.
+      if (!navigationOwner || latestNavigationOwner.current !== navigationOwner)
+        return;
+      setNavigationReport({ owner: navigationOwner, presentation });
+    },
+    [navigationOwner],
+  );
+  const navigation =
+    navigationReport?.owner === navigationOwner
+      ? navigationReport?.presentation
+      : null;
+  const navigationSupported =
+    !!state.active && resolveNavigationLanguage(state.active) !== null;
   // A fullscreen document cannot outlive the last open file. All close paths
   // (clean, save, discard and close-all) must restore navigation automatically.
   useEffect(() => {
@@ -1018,6 +1049,30 @@ export function ProjectOverview({
                   <span>{state.active}</span>
                 </button>
                 <div className="ov-file-actions">
+                  {navigationSupported && (
+                    <>
+                      <button
+                        type="button"
+                        className="ov-icon"
+                        aria-label="Назад к месту перехода"
+                        title="Назад к месту перехода после F12 / ⌘-клика / Ctrl-клика"
+                        disabled={!active || !navigation?.canBack}
+                        onClick={() => editorCommands.current?.goBack()}
+                      >
+                        <ArrowLeft size={15} />
+                      </button>
+                      <button
+                        type="button"
+                        className="ov-icon"
+                        aria-label="Перейти к определению"
+                        title="Перейти к определению (F12 / ⌘-клик / Ctrl-клик)"
+                        disabled={!active || !navigation?.ready}
+                        onClick={() => editorCommands.current?.goToDefinition()}
+                      >
+                        <CornerDownRight size={15} />
+                      </button>
+                    </>
+                  )}
                   <button
                     type="button"
                     className="ov-icon"
@@ -1113,11 +1168,24 @@ export function ProjectOverview({
                   readOnly={file.busy}
                   memory={file.memory}
                   commands={editorCommands}
+                  active={active}
+                  onNavigationChange={reportNavigation}
                 />
               )}
               <footer className="ov-status">
-                {dirty.includes(state.active!) ? "Не сохранено" : "Сохранено"} ·{" "}
-                {state.active?.split(".").at(-1)}
+                <span className="ov-save-status">
+                  {dirty.includes(state.active!) ? "Не сохранено" : "Сохранено"}{" "}
+                  · {state.active?.split(".").at(-1)}
+                </span>
+                {navigation?.message && (
+                  <span
+                    className="ov-navigation-message"
+                    role="status"
+                    title={navigation.message}
+                  >
+                    {navigation.message}
+                  </span>
+                )}
                 <span>Сохранение не создаёт коммит</span>
               </footer>
             </section>

@@ -808,7 +808,7 @@ it.each(["success", "failure"])(
   },
 );
 
-it("has exactly eight project tabs and isolates workflow and pipeline drafts with the same namespace stem", async () => {
+it("has exactly nine project tabs and isolates workflow and pipeline drafts with the same namespace stem", async () => {
   api.listProjectWorkflows = vi.fn(async () => []);
   await setup();
   const navigation = screen.getByRole("navigation", {
@@ -824,6 +824,7 @@ it("has exactly eight project tabs and isolates workflow and pipeline drafts wit
     "Рабочие процессы",
     "Конвейеры",
     "Образ",
+    "Спецификации",
     "История",
     "Инструменты",
     "Профили",

@@ -9,17 +9,27 @@ import {
 import { Prec } from "@codemirror/state";
 import { overviewSearch, openOverviewSearch } from "./editor-search";
 import { EditorView, keymap } from "@codemirror/view";
-import { syntaxHighlighting, type LanguageSupport } from "@codemirror/language";
+import {
+  language,
+  syntaxHighlighting,
+  type LanguageSupport,
+} from "@codemirror/language";
 import { YamlEditor, type YamlEditorMemory } from "../YamlEditor";
 import {
   loadOverviewLanguage,
   overviewHighlightStyle,
   resolveOverviewLanguage,
+  resolveNavigationLanguage,
 } from "./languages";
+
+import { createNavigation } from "./navigation/extension";
+import type { NavigationPresentation } from "./navigation/types";
 
 export interface OverviewEditorCommands {
   find: () => void;
   replace: () => void;
+  goToDefinition: () => void;
+  goBack: () => void;
 }
 
 export interface OverviewEditorProps {
@@ -28,6 +38,8 @@ export interface OverviewEditorProps {
   onChange: (value: string) => void;
   onSave?: () => void;
   readOnly?: boolean;
+  active?: boolean;
+  onNavigationChange?: (state: NavigationPresentation) => void;
   /** Must belong to this file and context, just like the supplied source text. */
   memory?: YamlEditorMemory;
   /** Commands belong to this mounted file; stale handles become inert on cleanup. */
@@ -79,6 +91,8 @@ function OverviewFileEditor({
   readOnly,
   memory,
   commands,
+  active = true,
+  onNavigationChange,
 }: OverviewEditorProps) {
   const description = resolveOverviewLanguage(path);
   const builtin =
@@ -91,11 +105,28 @@ function OverviewFileEditor({
   const view = useRef<EditorView | null>(null);
   const save = useRef(onSave);
   save.current = onSave;
+  const report = useRef(onNavigationChange);
+  report.current = onNavigationChange;
+  const languageId = resolveNavigationLanguage(path);
+  const [navigation] = useState(() =>
+    createNavigation({
+      languageId,
+      ready: false,
+      active,
+      onReport: (presentation) => report.current?.(presentation),
+    }),
+  );
   useImperativeHandle(
     commands,
     () => ({
       find() {
         if (view.current) openOverviewSearch(view.current);
+      },
+      goToDefinition() {
+        if (view.current) navigation.go(view.current);
+      },
+      goBack() {
+        if (view.current) navigation.back(view.current);
       },
       replace() {
         const current = view.current;
@@ -103,7 +134,7 @@ function OverviewFileEditor({
           openOverviewSearch(current, true);
       },
     }),
-    [],
+    [navigation],
   );
 
   useEffect(() => {
@@ -123,8 +154,20 @@ function OverviewFileEditor({
     };
   }, [path, builtin, description]);
 
+  useEffect(() => {
+    const current = view.current;
+    if (current)
+      navigation.configure(current, {
+        languageId,
+        active,
+        // The language extension must already be installed in this live view.
+        ready: !!support && current.state.facet(language) === support.language,
+      });
+  }, [navigation, languageId, support, active]);
+
   const extensions = useMemo(
     () => [
+      navigation.extensions,
       support ?? [],
       syntaxHighlighting(overviewHighlightStyle),
       Prec.highest(sourceTheme),
@@ -141,7 +184,7 @@ function OverviewFileEditor({
         ]),
       ),
     ],
-    [support],
+    [navigation, support],
   );
 
   return (

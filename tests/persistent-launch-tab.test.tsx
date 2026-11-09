@@ -921,3 +921,37 @@ it("defers only the originating result presentation while a topic card is open a
   expect(screen.queryByRole("tab", { name: /^Новый конвейер · / })).toBeNull();
   expect(api.launch).toHaveBeenCalledTimes(1);
 });
+
+it("settles the visible header mount before opening the current launch with one click", async () => {
+  let opening: Promise<void> | undefined;
+  let triggerClicks = 0;
+  const countTriggerClick = (event: MouseEvent) => {
+    if ((event.target as Element).closest(".context-launch-trigger"))
+      triggerClicks += 1;
+  };
+  // Enter at the first DOM commit, before passive menu mount effects run.
+  // A project heading alone does not guarantee those effects have settled.
+  const observer = new MutationObserver(() => {
+    if (!document.querySelector(".project-actions")) return;
+    observer.disconnect();
+    opening = openCurrentLaunch();
+    // Attach immediately, then assert the same promise below: no lost failure.
+    void opening.catch(() => {});
+  });
+  observer.observe(document.body, { childList: true, subtree: true });
+  document.addEventListener("click", countTriggerClick, true);
+  try {
+    render(<App />);
+    await waitFor(() => expect(opening).toBeDefined());
+    await opening;
+    expect(
+      await screen.findByRole("heading", { name: "Запустить конвейер" }),
+    ).toBeTruthy();
+    expect(triggerClicks).toBe(1);
+    expect(screen.getByRole("button", { name: "Без топика" })).toBeTruthy();
+    expect(api.ensureTopicContext).not.toHaveBeenCalled();
+  } finally {
+    observer.disconnect();
+    document.removeEventListener("click", countTriggerClick, true);
+  }
+});

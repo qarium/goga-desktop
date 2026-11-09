@@ -1,3 +1,4 @@
+import { createSpecificationsState } from "./project-specifications-state";
 import {dashboardRecoveryAllowed} from "../shared/dashboard-connection";
 import { TopicRemovalProvider, TopicRemovalPopup, useTopicRemovalController } from "./TopicRemovalController";
 import { useDashboardViewport } from "./useDashboardViewport";
@@ -62,7 +63,7 @@ import {
   createBuildDrafts,
 } from "./BuildForm";
 import { LaunchForm } from "./LaunchForm";
-import { LoadingState } from "./LoadingBoundary";
+import { LoadingBoundary, LoadingState } from "./LoadingBoundary";
 import { RunOutput, TerminalIcon, dashboardReady } from "./RunOutput";
 import { Settings } from "./Settings";
 import { createSettingsDocuments, documentScopeId } from "./settings-documents";
@@ -221,7 +222,11 @@ export function App() {
   >({});
   const repeatNonce = useRef(0);
   const repeatFlight = useRef(false);
+  const pipelineRepeatFlights = useRef(new Set<string>());
+  const [repeatingPipelines, setRepeatingPipelines] = useState(new Set<string>());
   const [settingsDocuments] = useState(createSettingsDocuments);
+  const [specificationsState] = useState(createSpecificationsState);
+  const [projectSettingsTabs, setProjectSettingsTabs] = useState<Record<string, string>>({});
   const documentsBusy = useSyncExternalStore(
     settingsDocuments.subscribe,
     settingsDocuments.busy,
@@ -692,6 +697,7 @@ export function App() {
     );
   }
   async function closeTab(id: string) {
+    if (pipelineRepeatFlights.current.has(id)) return;
     if (
       contextOpenRuns.has(id) &&
       (runs.find((record) => record.id === id) as RunWithContext | undefined)
@@ -728,6 +734,7 @@ export function App() {
     }
   }
   const read = useReadScope(projectId);
+  useEffect(() => { specificationsState.retainProjects(projects.map(project => project.id)); }, [projects, specificationsState]);
   const project = projects.find((p) => p.id === projectId),
     run = runs.find(
       (r) =>
@@ -1100,6 +1107,27 @@ export function App() {
     } finally {
       repeatFlight.current = false;
       setRepeatBusy(false);
+    }
+  }
+  async function repeatPipeline(target: Run) {
+    if (pipelineRepeatFlights.current.has(target.id) || typeof window.goga.repeatPipeline !== "function") return;
+    pipelineRepeatFlights.current.add(target.id);
+    setRepeatingPipelines(new Set(pipelineRepeatFlights.current));
+    setError("");
+    try {
+      const next = await window.goga.repeatPipeline(target.id);
+      if (next.id === target.id || next.kind === "build" || next.pipeline !== target.pipeline || next.branch !== target.branch || !runMatchesWorkspace(next, target.projectId, target.context ?? null))
+        throw Error("Повторный запуск не соответствует исходному контексту.");
+      if (!runsRef.current.some((run) => run.id === next.id)) applyRuns([...runsRef.current, next]);
+      setContextOpenRuns((previous) => new Set(previous).add(next.id));
+      // A late launch result owns its own tab, never the user's new section.
+      if (pageRef.current === "project" && selectedRef.current === target.id && runMatchesWorkspace(target, projectIdRef.current, selectedContextRef.current))
+        navigateRef.current(() => openRunRef.current(next));
+    } catch (error) {
+      setError(preparationErrorMessage(error));
+    } finally {
+      pipelineRepeatFlights.current.delete(target.id);
+      setRepeatingPipelines(new Set(pipelineRepeatFlights.current));
     }
   }
   const active = runs.some(
@@ -1885,7 +1913,7 @@ export function App() {
                     data-close-run={r.id}
                     aria-label={`Закрыть вкладку ${r.kind === "build" ? "Сборка" : r.pipeline} · ${r.topic || "Без топика"}`}
                     title="Закрыть вкладку"
-                    disabled={closingIds.includes(r.id)}
+                    disabled={closingIds.includes(r.id) || repeatingPipelines.has(r.id)}
                     onClick={() => navigate(() => void closeTab(r.id))}
                   >
                     ×
@@ -1954,6 +1982,17 @@ export function App() {
                         : "Проверить состояние процесса"}
                     </button>
                   )}
+                  {run.kind !== "build" && run.pipelineRepeat &&
+                    ["exited", "failed", "stopped"].includes(run.status) &&
+                    run.recovery !== "unverified" &&
+                    typeof window.goga.repeatPipeline === "function" && (
+                      <button
+                        type="button"
+                        disabled={repeatingPipelines.has(run.id) || !!contextUnavailable || !!workspaceLaunchBlockReason(runs, run.projectId, run.context ?? null, "pipeline")}
+                        title={`Повторить с прежними параметрами${run.pipelineRepeat.clean ? ", с очисткой состояния" : ""}${run.pipelineRepeat.update ? ", с пересборкой" : ""}`}
+                        onClick={() => void repeatPipeline(run)}
+                      >Повторить запуск</button>
+                    )}
                   {run.kind === "build" &&
                     !(
                       run.status === "starting" || run.status === "running"
@@ -2331,6 +2370,9 @@ export function App() {
                 <ProjectSettings
                   embedded
                   documents={settingsDocuments}
+                  specificationsState={specificationsState}
+                  selectedTab={projectSettingsTabs[project.id]}
+                  onTabChange={(tab) => setProjectSettingsTabs(values => ({ ...values, [project.id]: tab }))}
                   key={documentScopeId(
                     selectedContext ? contextRef(selectedContext) : project.id,
                   )}
@@ -2784,11 +2826,11 @@ export function App() {
                 runs.some((run) => run.id === JSON.parse(key)[2])
               }
             >
-              {run && <RunOutput key={run.id} run={run} viewError={viewErrors[run.id]} onRestore={typeof window.goga.restoreDashboard==="function" ? async()=>{
+              {run && <LoadingBoundary pending={repeatingPipelines.has(run.id)} label="Подготавливаем повторный запуск…"><RunOutput key={run.id} run={run} viewError={viewErrors[run.id]} onRestore={typeof window.goga.restoreDashboard==="function" ? async()=>{
                   await window.goga.restoreDashboard!(run.id);
                   setViewErrors(previous=>{const next={...previous};delete next[run.id];return next;});
                   setShowLogs(previous=>({...previous,[run.id]:false}));
-                }:undefined} />}
+                }:undefined} /></LoadingBoundary>}
             </RetainedViews>
           </div>
         </div>

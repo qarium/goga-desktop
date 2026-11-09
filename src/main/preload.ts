@@ -74,6 +74,7 @@ const api: DesktopAPI = {
   closeTopicPopup: (id) => invoke("close-topic-popup", id),
   onTopicPopupClosed: (callback) => listen("topic-popup-closed", callback),
   prepareBuildRepeat: (id) => invoke("prepare-build-repeat", id),
+  repeatPipeline: (id) => invoke("repeat-pipeline", id),
   reconcileRun: (id) => invoke("reconcile-run", id),
   createTopicContext: (v) => invoke("create-topic-context", v),
   migrateTopicContext: (v) => invoke("migrate-topic-context", v),
@@ -105,6 +106,8 @@ const api: DesktopAPI = {
   prepareHistoryPrune: (projectId, year) =>
     invoke("prepare-history-prune", projectId, year),
   pruneHistory: (projectId, token) => invoke("prune-history", projectId, token),
+  listProjectSpecifications: scope => invoke("list-project-specifications", scope),
+  readProjectSpecification: (scope, p) => invoke("read-project-specification", scope, p),
   listHistoryYears: (scope) => invoke("list-history-years", scope),
   listHistoryEntries: (scope, year) =>
     invoke("list-history-entries", scope, year),

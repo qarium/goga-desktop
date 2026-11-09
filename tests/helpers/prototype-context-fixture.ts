@@ -1,5 +1,11 @@
 import { expect, vi } from "vitest";
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  fireEvent,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import {
   topicContextRefSchema,
   worktreeContextRef,
@@ -179,6 +185,10 @@ export function retainedExecutionButton() {
 export async function openPrototypeDocuments() {
   await selectPrototypeOwner();
   fireEvent.click(screen.getByRole("button", { name: "Проект" }));
+  // Project now retains its chosen subtab across owners. This helper promises
+  // launch settings, so select that section rather than relying on a remount.
+  const tabs = await screen.findByRole("navigation", { name: "Разделы настроек проекта" });
+  fireEvent.click(within(tabs).getByRole("button", { name: "Запуск" }));
   await screen.findByRole("textbox", { name: "Исполняемый файл" });
 }
 
@@ -186,6 +196,9 @@ export async function openPrototypeDocuments() {
 export async function openCurrentLaunch(
   kind: "pipeline" | "build" = "pipeline",
 ) {
+  // The header can be visible before its menu's passive mount effects finish.
+  // Settle that mount before the first interaction; do not retry a lost click.
+  await act(async () => {});
   const actions = document.querySelector<HTMLElement>(".project-actions")!;
   fireEvent.click(within(actions).getByRole("button", { name: "Запустить" }));
   fireEvent.click(

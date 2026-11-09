@@ -227,6 +227,19 @@
 .ov-status span {
   margin-left: auto;
 }
+.ov-status .ov-save-status {
+  margin-left: 0;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.ov-status .ov-navigation-message {
+  margin-left: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
 .ov-work {
   display: flex;
   flex-direction: column;

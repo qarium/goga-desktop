@@ -1,3 +1,4 @@
+import { specificationPathSchema } from "../shared/project-specifications";
 import { PIPELINE_DISPLAY_LIMITS } from "../shared/pipeline-display";
 import { topicRemovalRequestSchema, topicRemovalTokenSchema, topicCloneCleanupRequestSchema } from "../shared/topic-removal";
 import {
@@ -263,6 +264,7 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   handle("prepare-build-repeat", (runId) =>
     d.service.prepareBuildRepeat(id.parse(runId)),
   );
+  handle("repeat-pipeline", (runId) => d.service.repeatPipeline(id.parse(runId)));
   handle("restore-dashboard", (runId) => {
     const value=id.parse(runId);
     if(!d.service.runs().some(run=>run.id===value)||!d.restoreDashboard)throw Error("Панель запуска недоступна.");
@@ -550,6 +552,10 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   handle("prune-history", (projectId, token) =>
     d.service.pruneHistory(id.parse(projectId), z.uuid().parse(token)),
   );
+  handle("list-project-specifications", scope =>
+    d.service.listProjectSpecifications(scopeRefSchema.parse(scope)));
+  handle("read-project-specification", (scope, p) =>
+    d.service.readProjectSpecification(scopeRefSchema.parse(scope), specificationPathSchema.parse(p)));
   handle("list-history-years", (scope) =>
     d.service.listHistoryYears(scopeRefSchema.parse(scope)),
   );

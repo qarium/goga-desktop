@@ -1180,6 +1180,11 @@ code {
 .tools-detail {
   grid-template-columns: 236px minmax(0, 1fr);
 }
+/* Tool selection hides the overview description; its margin must not be the
+ * only spacing between the tool controls and the file list/editor. */
+.tool-files-detail {
+  margin-top: 24px;
+}
 /* Tool files alone: fit Delete + Cancel/Save at the 920px minimum window.
  * Shared flat documents and personal settings keep their existing action gaps. */
 .tool-files-detail .document-save-actions {

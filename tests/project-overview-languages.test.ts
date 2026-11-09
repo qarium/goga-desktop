@@ -6,6 +6,7 @@ import {
   loadOverviewLanguage,
   overviewHighlightStyle,
   resolveOverviewLanguage,
+  resolveNavigationLanguage,
 } from "../src/renderer/overview/languages";
 
 const examples = [
@@ -82,5 +83,90 @@ describe("overview ready-made languages", () => {
   ])("leaves an unknown format as plain text: %s", async (path) => {
     expect(resolveOverviewLanguage(path)).toBeNull();
     expect(await loadOverviewLanguage(path)).toBeNull();
+  });
+});
+
+describe("overview structural navigation grammars", () => {
+  it.each([
+    [
+      "Main.kt",
+      "fun greet() = 1\nfun use() = greet()",
+      "FunctionDeclaration",
+      "Call",
+      "Identifier",
+    ],
+    [
+      "build.kts",
+      "fun greet() = 1\ngreet()",
+      "FunctionDeclaration",
+      "Call",
+      "Identifier",
+    ],
+    [
+      "Main.swift",
+      "func greet() {}\ngreet()",
+      "FunctionDeclaration",
+      "CallExpression",
+      "Identifier",
+    ],
+  ])(
+    "loads structural nodes instead of legacy highlighting for %s",
+    async (path, source, declaration, call, identifier) => {
+      const support = await loadOverviewLanguage(path);
+      expect(support).not.toBeNull();
+      const state = EditorState.create({ doc: source, extensions: [support!] });
+      const tree = ensureSyntaxTree(state, state.doc.length, 1000);
+      expect(tree).not.toBeNull();
+      const names: string[] = [];
+      tree!.iterate({
+        enter: (node) => {
+          names.push(node.name);
+        },
+      });
+      expect(names).toContain(declaration);
+      expect(names).toContain(call);
+      expect(names).toContain(identifier);
+    },
+  );
+
+  it.each(["Main.kt", "BUILD.KTS", "Main.SWIFT"])(
+    "keeps stable lazy descriptions and support for %s",
+    async (path) => {
+      expect(resolveOverviewLanguage(path)).toBe(resolveOverviewLanguage(path));
+      expect(await loadOverviewLanguage(path)).toBe(
+        await loadOverviewLanguage(path),
+      );
+    },
+  );
+});
+
+describe("overview navigation language admission", () => {
+  it.each([
+    ["main.py", "python"],
+    ["main.PY", "python"],
+    ["main.js", "javascript"],
+    ["main.mjs", "javascript"],
+    ["main.cjs", "javascript"],
+    ["main.ts", "typescript"],
+    ["main.mts", "typescript"],
+    ["main.cts", "typescript"],
+    ["main.go", "go"],
+    ["Main.kt", "kotlin"],
+    ["BUILD.KTS", "kotlin"],
+    ["nested\\Main.SWIFT", "swift"],
+  ])("admits %s as %s", (path, language) => {
+    expect(resolveNavigationLanguage(path)).toBe(language);
+  });
+  it.each([
+    "view.jsx",
+    "view.JSX",
+    "view.tsx",
+    "view.TSX",
+    "main.rs",
+    "config.json",
+    "README",
+    "main.kt.txt",
+  ])("excludes %s from V1 navigation without changing highlighting", (path) => {
+    expect(resolveNavigationLanguage(path)).toBeNull();
   });
 });

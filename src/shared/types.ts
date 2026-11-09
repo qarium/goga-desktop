@@ -1,4 +1,5 @@
 import type { BuildRepeatSnapshot } from "./build-repeat";
+import type { PipelineRepeatSnapshot } from "./pipeline-repeat";
 import type { TopicContextRef } from "./worktrees";
 import type { BuildSummary } from "./build";
 export interface Project {
@@ -115,6 +116,7 @@ export interface Run {
     rootHash: string;
   };
   buildRepeat?: BuildRepeatSnapshot;
+  pipelineRepeat?: PipelineRepeatSnapshot;
   recovery?: "unverified" | "confirmed";
   syncPending?: boolean;
   persistenceError?: string;

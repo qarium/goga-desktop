@@ -1,3 +1,4 @@
+import { createSpecificationsState, type SpecificationsStateStore } from "./project-specifications-state";
 import { saveProjectSettingsReconciled } from "./project-settings-save";
 import { preparationErrorMessage } from "./preparation-error";
 import "./ProjectContent.css";
@@ -149,11 +150,17 @@ export function ProjectSettings({
   guard,
   onBusy,
   documents,
+  specificationsState,
+  selectedTab,
+  onTabChange,
   embedded = false,
 }: {
   owner?: TopicContextRef;
   embedded?: boolean;
   documents?: SettingsDocuments;
+  specificationsState?: SpecificationsStateStore;
+  selectedTab?: string;
+  onTabChange?: (tab: string) => void;
   project: Project;
   onBack: () => void;
   onSaved: (version: string) => void;
@@ -163,13 +170,16 @@ export function ProjectSettings({
   const viewActive = useViewActive();
   const scope = owner ? contextRef(owner) : project.id;
   const scopeKey = documentScopeId(scope);
+  const [ownSpecifications] = useState(createSpecificationsState);
   const [ownDocuments] = useState(createSettingsDocuments);
   const documentStore = documents ?? ownDocuments;
   const documentsBusy = useSyncExternalStore(
     documentStore.subscribe,
     documentStore.busy,
   );
-  const [tab, setTab] = useState("launch");
+  const [localTab, setLocalTab] = useState("launch");
+  const tab = selectedTab ?? localTab;
+  const setTab = (next: string) => { setLocalTab(next); onTabChange?.(next); };
   const projectDocumentRevision = useSyncExternalStore(
     documentStore.subscribe,
     () => documentStore.projectRevision(scope),
@@ -454,6 +464,7 @@ export function ProjectSettings({
           ["workflows", "Рабочие процессы"],
           ["pipelines", "Конвейеры"],
           ["image", "Образ"],
+          ["specifications", "Спецификации"],
           ["history", "История"],
           ["tools", "Инструменты"],
           ["profiles", "Профили"],
@@ -834,10 +845,11 @@ export function ProjectSettings({
           owner={owner}
           tab={tab}
           store={documentStore}
+          specificationsState={specificationsState ?? ownSpecifications}
           savedSettingsVersion={doc?.version}
         />
       </RetainedViews>
-      {tab !== "history" && (
+      {tab !== "history" && tab !== "specifications" && (
         <p className="memory-note">
           Черновики настроек и YAML сохраняются при переходах в этом окне до его
           закрытия или перезагрузки. На диск записывается только выбранный файл
