@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type CSSProperties,
   type RefObject,
 } from "react";
 import { createPortal } from "react-dom";
@@ -39,6 +40,23 @@ export function useNativeTopicPopup() {
   return useContext(NativeTopicPopupContext) && hasNativeTopicPopup();
 }
 
+function popupBounds(
+  anchor: RefObject<HTMLElement | null>,
+  preferredWidth: number,
+) {
+  const rect = anchor.current?.getBoundingClientRect();
+  const width = Math.max(1, Math.min(preferredWidth, window.innerWidth - 16));
+  const x = Math.max(
+    0,
+    Math.min(Math.round((rect?.left ?? 8) - 8), window.innerWidth - width - 8),
+  );
+  const y = Math.max(
+    0,
+    Math.min(Math.round(rect?.bottom ?? 8), window.innerHeight - 48),
+  );
+  return { x, y, width, height: Math.max(1, window.innerHeight - y - 8) };
+}
+
 /** Only presentation moves into the same-origin native layer. React state and
  * every privileged call remain in the original, authenticated shell renderer. */
 export function TopicPickerPopup({
@@ -47,12 +65,14 @@ export function TopicPickerPopup({
   children,
   label = "Выбор топика",
   width: preferredWidth = 436,
+  domPortal = false,
 }: {
   anchor: RefObject<HTMLElement | null>;
   onClose: () => void;
   children: ReactNode;
   label?: string;
   width?: number;
+  domPortal?: boolean;
 }) {
   const native = useNativeTopicPopup();
   const close = useRef(onClose);
@@ -63,22 +83,7 @@ export function TopicPickerPopup({
   const layer = useRef<{ id: string; alive: boolean; fail: () => void } | null>(
     null,
   );
-  const position = () => {
-    const rect = anchor.current?.getBoundingClientRect();
-    const width = Math.max(1, Math.min(preferredWidth, window.innerWidth - 16));
-    const x = Math.max(
-      0,
-      Math.min(
-        Math.round((rect?.left ?? 8) - 8),
-        window.innerWidth - width - 8,
-      ),
-    );
-    const y = Math.max(
-      0,
-      Math.min(Math.round(rect?.bottom ?? 8), window.innerHeight - 48),
-    );
-    return { x, y, width, height: Math.max(1, window.innerHeight - y - 8) };
-  };
+  const position = () => popupBounds(anchor, preferredWidth);
   useLayoutEffect(() => {
     if (!native) return;
     const api = window.goga;
@@ -288,7 +293,14 @@ export function TopicPickerPopup({
     };
   }, [container, styled]);
 
-  if (!native) return children;
+  if (!native)
+    return domPortal ? (
+      <DomTopicPickerPopup anchor={anchor} width={preferredWidth}>
+        {children}
+      </DomTopicPickerPopup>
+    ) : (
+      children
+    );
   if (error)
     return createPortal(
       <div className="topic-popup-error" role="alert">
@@ -300,4 +312,60 @@ export function TopicPickerPopup({
       document.body,
     );
   return container ? createPortal(children, container) : null;
+}
+
+/** Escape clipped header/retained ancestors without creating a native surface.
+ * Interaction and ownership remain with the caller, just like the native portal. */
+function DomTopicPickerPopup({
+  anchor,
+  width,
+  children,
+}: {
+  anchor: RefObject<HTMLElement | null>;
+  width: number;
+  children: ReactNode;
+}) {
+  const [bounds, setBounds] = useState(() => popupBounds(anchor, width));
+  useLayoutEffect(() => {
+    const place = () => {
+      const next = popupBounds(anchor, width);
+      setBounds((previous) =>
+        Object.keys(next).every(
+          (key) =>
+            previous[key as keyof typeof next] ===
+            next[key as keyof typeof next],
+        )
+          ? previous
+          : next,
+      );
+    };
+    place();
+    window.addEventListener("resize", place);
+    document.addEventListener("scroll", place, true);
+    const observer =
+      typeof ResizeObserver === "function" ? new ResizeObserver(place) : null;
+    if (anchor.current) observer?.observe(anchor.current);
+    return () => {
+      window.removeEventListener("resize", place);
+      document.removeEventListener("scroll", place, true);
+      observer?.disconnect();
+    };
+  }, [anchor, width]);
+  return createPortal(
+    <div
+      className="topic-context-dom-root"
+      style={
+        {
+          position: "fixed",
+          left: bounds.x,
+          top: bounds.y,
+          width: bounds.width,
+          "--topic-popup-max-height": `${Math.max(1, bounds.height - 16)}px`,
+        } as CSSProperties
+      }
+    >
+      {children}
+    </div>,
+    document.body,
+  );
 }

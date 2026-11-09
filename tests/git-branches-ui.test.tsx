@@ -482,3 +482,74 @@ it("renders a readable branch SVG without a dropdown arrow and retains menu sema
   await open();
   expect(trigger.getAttribute("aria-expanded")).toBe("true");
 });
+
+it("keeps the primary-project branch menu outside the clipped context bar without a native surface", async () => {
+  const { NativeTopicPopupProvider } =
+    await import("../src/renderer/TopicPickerPopup");
+  const native = {
+    setTopicPopupBounds: vi.fn(async () => {}),
+    closeTopicPopup: vi.fn(async () => {}),
+    onTopicPopupClosed: vi.fn(() => () => {}),
+  };
+  Object.assign(api, native);
+  const popup = vi.spyOn(window, "open");
+  try {
+    render(
+      <NativeTopicPopupProvider value={false}>
+        <div className="run-context" data-testid="context-bar">
+          {view()}
+        </div>
+      </NativeTopicPopupProvider>,
+    );
+    await open();
+    const menu = screen.getByRole("dialog", { name: "Выбор ветки" });
+    expect(menu.closest(".run-context")).toBeNull();
+    const layer = menu.parentElement!;
+    expect(layer.parentElement).toBe(document.body);
+    expect(layer.style.position).toBe("fixed");
+    expect(popup).not.toHaveBeenCalled();
+    expect(native.setTopicPopupBounds).not.toHaveBeenCalled();
+    fireEvent.pointerDown(
+      screen.getByRole("searchbox", { name: "Найти ветку" }),
+    );
+    fireEvent.change(screen.getByRole("searchbox"), {
+      target: { value: "feature" },
+    });
+    expect(screen.getByRole("button", { name: "feature" })).toBeTruthy();
+    fireEvent.keyDown(screen.getByRole("searchbox"), { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "Выбор ветки" })).toBeNull();
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Ветка: main" }),
+    );
+  } finally {
+    popup.mockRestore();
+  }
+});
+
+it("portals branch loading and cleans it up on outside dismissal and retained owner changes", async () => {
+  const { NativeTopicPopupProvider } =
+    await import("../src/renderer/TopicPickerPopup");
+  const pending = deferred();
+  api.readGitBranches.mockReturnValue(pending.promise);
+  const tree = (owner: string) => (
+    <NativeTopicPopupProvider value={false}>
+      <RetainedViews activeKey={owner}>
+        <div className="run-context">{view({ projectId: owner })}</div>
+      </RetainedViews>
+    </NativeTopicPopupProvider>
+  );
+  const ui = render(tree("p"));
+  fireEvent.click(screen.getByRole("button", { name: "Ветка: main" }));
+  expect(
+    (await screen.findByRole("status", { name: "Загружаем ветки…" })).closest(
+      ".run-context",
+    ),
+  ).toBeNull();
+  fireEvent.pointerDown(document.body);
+  expect(screen.queryByRole("dialog", { name: "Выбор ветки" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Ветка: main" }));
+  ui.rerender(tree("q"));
+  await act(async () => pending.resolve(inventory));
+  expect(screen.queryByRole("dialog", { name: "Выбор ветки" })).toBeNull();
+  expect(document.querySelector(".topic-context-dom-root")).toBeNull();
+});

@@ -40,7 +40,8 @@
   color: var(--text);
   font-size: 13px;
 }
-.topic-context-native-root .git-branch-menu {
+.topic-context-native-root .git-branch-menu,
+.topic-context-dom-root .git-branch-menu {
   position: relative;
   top: auto;
   right: auto;

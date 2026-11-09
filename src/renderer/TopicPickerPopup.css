@@ -3,7 +3,8 @@ html.topic-popup-document {
   background: transparent;
   overflow: hidden;
 }
-.topic-context-native-root {
+.topic-context-native-root,
+.topic-context-dom-root {
   padding: 8px;
   width: 100%;
 }
@@ -55,5 +56,13 @@ html.topic-popup-document {
 .topic-popup-error button {
   justify-self: start;
   max-width: 100%;
+  white-space: normal;
+}
+
+.topic-context-dom-root {
+  z-index: 100;
+  color: var(--text);
+  font-size: 13px;
+  text-align: left;
   white-space: normal;
 }

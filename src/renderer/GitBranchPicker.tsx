@@ -308,6 +308,7 @@ function BranchOwner({
           anchor={anchor}
           onClose={() => setOpen(false)}
           label="Выбор ветки"
+          domPortal
           width={376}
         >
           <div

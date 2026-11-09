@@ -568,3 +568,48 @@ it("preserves stylesheet cascade order when a later shell sheet is still pending
     second.remove();
   }
 });
+
+it("bounds an opt-in DOM portal to the viewport and repositions it without native IPC", () => {
+  const ui = render(
+    <NativeTopicPopupProvider value={false}>
+      <div style={{ overflow: "hidden", height: 44 }}>
+        <TopicPickerPopup
+          anchor={anchor}
+          domPortal
+          width={376}
+          onClose={vi.fn()}
+        >
+          {content}
+        </TopicPickerPopup>
+      </div>
+    </NativeTopicPopupProvider>,
+  );
+  const root = screen
+    .getByRole("combobox")
+    .closest<HTMLElement>(".topic-context-dom-root")!;
+  expect(root.parentElement).toBe(document.body);
+  expect(root.style.left).toBe("392px");
+  expect(root.style.top).toBe("100px");
+  expect(root.style.width).toBe("376px");
+  anchor.current!.getBoundingClientRect = () =>
+    ({ left: 10000, bottom: 180 }) as DOMRect;
+  act(() => window.dispatchEvent(new Event("resize")));
+  expect(
+    Number.parseFloat(root.style.left) + Number.parseFloat(root.style.width),
+  ).toBeLessThanOrEqual(window.innerWidth - 8);
+  expect(root.style.top).toBe("180px");
+  expect(root.style.getPropertyValue("--topic-popup-max-height")).toBe(
+    `${window.innerHeight - 180 - 24}px`,
+  );
+  anchor.current!.getBoundingClientRect = () =>
+    ({ left: 100, bottom: 120 }) as DOMRect;
+  act(() => document.dispatchEvent(new Event("scroll")));
+  expect(root.style.left).toBe("92px");
+  expect(root.style.top).toBe("120px");
+  expect(window.open).not.toHaveBeenCalled();
+  expect(api.setTopicPopupBounds).not.toHaveBeenCalled();
+  const disconnect = observer.disconnect;
+  ui.unmount();
+  expect(disconnect).toHaveBeenCalledOnce();
+  expect(document.querySelector(".topic-context-dom-root")).toBeNull();
+});
