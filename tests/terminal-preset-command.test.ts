@@ -30,6 +30,7 @@ pid,fd=pty.fork()
 if pid==0:
  os.chdir(root)
  os.execve(shell,[shell,'-l','-i'],os.environ)
+signal.signal(signal.SIGTERM,lambda *_:sys.exit(143))
 print(pid,flush=True)
 try:
  while True:
@@ -139,6 +140,9 @@ for (const shell of ["/bin/bash", "/bin/zsh"]) {
           : "",
         'printf READY_TO_READ; read answer; printf "%s" "$answer" > "$HOME/input"',
         "/bin/sleep .05",
+        z
+          ? 'autoload -Uz add-zle-hook-widget; _fixture_prompt_ready() { builtin printf "%s\\n" "$$" > "$HOME/prompt-ready"; }; add-zle-hook-widget line-init _fixture_prompt_ready'
+          : 'PROMPT_COMMAND=\'printf "%s\\n" "$$" > "$HOME/prompt-ready"; \'"$PROMPT_COMMAND"',
       ].join("\n");
       writeFileSync(home + (z ? "/.zshrc" : "/.bash_profile"), profile + "\n");
       // Ready comes from the actual foreground owner, after installing its
@@ -178,6 +182,20 @@ for (const shell of ["/bin/bash", "/bin/zsh"]) {
         mode === "refuse" || mode === "wrong-peer" ? 600 : 6000,
       );
       let child: ChildProcessWithoutNullStreams | undefined;
+      let closed: Promise<void> | undefined;
+      let phase = "spawn";
+      const wait = async (label: string, check: () => boolean) => {
+        phase = label;
+        try {
+          await until(check);
+        } catch (error) {
+          throw Error(phase + ": " + String(error));
+        }
+      };
+      const write = (text: string) => {
+        old?.activity.input(text);
+        child!.stdin.write(text);
+      };
       try {
         expect(prepared.launch.args).toEqual(["-l", "-i"]);
         expect(JSON.stringify(prepared.launch.env)).not.toContain(cmd);
@@ -190,19 +208,24 @@ for (const shell of ["/bin/bash", "/bin/zsh"]) {
           env: prepared.launch.env,
           stdio: ["pipe", "pipe", "pipe"],
         });
+        closed = new Promise<void>((resolve) =>
+          child!.once("close", () => resolve()),
+        );
         let output = "";
         child.stdout.on("data", (s) => {
           output += s;
         });
         const pid = () => Number(output.match(/^(\d+)\n/)?.[1]);
-        await until(() => !!pid());
+        await wait("driver reports root PID", () => !!pid());
         prepared.arm(pid());
-        await until(() => output.includes("READY_TO_READ"));
+        await wait("root startup read", () => output.includes("READY_TO_READ"));
         await sleep(50);
         expect(calls).toBe(0);
         if (mode === "cancel") prepared.dispose();
-        child.stdin.write("fixture-answer\r");
-        await until(() => hasText(home + "/input", "fixture-answer"));
+        write("fixture-answer\r");
+        await wait("root startup read consumed answer", () =>
+          hasText(home + "/input", "fixture-answer"),
+        );
         expect(readFileSync(home + "/input", "utf8")).toBe("fixture-answer");
         expect(existsSync(home + "/login")).toBe(true);
         if (mode === "run") {
@@ -210,12 +233,19 @@ for (const shell of ["/bin/bash", "/bin/zsh"]) {
             await prepared.result,
             `peer attempts=${calls}, accepted=${accepted}, pty=${output.slice(-300)}`,
           ).toBe("delivered");
+          phase = "preset transport delivered";
           prepared.dispose();
-          await until(() => hasText(home + "/ran", "4100:"));
+          await wait("preset executed", () => hasText(home + "/ran", "4100:"));
+          if (z)
+            await wait("root prompt after preset", () =>
+              old!.activity.idle(pid()),
+            );
           expect(readFileSync(home + "/mark", "utf8")).toBe("alias-ok");
           expect(readFileSync(home + "/ran", "utf8")).toBe("4100:");
-          child.stdin.write('pwd > "$HOME/cwd"\r');
-          await until(() => hasText(home + "/cwd", wd + "/nested\n"));
+          write('pwd > "$HOME/cwd"\r');
+          await wait("pwd after preset", () =>
+            hasText(home + "/cwd", wd + "/nested\n"),
+          );
           expect(readFileSync(home + "/cwd", "utf8").trim()).toBe(
             wd + "/nested",
           );
@@ -224,13 +254,40 @@ for (const shell of ["/bin/bash", "/bin/zsh"]) {
               readFileSync(home + "/previous", "utf8").length,
             ).toBeGreaterThan(0);
           // A nested interactive login has its own prompt, never another ticket.
-          child.stdin.write(shell + " -l -i\r");
-          await until(() => output.split("READY_TO_READ").length >= 3);
-          child.stdin.write("nested-answer\r");
-          await until(
-            () => readFileSync(home + "/input", "utf8") === "nested-answer",
+          if (z)
+            await wait("root prompt before nested shell", () =>
+              old!.activity.idle(pid()),
+            );
+          write(shell + " -l -i\r");
+          await wait(
+            "nested startup read",
+            () => output.split("READY_TO_READ").length >= 3,
           );
-          child.stdin.write("exit\r");
+          write("nested-answer\r");
+          await wait("nested read consumed answer", () =>
+            hasText(home + "/input", "nested-answer"),
+          );
+          await wait("nested prompt after startup read", () => {
+            try {
+              return (
+                /^[0-9]+\n$/.test(
+                  readFileSync(home + "/prompt-ready", "utf8"),
+                ) && !hasText(home + "/prompt-ready", pid() + "\n")
+              );
+            } catch {
+              return false;
+            }
+          });
+          // A delivered command is not a prompt barrier; verify the nested
+          // line-init actually ran before asserting no replay and leaving it.
+          expect(accepted).toBe(1);
+          write("exit\r");
+          await wait(
+            "root prompt after nested exit",
+            () =>
+              hasText(home + "/prompt-ready", pid() + "\n") &&
+              (!z || old!.activity.idle(pid())),
+          );
           expect(readFileSync(home + "/mark", "utf8")).toBe("alias-ok");
           expect(accepted).toBe(1);
           expect(output).not.toMatch(/No such file or directory/);
@@ -259,13 +316,39 @@ for (const shell of ["/bin/bash", "/bin/zsh"]) {
           expect(existsSync(home + "/ran")).toBe(false);
         }
       } finally {
-        if (child && child.exitCode === null) {
-          const closed = new Promise((r) => child!.once("close", r));
-          child.stdin.end();
-          await closed;
+        try {
+          if (child && closed) {
+            // Subscribe at spawn, not in finally: a signalled/exited PTY driver
+            // may have emitted close already (exitCode stays null on signal).
+            child.stdin.end();
+            const terminate = setTimeout(() => child!.kill("SIGTERM"), 1000);
+            let deadline: ReturnType<typeof setTimeout> | undefined;
+            try {
+              await Promise.race([
+                closed,
+                new Promise<never>((_, reject) => {
+                  deadline = setTimeout(
+                    () =>
+                      reject(
+                        Error(
+                          "PTY driver cleanup after " +
+                            phase +
+                            " did not settle",
+                        ),
+                      ),
+                    2000,
+                  );
+                }),
+              ]);
+            } finally {
+              clearTimeout(terminate);
+              if (deadline) clearTimeout(deadline);
+            }
+          }
+        } finally {
+          prepared.dispose();
+          old?.dispose();
         }
-        prepared.dispose();
-        old?.dispose();
       }
     },
     12000,
