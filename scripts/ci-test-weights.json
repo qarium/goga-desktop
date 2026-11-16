@@ -39,7 +39,7 @@
   "tests/git-rebase-conflict-save-recovery.test.ts": 680,
   "tests/git-rebase-conflict-save-write-races.test.ts": 1412,
   "tests/git-rebase-conflict-save.test.ts": 1278,
-  "tests/git-rebase-continue-host.test.ts": 1452,
+  "tests/git-rebase-continue-host.test.ts": 508,
   "tests/git-rebase-operation-ui.test.tsx": 18,
   "tests/git-rebase-operations-host.test.ts": 554,
   "tests/git-rebase-read-admission.test.ts": 1897,
@@ -62,5 +62,7 @@
   "tests/unified-context-app.test.tsx": 26,
   "tests/unified-project-context-host.test.ts": 488,
   "tests/workflow-settings.test.tsx": 51,
-  "tests/worktrees-host.test.ts": 28
+  "tests/worktrees-host.test.ts": 28,
+  "tests/git-rebase-continue-managed-host.test.ts": 436,
+  "tests/git-rebase-continue-four-pick-host.test.ts": 508
 }

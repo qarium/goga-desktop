@@ -114,7 +114,7 @@
   "tests/git-rebase-conflict-save-recovery.test.ts": 182,
   "tests/git-rebase-conflict-save-write-races.test.ts": 698,
   "tests/git-rebase-conflict-save.test.ts": 379,
-  "tests/git-rebase-continue-host.test.ts": 478,
+  "tests/git-rebase-continue-host.test.ts": 385,
   "tests/git-rebase-operation-ui.test.tsx": 10,
   "tests/git-rebase-operations-contract.test.ts": 1,
   "tests/git-rebase-operations-host.test.ts": 195,
@@ -300,5 +300,7 @@
   "tests/worktree-store.test.ts": 3,
   "tests/worktree-topic-guards.test.ts": 1,
   "tests/worktrees-host.test.ts": 15,
-  "tests/yaml-editor.test.tsx": 1
+  "tests/yaml-editor.test.tsx": 1,
+  "tests/git-rebase-continue-managed-host.test.ts": 330,
+  "tests/git-rebase-continue-four-pick-host.test.ts": 385
 }

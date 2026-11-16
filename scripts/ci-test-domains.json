@@ -73,6 +73,8 @@
     "tests/git-rebase-conflict-save-write-races.test.ts",
     "tests/git-rebase-conflict-save.test.ts",
     "tests/git-rebase-continue-host.test.ts",
+    "tests/git-rebase-continue-managed-host.test.ts",
+    "tests/git-rebase-continue-four-pick-host.test.ts",
     "tests/git-rebase-operation-ui.test.tsx",
     "tests/git-rebase-operations-contract.test.ts",
     "tests/git-rebase-operations-host.test.ts",
