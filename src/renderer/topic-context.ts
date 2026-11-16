@@ -60,7 +60,7 @@ export function draftKey(context: TopicContextIdentity, kind: RunKind): string {
 }
 
 /** Missing historical context is deliberately not inferred from topic/branch. */
-function ownedContext(run: RunWithContext): TopicContextIdentity | null {
+export function ownedContext(run: RunWithContext): TopicContextIdentity | null {
   const context = run.context;
   return context &&
     context.contextId &&

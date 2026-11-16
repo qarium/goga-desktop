@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
+import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -131,4 +132,39 @@ it("offers selected deletion and clear in the real filter bar without using filt
       ],
     }),
   );
+});
+
+it("aligns the bulk-delete icon and label without enlarging the selection toolbar buttons", async () => {
+  const style = document.createElement("style");
+  style.textContent = readFileSync("src/renderer/Topics.css", "utf8");
+  document.head.append(style);
+  try {
+    setup();
+    const col = await screen.findByRole("region", { name: "Запланировано" });
+    fireEvent.click(
+      within(col).getByRole("checkbox", {
+        name: "Выбрать топики колонки Запланировано",
+      }),
+    );
+    const remove = screen.getByRole("button", {
+      name: "Удалить выбранные топики",
+    });
+    const cancel = screen.getByRole("button", { name: "Снять выделение" });
+    for (const button of [remove, cancel]) {
+      const css = getComputedStyle(button);
+      expect(css.display).toBe("inline-flex");
+      expect(css.alignItems).toBe("center");
+      expect(css.justifyContent).toBe("center");
+    }
+    const icon = remove.querySelector("svg")!;
+    expect(getComputedStyle(icon).width).toBe("14px");
+    expect(getComputedStyle(icon).height).toBe("14px");
+    expect(getComputedStyle(icon).flexShrink).toBe("0");
+    fireEvent.click(cancel);
+    expect(
+      screen.queryByRole("button", { name: "Удалить выбранные топики" }),
+    ).toBeNull();
+  } finally {
+    style.remove();
+  }
 });

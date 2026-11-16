@@ -1,5 +1,11 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
-import { rmSync, readFileSync, writeFileSync, lstatSync } from "node:fs";
+import { mkdtemp, writeFile, open } from "node:fs/promises";
+import {
+  constants,
+  rmSync,
+  readFileSync,
+  writeFileSync,
+  lstatSync,
+} from "node:fs";
 import type { TerminalLaunch } from "./terminal-environment";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,6 +22,7 @@ export async function prepareTopicPrompt(
   directory: string;
   dispose(): void;
   activity: NonNullable<TerminalLaunch["activity"]>;
+  presetShellHooks: NonNullable<TerminalLaunch["presetShellHooks"]>;
 }> {
   const directory = await mkdtemp(path.join(tmpdir(), "goga-terminal-prompt-"));
   const dispose = () => {
@@ -101,7 +108,33 @@ add-zle-hook-widget line-finish _goga_desktop_busy
 `;
   try {
     await writeFile(path.join(directory, ".zshenv"), script, { mode: 0o600 });
-    return { directory, dispose, activity };
+    return {
+      directory,
+      dispose,
+      activity,
+      presetShellHooks: {
+        async addZshHook(script: string) {
+          // Private mkdtemp child, known basename. Never append through symlinks.
+          const fd = await open(
+            path.join(directory, ".zshenv"),
+            constants.O_APPEND | constants.O_WRONLY | constants.O_NOFOLLOW,
+          );
+          try {
+            const st = await fd.stat();
+            if (
+              !st.isFile() ||
+              st.nlink !== 1 ||
+              (st.mode & 0o777) !== 0o600 ||
+              st.uid !== process.getuid?.()
+            )
+              throw Error("Не удалось подтвердить интеграцию оболочки.");
+            await fd.writeFile("\n" + script);
+          } finally {
+            await fd.close();
+          }
+        },
+      },
+    };
   } catch (error) {
     dispose();
     throw error;

@@ -7,7 +7,7 @@ import type { CellContract } from "../src/shared/project-architecture";
 
 afterEach(cleanup);
 
-function showContract(data: CellContract) {
+function showContract(data: CellContract, busy = false) {
   return render(
     <ContractPane
       cell={{
@@ -19,7 +19,7 @@ function showContract(data: CellContract) {
         children: [],
       }}
       data={data}
-      busy={false}
+      busy={busy}
       error=""
       onRetry={vi.fn()}
       onClose={vi.fn()}
@@ -189,4 +189,11 @@ it("does not truncate verbose member names or multiline contract values", () => 
   expect(
     [...methods.querySelectorAll("pre")].map((pre) => pre.textContent),
   ).toEqual([raw + "метод", ""]);
+});
+
+it("keeps validated contract details visible during background revalidation", () => {
+  showContract({Example: {signature: {codemanifest: "last accepted", implementation: null}}}, true);
+  expect(screen.getByText("last accepted")).toBeTruthy();
+  expect((screen.getByRole("button", {name: "Обновить контракт"}) as HTMLButtonElement).disabled).toBe(true);
+  expect(screen.getByRole("status").textContent).toMatch(/Обнов/);
 });

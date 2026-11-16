@@ -1,0 +1,121 @@
+.terminal-presets {
+  display: grid;
+  gap: 16px;
+  align-content: start;
+  min-width: 0;
+}
+.terminal-presets-head,
+.terminal-preset-actions {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.terminal-presets-head {
+  justify-content: space-between;
+  gap: 12px;
+}
+.terminal-presets h3,
+.terminal-presets p {
+  margin: 0;
+}
+.terminal-presets p,
+.terminal-presets small {
+  color: #93a7be;
+}
+.terminal-presets-head p {
+  margin-top: 5px;
+}
+.terminal-presets-list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+  border-top: 1px solid #29364b;
+}
+.terminal-presets-list li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 0;
+  border-bottom: 1px solid #29364b;
+}
+.terminal-presets-list li > svg {
+  color: #92aac1;
+  flex-shrink: 0;
+}
+.terminal-preset-summary {
+  display: grid;
+  gap: 3px;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.terminal-preset-summary code {
+  color: #aebfd3;
+  white-space: pre-wrap;
+}
+.terminal-presets button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.terminal-preset-editor {
+  display: grid;
+  gap: 16px;
+  padding: 16px;
+  border-radius: 8px;
+  border: 1px solid #2a3850;
+  background: #111b2c;
+  min-width: 0;
+}
+.terminal-preset-fields,
+.terminal-preset-env-row {
+  display: grid;
+  align-items: end;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 12px;
+}
+.terminal-preset-env-row {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.3fr) auto;
+  margin: 10px 0;
+}
+.terminal-preset-editor label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  color: #a4b5cc;
+}
+.terminal-preset-editor input {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+}
+.terminal-preset-env {
+  padding: 8px 0 12px;
+  border-block: 1px solid #2a3850;
+}
+.terminal-preset-env p {
+  font-size: 12px;
+  margin: 3px 0 10px;
+}
+.terminal-presets .terminal-preset-expander {
+  border: 0;
+  padding: 6px 0;
+  background: transparent;
+}
+.terminal-presets .terminal-preset-error {
+  color: #ffadab;
+  overflow-wrap: anywhere;
+}
+@media (max-width: 850px) {
+  .terminal-preset-fields {
+    grid-template-columns: 1fr;
+  }
+  .terminal-preset-env-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+  .terminal-preset-env-row label:first-child {
+    grid-column: 1/-1;
+  }
+}

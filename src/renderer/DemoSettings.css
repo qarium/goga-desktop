@@ -1,0 +1,60 @@
+/* The account settings and connection addresses are not part of the live view. */
+.demo-settings {
+  max-width: 680px;
+  padding: 16px 0;
+}
+.demo-settings-title,
+.demo-port-edit {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.demo-settings-title svg {
+  color: var(--teal);
+}
+.demo-settings h3,
+.demo-settings h4 {
+  margin: 0;
+}
+.demo-settings p,
+.demo-settings small,
+.demo-settings dt {
+  color: var(--muted);
+  line-height: 1.6;
+}
+.demo-settings form {
+  margin: 20px 0;
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+.demo-engine-edit {
+  display: grid;
+  gap: 8px;
+  margin-top: 20px;
+}
+.demo-engine-edit .searchable-picker {
+  width: min(100%, 320px);
+}
+.demo-settings .demo-port-edit input {
+  width: 110px;
+}
+.demo-settings dl {
+  display: flex;
+  gap: 12px 24px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+.demo-settings dd {
+  margin: 0;
+  user-select: all;
+}
+.demo-settings [data-error="true"] {
+  color: var(--red, #ffadb5);
+}
+.demo-settings .demo-settings-note {
+  font-size: 12px;
+}

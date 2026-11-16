@@ -1,7 +1,7 @@
 import { memo, useLayoutEffect, useRef, useState } from "react";
 import type { Run } from "../shared/types";
 import "./RunOutput.css";
-import { dashboardRecoveryAllowed } from "../shared/dashboard-connection";
+import { useRunJournal } from "./useRunJournal";
 
 export function TerminalIcon() {
   return (
@@ -22,15 +22,8 @@ export function TerminalIcon() {
   );
 }
 
-export function dashboardReady(run: Run) {
-  return (
-    dashboardRecoveryAllowed(run) &&
-    run.kind !== "build" &&
-    run.status === "running" &&
-    !!run.url &&
-    (run.dashboardOpened === true || run.dashboardOpened === undefined)
-  );
-}
+export {dashboardReady} from "./run-dashboard-state";
+import {dashboardReady,canRestoreRunDashboard} from "./run-dashboard-state";
 
 // Output is already bounded, sanitized and throttled by the host. Keep it as
 // one text node: never interpret HTML, terminal commands, links or ANSI markup.
@@ -103,6 +96,7 @@ export function RunOutput({
       setRestoring(false);
     }
   }
+  const journal = useRunJournal(run);
   const isBuild = run.kind === "build";
   const unverified = run.recovery === "unverified";
   const confirmed = run.recovery === "confirmed";
@@ -174,12 +168,7 @@ export function RunOutput({
                       ? `${run.update ? "Запуск с обновлением образа." : "Обычный запуск."} Вывод появляется ниже по мере поступления.`
                       : "Вывод этого запуска сохранён ниже.")}
             </p>
-            {run.status === "running" &&
-              run.recovery !== "unverified" &&
-              run.dashboardRecoveryVersion === 1 &&
-              !isBuild &&
-              onRestore &&
-              (!ready || !!viewError) && (
+            {onRestore && canRestoreRunDashboard(run,viewError) && (
                 <div className="run-output-reconnect">
                   <button
                     type="button"
@@ -214,7 +203,11 @@ export function RunOutput({
           <TerminalIcon />
           <h3>Вывод</h3>
         </header>
-        <OutputText text={run.output?.text ?? ""} live={active && !confirmed} />
+        {journal.error && <p role="alert" className="run-output-note">
+          Не удалось загрузить вывод. <button onClick={journal.retry}>Повторить загрузку журнала</button>
+        </p>}
+        {journal.loading ? <p className="run-output-note" role="status">Загружаем журнал…</p> :
+          (!journal.error || journal.output) && <OutputText text={journal.output?.text ?? ""} live={active && !confirmed} />}
         <footer className="run-output-footer">
           <span>
             {active && !confirmed ? "Вывод обновляется" : "Вывод сохранён"}
@@ -222,7 +215,7 @@ export function RunOutput({
           <span>Журнал этой вкладки</span>
         </footer>
       </section>
-      {run.output?.truncated && (
+      {journal.output?.truncated && (
         <p className="run-output-note">
           Часть вывода удалена или скрыта из-за ограничений журнала. Показан
           последний доступный вывод.

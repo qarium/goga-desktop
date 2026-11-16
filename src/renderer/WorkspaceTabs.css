@@ -1,0 +1,69 @@
+/* Terminal and demonstration share presentation, never tab state or actions. */
+.workspace-tab {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 240px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: #91a2ba;
+}
+.workspace-tab[data-selected="true"] {
+  border-bottom-color: #19cabb;
+  color: #19cabb;
+}
+.workspace-tab button,
+button.workspace-tab-create {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: inherit;
+}
+.workspace-tab .workspace-tab-select {
+  min-width: 0;
+  padding: 9px 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-tab-select span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.workspace-tab svg,
+.workspace-tab-create svg {
+  flex-shrink: 0;
+}
+.workspace-tab .workspace-tab-close {
+  width: 26px;
+  padding: 6px;
+  flex-shrink: 0;
+  color: #91a2ba;
+}
+button.workspace-tab-create {
+  width: 34px;
+  padding: 5px;
+  flex-shrink: 0;
+  color: #91a2ba;
+}
+.workspace-tab button:hover:not(:disabled),
+button.workspace-tab-create:hover:not(:disabled) {
+  color: #19cabb;
+  background: #101728;
+}
+.workspace-tab button:focus-visible,
+button.workspace-tab-create:focus-visible {
+  outline: 2px solid var(--teal, #19cabb);
+  outline-offset: -2px;
+}

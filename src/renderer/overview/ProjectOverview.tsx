@@ -1,3 +1,4 @@
+import type { HomeSessions } from "../home/session-summary";
 import { selectOverviewRows } from "./selection";
 import { createOverviewTransport } from "./transport";
 import {
@@ -38,14 +39,14 @@ import type { ScopeRef } from "../../shared/context";
 import type { DesktopAPI } from "../../shared/bridge";
 import type { OverviewEntry } from "../../shared/project-overview";
 import { buildArchitectureIndex } from "../../shared/project-architecture";
-import { createOverviewStore } from "./store";
+import { createOverviewStore, type OverviewStore } from "./store";
 import { HistoryMarkdown } from "../HistoryMarkdown";
 import {
   HistoryScrollPane,
   type HistoryScrollPositions,
 } from "../HistoryScrollPane";
 import "../ProjectHistory.css";
-import { OverviewEditor, type OverviewEditorCommands } from "./OverviewEditor";
+import { OverviewEditor, type OverviewEditorCommands, type OverviewEditorProps } from "./OverviewEditor";
 import type { YamlEditorMemory } from "../YamlEditor";
 import type { NavigationPresentation } from "./navigation/types";
 import { resolveNavigationLanguage } from "./languages";
@@ -59,6 +60,34 @@ import { ContractPane } from "./ContractPane";
 import { ownerForPath, projectScope, basename } from "./graph";
 import { useViewActive } from "../RetainedViews";
 import "./overview.css";
+// Subscribe here, not on the canvas: buffer writes remain synchronous, but
+// typing into an already-dirty file does not reconcile its tree or graph.
+function useFileText(store: OverviewStore, path: string) {
+  return useSyncExternalStore(store.subscribe, () => store.getSnapshot().files[path]?.text ?? "");
+}
+function LiveEditor({
+  store, ...props
+}: Omit<OverviewEditorProps, "value" | "onChange" | "onSave"> & { store: OverviewStore }) {
+  const text = useFileText(store, props.path);
+  return (
+    <OverviewEditor
+      {...props}
+      value={text}
+      onChange={(value) => store.edit(props.path, value)}
+      onSave={() => void store.save(props.path)}
+    />
+  );
+}
+
+function LiveMarkdown({ store, path, onFile }: {
+  store: OverviewStore;
+  path: string;
+  onFile: (path: string) => void;
+}) {
+  const text = useFileText(store, path);
+  return <HistoryMarkdown path={path} text={text} onFile={onFile} />;
+}
+
 function Splitter({
   label,
   value,
@@ -114,7 +143,10 @@ export function ProjectOverview({
   api = window.goga,
   onMutation,
   onCloseState,
+  sessions, retainedViewKey,
 }: {
+  sessions?: HomeSessions;
+  retainedViewKey?: string;
   scope: ScopeRef;
   workspacePath?: string;
   api?: DesktopAPI;
@@ -127,7 +159,7 @@ export function ProjectOverview({
   const [store] = useState(() =>
     createOverviewStore(transport.api, scope, () => callback.current?.()),
   );
-  const state = useSyncExternalStore(store.subscribe, store.getSnapshot);
+  const state = useSyncExternalStore(store.subscribe, store.getPresentation);
   const active = useViewActive();
   const filePaneRef = useRef<HTMLElement>(null);
   const searchAnchor = useRef<string | null>(null);
@@ -156,6 +188,19 @@ export function ProjectOverview({
     [width, setWidth] = useState(1000),
     [full, setFull] = useState<"graph" | "file" | null>(null),
     [compactTab, setCompactTab] = useState<"graph" | "contract">("graph");
+  useEffect(() => {
+    if (!sessions || !retainedViewKey) return;
+    return sessions.attachOverview(store, retainedViewKey, path => {
+      store.activate(path);
+      setFull(current => current === "graph" ? null : current);
+      setPreviews(current => {
+        if (!current.has(path)) return current;
+        const next = new Set(current); next.delete(path); return next;
+      });
+      setSelection(path);
+      setSelectedPaths([path]);
+    });
+  }, [sessions, retainedViewKey, store]);
   const [history, setHistory] = useState<string[]>([]),
     [historyIndex, setHistoryIndex] = useState(-1);
   const [creation, setCreation] = useState<{
@@ -174,9 +219,7 @@ export function ProjectOverview({
     () => buildArchitectureIndex(state.schema ?? []),
     [state.schema],
   );
-  const dirty = state.order.filter(
-    (p) => state.files[p].text !== state.files[p].document.text,
-  );
+  const dirty = useMemo(() => state.order.filter((p) => state.files[p].dirty), [state.order, state.files]);
   const file = state.active ? state.files[state.active] : null;
   const navigationOwner = useMemo(
     () =>
@@ -1116,7 +1159,7 @@ export function ProjectOverview({
                     title="Сохранить"
                     disabled={
                       file.busy ||
-                      !file.document.exists ||
+                      !file.exists ||
                       !dirty.includes(state.active!)
                     }
                     onClick={() => void store.save(state.active!)}
@@ -1149,8 +1192,8 @@ export function ProjectOverview({
                   active={active}
                   label="Предпросмотр Markdown"
                 >
-                  <HistoryMarkdown
-                    text={file.text}
+                  <LiveMarkdown
+                    store={store}
                     path={state.active!}
                     onFile={(p) => {
                       select(p);
@@ -1159,12 +1202,10 @@ export function ProjectOverview({
                   />
                 </HistoryScrollPane>
               ) : (
-                <OverviewEditor
+                <LiveEditor
+                  store={store}
                   key={state.active}
                   path={state.active!}
-                  value={file.text}
-                  onChange={(text) => store.edit(state.active!, text)}
-                  onSave={() => void store.save(state.active!)}
                   readOnly={file.busy}
                   memory={file.memory}
                   commands={editorCommands}

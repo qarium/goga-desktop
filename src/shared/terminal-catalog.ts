@@ -17,6 +17,14 @@ export const terminalCatalogChangeSchema = z.discriminatedUnion("kind", [
   target
     .extend({ kind: z.literal("rename"), name: terminalTabSchema.shape.name })
     .strict(),
+  base
+    .extend({
+      kind: z.literal("create-from-preset"),
+      presetId: z.string().uuid(),
+      presetRevision: z.string().uuid(),
+      actionId: z.string().uuid(),
+    })
+    .strict(),
   target.extend({ kind: z.literal("select") }).strict(),
   target
     .extend({

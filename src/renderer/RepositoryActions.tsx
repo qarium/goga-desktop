@@ -11,6 +11,7 @@ import {
   type ButtonHTMLAttributes,
 } from "react";
 import { createPortal } from "react-dom";
+import { useViewActive } from "./RetainedViews";
 import type { Project } from "../shared/types";
 import type { WorktreeRecord } from "../shared/worktrees";
 import type { RepositoryActionRequest } from "../shared/repository-actions";
@@ -201,6 +202,22 @@ export function RepositoryActions({
 }
 
 /** A DOM tooltip above the header, never over the native pipeline view. */
+// Subscribe only while a tooltip is open: thousands of idle row buttons need
+// not rerender on navigation. A body portal does not inherit its anchor's inert.
+function ActiveTooltip({
+  close,
+  children,
+}: {
+  close: () => void;
+  children: ReactNode;
+}) {
+  const active = useViewActive();
+  useLayoutEffect(() => {
+    if (!active) close();
+  }, [active, close]);
+  return active ? children : null;
+}
+
 export function TooltipButton({
   disabled,
   label,
@@ -394,25 +411,27 @@ export function TooltipButton({
       {open &&
         document &&
         createPortal(
-          <div
-            ref={tooltip}
-            id={id}
-            role="tooltip"
-            tabIndex={overflowing ? 0 : -1}
-            onMouseEnter={show}
-            onMouseLeave={leave}
-            className="repository-action-tooltip"
-            style={{
-              position: "fixed",
-              ...position,
-              overflowY: "auto",
-              pointerEvents: "auto",
-            }}
-          >
-            <strong>{tooltipLabel}</strong>
-            {": "}
-            <span>{description}</span>
-          </div>,
+          <ActiveTooltip close={() => setOpen(false)}>
+            <div
+              ref={tooltip}
+              id={id}
+              role="tooltip"
+              tabIndex={overflowing ? 0 : -1}
+              onMouseEnter={show}
+              onMouseLeave={leave}
+              className="repository-action-tooltip"
+              style={{
+                position: "fixed",
+                ...position,
+                overflowY: "auto",
+                pointerEvents: "auto",
+              }}
+            >
+              <strong>{tooltipLabel}</strong>
+              {": "}
+              <span>{description}</span>
+            </div>
+          </ActiveTooltip>,
           document.body,
         )}
     </span>

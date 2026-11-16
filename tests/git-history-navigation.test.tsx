@@ -14,6 +14,7 @@ import {
 import { GitHistory } from "../src/renderer/GitHistory";
 import { GitWorkspace } from "../src/renderer/GitWorkspace";
 import { RetainedViews } from "../src/renderer/RetainedViews";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 import { useViewActive } from "../src/renderer/RetainedViews";
 vi.mock("../src/renderer/ProjectSettings", () => ({
@@ -144,6 +145,7 @@ beforeEach(() => {
 });
 it("embeds commits beside changes, preserving project draft, terminal, file and scroll across projects", async () => {
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Fixture draft");
   click("Терминал");
@@ -342,6 +344,7 @@ it("updates the current HEAD history when the shared branch indicator observes a
     nextOffset: null,
   }));
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Fixture draft");
   await waitFor(() => expect(api.readGitSummary).toHaveBeenCalled());

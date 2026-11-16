@@ -1,6 +1,20 @@
 .retained-view[hidden] {
   display: none !important;
 }
+/* Keep a large catalog's computed layout only while dormant. No geometry,
+   pointer, keyboard, Find or accessibility targets leak into the active view.
+   Active rows remain an ordinary native table (including offscreen rows). */
+.retained-view[hidden][data-parked] {
+  display: block !important;
+  position: absolute;
+  height: 0;
+  width: 100%;
+  overflow: clip;
+  contain: strict;
+  content-visibility: hidden;
+  visibility: hidden;
+  pointer-events: none;
+}
 .retained-view:not([hidden]) {
   min-width: 0;
 }

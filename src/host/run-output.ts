@@ -156,7 +156,7 @@ class Redactor {
 export function captureRunOutput(
   child: ChildProcessWithoutNullStreams,
   secrets: readonly string[],
-  onUpdate: (output: RunOutput) => void,
+  onUpdate: (output: RunOutput, end: number) => void,
   options: { maxBytes?: number; throttleMs?: number } = {},
 ): { snapshot(): RunOutput; flush(): void; dispose(): void } {
   const maxBytes = Number.isFinite(options.maxBytes)
@@ -167,6 +167,7 @@ export function captureRunOutput(
     : 100;
   let text = "",
     bytes = 0,
+    sanitizedEnd = 0,
     truncated = false,
     disposed = false,
     dirty = false;
@@ -210,13 +211,14 @@ export function captureRunOutput(
     timer = undefined;
     if (!dirty) return;
     dirty = false;
-    onUpdate(snapshot());
+    onUpdate(snapshot(), sanitizedEnd);
   };
   const schedule = () => {
     if (dirty && !timer) timer = setTimeout(publish, throttleMs);
   };
   const append = (value: string) => {
     if (!value) return;
+    sanitizedEnd += value.length;
     text += value;
     bytes += Buffer.byteLength(value);
     if (bytes > maxBytes) {

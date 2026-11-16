@@ -184,3 +184,19 @@
 .context-stage > details summary {
   cursor: pointer;
 }
+
+.context-runs-heading,.attach-panel-dialog header,.attach-panel-dialog footer {display:flex;align-items:center;justify-content:space-between;gap:12px}
+.context-runs-heading button,.dashboard-refresh-button {display:inline-flex;align-items:center;justify-content:center;gap:7px}
+.context-run-identity small svg {vertical-align:-2px}
+.attach-panel-dialog {width:min(460px,90vw);max-height:90vh;padding:24px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--text);overflow:auto}
+.attach-panel-dialog::backdrop {background:#050911ad}
+.attach-panel-dialog header {color:var(--teal)}
+.attach-panel-dialog header button {display:grid;place-items:center;padding:6px}
+.attach-panel-dialog h2 {margin:16px 0 10px}
+.attach-panel-dialog label {display:grid;gap:7px;font-weight:600;margin-top:18px}
+.attach-panel-dialog input {width:100%}
+.attach-panel-dialog p {line-height:1.55}
+.attach-panel-dialog footer {margin-top:24px;justify-content:flex-end}
+.dashboard-refresh-button[aria-busy=true] svg {animation:dashboard-reload-spin 1s linear infinite}
+@keyframes dashboard-reload-spin {to {transform:rotate(360deg)}}
+@media(prefers-reduced-motion:reduce){.dashboard-refresh-button[aria-busy=true] svg {animation:none}}

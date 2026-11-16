@@ -360,20 +360,27 @@ export class GitMergeSafety {
       JSON.stringify(snapshot.scope) !== JSON.stringify(scope)
     )
       throw stale();
-    const config = rows(
-      (await this.git(ctx, ["config", "--null", "--list"])).stdout,
-    );
-    const raw = (
-      await this.git(ctx, [
+    // Independent, read-only probes share the same before/after snapshot seal.
+    // Do not serialize child startup; no freshness or ownership check is skipped.
+    const probes = await Promise.allSettled([
+      this.git(ctx, ["config", "--null", "--list"]),
+      this.git(ctx, [
         "for-each-ref",
         "--format=%(refname)%00%(objectname)%00%(symref)%00%(upstream)",
         "refs/heads/",
         "refs/remotes/",
-      ])
-    ).stdout;
-    const worktrees = (
-      await this.git(ctx, ["worktree", "list", "--porcelain", "-z"])
-    ).stdout;
+      ]),
+      this.git(ctx, ["worktree", "list", "--porcelain", "-z"]),
+    ]);
+    // Even a rejected probe must not leave sibling Git children behind when
+    // the owner scope is released or the next operation begins.
+    const [configuration, references, trees] = probes.map((probe) => {
+      if (probe.status === "rejected") throw probe.reason;
+      return probe.value;
+    });
+    const config = rows(configuration.stdout),
+      raw = references.stdout,
+      worktrees = trees.stdout;
     const checked = new Set(
       worktrees
         .split("\0")

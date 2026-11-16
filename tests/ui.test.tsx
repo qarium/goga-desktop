@@ -17,6 +17,8 @@ import {
   waitFor,
   cleanup,
 } from "@testing-library/react";
+import { within } from "@testing-library/react";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 import { LaunchForm } from "../src/renderer/LaunchForm";
 import { ExistingTopicLaunchForm } from "./helpers/existing-pipeline-draft";
@@ -106,13 +108,40 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 describe("Desktop shell", () => {
+  it("shows the project registration reason without the Electron envelope and allows another choice", async () => {
+    const reason = "Выбранная папка недоступна. Выберите другую папку.";
+    api.chooseProject.mockRejectedValueOnce(
+      Error(
+        `Error invoking remote method 'goga:choose-project': Error: ${reason}`,
+      ),
+    );
+    render(<App />);
+    await screen.findByText("Место для вашей следующей идеи");
+    fireEvent.click(within(screen.getByRole("complementary")).getByRole("button", { name: "Добавить проект" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Открыть существующий…" }));
+    expect(await screen.findByText(reason)).toBeTruthy();
+    expect(
+      screen.queryByRole("heading", { name: "Actual project" }),
+    ).toBeNull();
+    expect(document.body.textContent).not.toContain(
+      "Error invoking remote method",
+    );
+    fireEvent.click(within(screen.getByRole("complementary")).getByRole("button", { name: "Добавить проект" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Открыть существующий…" }));
+    expect(
+      await screen.findByRole("heading", { name: "Actual project" }),
+    ).toBeTruthy();
+    expect(api.chooseProject).toHaveBeenCalledTimes(2);
+    expect(screen.queryByText(reason)).toBeNull();
+  });
   it("starts without fake projects and selects only a native-picked project", async () => {
     render(<App />);
-    expect(await screen.findByText("Добавьте локальный проект")).toBeTruthy();
+    expect(await screen.findByText("Место для вашей следующей идеи")).toBeTruthy();
     expect(
       (screen.getByLabelText("Рабочая область") as HTMLSelectElement).disabled,
     ).toBe(true);
-    fireEvent.click(screen.getByRole("button", { name: "Добавить проект" }));
+    fireEvent.click(within(screen.getByRole("complementary")).getByRole("button", { name: "Добавить проект" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Открыть существующий…" }));
     expect(
       await screen.findByRole("heading", { name: "Actual project" }),
     ).toBeTruthy();
@@ -388,6 +417,7 @@ async function tabsFixture() {
     return () => {};
   });
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByRole("heading", { name: "Проект" });
   act(() => {

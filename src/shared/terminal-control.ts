@@ -77,6 +77,8 @@ export interface TerminalSessionInfo extends TerminalSessionRef {
   state: "starting" | "running" | "stopping" | "exited";
   exitCode?: number;
   screen?: "lost";
+  startupMessage?: string;
+  presetStatus?: "pending" | "submitted" | "unconfirmed" | "cancelled";
 }
 export interface TerminalWorkspaceSnapshot extends TerminalCatalogSnapshot {
   sessions: TerminalSessionInfo[];
@@ -98,6 +100,7 @@ export interface TerminalControlResponses {
   read: TerminalWorkspaceSnapshot;
   initialize: TerminalCatalogSnapshot;
   create: TerminalCatalogSnapshot;
+  "create-from-preset": TerminalCatalogSnapshot;
   rename: TerminalCatalogSnapshot;
   select: TerminalCatalogSnapshot;
   move: TerminalCatalogSnapshot;

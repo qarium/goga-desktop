@@ -73,11 +73,13 @@ export const terminalTabSchema = z
     projectId: id,
     name: text(120),
     scope: terminalTabScopeSchema,
+    envSnapshotId: z.string().uuid().optional(),
   })
   .strict()
-  .refine(
-    (t) =>
-      t.scope.kind === "common" || t.scope.context.projectId === t.projectId,
+  .refine((t) =>
+    t.scope.kind === "common"
+      ? !t.envSnapshotId
+      : t.scope.context.projectId === t.projectId,
   );
 export type TerminalTab = z.infer<typeof terminalTabSchema>;
 
@@ -136,7 +138,17 @@ export const terminalRegistrySchema = z
         code: "custom",
         message: "Слишком много проектов терминала.",
       });
+    const usedSnapshots = new Set<string>();
     for (const [projectId, p] of Object.entries(r.projects)) {
+      for (const tab of p.tabs)
+        if (tab.envSnapshotId) {
+          if (usedSnapshots.has(tab.envSnapshotId))
+            ctx.addIssue({
+              code: "custom",
+              message: "Снимок окружения должен принадлежать одной вкладке.",
+            });
+          usedSnapshots.add(tab.envSnapshotId);
+        }
       if (
         p.tabs.some((t) => t.projectId !== projectId) ||
         Object.keys(p.selectedByContext).some((k) => {

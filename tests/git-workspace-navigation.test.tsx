@@ -10,6 +10,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 import { useViewActive } from "../src/renderer/RetainedViews";
 vi.mock("../src/renderer/ProjectSettings", () => ({
@@ -99,6 +100,7 @@ const click = (name: string | RegExp) =>
   fireEvent.click(screen.getByRole("button", { name }));
 it("opens changes in place, does not add a main tab, and restores the exact project draft", async () => {
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   fireEvent.change(await screen.findByLabelText("Fixture draft"), {
     target: { value: "not saved" },
@@ -119,6 +121,7 @@ it("opens changes in place, does not add a main tab, and restores the exact proj
 });
 it("retains terminal screen and context-specific Git selection across projects", async () => {
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Fixture draft");
   click("Терминал");
@@ -166,6 +169,7 @@ it("retains terminal screen and context-specific Git selection across projects",
 });
 it("preserves busy navigation guards even for the read-only changes view", async () => {
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   fireEvent.change(await screen.findByLabelText("Fixture draft"), {
     target: { value: "busy" },

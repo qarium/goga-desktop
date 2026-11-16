@@ -152,3 +152,25 @@ describe("terminal scope contracts", () => {
     ).toBe(false);
   });
 });
+it("rejects a shared private environment reference across two tabs or projects", () => {
+  const envSnapshotId = crypto.randomUUID();
+  const project = (projectId: string) => ({
+    initialized: true,
+    selectedByContext: {},
+    tabs: [
+      {
+        id: "tab",
+        projectId,
+        name: "Dev",
+        scope: { kind: "context", context: { kind: "primary", projectId } },
+        envSnapshotId,
+      },
+    ],
+  });
+  const r = {
+    schemaVersion: 1,
+    revision: crypto.randomUUID(),
+    projects: { p: project("p"), q: project("q") },
+  };
+  expect(terminalRegistrySchema.safeParse(r).success).toBe(false);
+});

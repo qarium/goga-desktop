@@ -46,6 +46,8 @@ export interface GitWorkspaceFile {
 }
 /** Display only: never a revision or authority for a write. */
 export interface GitWorkspaceSummary {
+  /** Missing is not a clean Git status; legacy summaries omit this field. */
+  repository?: "missing";
   scope: ScopeRef;
   branch: string | null;
   changedFiles: number;

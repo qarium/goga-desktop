@@ -49,7 +49,16 @@ export interface GitWorkspaceProps {
   onHistoryOpen?(): void;
   onHistoryClose?(): void;
   onCurrentBranchChanged?(scope: ScopeRef): void;
-  onChanged?(projectId: string, scope?: ScopeRef): void;
+  onRepositoryStateChange?(
+    scope: ScopeRef,
+    state: "missing" | "ready" | "unknown",
+  ): void;
+  /** Ref-only imports do not invalidate documents or topic ownership. */
+  onChanged?(
+    projectId: string,
+    scope?: ScopeRef,
+    change?: "references-only",
+  ): void;
   onOverlayChange?(projectId: string, visible: boolean, owner?: string): void;
   onBranchBusyChange?(projectId: string, busy: boolean, owner?: string): void;
   revision: number;
@@ -92,6 +101,7 @@ function GitWorkspaceOwner({
   revision,
   onChanged,
   onCurrentBranchChanged,
+  onRepositoryStateChange,
   onOverlayChange,
   onBranchBusyChange,
   disabled = false,
@@ -258,8 +268,16 @@ function GitWorkspaceOwner({
   };
   const stableOwner = typeof scope === "string" ? scope : contextKey(scope);
   const projectId = scopeProjectId(scope);
-  const presentation = useRef({ onOverlayChange, onBranchBusyChange });
-  presentation.current = { onOverlayChange, onBranchBusyChange };
+  const presentation = useRef({
+    onOverlayChange,
+    onBranchBusyChange,
+    onRepositoryStateChange,
+  });
+  presentation.current = {
+    onOverlayChange,
+    onBranchBusyChange,
+    onRepositoryStateChange,
+  };
   const overlay =
     active &&
     (branchOverlay ||
@@ -295,6 +313,19 @@ function GitWorkspaceOwner({
     summarySupported && active && !disabled && !busy,
     revision + refresh,
   );
+  const gitMissing =
+    summarySupported && summary.value?.repository === "missing";
+  const repositoryState = summary.value
+    ? gitMissing
+      ? "missing"
+      : "ready"
+    : "unknown";
+  useLayoutEffect(() => {
+    if (!active) return;
+    presentation.current.onRepositoryStateChange?.(scope, repositoryState);
+    return () =>
+      presentation.current.onRepositoryStateChange?.(scope, "unknown");
+  }, [active, stableOwner, repositoryState]);
   const observedBranch = useRef<{ branch: string | null } | null>(null);
   const currentBranch = summarySupported
     ? summary.value?.branch
@@ -318,6 +349,14 @@ function GitWorkspaceOwner({
   const closeButton = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     if (!active || disabled || (summarySupported && !open)) return;
+    if (gitMissing) {
+      // Keep the last observation for already-issued result/recovery dialogs,
+      // but never treat it as fresh authority for a new Git operation.
+      setSnapshotPending(false);
+      setSnapshotFailed(true);
+      setShowFailure(false);
+      return;
+    }
     if (
       !open &&
       requested.current?.revision === revision &&
@@ -362,7 +401,16 @@ function GitWorkspaceOwner({
         if (!controller.signal.aborted) setSnapshotPending(false);
       });
     return () => controller.abort();
-  }, [active, disabled, open, owner, revision, refresh, summarySupported]);
+  }, [
+    active,
+    disabled,
+    open,
+    owner,
+    revision,
+    refresh,
+    summarySupported,
+    gitMissing,
+  ]);
   useEffect(() => {
     if (
       !active ||
@@ -423,18 +471,20 @@ function GitWorkspaceOwner({
   }, [open, active, file, diff]);
   const conflicts =
     snapshot?.files.filter((f) => f.kind === "conflict").length ?? 0;
-  const branch = summarySupported
-    ? summary.value
-      ? (summary.value.branch ?? "HEAD (без ветки)")
-      : typeof scope === "string"
-        ? "—"
-        : scope.branch
-    : (snapshot?.branch ??
-      (snapshot?.head
-        ? `HEAD · ${snapshot.head.slice(0, 8)}`
+  const branch = gitMissing
+    ? "Git не инициализирован"
+    : summarySupported
+      ? summary.value
+        ? (summary.value.branch ?? "HEAD (без ветки)")
         : typeof scope === "string"
           ? "—"
-          : scope.branch));
+          : scope.branch
+      : (snapshot?.branch ??
+        (snapshot?.head
+          ? `HEAD · ${snapshot.head.slice(0, 8)}`
+          : typeof scope === "string"
+            ? "—"
+            : scope.branch));
   const currentDiff =
     diff?.path === file && diff.revision === snapshot?.revision ? diff : null;
   const files = [
@@ -506,6 +556,7 @@ function GitWorkspaceOwner({
             revision={revision + refresh}
             disabled={
               disabled ||
+              gitMissing ||
               !!discard.pending ||
               !!discard.preview ||
               !!commit.pending ||
@@ -524,41 +575,46 @@ function GitWorkspaceOwner({
                   ? "Проверьте состояние прежней отмены в Изменениях."
                   : undefined
             }
-            onChanged={(id) => {
+            onChanged={(id, change) => {
               setRefresh((n) => n + 1);
-              onChanged?.(id);
+              if (change === "references-only") onChanged?.(id, scope, change);
+              else onChanged?.(id);
             }}
           />
         ) : (
           <span
             className="git-workspace-branch"
             title={branch}
-            aria-label={`Ветка: ${branch}`}
+            aria-label={gitMissing ? branch : `Ветка: ${branch}`}
           >
             <span aria-hidden="true">⑂</span> {branch}
           </span>
         )}
         <TooltipButton
           buttonClassName={`git-workspace-trigger${(summarySupported ? summary.value?.conflicts : conflicts) ? " has-conflicts" : ""}`}
-          disabled={disabled}
+          disabled={disabled || gitMissing}
           busy={false}
           tabProps={{ "aria-pressed": open }}
           label={
-            summarySupported
-              ? `Изменения, ${summary.error ? "не удалось обновить данные" : summary.value ? `файлов: ${summary.value.changedFiles}${summary.value.conflicts ? `, конфликтов: ${summary.value.conflicts}` : ""}` : "проверяем данные"}`
-              : conflicts
-                ? `Конфликты · ${conflicts}`
-                : "Изменения"
+            gitMissing
+              ? "Изменения, Git не инициализирован"
+              : summarySupported
+                ? `Изменения, ${summary.error ? "не удалось обновить данные" : summary.value ? `файлов: ${summary.value.changedFiles}${summary.value.conflicts ? `, конфликтов: ${summary.value.conflicts}` : ""}` : "проверяем данные"}`
+                : conflicts
+                  ? `Конфликты · ${conflicts}`
+                  : "Изменения"
           }
           tooltipLabel="Изменения рабочей папки"
           description={
-            summarySupported
-              ? summary.error
-                ? "Не удалось обновить данные. Количество изменений неизвестно. Откройте раздел для диагностики."
-                : summary.value
-                  ? `Изменённых файлов: ${summary.value.changedFiles}. Конфликтов: ${summary.value.conflicts}. Счётчик обновляется автоматически.`
-                  : "Проверяем изменения. Раздел можно открыть, не дожидаясь счётчика."
-              : "Посмотреть изменения выбранного контекста"
+            gitMissing
+              ? "Git не инициализирован. Файлы и редактор доступны в Обзоре."
+              : summarySupported
+                ? summary.error
+                  ? "Не удалось обновить данные. Количество изменений неизвестно. Откройте раздел для диагностики."
+                  : summary.value
+                    ? `Изменённых файлов: ${summary.value.changedFiles}. Конфликтов: ${summary.value.conflicts}. Счётчик обновляется автоматически.`
+                    : "Проверяем изменения. Раздел можно открыть, не дожидаясь счётчика."
+                : "Посмотреть изменения выбранного контекста"
           }
           tooltipEnabled={active}
           onClick={() => (open ? onClose() : onOpen())}
@@ -581,13 +637,15 @@ function GitWorkspaceOwner({
             className={`git-changes-count${(summarySupported ? summary.error || !summary.value || summary.value.changedFiles === 0 : !snapshot || snapshotFailed || snapshot.files.length === 0) ? " quiet" : ""}`}
             aria-hidden="true"
           >
-            {summarySupported
-              ? summary.error
-                ? "—"
-                : (summary.value?.changedFiles ?? "…")
-              : snapshotFailed
-                ? "—"
-                : (snapshot?.files.length ?? "…")}
+            {gitMissing
+              ? "—"
+              : summarySupported
+                ? summary.error
+                  ? "—"
+                  : (summary.value?.changedFiles ?? "…")
+                : snapshotFailed
+                  ? "—"
+                  : (snapshot?.files.length ?? "…")}
           </span>
           {(summarySupported
             ? summary.error || !!summary.value?.conflicts
@@ -600,7 +658,7 @@ function GitWorkspaceOwner({
         {onHistoryOpen && (
           <TooltipButton
             buttonClassName="git-workspace-trigger"
-            disabled={disabled}
+            disabled={disabled || gitMissing}
             busy={false}
             tabProps={{ "aria-pressed": historyOpen }}
             label="Коммиты"
@@ -711,6 +769,10 @@ function GitWorkspaceOwner({
                 <div className="git-workspace-empty">
                   Выбранный контекст недоступен. Основная папка не используется
                   вместо него.
+                </div>
+              ) : gitMissing ? (
+                <div className="git-workspace-empty">
+                  Git не инициализирован. Файлы и редактор доступны в Обзоре.
                 </div>
               ) : snapshotPending ? (
                 <LoadingState label="Загрузка изменений" />

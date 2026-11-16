@@ -3,6 +3,8 @@
 #include <libproc.h>
 #include <sys/proc_info.h>
 #include <unistd.h>
+#include <sys/socket.h>
+#include <sys/un.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -84,6 +86,33 @@ static int snapshot(pid_t pid) {
     printf("],\"uncertain\":%d,\"stable\":%s}\n", uncertain, stable ? "true" : "false");
     free(pids); return 0;
 }
+/* fd 3 is an accepted Unix socket explicitly inherited from main. Use
+ * kernel credentials, NOT a PID supplied by a connecting process. Shells can
+ * retain an extra process for the command substitution that runs system nc. */
+static int preset_peer(pid_t root_pid) {
+    pid_t peer; socklen_t len = sizeof(peer);
+    struct record root, process; char pathbuf[PROC_PIDPATHINFO_MAXSIZE];
+    if (getsockopt(3, SOL_LOCAL, LOCAL_PEERPID, &peer, &len) || len != sizeof(peer) ||
+        peer < 2 || read_record(root_pid, &root) != 1 || root.sid != root_pid ||
+        root.b.pbi_uid != getuid() || root.b.e_tdev == UINT32_MAX ||
+        read_record(peer, &process) != 1 || process.b.pbi_uid != root.b.pbi_uid ||
+        process.sid != root_pid || process.b.e_tdev != root.b.e_tdev ||
+        proc_pidpath(peer, pathbuf, sizeof(pathbuf)) <= 0 || strcmp(pathbuf, "/usr/bin/nc"))
+        return fail();
+    pid_t parent = process.b.pbi_ppid;
+    if (parent != root_pid) {
+        struct record shim; char shell[PROC_PIDPATHINFO_MAXSIZE];
+        if (read_record(parent, &shim) != 1 || shim.b.pbi_ppid != (uint32_t)root_pid ||
+            shim.b.pbi_uid != root.b.pbi_uid || shim.sid != root_pid ||
+            shim.b.e_tdev != root.b.e_tdev || proc_pidpath(parent, pathbuf, sizeof(pathbuf)) <= 0 ||
+            proc_pidpath(root_pid, shell, sizeof(shell)) <= 0 || strcmp(pathbuf, shell))
+            return fail();
+    }
+    struct record again;
+    if (read_record(root_pid, &again) != 1 || !same_birth(&root.b, &again.b) ||
+        read_record(peer, &again) != 1 || !same_birth(&process.b, &again.b)) return fail();
+    puts("{\"ok\":true}"); return 0;
+}
 int main(int argc, char **argv) {
     if (argc == 2 && strcmp(argv[1], "version") == 0) {
 #if defined(__arm64__)
@@ -100,6 +129,7 @@ int main(int argc, char **argv) {
     errno = 0; char *end; long value = strtol(argv[2], &end, 10);
     if (errno || !*argv[2] || *end || value < 2 || value > INT32_MAX) return 2;
     pid_t pid = (pid_t)value;
+    if (strcmp(argv[1], "preset-peer") == 0) return preset_peer(pid);
     if (strcmp(argv[1], "birth") == 0) {
         struct proc_bsdinfo birth;
         if (read_birth(pid, &birth) != 1) return fail();

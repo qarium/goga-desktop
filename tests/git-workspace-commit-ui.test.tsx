@@ -1067,3 +1067,64 @@ it("defends the bulk command against synchronous prepare/execute flight and an o
     }),
   );
 });
+it.each(["result", "preview"])(
+  "preserves commit %s evidence when the repository disappears, while blocking new writes",
+  async (phase) => {
+    api.readGitSummary = vi.fn(async () => ({
+      scope: "p",
+      branch: "main",
+      changedFiles: 2,
+      conflicts: 0,
+    }));
+    api.executeGitCommit.mockResolvedValue({
+      scope: "p",
+      status: "uncertain",
+      indexPublished: false,
+      message: "Проверьте результат",
+      log: "known diagnostics",
+      recoveryPath: "/fixture/protected-recovery",
+    });
+    render(view());
+    await draft();
+    fireEvent.click(screen.getByRole("button", { name: "Создать коммит…" }));
+    const previewDialog = await screen.findByRole("dialog", {
+      name: "Подтвердить коммит",
+    });
+    if (phase === "result") {
+      fireEvent.click(
+        screen.getByRole("button", { name: "Создать локальный коммит" }),
+      );
+      await screen.findByRole("dialog", { name: "Результат коммита" });
+    }
+    api.readGitSummary.mockResolvedValue({
+      scope: "p",
+      branch: null,
+      changedFiles: 0,
+      conflicts: 0,
+      repository: "missing",
+    });
+    fireEvent(window, new Event("focus"));
+    await screen.findByText("Git не инициализирован");
+    if (phase === "result") {
+      expect(
+        screen.getByRole("dialog", { name: "Результат коммита" }).textContent,
+      ).toContain("/fixture/protected-recovery");
+      fireEvent.click(
+        screen.getByRole("button", { name: "Закрыть результат коммита" }),
+      );
+      expect(api.executeGitCommit).toHaveBeenCalledOnce();
+    } else {
+      expect(screen.getByRole("dialog", { name: "Подтвердить коммит" })).toBe(
+        previewDialog,
+      );
+      expect(
+        screen.getByRole("button", { name: "Создать локальный коммит" }),
+      ).toHaveProperty("disabled", true);
+      fireEvent.click(
+        screen.getByRole("button", { name: "Закрыть подтверждение коммита" }),
+      );
+      expect(api.executeGitCommit).not.toHaveBeenCalled();
+    }
+    expect(screen.queryByRole("dialog")).toBeNull();
+  },
+);

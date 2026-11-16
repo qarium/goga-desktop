@@ -3,6 +3,7 @@ import React, { useEffect, useState } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { RetainedViews, useViewActive } from "../src/renderer/RetainedViews";
+import { TooltipButton } from "../src/renderer/RepositoryActions";
 afterEach(cleanup);
 it("retains DOM, draft and mount lifetime across projects without mounting unseen pages", () => {
   const mount = vi.fn(),
@@ -141,4 +142,77 @@ it("does not reinsert an attached portal after child scroll/layout restoration",
   f.rerender(view("A"));
   expect(append.mock.calls.filter(([node]) => node === portal)).toHaveLength(1);
   append.mockRestore();
+});
+
+it("keeps only an explicitly cacheable screen laid out, hidden from interaction; detaches on eviction", () => {
+  const view = (owner: string, keep = true) => (
+    <RetainedViews activeKey={owner} retain={(k) => keep || k !== "large"}>
+      <section data-retain-layout={owner === "large" ? "" : undefined}>
+        <button>{owner}</button>
+      </section>
+    </RetainedViews>
+  );
+  const page = render(view("large"));
+  const button = screen.getByRole("button", { name: "large" });
+  page.rerender(view("other"));
+  expect(button.isConnected).toBe(true);
+  expect(button.closest("[inert][aria-hidden=true]")).not.toBeNull();
+  expect(screen.queryByRole("button", { name: "large" })).toBeNull();
+  const other = screen.getByRole("button", { name: "other" });
+  page.rerender(view("large"));
+  expect(screen.getByRole("button", { name: "large" })).toBe(button);
+  expect(other.isConnected).toBe(false);
+  page.rerender(view("other", false));
+  expect(button.isConnected).toBe(false);
+});
+
+it("dismisses a portaled row tooltip when its table is parked without pointerleave", () => {
+  const view = (key: string) => (
+    <RetainedViews activeKey={key}>
+      {key === "large" ? (
+        <section data-retain-layout="">
+          <TooltipButton
+            label="Action"
+            tooltipLabel="Hint"
+            description="Description"
+            busy={false}
+            disabled={false}
+            onClick={() => {}}
+          >
+            +
+          </TooltipButton>
+        </section>
+      ) : (
+        <span>Another page</span>
+      )}
+    </RetainedViews>
+  );
+  const page = render(view("large"));
+  fireEvent.mouseEnter(screen.getByRole("button", { name: "Action" }));
+  expect(screen.getByRole("tooltip")).toBeTruthy();
+  page.rerender(view("other"));
+  expect(screen.queryByRole("tooltip")).toBeNull();
+  page.rerender(view("large"));
+  expect(screen.queryByRole("tooltip")).toBeNull();
+});
+
+it("parks at most the last large table in an outlet without evicting previous owners", () => {
+  const view = (name: string | null) => (
+    <RetainedViews activeKey={name}>
+      <section data-retain-layout="">
+        <input aria-label={name ?? ""} defaultValue="original" />
+      </section>
+    </RetainedViews>
+  );
+  const f = render(view("A"));
+  const a = screen.getByRole("textbox", { name: "A" }) as HTMLInputElement;
+  fireEvent.change(a, { target: { value: "kept" } });
+  f.rerender(view("B"));
+  const b = screen.getByRole("textbox", { name: "B" });
+  f.rerender(view(null));
+  expect(b.isConnected).toBe(true);
+  expect(a.isConnected).toBe(false);
+  f.rerender(view("A"));
+  expect(screen.getByRole("textbox", { name: "A" })).toBe(a);
+  expect(a.value).toBe("kept");
 });

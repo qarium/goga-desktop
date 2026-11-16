@@ -1,3 +1,9 @@
+import {
+  projectRemovalRequestSchema,
+  type ProjectRemovalRequest,
+} from "../shared/project-registration";
+import { ProjectCreationCoordinator } from "./project-creation";
+import type { ProjectCreationRequest } from "../shared/project-creation";
 import * as specifications from "./project-specifications";
 import { pipelineDisplayMetadata } from "../shared/pipeline-display";
 import { capturePipelineRepeat, pipelineRepeatSnapshotSchema } from "../shared/pipeline-repeat";
@@ -180,6 +186,8 @@ import type {
   ProjectSettings,
   ProjectSettingsView,
   Run,
+  RunOutput,
+  RunJournalSlice,
   Topic,
   TopicTaskDocument,
   TopicTaskRequest,
@@ -404,6 +412,7 @@ export class HostService extends EventEmitter {
   >();
   private showItemInFolder?: (absolutePath: string) => void;
   private terminalLeases = new Map<string, number>();
+  private terminalLeaseProjects = new Map<symbol, string>();
   private operationTail: Promise<unknown> = Promise.resolve();
   private catalogEpoch = 0;
   private deleting = false;
@@ -413,6 +422,7 @@ export class HostService extends EventEmitter {
   private goga: string;
   private shellPath?: () => Promise<string>;
   private runner: Runner;
+  private projectCreation: ProjectCreationCoordinator;
   private state: DesktopStateStore;
   private context = new AsyncLocalStorage<{
     projectId: string;
@@ -424,6 +434,7 @@ export class HostService extends EventEmitter {
   private settingsLocks = new Map<string, Promise<unknown>>();
   private documentSaveRevisions = new Map<string, number>();
   private runList: Run[] = [];
+  private journalHeads = new WeakMap<Run, { end: number; sequence: number }>();
   private locks = new Map<string, Promise<unknown>>();
   private children = new Map<
     string,
@@ -445,12 +456,16 @@ export class HostService extends EventEmitter {
   private contextPreparations = new Map<string, Promise<WorktreeRecord>>();
   private disposed = false;
   private shutdownAdmission = false;
+  private readonly demonstrationActive?: (projectId:string, contextId?:string)=>boolean;
+  private readonly demoAdmissions = new Map<symbol,ScopeRef>();
   constructor(options: {
+    demonstrationActive?: (projectId:string, contextId?:string)=>boolean;
     home?: string;
     dataDir: string;
     goga?: string;
     shellPath?: () => Promise<string>;
     runner?: Runner;
+    projectCreationRunner?: Runner;
     settings?: SettingsStore;
     trashItem?: TrashItem;
     fileClipboard?: FileClipboard;
@@ -459,6 +474,7 @@ export class HostService extends EventEmitter {
   }) {
     super();
     this.home = options.home ?? homedir();
+    this.demonstrationActive = options.demonstrationActive;
     this.nativeGitJournal = new NativeGitJournal({
       directory: path.join(this.home, ".goga", "desktop", "git-operations"),
     });
@@ -474,6 +490,14 @@ export class HostService extends EventEmitter {
     this.goga = options.goga ?? "goga";
     this.state = new DesktopStateStore(this.home, this.dataDir);
     this.runner = options.runner ?? new NodeRunner(120000, { HOME: this.home });
+    this.projectCreation = new ProjectCreationCoordinator({
+      home: this.home,
+      runner: options.projectCreationRunner ?? new NodeRunner(30 * 60 * 1000, { HOME: this.home }),
+      progress: (value) => this.emit("project-creation", value),
+      register: (folder) => this.state.addProject({
+        id: digest(folder).slice(0, 24), name: path.basename(folder), path: folder,
+      }),
+    });
     this.shellPath =
       options.shellPath ??
       (!options.runner
@@ -592,7 +616,7 @@ export class HostService extends EventEmitter {
       for (const run of this.runList)
         run.persistenceError =
           "Не удалось сохранить историю запусков. После перезапуска состояние потребует проверки.";
-      this.emit("runs", this.runs());
+      this.emit("runs", this.runCatalog());
     });
     return work;
   }
@@ -817,6 +841,8 @@ export class HostService extends EventEmitter {
       const key =
         typeof parsed === "string" ? `primary:${parsed}` : parsed.contextId;
       this.terminalLeases.set(key, (this.terminalLeases.get(key) ?? 0) + 1);
+      const leaseOwner = Symbol();
+      this.terminalLeaseProjects.set(leaseOwner, scopeProjectId(parsed));
       let released = false;
       let launch: TerminalLaunch | undefined;
       const release = () => {
@@ -826,6 +852,7 @@ export class HostService extends EventEmitter {
         const count = (this.terminalLeases.get(key) ?? 1) - 1;
         if (count) this.terminalLeases.set(key, count);
         else this.terminalLeases.delete(key);
+        this.terminalLeaseProjects.delete(leaseOwner);
       };
       try {
         launch = await this.prepareTerminalLaunch(parsed, system);
@@ -1271,7 +1298,6 @@ export class HostService extends EventEmitter {
     let key = "",
       issued = 0;
     const data = await this.overviewRead(scope, async (project) => {
-      const call = await this.invocation(project);
       key = JSON.stringify([
         scope,
         this.root(project),
@@ -1279,6 +1305,10 @@ export class HostService extends EventEmitter {
       ]);
       issued = (this.overviewSchemaIssued.get(key) ?? 0) + 1;
       this.overviewSchemaIssued.set(key, issued);
+      // A new empty project has no code to analyse, with or without Git. Do not
+      // invoke Goga merely to display its empty Overview; recheck on every read.
+      if ((await readdir(this.root(project))).every((name) => name === ".git")) return [];
+      const call = await this.invocation(project);
       return readOverviewSchema(
         this.runner,
         call.executable,
@@ -1657,22 +1687,110 @@ export class HostService extends EventEmitter {
     await this.assertEffectiveRoot(scoped);
     return scoped;
   }
+  /** Admit under the same ordering as unregister/topic deletion, but never hold
+   * the project lock during a browser launch or tie ordinary edits/runs to a show. */
+  async withDemonstrationOwner(
+    scope: ScopeRef,
+    open: (label: string) => Promise<void>,
+  ): Promise<void> {
+    const ref = this.parseScope(scope), projectId = scopeProjectId(ref), ticket = Symbol();
+    try {
+      const label = await this.operation(() => this.exclusive(projectId, async () => {
+        this.check();
+        if (this.shutdownAdmission) throw Error("Приложение готовится к выходу.");
+        this.demoAdmissions.set(ticket, ref);
+        const project = await this.project(ref);
+        return typeof ref === "string" ? project.name : project.name + " · " + ref.topic;
+      }));
+      await open(label);
+    } finally {
+      this.demoAdmissions.delete(ticket);
+    }
+  }
+  private hasDemonstration(projectId: string, contextId?: string) {
+    return this.demonstrationActive?.(projectId, contextId) || [...this.demoAdmissions.values()].some(s =>
+      scopeProjectId(s) === projectId && (!contextId || (typeof s !== "string" && s.contextId === contextId)));
+  }
   async listProjects(): Promise<Project[]> {
     return this.state.listProjects();
   }
+  createProject(request: ProjectCreationRequest) {
+    this.check();
+    if (this.shutdownAdmission) throw Error("Приложение готовится к выходу.");
+    return this.projectCreation.create(request);
+  }
+  cancelProjectCreation(id: string) { return this.projectCreation.cancelAndWait(id); }
+  prepareProjectCreationShutdown() { return this.projectCreation.prepareShutdown(); }
+  /** Serialized with launch/terminal admission; unregistering never stops processes. */
+  async removeProject(input: ProjectRemovalRequest): Promise<Project[]> {
+    const target = projectRemovalRequestSchema.parse(input);
+    if (!path.isAbsolute(target.path))
+      throw Error("Недопустимая папка проекта.");
+    return this.operation(() =>
+      this.exclusive(target.id, async () => {
+        this.check();
+        if (
+          this.runList.some(
+            (run) =>
+              run.projectId === target.id &&
+              (["starting", "running"].includes(run.status) ||
+                run.recovery === "unverified" ||
+                this.children.has(run.id) ||
+                this.stopFlights.has(run.id)),
+          )
+        )
+          throw Error(
+            "Сначала завершите запуск этого проекта или проверьте его состояние. Проект не убран из списка; процессы не остановлены.",
+          );
+        if ([...this.terminalLeaseProjects.values()].includes(target.id))
+          throw Error(
+            "Сначала закройте терминалы этого проекта. Проект не убран из списка; сессии не остановлены.",
+          );
+        if(this.hasDemonstration(target.id))
+          throw Error("Сначала закройте демонстрации этого проекта. Проект не убран из списка.");
+        const remaining = await this.state.removeProject(target);
+        if (this.selectedContext?.projectId === target.id)
+          this.selectedContext = null;
+        return remaining;
+      }),
+    );
+  }
   async addProject(folder: string): Promise<Project> {
+    this.check();
     if (typeof folder !== "string" || !path.isAbsolute(folder))
       throw new Error("Выберите локальную папку");
     const canonical = await realpath(folder);
-    const root = await realpath(
-      (
-        await this.runner.command(
-          "git",
-          ["rev-parse", "--show-toplevel"],
-          canonical,
+    if (!(await lstat(canonical)).isDirectory())
+      throw Error("Выберите папку проекта, а не файл.");
+    // A project is a local directory. Git-root discovery is only a hint which
+    // preserves canonical IDs for existing repositories, never an admission gate.
+    let root = canonical;
+    try {
+      const discovered = (
+        await withOfflineGitReadScope(() =>
+          this.runner.command(
+            "git",
+            ["rev-parse", "--show-toplevel"],
+            canonical,
+          ),
         )
-      ).stdout.trim(),
-    );
+      ).stdout.trim();
+      if (path.isAbsolute(discovered)) {
+        const candidate = await realpath(discovered);
+        const relative = path.relative(candidate, canonical);
+        if (
+          relative !== ".." &&
+          !relative.startsWith(`..${path.sep}`) &&
+          !path.isAbsolute(relative)
+        )
+          root = candidate;
+      }
+    } catch (error) {
+      if (error instanceof RunnerShutdownError) throw error;
+      // Missing Git, no repository, or a failed Git probe do not grant any Git
+      // authority. Its actual operations retain their independent strict guards.
+    }
+    this.check();
     return this.state.addProject({
       id: digest(root).slice(0, 24),
       name: path.basename(root),
@@ -2093,8 +2211,9 @@ export class HostService extends EventEmitter {
         assertReadActive();
         const epoch = this.catalogEpoch;
         this.assertCatalog(epoch);
-        const project = await this.project(scopeProjectId(owner));
-        const document = await this.state.read(project.id);
+        const { project, document } = await this.state.readRegisteredProject(
+          scopeProjectId(owner),
+        );
         try {
           const admission =
             typeof owner === "string"
@@ -2107,18 +2226,13 @@ export class HostService extends EventEmitter {
             this.check();
             assertReadActive();
             this.assertCatalog(epoch);
-            if (
-              document.version !== (await this.state.read(project.id)).version
-            )
+            const current = await this.state.readRegisteredProject(project.id);
+            if (document.version !== current.document.version)
               throw Error(
                 "Настройки проекта изменились. Откройте изменения заново.",
               );
-            const current = (await this.listProjects()).find(
-              (p) => p.id === project.id,
-            );
             if (
-              !current ||
-              current.path !== project.path ||
+              current.project.path !== project.path ||
               root !== (await realpath(root))
             )
               throw Error(
@@ -2169,13 +2283,16 @@ export class HostService extends EventEmitter {
                   "Владелец или операция Git изменились. Откройте изменения заново.",
                 );
             }
-            // Owner/object checks await Git processes; settings can change while
-            // they run, so the final settings check belongs after them as well.
-            if (
-              document.version !== (await this.state.read(project.id)).version
-            )
+            // Git and clone proofs can outlive either a settings change or an
+            // external path rebind of the same project id. Check both again.
+            const final = await this.state.readRegisteredProject(project.id);
+            if (document.version !== final.document.version)
               throw Error(
                 "Настройки проекта изменились. Откройте изменения заново.",
+              );
+            if (final.project.path !== project.path)
+              throw Error(
+                "Рабочая папка изменилась. Откройте изменения заново.",
               );
             this.assertCatalog(epoch);
             assertStoppedRebaseOwnership(stoppedRebase);
@@ -2258,7 +2375,30 @@ export class HostService extends EventEmitter {
     return this.gitHistoryRead(request.scope, (reader) => reader.diff(request));
   }
   async readGitSummary(scope: ScopeRef): Promise<GitWorkspaceSummary> {
-    return this.gitWorkspaceRead(scope, (reader) => reader.summary());
+    return this.gitWorkspaceRead(
+      scope,
+      async (reader, context): Promise<GitWorkspaceSummary> => {
+        // Only a genuinely absent primary .git is a supported local-folder state.
+        // Broken metadata, permission failures and missing managed clones still fail.
+        if (typeof context.scope === "string") {
+          const marker = await lstat(path.join(context.root, ".git")).catch(
+            (error) => {
+              if (error.code === "ENOENT") return null;
+              throw error;
+            },
+          );
+          if (!marker)
+            return {
+              scope: context.scope,
+              repository: "missing",
+              branch: null,
+              changedFiles: 0,
+              conflicts: 0,
+            };
+        }
+        return reader.summary();
+      },
+    );
   }
   inspectGitDiscardRecovery(scope: ScopeRef) {
     return this.gitDiscardActions.inspectRecovery(this.parseScope(scope));
@@ -3460,7 +3600,7 @@ export class HostService extends EventEmitter {
   private deletionGuards(ref: TopicContextRef) {
     return {
       active:
-        this.contextActive(ref.contextId) || this.terminalDeletionBlocked(ref),
+        this.contextActive(ref.contextId) || this.terminalDeletionBlocked(ref) || this.hasDemonstration(ref.projectId,ref.contextId),
       current: this.selectedContext?.contextId === ref.contextId,
     };
   }
@@ -5317,10 +5457,9 @@ export class HostService extends EventEmitter {
     this.addActiveRun(key, run.id);
     if (!this.runList.includes(run)) this.runList.push(run);
     this.buildRequests.set(run.id, structuredClone(request));
-    const output = captureRunOutput(child, secrets, (snapshot) => {
-      run.output = snapshot;
-      if (this.runList.includes(run)) this.emitRuns();
-    });
+    const output = captureRunOutput(child, secrets, (snapshot,end) =>
+      this.publishRunOutput(run,snapshot,end),
+    );
     const onClose = (code: number | null) => {
       void this.terminateOwned(
         run.id,
@@ -5641,8 +5780,36 @@ export class HostService extends EventEmitter {
     const { process: _private, ...visible } = run;
     return structuredClone(visible);
   }
+  hasRun(id: string): boolean {
+    return this.runList.some((run) => run.id === id);
+  }
   runs(): Run[] {
     return this.runList.map((run) => this.publicRun(run));
+  }
+  /** Navigation, dashboards and notifications observe lifecycle, not raw journal content. */
+  runCatalog(): Run[] {
+    return this.runList.map(({ process: _private, output: _output, ...row }) => structuredClone(row));
+  }
+  private publishRunOutput(run: Run, output: RunOutput, end: number) {
+    run.output = output;
+    if (!this.runList.includes(run)) return;
+    const sequence = (this.journalHeads.get(run)?.sequence ?? 0) + 1;
+    this.journalHeads.set(run, {end,sequence});
+    this.emit("run-output", run.id, sequence);
+    // Ordinary stdout was already excluded from the durable signature. Retry
+    // a failed save as before; finalization and all metadata changes still save.
+    if (!this.lastRunSave) void this.persistRuns().catch(() => {});
+  }
+  readRunJournal(id: string, after?: number): RunJournalSlice {
+    this.check();
+    const run = this.runList.find(r => r.id === id);
+    if (!run) throw Error("Неизвестный запуск");
+    const output = run.output ?? {text:"",truncated:false};
+    const head = this.journalHeads.get(run);
+    const end = head?.end ?? output.text.length, start = end - output.text.length;
+    const from = after !== undefined && after >= start && after <= end ? after : start;
+    return {id, sequence:head?.sequence ?? 0, start, from, end,
+      truncated:output.truncated, text:output.text.slice(from-start)};
   }
   private runOwnerHash(run: Run) {
     const c = run.context,
@@ -5798,7 +5965,7 @@ export class HostService extends EventEmitter {
   }
   private emitRuns() {
     void this.persistRuns().catch(() => {});
-    this.emit("runs", this.runs());
+    this.emit("runs", this.runCatalog());
   }
   private async key(p: Project) {
     const dir = (
@@ -6346,10 +6513,9 @@ export class HostService extends EventEmitter {
           )
           .map(([, value]) => value ?? ""),
       ].filter(Boolean);
-      const output = captureRunOutput(child, secrets, (snapshot) => {
-        run.output = snapshot;
-        if (this.runList.includes(run)) this.emitRuns();
-      });
+      const output = captureRunOutput(child, secrets, (snapshot,end) =>
+        this.publishRunOutput(run,snapshot,end),
+      );
       const cancelWatch = watchDashboard(child, {
         timeoutMs: null, // One host deadline also covers actual embedded browser load.
         onReady: (url) => {
@@ -6501,7 +6667,11 @@ export class HostService extends EventEmitter {
     const run = this.runList.find((r) => r.id === id)!;
     if (run.recovery === "confirmed") {
       try {
+        const {url: previousURL,dashboardRunId,dashboardReconnect,dashboardMessage}=run;
         await this.restoreSavedDashboard(run);
+        if (run.url !== previousURL || run.dashboardRunId !== dashboardRunId ||
+            run.dashboardReconnect !== dashboardReconnect || run.dashboardMessage !== dashboardMessage)
+          this.emitRuns();
         return true;
       } catch {
         return false;
@@ -6943,6 +7113,7 @@ export class HostService extends EventEmitter {
       flight.controller.abort();
     this.disposed = true;
     try {
+      await this.projectCreation.dispose();
       await this.runner.dispose?.();
       clearInterval(this.recoveryPoll);
     } catch (error) {
@@ -6952,6 +7123,7 @@ export class HostService extends EventEmitter {
   }
   async dispose(): Promise<void> {
     this.disposed = true;
+    await this.projectCreation.dispose();
     clearInterval(this.recoveryPoll);
     for (const flight of this.dashboardFlights.values())
       flight.controller.abort();

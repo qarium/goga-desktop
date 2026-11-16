@@ -712,7 +712,7 @@ it("accepts explicit no-topic launch but rejects hidden topic/task fields", asyn
 it("dashboard restore accepts only a known run id from the trusted shell, never a renderer URL", async () => {
   const handlers = new Map<string, Function>(),
     restoreDashboard = vi.fn(async () => {});
-  const service = { runs: () => [{ id: "run-a" }] };
+  const service = { hasRun: (id: string) => id === "run-a" };
   registerIPC(
     { handle: (key: string, fn: Function) => handlers.set(key, fn) } as any,
     {
@@ -732,6 +732,10 @@ it("dashboard restore accepts only a known run id from the trusted shell, never 
     senderFrame: { url: "file:///shell", parent: null },
   };
   const handle = handlers.get("goga:restore-dashboard")!;
+  const select = handlers.get("goga:select-run")!;
+  expect(() => select(event, "run-a")).not.toThrow();
+  expect(() => select(event, "foreign")).toThrow("Неизвестный запуск");
+  expect(() => select(event, null)).not.toThrow();
   await handle(event, "run-a");
   expect(restoreDashboard).toHaveBeenCalledExactlyOnceWith("run-a");
   expect(() => handle(event, "foreign")).toThrow();
@@ -740,4 +744,84 @@ it("dashboard restore accepts only a known run id from the trusted shell, never 
   ).toThrow();
   expect(() => handle({ ...event, sender: { id: 8 } }, "run-a")).toThrow();
   expect(restoreDashboard).toHaveBeenCalledTimes(1);
+});
+
+it("unregisters only an exact project binding through the authenticated shell", async () => {
+  const handlers = new Map<string, Function>();
+  const service = { removeProject: vi.fn(async () => []) };
+  registerIPC(
+    { handle: (key: string, fn: Function) => handlers.set(key, fn) } as any,
+    {
+      service,
+      settings: {},
+      window: { webContents: { id: 1 } },
+      shellURL: "file:///app/index.html",
+    } as any,
+  );
+  const event = {
+    sender: { id: 1 },
+    senderFrame: { url: "file:///app/index.html", parent: null },
+  };
+  const remove = handlers.get("goga:remove-project");
+  expect(remove).toBeTypeOf("function");
+  for (const request of [
+    null,
+    {},
+    "p",
+    { id: "p" },
+    { id: "p", path: "/tmp/p", extra: true },
+    { id: "p", path: "bad\npath" },
+  ])
+    expect(() => remove!(event, request)).toThrow();
+  expect(() =>
+    remove!({ ...event, sender: { id: 2 } }, { id: "p", path: "/tmp/p" }),
+  ).toThrow(/IPC/);
+  expect(() =>
+    remove!(
+      { ...event, senderFrame: { ...event.senderFrame, parent: {} } },
+      { id: "p", path: "/tmp/p" },
+    ),
+  ).toThrow(/IPC/);
+  expect(service.removeProject).not.toHaveBeenCalled();
+  expect(await remove!(event, { id: "p", path: "/tmp/p" })).toEqual([]);
+  expect(service.removeProject).toHaveBeenCalledWith({
+    id: "p",
+    path: "/tmp/p",
+  });
+});
+
+it("serves journal slices only to the trusted shell with a valid id and safe offset", () => {
+  const handlers = new Map<string, Function>();
+  const service = {runCatalog:vi.fn(()=>[]),readRunJournal:vi.fn()};
+  registerIPC({handle:(k:string,fn:Function)=>handlers.set(k,fn)} as any,{
+    service,settings:{},window:{webContents:{id:1}},shellURL:"file:///app/index.html",
+    choose:async()=>null,select:()=>{},stop:()=>{},
+  } as any);
+  const shell={sender:{id:1},senderFrame:{url:"file:///app/index.html",parent:null}};
+  const read=handlers.get("goga:run-journal")!;
+  for(const invalid of [-1,1.5,"1",Number.MAX_SAFE_INTEGER+1]) expect(()=>read(shell,"one",invalid)).toThrow();
+  expect(()=>read(shell,"",0)).toThrow();
+  expect(()=>read({...shell,sender:{id:99}},"one",0)).toThrow();
+  expect(service.readRunJournal).not.toHaveBeenCalled();
+  read(shell,"one",2);
+  expect(service.readRunJournal).toHaveBeenCalledWith("one",2);
+  handlers.get("goga:runs")!(shell);
+  expect(service.runCatalog).toHaveBeenCalledExactlyOnceWith();
+});
+
+it("keeps dashboard observers scoped and never dispatches an unowned refresh or privileged IPC from a guest",()=>{
+  const handlers=new Map<string,Function>(), panels={connect:vi.fn(),select:vi.fn(),refresh:vi.fn(),detach:vi.fn()};
+  const ownedRefresh=vi.fn(),stop=vi.fn();
+  registerIPC({handle:(key:string,fn:Function)=>handlers.set(key,fn)} as any,{
+    window:{webContents:{id:11}},shellURL:"file:///app/index.html",service:{hasRun:(id:string)=>id==="ours"},refreshDashboard:ownedRefresh,panels,stop
+  } as any);
+  const shell={sender:{id:11},senderFrame:{url:"file:///app/index.html",parent:null}},guest={sender:{id:12},senderFrame:{url:"http://localhost:5555/",parent:null}};
+  const call=(name:string,event:any,...args:unknown[])=>handlers.get("goga:"+name)!(event,...args);
+  expect(()=>call("attach-dashboard",guest,"p","http://localhost:5555",crypto.randomUUID())).toThrow();
+  expect(()=>call("attach-dashboard",shell,{projectId:"p"},"http://localhost:5555",crypto.randomUUID())).toThrow();
+  expect(panels.connect).not.toHaveBeenCalled();
+  expect(()=>call("refresh-dashboard",shell,"attached:test")).toThrow();
+  call("refresh-dashboard",shell,"attached:test","p",false);expect(panels.refresh).toHaveBeenCalledWith("p","attached:test",false);
+  call("refresh-dashboard",shell,"ours");expect(ownedRefresh).toHaveBeenCalledExactlyOnceWith("ours");
+  expect(stop).not.toHaveBeenCalled();
 });

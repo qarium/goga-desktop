@@ -201,3 +201,65 @@ it.each([
     }
   },
 );
+
+it("enlarges only the project workspace, hides its chrome, and leaves the sidebar and editor actions visible", () => {
+  const css = document.createElement("style");
+  css.textContent = readFileSync(
+    `${process.cwd()}/src/renderer/ProjectDocumentExpansion.css`,
+    "utf8",
+  );
+  document.head.appendChild(css);
+  try {
+    const { container } = render(
+      <div className="app-shell">
+        <aside className="sidebar">Sidebar</aside>
+        <main className="main-area">
+          <div className="project-bar">Header</div>
+          <div className="project-page">
+            <div className="tabs">Tabs</div>
+            <div className="run-context">Context</div>
+            <div className="scroll-area">
+              <section className="project-settings-panel">
+                <nav className="section-tabs">Settings tabs</nav>
+                <div className="master-detail">
+                  <div className="tree-pane">File tree</div>
+                  <section className="editor-pane">
+                    <div className="yaml-code-editor" />
+                    <footer className="document-editor-footer">Actions</footer>
+                  </section>
+                </div>
+              </section>
+            </div>
+          </div>
+        </main>
+      </div>,
+    );
+    const element = (s: string) => container.querySelector<HTMLElement>(s)!;
+    const display = (s: string) => getComputedStyle(element(s)).display;
+    element(".editor-pane").classList.add("project-document-expanded");
+    for (const chrome of [
+      ".project-bar",
+      ".tabs",
+      ".run-context",
+      ".section-tabs",
+      ".tree-pane",
+    ])
+      expect(display(chrome), chrome).toBe("none");
+    expect(display(".sidebar")).not.toBe("none");
+    expect(display("footer")).not.toBe("none");
+    expect(display(".scroll-area")).toBe("flex");
+    expect(display(".master-detail")).toBe("contents");
+    expect(getComputedStyle(element(".yaml-code-editor")).flexGrow).toBe("1");
+    element(".editor-pane").classList.remove("project-document-expanded");
+    for (const chrome of [
+      ".project-bar",
+      ".tabs",
+      ".run-context",
+      ".section-tabs",
+      ".tree-pane",
+    ])
+      expect(display(chrome), chrome).not.toBe("none");
+  } finally {
+    css.remove();
+  }
+});

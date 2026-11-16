@@ -44,6 +44,26 @@ const settingsPath = (root: string, id = "stable-old-id") =>
   );
 
 describe("Desktop project registry", () => {
+  it("reads a fresh registered owner and settings together, including external changes", async () => {
+    const p = project();
+    const { store, root } = await setup([p]);
+    const original = await store.read(p.id);
+    expect(await store.readRegisteredProject(p.id)).toEqual({
+      project: p,
+      document: original,
+    });
+    const settings = settingsPath(root);
+    const data = JSON.parse(await fs.readFile(settings, "utf8"));
+    data.value.profile = "changed";
+    await fs.writeFile(settings, JSON.stringify(data));
+    const next = await store.readRegisteredProject(p.id);
+    expect(next.document.version).not.toBe(original.version);
+    expect(next.document.value.profile).toBe("changed");
+    await store.removeProject({ id: p.id, path: p.path });
+    await expect(store.readRegisteredProject(p.id)).rejects.toThrow(
+      "Неизвестный проект",
+    );
+  });
   it("migrates legacy registry preserving IDs without changing its source", async () => {
     const p = project();
     const { store, old, root } = await setup([p]);
@@ -527,5 +547,58 @@ describe("startup timeout settings", () => {
       ),
     ).rejects.toThrow();
     expect(await fs.readFile(settingsPath(root), "utf8")).toBe(before);
+  });
+});
+
+describe("removing a project only from the Desktop registry", () => {
+  it("retains settings, source files, copies and history and supports adding back", async () => {
+    const { store, home, root } = await setup();
+    const folder = path.join(home, "source");
+    await fs.mkdir(folder);
+    await fs.writeFile(path.join(folder, "keep.txt"), "original");
+    const p = { ...project("local"), path: folder };
+    await store.addProject(p);
+    const settings = await store.read(p.id);
+    await store.save(
+      p.id,
+      { ...defaults, executable: "my-goga" },
+      settings.version,
+    );
+    await fs.mkdir(path.join(root, "clones"));
+    await fs.writeFile(path.join(root, "clones", "keep"), "copy");
+    const stored = await fs.readFile(settingsPath(root, p.id));
+    expect(await store.removeProject({ id: p.id, path: p.path })).toEqual([]);
+    expect(await store.listProjects()).toEqual([]);
+    expect(await fs.readFile(path.join(folder, "keep.txt"), "utf8")).toBe(
+      "original",
+    );
+    expect(await fs.readFile(settingsPath(root, p.id))).toEqual(stored);
+    expect(await fs.readFile(path.join(root, "clones", "keep"), "utf8")).toBe(
+      "copy",
+    );
+    await store.addProject(p);
+    expect((await store.read(p.id)).value.executable).toBe("my-goga");
+  });
+  it("checks the exact binding, preserves other projects and independent additions", async () => {
+    const { store, home, old } = await setup([project("one"), project("two")]);
+    await expect(
+      store.removeProject({ id: "one", path: "/wrong" }),
+    ).rejects.toThrow();
+    await expect(
+      store.removeProject({ id: "absent", path: "/absent" }),
+    ).rejects.toThrow();
+    expect(await store.listProjects()).toEqual([
+      project("one"),
+      project("two"),
+    ]);
+    const other = new DesktopStateStore(home, old);
+    await Promise.all([
+      store.removeProject({ id: "one", path: project("one").path }),
+      other.addProject(project("three")),
+    ]);
+    expect((await store.listProjects()).map((p) => p.id).sort()).toEqual([
+      "three",
+      "two",
+    ]);
   });
 });

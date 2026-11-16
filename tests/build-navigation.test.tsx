@@ -17,6 +17,7 @@ import {
   act,
   within,
 } from "@testing-library/react";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 let api: any;
 let focusRun: (id: string) => void;
@@ -148,6 +149,7 @@ async function openBuild() {
 }
 async function mount() {
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Исполняемый файл");
   act(() => focusRun("b"));
@@ -253,11 +255,11 @@ it("isolates open state and drafts per project, closes only the target draft and
   await mount();
   await openBuild();
   change("План сборки", "alpha.md");
-  click(/Beta/);
+  click("Beta");
   expect(screen.queryByRole("tab", { name: /^Новая сборка · / })).toBeNull();
   await openBuild();
   change("План сборки", "beta.md");
-  click(/Alpha/);
+  click("Alpha");
   fireEvent.click(draftTab());
   await screen.findByRole("textbox", { name: "План сборки" });
   await waitFor(() => executionButton());
@@ -268,7 +270,7 @@ it("isolates open state and drafts per project, closes only the target draft and
   expect(document.querySelectorAll(".build-form")).toHaveLength(1); // other project's retained cache
   await openBuild();
   expect((field("План сборки") as HTMLInputElement).value).toBe("plan.md");
-  click(/Beta/);
+  click("Beta");
   fireEvent.click(draftTab());
   await screen.findByRole("textbox", { name: "План сборки" });
   await waitFor(() => executionButton());

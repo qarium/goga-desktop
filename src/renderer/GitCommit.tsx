@@ -308,6 +308,7 @@ export function GitCommitFooter({
             <button
               type="button"
               className="primary"
+              disabled={disabled || !!commit.pending}
               onClick={() => void commit.execute()}
             >
               Создать локальный коммит

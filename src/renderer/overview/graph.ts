@@ -27,10 +27,10 @@ export function ownerForPath(schema: SchemaCell[], p: string) {
       .sort((a, b) => b.length - a.length)[0] ?? null
   );
 }
-export function makeOverviewGraph(
+function layoutOverviewGraph(
   schema: SchemaCell[],
   scope: string,
-  selected: string | null = null,
+  onContract?: (cell: string) => void,
 ) {
   const index = buildArchitectureIndex(schema),
     parent = index.cells[scope];
@@ -64,26 +64,21 @@ export function makeOverviewGraph(
     }
     if (!source || !target || source === target) continue;
     const context = !central.has(source) || !central.has(target);
-    const active =
-      source === selected ||
-      target === selected ||
-      source === "scope::" + selected ||
-      target === "scope::" + selected;
     edgeMap.set(source + "→" + target, {
       id: source + "→" + target,
       source,
       target,
       type: "smoothstep",
-      className: active ? "ov-edge-selected" : "",
+      className: "",
       markerEnd: {
         type: MarkerType.ArrowClosed,
         width: 16,
         height: 16,
-        color: active ? "#7ce4cc" : context ? "#7897b9" : "#35b9ab",
+        color: context ? "#7897b9" : "#35b9ab",
       },
       style: {
-        stroke: active ? "#7ce4cc" : context ? "#7897b9" : "#35b9ab",
-        strokeWidth: active ? 2.5 : 1.7,
+        stroke: context ? "#7897b9" : "#35b9ab",
+        strokeWidth: 1.7,
         strokeDasharray: context ? "5 5" : undefined,
       },
     });
@@ -112,7 +107,8 @@ export function makeOverviewGraph(
     name: basename(id),
     cell: id,
     navigable: Object.hasOwn(index.cells, id),
-    selected: id === selected,
+    selected: false,
+    ...(onContract ? { onContract } : {}),
     children: index.cells[id]?.children.length || 0,
     ...extra,
   });
@@ -161,4 +157,66 @@ export function makeOverviewGraph(
   add(incoming, true);
   add(outgoing, false);
   return { nodes, edges: [...edgeMap.values()], tooLarge: false };
+}
+
+// A projection belongs to one mounted schema/scope, never to a path or a global cache.
+// Keep both immutable display states so a shared edge stays referentially stable
+// when its first selected endpoint is replaced by the other.
+export function prepareOverviewGraph(
+  schema: SchemaCell[],
+  scope: string,
+  onContract?: (cell: string) => void,
+) {
+  const base = layoutOverviewGraph(schema, scope, onContract);
+  const byCell = new Map(base.nodes.map((n) => [n.data.cell, n]));
+  const selectedNodes = base.nodes.map((n) => ({
+    ...n,
+    data: { ...n.data, selected: true },
+  }));
+  const selectedEdges = base.edges.map((e) => ({
+    ...e,
+    className: "ov-edge-selected",
+    markerEnd:
+      typeof e.markerEnd === "object"
+        ? { ...e.markerEnd, color: "#7ce4cc" }
+        : e.markerEnd,
+    style: { ...e.style, stroke: "#7ce4cc", strokeWidth: 2.5 },
+  }));
+  return {
+    tooLarge: base.tooLarge,
+    select(selected: string | null) {
+      const target = selected && byCell.get(selected);
+      if (!target) return base;
+      return {
+        ...base,
+        nodes: base.nodes.map((n, i) => (n === target ? selectedNodes[i] : n)),
+        edges: base.edges.map((e, i) =>
+          e.source === target.id || e.target === target.id
+            ? selectedEdges[i]
+            : e,
+        ),
+      };
+    },
+    // A selected file may not itself be a graph node. Its nearest visible owner
+    // is still the viewport target, without changing the file/contract selection.
+    visibleOwnerId(path: string | null) {
+      if (!path) return null;
+      for (let current = path; ;) {
+        const node = byCell.get(current);
+        if (node) return node.id;
+        const slash = current.lastIndexOf("/");
+        if (slash < 0) return byCell.get(".")?.id ?? null;
+        current = current.slice(0, slash);
+      }
+    },
+  };
+}
+
+// Standalone one-shot construction (including callers that do not own a mounted graph).
+export function makeOverviewGraph(
+  schema: SchemaCell[],
+  scope: string,
+  selected: string | null = null,
+) {
+  return prepareOverviewGraph(schema, scope).select(selected);
 }

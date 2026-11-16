@@ -8,24 +8,35 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
 } from "@testing-library/react";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 import { documentScopeId } from "../src/renderer/settings-documents";
 import type { ScopeRef } from "../src/shared/context";
 
 const fixture = vi.hoisted(() => ({
   props: new Map<string, any>(),
+  realWorkspace: false,
   refresh: vi.fn(async (_scope: unknown) => {}),
 }));
-vi.mock("../src/renderer/GitWorkspace", () => ({
-  GitWorkspace: (props: any) => {
-    fixture.props.set(
-      typeof props.scope === "string" ? props.scope : props.scope.contextId,
-      props,
-    );
-    return <span data-testid="git-revision">{props.revision}</span>;
-  },
-}));
+vi.mock("../src/renderer/GitWorkspace", async (importOriginal) => {
+  const { GitWorkspace } =
+    await importOriginal<typeof import("../src/renderer/GitWorkspace")>();
+  return {
+    GitWorkspace: (props: any) => {
+      fixture.props.set(
+        typeof props.scope === "string" ? props.scope : props.scope.contextId,
+        props,
+      );
+      return fixture.realWorkspace ? (
+        <GitWorkspace {...props} />
+      ) : (
+        <span data-testid="git-revision">{props.revision}</span>
+      );
+    },
+  };
+});
 vi.mock("../src/renderer/ProjectSettings", () => ({
   ProjectSettings: () => <div>Fixture settings</div>,
   ProjectSettingsConfirmation: () => null,
@@ -65,6 +76,7 @@ const topic: Exclude<ScopeRef, string> = {
 let api: any;
 beforeEach(() => {
   fixture.props.clear();
+  fixture.realWorkspace = false;
   fixture.refresh.mockClear();
   localStorage.clear();
   api = {
@@ -85,6 +97,7 @@ beforeEach(() => {
 afterEach(cleanup);
 async function open() {
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByText("Fixture settings");
 }
@@ -171,4 +184,144 @@ it("keeps catalog failures after a primary Git operation local to topic selectio
   expect(
     screen.getByRole("button", { name: "Повторить загрузку топиков" }),
   ).toBeTruthy();
+});
+
+it("refreshes only Git references without reloading topic contexts or project documents", async () => {
+  api.ensureTopicContext = vi.fn();
+  api.listTopicContexts = vi.fn(async () => []);
+  await open();
+  await waitFor(() => expect(fixture.props.get("p").disabled).toBe(false));
+  const revision = fixture.props.get("p").revision;
+  await act(async () =>
+    fixture.props.get("p").onChanged("p", "p", "references-only"),
+  );
+  expect(fixture.props.get("p").revision).toBe(revision + 1);
+  expect(api.listTopicContexts).toHaveBeenCalledTimes(1);
+  expect(fixture.refresh).not.toHaveBeenCalled();
+  expect(fixture.props.get("p").disabled).toBe(false);
+});
+
+it.each(["success", "error"])(
+  "keeps the real branch popup open after fetch %s through App invalidation",
+  async (status) => {
+    fixture.realWorkspace = true;
+    const oid = "b".repeat(40),
+      revision = "a".repeat(64);
+    const row = (name: string, remote = false) => ({
+      name,
+      ref: `${remote ? "refs/remotes/" : "refs/heads/"}${name}`,
+      oid,
+      checkedOut: false,
+      upstream: null,
+    });
+    let inventory = {
+      projectId: "p",
+      root: "/fixture/p",
+      revision,
+      head: oid,
+      branch: "main",
+      upstream: null,
+      operation: "none",
+      dirty: false,
+      local: [row("main"), row("feature")],
+      remote: [row("origin/main", true)],
+    };
+    let release!: (value: any) => void;
+    api.ensureTopicContext = vi.fn();
+    api.listTopicContexts = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockImplementation(() => new Promise(() => {}));
+    api.readGitSummary = vi.fn(async () => ({
+      scope: "p",
+      branch: "main",
+      changedFiles: 0,
+      conflicts: 0,
+    }));
+    api.readGitBranches = vi.fn(async () => inventory);
+    api.prepareGitBranch = vi.fn(async () => ({
+      projectId: "p",
+      action: "fetch",
+      remote: "origin",
+      token: "c".repeat(64),
+    }));
+    api.executeGitBranch = vi.fn(
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    );
+    await open();
+    fireEvent.click(await screen.findByRole("button", { name: "Ветка: main" }));
+    await screen.findByRole("button", { name: "feature" });
+    fireEvent.click(screen.getByRole("tab", { name: "Удалённые" }));
+    fireEvent.change(screen.getByRole("searchbox", { name: "Найти ветку" }), {
+      target: { value: "fresh" },
+    });
+    const popup = screen.getByRole("dialog", { name: "Выбор ветки" });
+    fireEvent.click(screen.getByRole("button", { name: "Обновить из origin" }));
+    await waitFor(() => expect(api.executeGitBranch).toHaveBeenCalledOnce());
+    expect(screen.getByRole("dialog", { name: "Выбор ветки" })).toBe(popup);
+    inventory = {
+      ...inventory,
+      remote: [...inventory.remote, row("origin/fresh", true)],
+    };
+    await act(async () =>
+      release({
+        projectId: "p",
+        action: "fetch",
+        status,
+        changed: status === "success",
+        message: status === "success" ? "Готово" : "Сеть недоступна",
+        log: "",
+      }),
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("dialog", { name: "Выбор ветки" })).toBe(popup),
+    );
+    expect(
+      screen.getByRole("searchbox", { name: "Найти ветку" }),
+    ).toHaveProperty("value", "fresh");
+    expect(
+      screen
+        .getByRole("tab", { name: "Удалённые" })
+        .getAttribute("aria-selected"),
+    ).toBe("true");
+    expect(screen.getByRole("button", { name: "origin/fresh" })).toBeTruthy();
+    expect(api.listTopicContexts).toHaveBeenCalledTimes(1);
+    expect(fixture.refresh).not.toHaveBeenCalled();
+    if (status === "error")
+      expect(screen.getByRole("alert").textContent).toContain(
+        "Сеть недоступна",
+      );
+    else expect(screen.getByText("Список веток обновлён.")).toBeTruthy();
+  },
+);
+
+it("disables header Git actions for a plain folder, without affecting another project", async () => {
+  fixture.realWorkspace = true;
+  api.readGitSummary = vi.fn(async (scope: string) => ({
+    scope,
+    branch: scope === "p" ? null : "main",
+    changedFiles: 0,
+    conflicts: 0,
+    ...(scope === "p" ? { repository: "missing" } : {}),
+  }));
+  await open();
+  await screen.findByText("Git не инициализирован");
+  expect(repositoryDisabled()).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+  await screen.findByLabelText("Ветка: main");
+  expect(repositoryDisabled()).toBe(false);
+});
+it("keeps missing-Git indicators scoped to their exact owner", async () => {
+  await open();
+  act(() => fixture.props.get("p").onRepositoryStateChange(topic, "missing"));
+  expect(repositoryDisabled()).toBe(false);
+  act(() => fixture.props.get("p").onRepositoryStateChange("p", "missing"));
+  expect(repositoryDisabled()).toBe(true);
+  act(() => fixture.props.get("p").onRepositoryStateChange(topic, "ready"));
+  expect(repositoryDisabled()).toBe(true);
+  act(() => fixture.props.get("p").onRepositoryStateChange("p", "ready"));
+  expect(repositoryDisabled()).toBe(false);
 });

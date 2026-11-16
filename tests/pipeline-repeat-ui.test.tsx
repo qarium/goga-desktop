@@ -10,6 +10,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 const snapshot = {
   version: 1,
@@ -72,6 +73,7 @@ beforeEach(() => {
 afterEach(cleanup);
 async function open() {
   render(<App />);
+  await openFirstProject();
   await screen.findByRole("button", { name: "Проект" });
   await act(async () => focusRun("source"));
   await screen.findByText("Synthetic original output");

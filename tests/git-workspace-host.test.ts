@@ -1,4 +1,4 @@
-import { gitIntegrationBudget } from "./helpers/git-integration";
+import { fixtureExecFile, gitIntegrationBudget } from "./helpers/git-integration";
 import { installGitFixtureScope } from "./helpers/git-test-scope";
 const fixtureScope = installGitFixtureScope();
 import { expect, it, vi } from "vitest";
@@ -14,6 +14,7 @@ import {
 } from "node:fs/promises";
 import path from "node:path";
 import { HostService } from "../src/host/service";
+import { GitWorkspaceReader } from "../src/host/git-workspace-reader";
 import { GitWorkspaceActions } from "../src/host/git-workspace-actions";
 import { NodeRunner } from "../src/host/process";
 import { CloneManager } from "../src/host/clones";
@@ -691,6 +692,48 @@ it.each(["content", "operation", "head"] as const)(
   gitIntegrationBudget(15000),
 );
 it(
+  "rejects a working-copy summary when the project path is rebound during the final clone verification",
+  fixtureScope.run(async () => {
+    const f = await fixture();
+    const clone = await new CloneManager(f.home, f.runner).ensure(f.project, {
+      projectId: f.project.id,
+      year: "2026",
+      topic: "feature",
+      branch: "feature",
+    });
+    const scope = worktreeContextRef(clone);
+    const alternate = path.join(f.base, "other-project");
+    await mkdir(alternate);
+    const registry = path.join(f.home, ".goga", "desktop", "projects.json");
+    const original = GitWorkspaceReader.prototype.summary;
+    const resolve = CloneManager.prototype.resolveGitRead;
+    let computed = false, rebound = false;
+    vi.spyOn(GitWorkspaceReader.prototype, "summary").mockImplementation(async function (
+      this: GitWorkspaceReader,
+    ) {
+      const result = await original.call(this);
+      computed = true;
+      return result;
+    });
+    vi.spyOn(CloneManager.prototype, "resolveGitRead").mockImplementation(async function (
+      this: CloneManager, input,
+    ) {
+      const proof = await resolve.call(this, input);
+      if (computed && !rebound) {
+        const data = JSON.parse(await readFile(registry, "utf8"));
+        const row = data.projects.find((p: { id: string }) => p.id === f.project.id);
+        row.path = alternate;
+        await writeFile(registry, JSON.stringify(data)); // unchanged settings and id
+        rebound = true;
+      }
+      return proof;
+    });
+    await expect(f.host.readGitSummary(scope)).rejects.toThrow("Рабочая папка изменилась");
+    expect(rebound).toBe(true);
+  }),
+  gitIntegrationBudget(30000),
+);
+it(
   "reads display summaries only from the authorized primary or exact managed owner",
   fixtureScope.run(async () => {
     const f = await fixture();
@@ -701,9 +744,23 @@ it(
       branch: "feature",
     });
     const scope = worktreeContextRef(clone);
-    await writeFile(path.join(f.root, "file.txt"), "primary change\n");
-    await writeFile(path.join(f.root, "primary.txt"), "primary only\n");
-    await writeFile(path.join(clone.path, "clone.txt"), "clone only\n");
+    // Warm both owners before a separate process edits them. It has no Desktop
+    // API and cannot notify the app about the changes or invalidate its cache.
+    await expect(f.host.readGitSummary(f.project.id)).resolves.toMatchObject({
+      branch: "main", changedFiles: 0,
+    });
+    await expect(f.host.readGitSummary(scope)).resolves.toMatchObject({
+      branch: "feature", changedFiles: 0,
+    });
+    await fixtureExecFile(process.execPath, [
+      "-e",
+      `const fs = require('node:fs'), path = require('node:path');
+       const [primary, clone] = process.argv.slice(1);
+       fs.writeFileSync(path.join(primary, 'file.txt'), 'primary change');
+       fs.writeFileSync(path.join(primary, 'primary.txt'), 'primary only');
+       fs.writeFileSync(path.join(clone, 'clone.txt'), 'clone only');`,
+      f.root, clone.path,
+    ], { cwd: f.base, env: { HOME: f.home } });
     const original = f.runner.command.bind(f.runner);
     const commands = vi
       .spyOn(f.runner, "command")

@@ -901,3 +901,31 @@ it("keeps a queued save admitted when its cancelled read fails during suspension
   expect(onMutation).toHaveBeenCalledTimes(1);
   expect(api.readOverviewSchema).toHaveBeenCalledTimes(1);
 });
+
+it("revalidates unchanged resources but preserves their render identities; changes and record order still arrive", async () => {
+  const {store, api} = fixture();
+  const nested = schema();
+  nested[0].children = schema("src/child");
+  const pairs = {signature: {codemanifest: "same", implementation: null}};
+  let current: CellContract = Object.fromEntries([["__proto__", pairs], ["Worker", pairs]]);
+  api.readOverviewSchema.mockImplementation(async () => structuredClone(nested));
+  api.readOverviewContract.mockImplementation(async () => structuredClone(current));
+  await store.loadDirectory("");
+  await store.showContract("src");
+  await store.refreshAll();
+  const before = store.getSnapshot();
+  await store.refreshAll();
+  expect(api.readOverviewSchema).toHaveBeenCalledTimes(2);
+  expect(api.readOverviewContract).toHaveBeenCalledTimes(3);
+  expect(api.listOverviewDirectory).toHaveBeenCalledTimes(3);
+  expect(store.getSnapshot().schema).toBe(before.schema);
+  expect(store.getSnapshot().contract).toBe(before.contract);
+  expect(store.getSnapshot().directories).toBe(before.directories);
+  nested[0].children[0].description = "external";
+  current = Object.fromEntries([["Worker", pairs], ["__proto__", pairs]]);
+  await store.refreshAll();
+  expect(store.getSnapshot().schema?.[0].children[0].description).toBe("external");
+  expect(Object.keys(store.getSnapshot().contract!)).toEqual(["Worker", "__proto__"]);
+  expect(store.getSnapshot().schema).not.toBe(before.schema);
+  expect(store.getSnapshot().contract).not.toBe(before.contract);
+});

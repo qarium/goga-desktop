@@ -1,4 +1,4 @@
-import { createTerminalControlAPI } from "./terminal-control-preload";
+import { createTerminalControlAPI,createTerminalPresetAPI } from "./terminal-control-preload";
 import { contextBridge, ipcRenderer } from "electron";
 import type { DesktopAPI } from "../shared/bridge";
 const invoke = (name: string, ...args: unknown[]) =>
@@ -9,6 +9,14 @@ function listen<T>(name: string, callback: (value: T) => void) {
   return () => ipcRenderer.removeListener(`goga:${name}`, fn);
 }
 const api: DesktopAPI = {
+  demoState: () => invoke("demo-state"),
+  demoExecute: cmd => invoke("demo-execute", cmd),
+  demoNextFrame: (showId, tabId, after) => invoke("demo-next-frame", { showId, tabId, after }),
+  demoFrame: id => invoke("demo-frame", id),
+  demoOpenBrowser: id => invoke("demo-browser", id),
+  demoCopyURL: (showId, tabId) => invoke("demo-copy-url", {showId, tabId}),
+  demoCopySelection: (showId, tabId, requestId) => invoke("demo-copy-selection", {showId, tabId, requestId}),
+  demoCancelSelectionCopy: requestId => invoke("demo-cancel-selection-copy", requestId),
   notifications: (page) => invoke("notifications", page),
   markNotificationRead: (id, sequence) => invoke("mark-notification-read", id, sequence),
   setNotificationView: (id) => invoke("set-notification-view", id),
@@ -58,6 +66,7 @@ const api: DesktopAPI = {
   executeGitDiscard: (token) => invoke("execute-git-discard", token),
   prepareGitCommit: (request) => invoke("prepare-git-commit", request),
   executeGitCommit: (token) => invoke("execute-git-commit", token),
+  terminalPresets: createTerminalPresetAPI((channel,...args)=>ipcRenderer.invoke(channel,...args)),
   terminal: createTerminalControlAPI(
     (channel, value) =>
       ipcRenderer.invoke(channel, ...(value === undefined ? [] : [value])),
@@ -133,6 +142,7 @@ const api: DesktopAPI = {
     invoke("prepare-document-deletion", source, version),
   deleteDocument: (token) => invoke("delete-document", token),
   listProjects: () => invoke("list-projects"),
+  removeProject: (project) => invoke("remove-project", project),
   listProjectProfiles: (id) => invoke("list-project-profiles", id),
   listProjectTools: (id) => invoke("list-project-tools", id),
   resolveProjectDockerfile: (id) => invoke("resolve-project-dockerfile", id),
@@ -172,6 +182,10 @@ const api: DesktopAPI = {
   saveProjectDocument: (id, target, text, version) =>
     invoke("save-project-document", id, target, text, version),
   chooseProject: () => invoke("choose-project"),
+  chooseProjectLocation: () => invoke("choose-project-location"),
+  createProject: (request) => invoke("create-project", request),
+  cancelProjectCreation: (id) => invoke("cancel-project-creation", id),
+  onProjectCreation: (callback) => listen("project-creation", callback),
   readProjectSettings: (id) => invoke("read-project-settings", id),
   saveProjectSettings: (id, value, version) =>
     invoke("save-project-settings", id, value, version),
@@ -181,8 +195,18 @@ const api: DesktopAPI = {
   preview: (r) => invoke("preview", r),
   launch: (r) => invoke("launch", r),
   runs: () => invoke("runs"),
+  readRunJournal: (id, after) => invoke("run-journal", id, after),
+  onRunOutputChanged: (callback) => listen("run-output", callback),
   closeRun: (id) => invoke("close-run", id),
   stopRun: (id) => invoke("stop-run", id),
+  listAttachedDashboards:()=>invoke("attached-dashboards"),
+  attachDashboard:(scope,url,key)=>invoke("attach-dashboard",scope,url,key),
+  cancelDashboardAttach:key=>invoke("cancel-dashboard-attach",key),
+  detachDashboard:(scope,id)=>invoke("detach-dashboard",scope,id),
+  selectAttachedDashboard:(scope,id)=>invoke("select-attached-dashboard",scope,id),
+  refreshDashboard:(id,scope,recover)=>invoke("refresh-dashboard",id,scope,recover),
+  onAttachedDashboards:cb=>listen("attached-dashboards",cb),
+  onDashboardRefresh:cb=>listen("dashboard-refresh",cb),
   restoreDashboard: (id) => invoke("restore-dashboard", id),
   selectRun: (id) => invoke("select-run", id),
   setDashboardViewport: (bounds) => invoke("set-dashboard-viewport", bounds),

@@ -554,3 +554,16 @@ it("does not publish a late initial dashboard failure after its process exited",
     fetcher.mockRestore();
   }
 }, 30000);
+it("publishes changed recovered panel identity immediately without relying on stdout, but not for an unchanged verification", async () => {
+  const service = Object.create(HostService.prototype);
+  const run = {id:"fixture",status:"running",recovery:"confirmed",url:"http://localhost:12345",dashboardRunId:"old",dashboardReconnect:true};
+  service.runList = [run];
+  service.markDashboardOpened = () => true;
+  service.restoreSavedDashboard = async () => {run.dashboardRunId = "new"; return run.url;};
+  let changes=0;
+  service.emitRuns=()=>changes++;
+  expect(await service.dashboardLoaded(run.id,run.url)).toBe(true);
+  expect(changes).toBe(1);
+  expect(await service.dashboardLoaded(run.id,run.url)).toBe(true);
+  expect(changes).toBe(1);
+});

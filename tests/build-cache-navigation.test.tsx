@@ -17,6 +17,7 @@ import {
   act,
 } from "@testing-library/react";
 import { BuildForm } from "../src/renderer/BuildForm";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 let api: any;
 let focusRun: (id: string) => void;
@@ -173,6 +174,7 @@ async function openBuild() {
 }
 async function mount() {
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Исполняемый файл");
   act(() => focusRun("b"));
@@ -429,24 +431,24 @@ it("App navigation through Project, Topics, launch, runs and settings does not r
   expect(
     screen.getByRole("heading", { name: "Проект", level: 2 }),
   ).toBeTruthy();
-  expect(screen.queryByRole("button", { name: "Главная" })).toBeNull();
+  expect(screen.queryByRole("heading", { name: "Главная" })).toBeNull();
 });
 it("two projects retain their own ready snapshots and do not inherit each other's revision", async () => {
   await mount();
   await openBuild();
   const alpha = screen.getByRole("textbox", { name: "План сборки" });
-  click(/Beta/);
+  click("Beta");
   await openBuild();
   const beta = screen.getByRole("textbox", { name: "План сборки" });
   const counts = [
     api.buildContext.mock.calls.length,
     api.readBuildPlan.mock.calls.length,
   ];
-  click(/Alpha/);
+  click("Alpha");
   fireEvent.click(draftTab());
   noLoader();
   expect(screen.getByRole("textbox", { name: "План сборки" })).toBe(alpha);
-  click(/Beta/);
+  click("Beta");
   fireEvent.click(draftTab());
   noLoader();
   expect(screen.getByRole("textbox", { name: "План сборки" })).toBe(beta);

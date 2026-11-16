@@ -431,3 +431,69 @@ it("still rejects a stale initialization that would write into an empty context"
   ).rejects.toThrow();
   expect((await f.catalog.read("p")).tabs).toEqual([]);
 });
+it("publishes named preset tabs with their private environment reference and starts only after successful commit", async () => {
+  const { store, resolve } = await fixture();
+  const first = {
+    name: "Dev",
+    command: "npm run dev",
+    env: [{ key: "PORT", value: "4100" }],
+  };
+  const snapshots = new Map<string, unknown>();
+  const presets = {
+    read: vi.fn(async () => ({
+      ...first,
+      id: crypto.randomUUID(),
+      revision: crypto.randomUUID(),
+    })),
+    createSnapshot: vi.fn(async (v: unknown) => {
+      const id = crypto.randomUUID();
+      snapshots.set(id, v);
+      return id;
+    }),
+    removeSnapshot: vi.fn(async (id: string) => {
+      snapshots.delete(id);
+    }),
+    collectSnapshots: vi.fn(async () => {}),
+  };
+  const start = vi.fn(async () => {});
+  const catalog = new TerminalCatalog(store, resolve, {
+    store: presets,
+    start,
+  });
+  const command = {
+    kind: "create-from-preset" as const,
+    scope: a,
+    presetId: crypto.randomUUID(),
+    presetRevision: crypto.randomUUID(),
+    actionId: crypto.randomUUID(),
+  };
+  const state = await catalog.change({
+    ...command,
+    revision: (await catalog.read(a)).revision,
+  });
+  expect(state.tabs[0]).toMatchObject({
+    name: "Dev",
+    scope: { kind: "context" },
+  });
+  expect(start).toHaveBeenCalledWith(
+    expect.objectContaining({ id: state.selectedId }),
+    a,
+    first.command,
+  );
+  expect(JSON.stringify(state)).not.toMatch(/4100|npm run dev/);
+  expect((await catalog.read(b)).tabs).toEqual([]);
+  const second = await catalog.change({
+    ...command,
+    actionId: crypto.randomUUID(),
+    revision: state.revision,
+  });
+  expect(second.tabs.map((t) => t.name)).toEqual(["Dev", "Dev (1)"]);
+  await expect(
+    catalog.change({ ...command, revision: state.revision }),
+  ).rejects.toThrow();
+  expect(start).toHaveBeenCalledTimes(2);
+  await catalog.removeTerminatedTab(state.tabs[0]);
+  expect(presets.removeSnapshot).toHaveBeenCalledWith(
+    state.tabs[0].envSnapshotId,
+  );
+});

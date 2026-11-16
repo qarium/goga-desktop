@@ -43,6 +43,7 @@ export interface NativeTerminalDriver {
   ): NativeTerminal;
 }
 export interface TerminalInspector {
+  presetPeer?(fd: number, rootPid: number): boolean;
   prepare?(budgetMs?: number): Promise<void>;
   check?(): void;
   birth(pid: number, timeoutMs?: number): unknown;
@@ -129,6 +130,11 @@ export class TerminalNativeAdapter {
     this.owned.set(managed.api, managed);
     return managed.api;
   };
+  armPreset = (pty: TerminalPty, arm: (pid: number) => void): void => {
+    const managed = this.owned.get(pty);
+    if (!managed) throw new TerminalStopError("uncertain");
+    managed.armPreset(arm);
+  };
   processes = (pty: TerminalPty): TerminalProcessControl => {
     const managed = this.owned.get(pty);
     if (!managed) throw new TerminalStopError("uncertain");
@@ -136,6 +142,11 @@ export class TerminalNativeAdapter {
   };
 }
 class ManagedTerminal {
+  armPreset(arm: (pid: number) => void) {
+    if (this.failed || this.exit || !this.birth || this.poisoned)
+      throw new TerminalStopError("uncertain");
+    arm(this.birth.pid);
+  }
   readonly api: TerminalPty;
   readonly control: TerminalProcessControl;
   private birth?: Birth;

@@ -17,6 +17,7 @@ import {
   act,
 } from "@testing-library/react";
 import { ExistingTopicLaunchForm as LaunchForm } from "./helpers/existing-pipeline-draft";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 import { createDraftStore, useTaskDraft } from "../src/renderer/task-drafts";
 import { renderHook } from "@testing-library/react";
@@ -198,6 +199,7 @@ it("retains drafts across topic switches and ignores late reads from previous to
 });
 it("survives cancel, settings and project navigation in App-owned memory", async () => {
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   await loaded();
   fireEvent.change(edit(), { target: { value: "unsaved memory" } });
@@ -302,11 +304,11 @@ it("restores standalone selected topic and independent drafts after changing pro
   selectOther();
   await loaded();
   fireEvent.change(edit(), { target: { value: "other on first project" } });
-  fireEvent.click(screen.getByRole("button", { name: /Second project/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Second project" }));
   fireEvent.click(screen.getByRole("button", { name: "Открыть форму" }));
   await loaded();
   fireEvent.change(edit(), { target: { value: "second project draft" } });
-  fireEvent.click(screen.getByRole("button", { name: /Editor project/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Editor project" }));
   fireEvent.click(screen.getByRole("button", { name: "Открыть форму" }));
   await screen.findByRole("textbox", { name: "Что нужно сделать?" });
   await waitFor(() => expect(edit().value).toBe("other on first project"));
@@ -367,6 +369,7 @@ it("late launch completion cannot erase newer text or close a reopened editor", 
   let finish: any;
   api.launch.mockImplementationOnce(() => new Promise((r) => (finish = r)));
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   await loaded();
   fireEvent.change(edit(), { target: { value: "submitted" } });
@@ -390,6 +393,7 @@ it("reopening a pending unchanged launch retains its loader and replaces only it
   let finish: any;
   api.launch.mockImplementationOnce(() => new Promise((r) => (finish = r)));
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   await loaded();
   const task = edit();
@@ -584,6 +588,7 @@ it.each(["close", "project"])(
     const second = { ...p, id: "second", name: "Second project" };
     api.listProjects.mockResolvedValue([p, second]);
     render(<App />);
+    await openFirstProject();
     await openPrototypeLaunch();
     await loaded();
     fireEvent.change(edit(), { target: { value: "kept draft" } });
@@ -598,8 +603,8 @@ it.each(["close", "project"])(
     if (action === "close")
       fireEvent.click(screen.getByRole("button", { name: "Закрыть форму" }));
     else {
-      fireEvent.click(screen.getByRole("button", { name: /Second project/ }));
-      fireEvent.click(screen.getByRole("button", { name: /Editor project/ }));
+      fireEvent.click(screen.getByRole("button", { name: "Second project" }));
+      fireEvent.click(screen.getByRole("button", { name: "Editor project" }));
     }
     await openPrototypeLaunch();
     await waitFor(() => expect(edit().disabled).toBe(false));
@@ -718,6 +723,7 @@ it("normalizes initial task failure on direct exact-owner form opening through r
   useTaskReadIPCEnvelope();
   api.readTopicTask.mockRejectedValueOnce(Error(taskReadReason));
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   expect((await screen.findByRole("alert")).textContent).toBe(taskReadReason);
   expect(api.checkTopicContextReadiness).not.toHaveBeenCalled();

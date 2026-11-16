@@ -734,6 +734,20 @@ it("scrolls keyboard selection in the native portal's document", async () => {
     Object.defineProperty(list, "clientHeight", { value: 100 });
     Object.defineProperty(last, "offsetTop", { value: 300 });
     Object.defineProperty(last, "offsetHeight", { value: 20 });
+    const rect = (top: number, bottom: number) =>
+      ({
+        top,
+        bottom,
+        left: 0,
+        right: 420,
+        width: 420,
+        height: bottom - top,
+        x: 0,
+        y: top,
+        toJSON() {},
+      }) as DOMRect;
+    vi.spyOn(list, "getBoundingClientRect").mockReturnValue(rect(200, 300));
+    vi.spyOn(last, "getBoundingClientRect").mockReturnValue(rect(500, 520));
     fireEvent.keyDown(search, { key: "End" });
     await waitFor(() => expect(list.scrollTop).toBe(220));
     fireEvent.keyDown(search, { key: "Escape" });
@@ -1073,4 +1087,69 @@ it("gives persistent creation errors the existing visible error colour", async (
   } finally {
     style.remove();
   }
+});
+
+describe("topic picker scroll intent", () => {
+  const rect = (top: number, bottom: number) =>
+    ({
+      top,
+      bottom,
+      left: 0,
+      right: 420,
+      width: 420,
+      height: bottom - top,
+      x: 0,
+      y: top,
+      toJSON() {},
+    }) as DOMRect;
+  function measured() {
+    mount({ selected: null });
+    open();
+    const list = screen.getByRole("grid", { name: "Топики проекта" });
+    const last = screen.getByRole("row", { name: /^gamma / });
+    vi.spyOn(list, "getBoundingClientRect").mockReturnValue(rect(300, 480));
+    Object.defineProperty(list, "clientHeight", {
+      value: 180,
+      configurable: true,
+    });
+    // offsetTop is relative to the positioned popup, including its search
+    // header. It is deliberately NOT relative to this scrolling list.
+    Object.defineProperty(last, "offsetTop", {
+      value: 340,
+      configurable: true,
+    });
+    Object.defineProperty(last, "offsetHeight", {
+      value: 60,
+      configurable: true,
+    });
+    const bounds = vi
+      .spyOn(last, "getBoundingClientRect")
+      .mockReturnValue(rect(440, 500));
+    return { list, last, bounds };
+  }
+  it("highlights a partially visible row under the pointer without moving the list", () => {
+    const { list, last } = measured();
+    list.scrollTop = 65;
+    for (let i = 0; i < 5; i++) fireEvent.pointerMove(last);
+    expect(last.classList.contains("is-focused")).toBe(true);
+    expect(list.scrollTop).toBe(65);
+  });
+  it("reveals keyboard focus in list coordinates, and End works again after wheel scrolling", () => {
+    const { list, last, bounds } = measured();
+    const search = screen.getByRole("combobox", { name: "Найти топик" });
+    list.scrollTop = 65;
+    fireEvent.pointerMove(last);
+    list.scrollTop = 65;
+    // Hover has already focused the same index. End must still reveal it.
+    fireEvent.keyDown(search, { key: "End" });
+    expect(list.scrollTop).toBe(85);
+    bounds.mockReturnValue(rect(400, 460));
+    fireEvent.keyDown(search, { key: "End" });
+    expect(list.scrollTop).toBe(85);
+    // Wheel moves the row back offscreen while the active index stays fixed.
+    list.scrollTop = 30;
+    bounds.mockReturnValue(rect(510, 570));
+    fireEvent.keyDown(search, { key: "End" });
+    expect(list.scrollTop).toBe(120);
+  });
 });

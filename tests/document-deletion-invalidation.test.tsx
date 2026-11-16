@@ -19,6 +19,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 import { Settings } from "../src/renderer/Settings";
 import { ProjectDocuments } from "../src/renderer/ProjectDocuments";
@@ -484,6 +485,7 @@ it.each(["trashed", "uncertain", "bridge-error"])(
   async (status) => {
     appApi();
     render(<App />);
+    await openFirstProject();
     await openPrototypeLaunch();
     await ready();
     await waitFor(() =>
@@ -528,6 +530,7 @@ it.each(["trashed", "uncertain", "bridge-error"])(
 it("App preserves explicit profile through global settings deletion with the launch retained", async () => {
   appApi();
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   await ready();
   selectCatalog(screen.getByLabelText("Профиль"), "personal");
@@ -629,6 +632,7 @@ it.each(["save", "delete"] as const)(
       ],
     };
     render(<App />);
+    await openFirstProject();
     await openPrototypeLaunch();
     await ready();
     selectCatalog(screen.getByLabelText("Профиль"), "personal");

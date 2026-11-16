@@ -12,6 +12,7 @@ import {
   within,
 } from "@testing-library/react";
 import { BuildForm } from "../src/renderer/BuildForm";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 let api: any;
 let emitRuns: (runs: any[]) => void;
@@ -205,6 +206,7 @@ async function mountContexts(extraRuns: any[] = []) {
     },
   ]);
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Исполняемый файл");
   await screen.findByRole("button", { name: "Выбрать другой топик" });
@@ -340,7 +342,8 @@ it("keeps completed pipeline output and exposes catalog retry only inside topic 
   };
   api.runs.mockResolvedValue([pipeline]);
   render(<App />);
-  await screen.findByRole("button", { name: /Alpha/ });
+  await openFirstProject();
+  await screen.findByRole("button", { name: "Alpha" });
   await waitFor(() => expect(api.readTopicBoard).toHaveBeenCalled());
   fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
   fireEvent.click(
@@ -383,7 +386,8 @@ it("does not leak catalog errors into the dashboard or sidebar while a pipeline 
   api.runs.mockResolvedValue([pipeline]);
   api.readTopicBoard.mockRejectedValue(new Error("Catalog unavailable"));
   render(<App />);
-  await screen.findByRole("button", { name: /Alpha/ });
+  await openFirstProject();
+  await screen.findByRole("button", { name: "Alpha" });
   fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
   fireEvent.click(
     await screen.findByRole("button", { name: "Открыть запуск refinement" }),
@@ -400,6 +404,7 @@ it("does not leak catalog errors into the dashboard or sidebar while a pipeline 
 
 it("keeps identity separate from context controls on the same header", async () => {
   render(<App />);
+  await openFirstProject();
   const title = await screen.findByRole("heading", { name: "Alpha" });
   const heading = title.closest(".project-heading");
   expect(heading).not.toBeNull();
@@ -415,6 +420,7 @@ it("keeps identity separate from context controls on the same header", async () 
 
 it("collapses only sidebar while retaining the selected workspace", async () => {
   render(<App />);
+  await openFirstProject();
   const toggle = await screen.findByRole("button", {
     name: "Свернуть боковую панель",
   });
@@ -441,10 +447,12 @@ it("collapses only sidebar while retaining the selected workspace", async () => 
 
 it("shows project name and full path on hover and focus in the collapsed sidebar", async () => {
   render(<App />);
-  const project = await screen.findByRole("button", { name: "Alpha" });
+  await openFirstProject();
   fireEvent.click(
     screen.getByRole("button", { name: "Свернуть боковую панель" }),
   );
+  // Compact mode flattens the group hierarchy into the visible icon list.
+  const project = screen.getByRole("button", { name: "Alpha" });
   fireEvent.mouseEnter(project);
   expect(screen.getByRole("tooltip").textContent).toContain("Alpha");
   expect(screen.getByRole("tooltip").textContent).toContain("/fixture/a");
@@ -469,7 +477,8 @@ it("dismisses a dashboard presentation failure without reopening it in a loop", 
     if (id) throw Error("Synthetic native view failure");
   });
   render(<App />);
-  await screen.findByRole("button", { name: /Alpha/ });
+  await openFirstProject();
+  await screen.findByRole("button", { name: "Alpha" });
   fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
   fireEvent.click(
     await screen.findByRole("button", { name: "Открыть запуск refinement" }),
@@ -543,6 +552,7 @@ it.each([false, true])(
         }),
     );
     render(<App />);
+    await openFirstProject();
     fireEvent.click(
       await screen.findByRole("button", {
         name: "Синхронизировать текущую ветку",

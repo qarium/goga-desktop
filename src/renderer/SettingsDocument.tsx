@@ -1,3 +1,6 @@
+import { Maximize2, Minimize2 } from "lucide-react";
+import { useProjectDocumentExpansion } from "./useProjectDocumentExpansion";
+import "./ProjectDocumentExpansion.css";
 import { useViewActive } from "./RetainedViews";
 import { useSettingsEditorViewport } from "./useSettingsEditorViewport";
 import { LoadingBoundary } from "./LoadingBoundary";
@@ -68,9 +71,15 @@ export function SettingsDocument({
     void store.open(source);
   }, [store, key, active]);
   const pane = useRef<HTMLElement>(null);
+  const expansion = useProjectDocumentExpansion(
+    pane,
+    active && source.scope === "project" && draft.document ? key : null,
+  );
   const editorHeight = useSettingsEditorViewport(
     pane,
-    !!draft.document && (!draft.busy || !!draft.saving || !!draft.deleting),
+    !expansion.expanded &&
+      !!draft.document &&
+      (!draft.busy || !!draft.saving || !!draft.deleting),
     key,
   );
   useEffect(() => () => store.cancelDeletion(source), [store, key]);
@@ -106,7 +115,11 @@ export function SettingsDocument({
   return (
     <section
       ref={pane}
-      className="editor-pane"
+      className={
+        expansion.expanded
+          ? "editor-pane project-document-expanded"
+          : "editor-pane"
+      }
       aria-label={title}
       aria-busy={draft.busy}
       style={
@@ -176,6 +189,9 @@ export function SettingsDocument({
               value={draft.text}
               onChange={(text) => store.edit(source, text)}
               readOnly={draft.busy}
+              onView={(view) => {
+                expansion.editor.current = view;
+              }}
             />
             <div className="document-editor-footer">
               <p className="hint">
@@ -202,6 +218,30 @@ export function SettingsDocument({
                 <div className="document-save-actions">
                   {deleteButton}
                   <div className="document-save-primary-actions">
+                    {source.scope === "project" && (
+                      <button
+                        type="button"
+                        className="document-size-toggle"
+                        aria-expanded={expansion.expanded}
+                        aria-label={
+                          expansion.expanded
+                            ? "Свернуть документ"
+                            : "Развернуть документ"
+                        }
+                        title={
+                          expansion.expanded
+                            ? "Свернуть документ (Esc)"
+                            : "Развернуть на рабочую область"
+                        }
+                        onClick={expansion.toggle}
+                      >
+                        {expansion.expanded ? (
+                          <Minimize2 size={16} aria-hidden />
+                        ) : (
+                          <Maximize2 size={16} aria-hidden />
+                        )}
+                      </button>
+                    )}
                     <button
                       disabled={draft.busy}
                       onClick={() =>

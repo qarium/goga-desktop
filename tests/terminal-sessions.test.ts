@@ -4,6 +4,7 @@ import {
   TerminalSessions,
   type TerminalPty,
   type TerminalLease,
+  type TerminalSessionDependencies,
 } from "../src/host/terminal-sessions";
 import type { TerminalTab, TerminalContext } from "../src/shared/terminal";
 import type { ScopeRef } from "../src/shared/context";
@@ -62,7 +63,7 @@ class Pty extends EventEmitter implements TerminalPty {
     this.emit("exit", { exitCode: 0 });
   }
 }
-function fixture() {
+function fixture(extra: Partial<TerminalSessionDependencies> = {}) {
   const leases: TerminalLease[] = [],
     ptys: Pty[] = [];
   const acquire = vi.fn(async (scope: ScopeRef): Promise<TerminalLease> => {
@@ -118,6 +119,8 @@ function fixture() {
       processes,
       prepareScreen,
       removeTab: async () => {},
+      armPreset: (_pty, accept) => accept(210),
+      ...extra,
     }),
     acquire,
     spawn,
@@ -742,4 +745,56 @@ it("invalidates prompt readiness before forwarding input and rechecks it before 
   await expect(gate.stopIdle()).rejects.toThrow(/ожидан/);
   expect(f.stop).not.toHaveBeenCalled();
   gate.release();
+});
+it("reserves preset delivery for the new tab's first generation; ordinary concurrent open and refresh never replay it", async () => {
+  const t: TerminalTab = {
+    ...common,
+    id: "preset-tab",
+    scope: { kind: "context", context: primary },
+  };
+  const commands: string[] = [];
+  const f = fixture({
+    preparePreset: async (_launch, command) => {
+      commands.push(command);
+      return {
+        launch: _launch,
+        result: Promise.resolve("delivered" as const),
+        arm: vi.fn(),
+        dispose: vi.fn(),
+      };
+    },
+  });
+  const [explicit, shown] = await Promise.all([
+    f.manager.startPreset(t, "p", "echo first"),
+    f.manager.open(t, "p"),
+  ]);
+  expect(shown.generation).toBe(explicit.generation);
+  expect(commands).toEqual(["echo first"]);
+  await expect(f.manager.startPreset(t, "p", "never")).rejects.toThrow();
+  await refresh(f.manager, explicit, "p");
+  expect(f.ptys).toHaveLength(2);
+  expect(commands).toEqual(["echo first"]);
+  expect(f.ptys.every((p) => p.write.mock.calls.length === 0)).toBe(true);
+});
+it("retains a safe, non-running tab result when initial preset preparation fails; auto-open cannot create a fallback PTY", async () => {
+  const f = fixture({
+    preparePreset: async () => {
+      throw Error("secret");
+    },
+  });
+  const tab: TerminalTab = {
+    ...common,
+    id: "failed",
+    scope: { kind: "context", context: primary },
+  };
+  const created = await f.manager.startPreset(tab, "p", "echo secret");
+  expect(created.state).toBe("exited");
+  expect(created.startupMessage).toMatch(/не отправлена/i);
+  expect(created.startupMessage).not.toContain("secret");
+  expect(await f.manager.open(tab, "p")).toEqual(created);
+  expect(f.ptys.length).toBe(0);
+  const fresh = await refresh(f.manager, created, "p");
+  expect(fresh.state).toBe("running");
+  expect(f.ptys.length).toBe(1);
+  expect(f.ptys[0].write).not.toHaveBeenCalled();
 });

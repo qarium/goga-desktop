@@ -1,5 +1,5 @@
 import { expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { HostService } from "../src/host/service";
 import { DesktopStateStore } from "../src/host/desktop-state";
 const cell = (cell: string) => ({
@@ -14,6 +14,8 @@ async function setup() {
   const dir = await mkdtemp("/private/tmp/goga-overview-host-");
   await mkdir(dir + "/home");
   await mkdir(dir + "/project");
+  // Schema membership scenarios need code to analyse, not a newly empty project.
+  await writeFile(dir + "/project/CODEMANIFEST", "description: synthetic fixture\n");
   const state = new DesktopStateStore(dir + "/home", dir + "/data");
   await state.addProject({ id: "p", name: "Test", path: dir + "/project" });
   const command = vi.fn(async (_exe: string, args: string[]) => ({

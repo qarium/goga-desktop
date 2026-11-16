@@ -4,7 +4,14 @@ import { afterEach, expect, it, vi } from "vitest";
 import { render, cleanup, act } from "@testing-library/react";
 const mocks = vi.hoisted(() => ({
   nodes: [] as any[],
-  flow: { fitView: vi.fn(async () => {}), zoomIn: vi.fn(), zoomOut: vi.fn() },
+  flow: {
+    getNodesBounds: vi.fn(() => ({ x: 50, y: 50, width: 140, height: 60 })),
+    getViewport: vi.fn(() => ({ x: 0, y: 0, zoom: 1 })),
+    setCenter: vi.fn(),
+    fitView: vi.fn(async () => {}),
+    zoomIn: vi.fn(),
+    zoomOut: vi.fn(),
+  },
 }));
 vi.mock("@xyflow/react", () => ({
   ReactFlowProvider: ({ children }: any) => children,
@@ -17,6 +24,7 @@ vi.mock("@xyflow/react", () => ({
   Position: { Left: "left", Right: "right" },
   MarkerType: { ArrowClosed: "arrowclosed" },
   useReactFlow: () => mocks.flow,
+  useStore: (select: any) => select({ transform: [0, 0, 1] }),
 }));
 import { SchemaGraph } from "../src/renderer/overview/SchemaGraph";
 afterEach(() => {
@@ -165,6 +173,51 @@ it("defers fitting a changed graph while hidden and fits it once on restore", as
     graph.resize(700, 300);
     await graph.settle();
     expect(mocks.flow.fitView).toHaveBeenCalledTimes(2);
+  } finally {
+    graph.bounds.mockRestore();
+  }
+});
+
+it("does not refit or pan for a visible selection; reveals an offscreen file owner without resetting zoom", async () => {
+  const graph = resizingGraph();
+  try {
+    mocks.flow.setCenter.mockClear();
+    await graph.settle();
+    graph.view.rerender(<SchemaGraph {...graph.props} selection="src" />);
+    await graph.settle();
+    expect(mocks.flow.fitView).toHaveBeenCalledTimes(1);
+    expect(mocks.flow.setCenter).not.toHaveBeenCalled();
+    mocks.flow.getViewport.mockReturnValueOnce({ x: -2000, y: 0, zoom: 0.8 });
+    graph.view.rerender(
+      <SchemaGraph {...graph.props} selection="src/file.ts" />,
+    );
+    await graph.settle();
+    expect(mocks.flow.setCenter).toHaveBeenCalledWith(120, 80, { zoom: 0.8 });
+    expect(mocks.flow.fitView).toHaveBeenCalledTimes(1);
+  } finally {
+    graph.bounds.mockRestore();
+  }
+});
+
+it("defers offscreen selection until the hidden canvas is restored without fitting it", async () => {
+  const graph = resizingGraph();
+  try {
+    mocks.flow.setCenter.mockClear();
+    await graph.settle();
+    graph.resize(0, 0);
+    await graph.settle();
+    graph.view.rerender(
+      <SchemaGraph {...graph.props} selection="src/deep/file.ts" />,
+    );
+    await graph.settle();
+    expect(mocks.flow.setCenter).not.toHaveBeenCalled();
+    mocks.flow.getViewport.mockReturnValueOnce({ x: -2000, y: 0, zoom: 1.6 });
+    graph.resize(700, 300);
+    await graph.settle();
+    expect(mocks.flow.setCenter).toHaveBeenCalledExactlyOnceWith(120, 80, {
+      zoom: 1.6,
+    });
+    expect(mocks.flow.fitView).toHaveBeenCalledTimes(1);
   } finally {
     graph.bounds.mockRestore();
   }

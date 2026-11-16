@@ -1,3 +1,4 @@
+import { registerDemoIPC } from "../src/main/demo-ipc";
 import { expect, it } from "vitest";
 import { registerIPC } from "../src/main/ipc";
 import { registerNotificationIPC } from "../src/main/notification-ipc";
@@ -17,6 +18,13 @@ it("classifies every IPC handler and every read-request route with the same expl
     center: {},
     navigation: {},
   } as any);
+  registerDemoIPC(ipc as any, {window:{webContents:{id:1}},shellURL:"file:///shell"} as any);
+  expect(IPC_SCOPES["demo-next-frame"]).toBe("owner-ticket");
+  expect(IPC_SCOPES["demo-frame"]).toBe("owner-ticket");
+  expect(IPC_SCOPES["demo-copy-url"]).toBe("owner-ticket");
+  expect(IPC_SCOPES["demo-copy-selection"]).toBe("owner-ticket");
+  expect(IPC_SCOPES["demo-cancel-selection-copy"]).toBe("owner-ticket");
+  expect(IPC_SCOPES["demo-execute"]).toBe("context-lifecycle");
   expect(channels.sort()).toEqual(Object.keys(IPC_SCOPES).sort());
   for (const method of Object.keys(READ_BUDGETS))
     expect(channels).toContain(readChannel(method as any));

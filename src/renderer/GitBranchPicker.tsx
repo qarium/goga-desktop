@@ -4,6 +4,7 @@ import {
 } from "./git-operation-diagnostics";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { RefreshCw } from "lucide-react";
 import { GitMergeConfirmation, GitMergeSource } from "./GitMergeDialogs";
 import type {
   GitBranchInventory,
@@ -16,6 +17,8 @@ import { LoadingState } from "./LoadingBoundary";
 import { readWithSignal } from "./read-request";
 import { useViewActive } from "./RetainedViews";
 import "./GitBranchPicker.css";
+import { useGitBranchMenu } from "./useGitBranchMenu";
+import { remoteBranchTarget } from "./git-branch-targets";
 const labels: Record<GitBranchRequest["action"], string> = {
   create: "Создать ветку",
   "switch-local": "Переключить ветку",
@@ -33,7 +36,7 @@ interface Props {
   revision: number;
   disabled?: boolean;
   mutationBlockedReason?: string;
-  onChanged(projectId: string): void;
+  onChanged(projectId: string, change?: "references-only"): void;
   onOverlayChange?(projectId: string, visible: boolean): void;
   onBusyChange?(busy: boolean): void;
   onShowChanges?(): void;
@@ -61,8 +64,6 @@ function BranchOwner({
   const [open, setOpen] = useState(false),
     [group, setGroup] = useState<"local" | "remote">("local"),
     [query, setQuery] = useState("");
-  const [inventory, setInventory] = useState<GitBranchInventory | null>(null),
-    [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false),
     [merging, setMerging] = useState(false),
     [name, setName] = useState(""),
@@ -105,29 +106,18 @@ function BranchOwner({
       preparing.current?.abort();
     }
   }, [mutationBlockedReason]);
-  useEffect(() => {
-    if (!active || !open || disabled) return;
-    const controller = new AbortController();
-    setLoading(true);
-    setInventory(null);
-    void readWithSignal(controller.signal, "readGitBranches", projectId)
-      .then((value) => {
-        if (controller.signal.aborted) return;
-        if (value.projectId !== projectId)
-          throw Error("Список веток относится к другому проекту.");
-        setInventory(value);
-      })
-      .catch(async (error) => {
-        if (controller.signal.aborted) return;
-        setOpen(false);
-        await dismissActiveTopicPopup().catch(() => {});
-        if (alive.current) setResult(topicError(error));
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false);
-      });
-    return () => controller.abort();
-  }, [active, open, disabled, projectId, revision, attempt]);
+  const menuState = useGitBranchMenu({
+    projectId,
+    active,
+    open,
+    disabled,
+    blocked: mutationBlockedReason,
+    revision,
+    attempt,
+    flight,
+    onChanged,
+  });
+  const { inventory, setInventory, loading, fetching, newRefs } = menuState;
   useEffect(() => {
     if (!open) return;
     const outside = (event: PointerEvent) => {
@@ -150,11 +140,18 @@ function BranchOwner({
     return () => presentation.current.onOverlayChange?.(projectId, false);
   }, [projectId, modalVisible]);
   useEffect(() => {
-    presentation.current.onBusyChange?.(!!pending);
+    presentation.current.onBusyChange?.(!!pending || fetching);
     return () => presentation.current.onBusyChange?.(false);
-  }, [pending]);
+  }, [pending, fetching]);
   const ready =
-    !!inventory && !loading && !pending && !disabled && !mutationBlockedReason;
+    !!inventory &&
+    !loading &&
+    !fetching &&
+    !menuState.stale &&
+    !menuState.reviewRequired &&
+    !pending &&
+    !disabled &&
+    !mutationBlockedReason;
   const mutable = ready && inventory.operation === "none";
   function closeResult() {
     setResult("");
@@ -352,7 +349,7 @@ function BranchOwner({
               {(
                 [
                   ["local", "Локальные"],
-                  ["remote", "Remote"],
+                  ["remote", "Удалённые"],
                 ] as const
               ).map(([key, label]) => (
                 <button
@@ -369,15 +366,91 @@ function BranchOwner({
                 </button>
               ))}
             </div>
-            <input
-              type="search"
-              aria-label="Найти ветку"
-              placeholder="Найти ветку"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              autoFocus
-            />
-            {loading ? (
+            <div className="git-branch-searchbar">
+              <input
+                type="search"
+                aria-label="Найти ветку"
+                placeholder="Найти ветку"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                autoFocus
+              />
+              <button
+                type="button"
+                className="git-branch-refresh"
+                aria-label="Обновить из origin"
+                title="Обновить из origin"
+                aria-busy={fetching}
+                disabled={
+                  fetching ||
+                  !!pending ||
+                  disabled ||
+                  !!mutationBlockedReason ||
+                  menuState.reviewRequired ||
+                  !inventory ||
+                  inventory.operation !== "none"
+                }
+                onClick={() => void menuState.update()}
+              >
+                <RefreshCw
+                  size={16}
+                  aria-hidden="true"
+                  focusable="false"
+                  className={
+                    fetching ? "git-branch-refresh-spinning" : undefined
+                  }
+                />
+              </button>
+            </div>
+            {fetching && (
+              <p className="hint" role="status">
+                Обновляем список веток origin…
+              </p>
+            )}
+            {menuState.error && (
+              <div className="git-branch-refresh-error" role="alert">
+                <pre>{menuState.error}</pre>
+                <button type="button" onClick={() => setOpen(false)}>
+                  Закрыть меню
+                </button>
+              </div>
+            )}
+            {menuState.stale && (
+              <p className="hint">
+                Показан прежний список. Обновите состояние перед переключением.
+              </p>
+            )}
+            {(menuState.reviewRequired || menuState.stale) && (
+              <button
+                type="button"
+                disabled={fetching}
+                onClick={() => void menuState.checkState()}
+              >
+                Проверить состояние
+              </button>
+            )}
+            {menuState.notice && (
+              <p className="hint" role="status">
+                {menuState.notice}
+              </p>
+            )}
+            {!!newRefs.length &&
+              (group !== "remote" ||
+                newRefs.some((ref) => !rows.some((r) => r.ref === ref))) && (
+                <p className="hint">
+                  Новые ветки скрыты текущей вкладкой или поиском.{" "}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setGroup("remote");
+                      setQuery("");
+                    }}
+                  >
+                    Показать новые ветки
+                  </button>
+                </p>
+              )}
+            {loading && !inventory ? (
               <LoadingState label="Загружаем ветки…" />
             ) : (
               <div
@@ -387,39 +460,84 @@ function BranchOwner({
                   group === "local" ? "Локальные ветки" : "Удалённые ветки"
                 }
               >
-                {rows.map((row) => (
-                  <button
-                    key={row.ref}
-                    type="button"
-                    aria-label={row.name}
-                    disabled={
-                      !mutable ||
-                      inventory?.dirty ||
-                      row.checkedOut ||
-                      (group === "local" && row.name === inventory?.branch)
-                    }
-                    onClick={() =>
-                      basicRequest &&
-                      void prepare({
-                        ...basicRequest,
-                        action:
-                          group === "local" ? "switch-local" : "switch-remote",
-                        ref: row.ref,
-                      })
-                    }
-                  >
-                    <span>{row.name}</span>
-                    <small>
-                      {group === "local" && row.name === inventory?.branch
-                        ? "Текущая"
-                        : row.checkedOut
-                          ? "Открыта в другой копии"
-                          : group === "remote"
-                            ? "Создать локальную и переключиться"
-                            : "Переключиться"}
-                    </small>
-                  </button>
-                ))}
+                {rows.map((row) => {
+                  const target =
+                    group === "remote" && inventory
+                      ? remoteBranchTarget(inventory, row)
+                      : null;
+                  const choices =
+                    target?.kind === "tracking" ? target.locals : [row];
+                  const collision =
+                    target?.kind === "collision" ? target.name : null;
+                  return (
+                    <div key={row.ref} className="git-branch-row">
+                      {choices.length > 1 && <p>{row.name}</p>}
+                      {choices.map((choice) => {
+                        const local =
+                          group === "local" || target?.kind === "tracking";
+                        const current =
+                          local && choice.name === inventory?.branch;
+                        return (
+                          <button
+                            key={choice.ref}
+                            type="button"
+                            aria-label={
+                              choices.length > 1
+                                ? `Переключиться на ${choice.name}`
+                                : row.name
+                            }
+                            disabled={
+                              !mutable ||
+                              inventory?.dirty ||
+                              choice.checkedOut ||
+                              current ||
+                              !!collision
+                            }
+                            onClick={() =>
+                              basicRequest &&
+                              void prepare({
+                                ...basicRequest,
+                                action: local
+                                  ? "switch-local"
+                                  : "switch-remote",
+                                ref: choice.ref,
+                              })
+                            }
+                          >
+                            <span>
+                              {choices.length > 1 ? choice.name : row.name}{" "}
+                              {newRefs.includes(row.ref) && (
+                                <small className="git-branch-new">Новая</small>
+                              )}
+                            </span>
+                            <small>
+                              {current
+                                ? "Текущая"
+                                : choice.checkedOut
+                                  ? "Открыта в другой копии"
+                                  : collision
+                                    ? `Имя ${collision} уже занято локальной веткой с другой или отсутствующей связью upstream.`
+                                    : local
+                                      ? `Переключиться${target?.kind === "tracking" ? ` на ${choice.name}` : ""}`
+                                      : "Создать локальную и переключиться"}
+                            </small>
+                          </button>
+                        );
+                      })}
+                      {collision && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setGroup("local");
+                            setQuery(collision);
+                          }}
+                        >
+                          Показать локальную {collision}
+                        </button>
+                      )}
+                    </div>
+                  );
+                })}
                 {!rows.length && <p className="hint">Ветки не найдены</p>}
               </div>
             )}
@@ -500,16 +618,6 @@ function BranchOwner({
                 </>
               ) : (
                 <>
-                  <button
-                    type="button"
-                    disabled={!mutable}
-                    onClick={() =>
-                      basicRequest &&
-                      void prepare({ ...basicRequest, action: "fetch" })
-                    }
-                  >
-                    Обновить список из remote
-                  </button>
                   <small>
                     Из origin. Рабочие файлы и текущая ветка не меняются.
                   </small>

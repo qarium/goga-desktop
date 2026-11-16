@@ -78,6 +78,61 @@
   accent-color: var(--teal);
   flex-shrink: 0;
 }
+/* Native inputs keep their semantics/Space handling; only the board's paint
+ * is customized. The table and other application forms are unchanged. */
+.topics-board-workspace input[type="checkbox"] {
+  appearance: none;
+  display: inline-grid;
+  place-content: center;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  margin: 0;
+  border: 1px solid #53657d;
+  border-radius: 3px;
+  background: var(--surface);
+  color: #06251f;
+  vertical-align: middle;
+  cursor: pointer;
+}
+.topics-board-workspace input[type="checkbox"]::before {
+  content: "";
+  width: 8px;
+  height: 5px;
+  border-left: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: translateY(-1px) rotate(-45deg);
+  opacity: 0;
+  pointer-events: none;
+}
+.topics-board-workspace input[type="checkbox"]:checked {
+  border-color: var(--teal);
+  background: var(--teal);
+}
+.topics-board-workspace input[type="checkbox"]:checked::before {
+  opacity: 1;
+}
+.topics-board-workspace input[type="checkbox"]:hover:not(:disabled) {
+  border-color: var(--teal);
+}
+.topics-board-workspace input[type="checkbox"]:focus-visible {
+  outline: 2px solid var(--teal);
+  outline-offset: 2px;
+}
+.topics-board-workspace input[type="checkbox"]:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+@media (forced-colors: active) {
+  .topics-board-workspace input[type="checkbox"] {
+    appearance: auto;
+    forced-color-adjust: auto;
+    opacity: 1;
+  }
+  .topics-board-workspace input[type="checkbox"]::before {
+    display: none;
+  }
+}
 .topic-board-column-heading strong {
   font-size: 13px;
 }

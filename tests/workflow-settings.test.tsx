@@ -20,6 +20,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 import { ProjectSettings } from "../src/renderer/ProjectSettings";
 import {
@@ -76,6 +77,7 @@ async function openSettings(primary = false) {
 }
 async function setup() {
   render(<App />);
+  await openFirstProject();
   await screen.findByRole("button", { name: "Проект" });
   await openSettings();
 }
@@ -253,11 +255,11 @@ it("retains named drafts and unfinished name across tabs, Back, and project swit
   expect(
     (screen.getByLabelText("Имя рабочего процесса") as HTMLInputElement).value,
   ).toBe("unfinished");
-  fireEvent.click(screen.getByRole("button", { name: /Beta/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Beta" }));
   await openSettings(true);
   await create("draft");
   replace("# beta");
-  fireEvent.click(screen.getByRole("button", { name: /Alpha/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
   await openSettings(true);
   expect(editor()!.state.doc.toString()).toBe(raw);
   expect(
@@ -402,6 +404,7 @@ it("retains workflow state through actual settings component remount", async () 
 });
 it("refreshes App launch discovery only after successful save and rejects a pending stale preview", async () => {
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   await screen.findByRole("checkbox", { name: /One/ });
   await waitFor(() =>
@@ -644,6 +647,7 @@ it.each(["success", "failure"])(
       workflows: ["existing", "new-flow"],
     });
     render(<App />);
+    await openFirstProject();
     await openPrototypeLaunch();
     await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(1));
     await openSettings();
@@ -675,6 +679,7 @@ it("releases the discovery lock if refresh supersedes a pending initial discover
   api.discover.mockImplementationOnce(() => new Promise(() => {}));
   api.discover.mockRejectedValue(Error("fresh catalog unavailable"));
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(1));
   await openSettings();
@@ -691,6 +696,7 @@ it("supersedes an older Reset discovery when workflow saving starts a refresh", 
   const original = await api.discover();
   api.discover.mockClear();
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   await screen.findByRole("checkbox", { name: /One/ });
   await waitFor(() =>

@@ -56,13 +56,24 @@ export interface TerminalSessionView {
   state: "starting" | "running" | "stopping" | "exited";
   exitCode?: number;
   screen?: "lost";
+  startupMessage?: string;
+  presetStatus?: "pending" | "submitted" | "unconfirmed" | "cancelled";
 }
 export type TerminalSessionRef = Pick<
   TerminalSessionView,
   "sessionId" | "generation"
 >;
 export interface TerminalSessionDependencies {
-  acquire(scope: ScopeRef): Promise<TerminalLease>;
+  acquire(
+    scope: ScopeRef,
+    snapshot?: { id: string; tabId: string; context: TerminalContext },
+  ): Promise<TerminalLease>;
+  armPreset?(pty: TerminalPty, arm: (pid: number) => void): void;
+  preparePreset?(
+    launch: TerminalLaunch,
+    command: string,
+  ): Promise<PreparedCommand>;
+
   /** Shared cold native readiness. No shell exists while this promise is pending. */
   prepareNative?(): Promise<void>;
   spawn(launch: TerminalLaunch): TerminalPty;
@@ -72,7 +83,14 @@ export interface TerminalSessionDependencies {
   removeTab(tab: TerminalTab): Promise<void>;
   prepareScreen: PrepareTerminalScreen;
 }
+interface PreparedCommand {
+  launch: TerminalLaunch;
+  arm(rootPid: number): void;
+  result: Promise<"delivered" | "unavailable" | "uncertain">;
+  dispose(): void;
+}
 interface Entry {
+  preset?: PreparedCommand;
   key: string;
   tab: TerminalTab;
   scope: ScopeRef;
@@ -178,6 +196,18 @@ export class TerminalSessions {
       throw Error("Сессия останавливается.");
     if (current.opening) return current.opening;
     return this.verifyExisting(selected, current);
+  }
+  /** Explicit creation only. The ordinary open/refresh paths carry no instruction. */
+  async startPreset(
+    tab: TerminalTab,
+    scope: ScopeRef,
+    command: string,
+  ): Promise<TerminalSessionView> {
+    const selected = selection(tab, scope);
+    this.assertOpen(selected);
+    if (tab.scope.kind !== "context" || this.entries.has(selected.key))
+      throw Error("Нельзя выполнить пресет в существующей сессии.");
+    return this.start(selected, undefined, command);
   }
   /** Revalidate a known screen without any path capable of spawning a PTY. */
   async verifyPresentation(
@@ -473,6 +503,7 @@ export class TerminalSessions {
     if (entry.view.state === "exited") return;
     if (entry.view.state !== "running" || !entry.control)
       throw new TerminalStopError("uncertain");
+    entry.preset?.dispose();
     entry.view.state = "stopping";
     this.changed();
     try {
@@ -517,7 +548,9 @@ export class TerminalSessions {
   private start(
     selected: ReturnType<typeof selection>,
     previous?: Entry,
+    command?: string,
   ): Promise<TerminalSessionView> {
+    const explicitPreset = command !== undefined;
     const entry: Entry = {
       ...selected,
       view: {
@@ -536,7 +569,13 @@ export class TerminalSessions {
     const opening = async () => {
       let phase: TerminalStartupPhase = "context";
       try {
-        entry.lease = await this.dependencies.acquire(entry.scope);
+        entry.lease = entry.tab.envSnapshotId
+          ? await this.dependencies.acquire(entry.scope, {
+              id: entry.tab.envSnapshotId,
+              tabId: entry.tab.id,
+              context: entry.view.context,
+            })
+          : await this.dependencies.acquire(entry.scope);
         if (
           terminalContextKey(entry.lease.launch.context) !==
           terminalContextKey(entry.view.context)
@@ -549,6 +588,16 @@ export class TerminalSessions {
           phase = "native-preflight";
           await this.dependencies.prepareNative();
           if (entry.cancelled) throw Error();
+        }
+        if (command !== undefined) {
+          phase = "preset-command";
+          if (!this.dependencies.preparePreset) throw Error();
+          entry.view.presetStatus = "pending";
+          entry.preset = await this.dependencies.preparePreset(
+            entry.lease.launch,
+            command,
+          );
+          command = undefined;
         }
         phase = "screen";
         entry.screen = await this.dependencies.prepareScreen(
@@ -564,7 +613,9 @@ export class TerminalSessions {
         entry.screen.assertReady();
         // Adapter spawn and subscription registration are synchronous, with asynchronous events.
         phase = "spawn";
-        entry.pty = this.dependencies.spawn(entry.lease.launch);
+        entry.pty = this.dependencies.spawn(
+          entry.preset?.launch ?? entry.lease.launch,
+        );
         entry.view.state = "running";
         entry.subscriptions.push(
           entry.pty.onExit((event) => {
@@ -611,6 +662,35 @@ export class TerminalSessions {
           }),
         );
 
+        if (entry.preset) {
+          const handle = entry.preset;
+          // A native PID is exposed only after the adapter has proved ownership.
+          // An unavailable handoff leaves the ordinary interactive shell intact.
+          void handle.result.then((status) => {
+            if (this.entries.get(entry.key) !== entry) return;
+            entry.view.presetStatus =
+              status === "delivered"
+                ? "submitted"
+                : status === "uncertain"
+                  ? "unconfirmed"
+                  : "cancelled";
+            handle.dispose();
+            this.changed();
+          });
+          if (
+            !this.dependencies.armPreset ||
+            entry.transportFailed ||
+            entry.cancelled
+          )
+            handle.dispose();
+          else {
+            try {
+              this.dependencies.armPreset(entry.pty, (pid) => handle.arm(pid));
+            } catch {
+              handle.dispose();
+            }
+          }
+        }
         this.changed();
         return structuredClone(entry.view);
       } catch (error) {
@@ -623,6 +703,19 @@ export class TerminalSessions {
         }
         entry.screen?.dispose();
         this.release(entry);
+        if (explicitPreset && this.entries.get(entry.key) === entry) {
+          // Metadata has already been committed. Keep a terminal result without
+          // a PTY, so a render/read can never turn this rejection into a new spawn.
+          entry.screen = undefined;
+          entry.view.state = "exited";
+          entry.view.presetStatus = undefined;
+          entry.view.startupMessage = new TerminalStartupError(
+            phase,
+            false,
+            entry.cancelled,
+          ).message;
+          return structuredClone(entry.view);
+        }
         if (this.entries.get(entry.key) === entry) {
           if (previous) this.entries.set(entry.key, previous);
           else this.entries.delete(entry.key);
@@ -638,6 +731,7 @@ export class TerminalSessions {
   }
   private loseScreen(entry: Entry): void {
     if (this.entries.get(entry.key) !== entry || entry.transportFailed) return;
+    entry.preset?.dispose();
     entry.transportFailed = true;
     entry.view.screen = "lost";
     try {
@@ -751,6 +845,8 @@ export class TerminalSessions {
     };
   }
   private release(entry: Entry) {
+    entry.preset?.dispose();
+    entry.preset = undefined;
     const lease = entry.lease;
     entry.lease = undefined;
     lease?.release();

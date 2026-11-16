@@ -358,3 +358,33 @@ describe("TopicSelect", () => {
     expect(screen.getByRole("listbox")).toBeTruthy();
   });
 });
+
+it("does not scroll launch topics on pointer hover; keyboard can reveal that very same option", () => {
+  render(<TopicSelect {...props} />);
+  fireEvent.click(control());
+  const list = screen.getByRole("listbox"),
+    last = screen.getAllByRole("option")[2];
+  const rect = (top: number, bottom: number) =>
+    ({
+      top,
+      bottom,
+      left: 0,
+      right: 400,
+      width: 400,
+      height: bottom - top,
+      x: 0,
+      y: top,
+      toJSON() {},
+    }) as DOMRect;
+  vi.spyOn(list, "getBoundingClientRect").mockReturnValue(rect(200, 300));
+  Object.defineProperty(list, "clientHeight", {
+    value: 100,
+    configurable: true,
+  });
+  vi.spyOn(last, "getBoundingClientRect").mockReturnValue(rect(280, 340));
+  fireEvent.pointerMove(last);
+  expect(last.classList.contains("is-focused")).toBe(true);
+  expect(list.scrollTop).toBe(0);
+  fireEvent.keyDown(control(), { key: "End" });
+  expect(list.scrollTop).toBe(40);
+});

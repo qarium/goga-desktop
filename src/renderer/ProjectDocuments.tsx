@@ -36,7 +36,6 @@ export function ProjectDocuments({
   const scope = owner ? contextRef(owner) : project.id;
   const scopeKey = documentScopeId(scope);
   const [tools, setTools] = useState<ProjectTool[]>([]),
-    [selectedTools, setSelectedTools] = useState<Record<string, string>>({}),
     [expanded, setExpanded] = useState<Record<string, boolean>>({}),
     [error, setError] = useState(""),
     [nameErrors, setNameErrors] = useState<Record<string, string>>({}),
@@ -45,7 +44,7 @@ export function ProjectDocuments({
   const revision = useSyncExternalStore(store.subscribe, () =>
     store.projectRevision(scope),
   );
-  const tool = selectedTools[scopeKey] ?? "";
+  const tool = useSyncExternalStore(store.subscribe, () => store.selectedTool(scope));
   const state = useSyncExternalStore(store.subscribe, () =>
     store.toolState(scope, tool),
   );
@@ -81,10 +80,7 @@ export function ProjectDocuments({
       (items) => {
         if (!current) return;
         setTools(items);
-        setSelectedTools((previous) => ({
-          ...previous,
-          [scopeKey]: previous[scopeKey] || items[0]?.name || "",
-        }));
+        if (!store.selectedTool(scope) && items[0]) store.selectTool(scope, items[0].name);
         setLoading(false);
         setSettled(loadKey);
       },
@@ -346,12 +342,7 @@ export function ProjectDocuments({
               Инструмент
               <select
                 value={availableTools.includes(tool) ? tool : ""}
-                onChange={(e) =>
-                  setSelectedTools((previous) => ({
-                    ...previous,
-                    [scopeKey]: e.target.value,
-                  }))
-                }
+                onChange={e => store.selectTool(scope, e.target.value)}
               >
                 {!availableTools.includes(tool) && (
                   <option value="" disabled>

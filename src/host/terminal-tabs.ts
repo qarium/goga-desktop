@@ -64,16 +64,31 @@ export function createTerminalTab(
   context: TerminalContext,
   kind: "common" | "context",
   id: string,
+  preset?: { name: string; envSnapshotId?: string },
 ): TerminalProjectTabs {
   const next = terminalProjectTabsSchema.parse(state),
     owner = terminalContextSchema.parse(context);
   if (next.tabs.some((t) => t.projectId !== owner.projectId || t.id === id))
     throw invalid();
   if (kind !== "common" && kind !== "context") throw invalid();
+  let name = nextTerminalName(next.tabs);
+  if (preset) {
+    if (kind !== "context") throw invalid();
+    const base = terminalTabSchema.shape.name.parse(preset.name);
+    const names = new Set(
+      visibleTerminalTabs(next.tabs, owner).map((t) => t.name),
+    );
+    name = base;
+    for (let n = 1; names.has(name); n++) {
+      const suffix = ` (${n})`;
+      name = base.slice(0, 120 - suffix.length) + suffix;
+    }
+  }
   const tab = terminalTabSchema.parse({
     id,
     projectId: owner.projectId,
-    name: nextTerminalName(next.tabs),
+    name,
+    ...(preset?.envSnapshotId ? { envSnapshotId: preset.envSnapshotId } : {}),
     scope: kind === "common" ? { kind } : { kind, context: owner },
   });
   next.initialized = true;

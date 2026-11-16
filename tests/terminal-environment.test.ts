@@ -301,3 +301,28 @@ it("preserves an explicit project NO_COLOR instead of forcing terminal colors", 
   expect(launch.env.NO_COLOR).toBe("1");
   expect(launch.env.FORCE_COLOR).toBeUndefined();
 });
+it("takes preset values as literal per-tab startup env, never as shell or project configuration", async () => {
+  const f = await fixture();
+  f.resolved.env = [
+    { key: "PORT", value: "3000", secret: false, runtime: false },
+  ];
+  const env = async (value?: string) =>
+    (
+      await prepareTerminalEnvironment(primary, f.resolve, {
+        ...system,
+        ...(value === undefined ? {} : { presetEnv: [{ key: "PORT", value }] }),
+      })
+    ).env;
+  expect((await env("4100")).PORT).toBe("4100");
+  expect((await env("$HOME $(echo not-executed)")).PORT).toBe(
+    "$HOME $(echo not-executed)",
+  );
+  expect((await env("")).PORT).toBe("");
+  expect((await env()).PORT).toBe("3000");
+  await expect(
+    prepareTerminalEnvironment(primary, f.resolve, {
+      ...system,
+      presetEnv: [{ key: "BASH_ENV", value: "not printed" }],
+    }),
+  ).rejects.toThrow();
+});

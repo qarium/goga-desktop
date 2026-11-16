@@ -1,6 +1,7 @@
 import { expect, it } from "vitest";
 import {
   makeOverviewGraph,
+  prepareOverviewGraph,
   ownerForPath,
 } from "../src/renderer/overview/graph";
 import type { SchemaCell } from "../src/shared/project-architecture";
@@ -70,4 +71,50 @@ it("keeps project-level external and parent-to-child incoming dependencies", () 
   expect(
     nested.edges.some((e) => e.source === "src" && e.target === "src/a"),
   ).toBe(true);
+});
+
+it("projects selection without relaying out or replacing unaffected nodes and edges", () => {
+  const prepared = prepareOverviewGraph(
+    [
+      cell("a", [], ["b"]),
+      cell("b", [], ["c"]),
+      cell("c"),
+      cell("d", [], ["../unknown"]),
+    ],
+    "@project",
+  );
+  const base = prepared.select(null);
+  const a = prepared.select("a"),
+    b = prepared.select("b");
+  expect(prepared.select("not-a-node")).toBe(base);
+  const node = (g: typeof base, id: string) =>
+    g.nodes.find((n) => n.id === id)!;
+  const edge = (g: typeof base, id: string) =>
+    g.edges.find((e) => e.id === id)!;
+  expect(node(a, "a").data.selected).toBe(true);
+  expect(node(a, "a").position).toBe(node(base, "a").position);
+  expect(node(b, "a")).toBe(node(base, "a"));
+  expect(node(a, "d")).toBe(node(b, "d"));
+  expect(edge(a, "a→b")).toBe(edge(b, "a→b"));
+  expect(edge(a, "b→c")).toBe(edge(base, "b→c"));
+  expect(edge(b, "b→c").className).toBe("ov-edge-selected");
+  expect(edge(a, "d→../unknown")).toBe(edge(b, "d→../unknown"));
+  expect(edge(base, "a→b").className).toBe("");
+});
+it("preserves selection and highlighted arrows of scope groups and dashed external links", () => {
+  const prepared = prepareOverviewGraph(schema, "src/a");
+  const base = prepared.select(null),
+    selected = prepared.select("src/a");
+  expect(
+    selected.nodes.find((n) => n.id === "scope::src/a")?.data.selected,
+  ).toBe(true);
+  for (const e of selected.edges.filter(
+    (e) => e.source === "scope::src/a" || e.target === "scope::src/a",
+  )) {
+    expect(e.className).toBe("ov-edge-selected");
+    expect(e.style?.strokeDasharray).toBe(
+      base.edges.find((x) => x.id === e.id)?.style?.strokeDasharray,
+    );
+    expect(e.markerEnd).toMatchObject({ color: "#7ce4cc" });
+  }
 });

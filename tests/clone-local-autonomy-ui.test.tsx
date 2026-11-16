@@ -13,6 +13,7 @@ import {
 } from "@testing-library/react";
 import { LaunchForm } from "../src/renderer/LaunchForm";
 import { createDraftStore } from "../src/renderer/task-drafts";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 import { TopicCard } from "../src/renderer/TopicCard";
 import { topicError } from "../src/renderer/TopicsCommon";
@@ -298,6 +299,7 @@ it.each(["current-header", "selector", "board"])(
       typeof scope === "string" ? board : missingBoard,
     );
     render(<App />);
+    await openFirstProject();
     fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
     await screen.findByLabelText("Исполняемый файл");
     if (entry === "selector" || entry === "current-header") {

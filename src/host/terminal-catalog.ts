@@ -35,12 +35,21 @@ const denied = () => Error("Вкладка терминала недоступн
 /** Serial host-owned catalog. Resolving ScopeRef must verify its actual project/clone,
  * identity and initial revision; no shell/environment/path comes from the UI.
  */
+interface PresetCatalogDependencies {
+  store: Pick<
+    import("./terminal-preset-store").TerminalPresetStore,
+    "read" | "createSnapshot" | "removeSnapshot" | "collectSnapshots"
+  >;
+  start(tab: TerminalTab, scope: ScopeRef, command: string): Promise<unknown>;
+}
 export class TerminalCatalog {
+  private reconciled = false;
   private tail: Promise<unknown> = Promise.resolve();
   private frozen = new Set<string>();
   constructor(
     private store: Pick<TerminalStore, "load" | "save">,
     private resolve: (scope: ScopeRef) => Promise<TerminalContext>,
+    private readonly presets?: PresetCatalogDependencies,
   ) {}
   private serial<T>(action: () => Promise<T>): Promise<T> {
     const result = this.tail.then(action);
@@ -130,6 +139,7 @@ export class TerminalCatalog {
     const parsed = terminalCatalogChangeSchema.safeParse(raw);
     if (!parsed.success) return Promise.reject(denied());
     const request = parsed.data;
+    let afterPublish: Promise<unknown> | undefined;
     return this.serial(async () => {
       guard();
       const context = await this.context(request.scope),
@@ -158,6 +168,56 @@ export class TerminalCatalog {
         case "create":
           state = createTerminalTab(state, context, request.area, randomUUID());
           break;
+        case "create-from-preset": {
+          if (!this.presets) throw Error("Пресеты терминала недоступны.");
+          const { store, start } = this.presets;
+          // Only reconcile under this host registry's serial writer, never while
+          // another tab is between snapshot publication and registry commit.
+          if (!this.reconciled) {
+            const live = new Set<string>();
+            for (const project of Object.values(registry.projects))
+              for (const tab of project.tabs)
+                if (tab.envSnapshotId) live.add(tab.envSnapshotId);
+            await store.collectSnapshots(live);
+            this.reconciled = true;
+          }
+          const preset = await store.read(
+            request.presetId,
+            request.presetRevision,
+          );
+          guard();
+          const tabId = randomUUID();
+          const envSnapshotId = await store.createSnapshot(preset.env, {
+            tabId,
+            context,
+          });
+          let writeAttempted = false;
+          try {
+            guard();
+            state = createTerminalTab(state, context, "context", tabId, {
+              name: preset.name,
+              envSnapshotId,
+            });
+            const tab = state.tabs[state.tabs.length - 1];
+            registry.projects[context.projectId] = state;
+            writeAttempted = true;
+            const committed = await this.store.save(registry);
+            guard();
+            // Reserve the generation synchronously, before releasing the catalog
+            // queue to open(). Do not hold the queue during native startup.
+            const started = start(tab, request.scope, preset.command);
+            const snapshot = this.snapshot(committed, context);
+            afterPublish = started;
+            return snapshot;
+          } catch (e) {
+            if (envSnapshotId && !writeAttempted)
+              await store.removeSnapshot(envSnapshotId);
+            // A failed fsync can mean the new registry is already visible.
+            // Never delete a possibly referenced snapshot; reconcile on next create.
+            this.reconciled = false;
+            throw e;
+          }
+        }
         case "rename":
           state = renameTerminalTab(state, request.tabId, request.name);
           break;
@@ -191,6 +251,9 @@ export class TerminalCatalog {
       guard();
       registry.projects[context.projectId] = state;
       return this.snapshot(await this.store.save(registry), context);
+    }).then(async (snapshot) => {
+      await afterPublish;
+      return snapshot;
     });
   }
   authorize(
@@ -235,6 +298,13 @@ export class TerminalCatalog {
         throw denied();
       registry.projects[tab.projectId] = removeTerminalTab(project, tab.id);
       await this.store.save(registry);
+      if (current.envSnapshotId && this.presets) {
+        try {
+          await this.presets.store.removeSnapshot(current.envSnapshotId);
+        } catch {
+          this.reconciled = false;
+        } // metadata closed; retry orphan cleanup on next preset
+      }
     });
   }
 }

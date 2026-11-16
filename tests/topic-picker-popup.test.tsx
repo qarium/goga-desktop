@@ -11,6 +11,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { TopicContextPicker } from "../src/renderer/TopicContextPicker";
 import {
   NativeTopicPopupProvider,
   TopicPickerPopup,
@@ -612,4 +613,66 @@ it("bounds an opt-in DOM portal to the viewport and repositions it without nativ
   ui.unmount();
   expect(disconnect).toHaveBeenCalledOnce();
   expect(document.querySelector(".topic-context-dom-root")).toBeNull();
+});
+
+it("does not scroll a native topic popup on hover and reveals keyboard focus only in its own document", async () => {
+  const topics = Array.from({ length: 5 }, (_, i) => ({
+    topic: "topic-" + i,
+    branch: "branch-" + i,
+    remote: false,
+    current: false,
+    statuses: [],
+    hosts: [],
+    todo: null,
+    divergence: null,
+  }));
+  render(
+    <TopicContextPicker
+      project={{ id: "p", name: "Project", path: "/fixture/project" }}
+      board={{
+        projectId: "p",
+        year: "2026",
+        entries: topics,
+        currentTopic: null,
+      }}
+      selected={null}
+      onSelect={() => {}}
+      onClear={() => {}}
+      onOpenCard={() => {}}
+    />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
+  const body = within(child.window.document.body);
+  const search = await body.findByRole("combobox", { name: "Найти топик" });
+  const list = body.getByRole("grid", { name: "Топики проекта" });
+  const last = body.getAllByRole("row").at(-1)!;
+  expect(list.ownerDocument).not.toBe(document);
+  const rect = (top: number, bottom: number) =>
+    ({
+      top,
+      bottom,
+      left: 0,
+      right: 420,
+      width: 420,
+      height: bottom - top,
+      x: 0,
+      y: top,
+      toJSON() {},
+    }) as DOMRect;
+  vi.spyOn(list, "getBoundingClientRect").mockReturnValue(rect(200, 380));
+  Object.defineProperty(list, "clientHeight", {
+    value: 180,
+    configurable: true,
+  });
+  Object.defineProperty(last, "offsetTop", { value: 1000, configurable: true });
+  Object.defineProperty(last, "offsetHeight", {
+    value: 60,
+    configurable: true,
+  });
+  vi.spyOn(last, "getBoundingClientRect").mockReturnValue(rect(380, 440));
+  fireEvent.pointerMove(last);
+  expect(list.scrollTop).toBe(0);
+  fireEvent.keyDown(search, { key: "End" });
+  expect(list.scrollTop).toBe(60);
+  expect(child.window.document.scrollingElement?.scrollTop ?? 0).toBe(0);
 });

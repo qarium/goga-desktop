@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { EventEmitter } from "node:events";
 const fake = vi.hoisted(() => ({
   created: [] as any[],
@@ -20,8 +20,12 @@ vi.mock("electron", () => ({
         }),
         url: "",
         getURL: () => this.webContents.url,
+        reload: vi.fn(() => queueMicrotask(() => this.webContents.emit("did-finish-load"))),
+        isLoadingMainFrame: vi.fn(() => false),
+        stop: vi.fn(),
         insertCSS: vi.fn(async () => "style-key"),
         setWindowOpenHandler: vi.fn(),
+        setWebRTCIPHandlingPolicy: vi.fn(),
         close: vi.fn(),
         isDestroyed: () => false,
         focus: vi.fn(),
@@ -39,9 +43,10 @@ vi.mock("electron", () => ({
     fromPartition: vi.fn(() => {
       const s = Object.assign(new EventEmitter(), {
         setPermissionCheckHandler: vi.fn(),
+        setDevicePermissionHandler: vi.fn(),
         clearStorageData: vi.fn(async () => {}),
         setPermissionRequestHandler: vi.fn(),
-        webRequest: { onBeforeRequest: vi.fn() },
+        webRequest: { onBeforeRequest: vi.fn(), onHeadersReceived: vi.fn() },
       });
       fake.sessions.push(s);
       return s;
@@ -52,6 +57,8 @@ vi.mock("electron", () => ({
 }));
 import { dialog, ipcMain } from "electron";
 import { DashboardViews } from "../src/main/views";
+import { WindowDashboards } from "../src/main/dashboard-window";
+import type { Run } from "../src/shared/types";
 describe("independent AFM views", () => {
   beforeEach(() => {
     fake.created.length = 0;
@@ -70,15 +77,17 @@ describe("independent AFM views", () => {
     });
     const focus = vi.fn(),
       error = vi.fn(),
+      shortcut = vi.fn(),
       opened = vi.fn<(_id: string, _url: string) => boolean | Promise<boolean>>(
         () => true,
       );
     return {
-      views: new DashboardViews(win as any, focus, error, opened),
+      views: new DashboardViews(win as any, focus, error, opened, shortcut),
       win,
       focus,
       error,
       opened,
+      shortcut,
     };
   }
   function deferred<T>() {
@@ -90,6 +99,337 @@ describe("independent AFM views", () => {
     });
     return { promise, resolve, reject };
   }
+  describe("window attachment lifecycle with real pin parsing and native generations", () => {
+    const origin = "http://localhost:4101";
+    const status = (id="run-a") => Response.json({run_id:id,flow_name:"Worker",run_status:"running",stages:[]});
+    function setup(runs: Run[] = []) {
+      const fetcher = vi.spyOn(globalThis,"fetch").mockImplementation(async()=>status());
+      const {views,opened,error} = fixture();
+      const host = {
+        runCatalog: () => runs,
+        withDemonstrationOwner: vi.fn(async (_scope,action)=>action("Owner")),
+      };
+      const changed=vi.fn();
+      const panels = new WindowDashboards(host as any,views,changed);
+      opened.mockImplementation((id,url)=>panels.opened(id,url));
+      return {panels,views,fetcher,runs,error,changed};
+    }
+    afterEach(()=>vi.restoreAllMocks());
+    it.each(["probe","native","post-load"] as const)("releases the slot and tentative view synchronously when cancelling %s", async phase=>{
+      const {panels,fetcher} = setup();
+      const heldFetch=deferred<Response>(), heldLoad=deferred<void>();
+      if(phase==="probe")fetcher.mockReturnValueOnce(heldFetch.promise);
+      if(phase==="native")fake.loads.push(()=>heldLoad.promise);
+      if(phase==="post-load")fetcher.mockResolvedValueOnce(status()).mockReturnValueOnce(heldFetch.promise);
+      const initial=panels.connect("p",origin,"old");
+      const rejected=expect(initial).rejects.toThrow(/отменено/);
+      if(phase==="native")await vi.waitFor(()=>expect(fake.created).toHaveLength(1));
+      else await vi.waitFor(()=>expect(fetcher).toHaveBeenCalledTimes(phase==="probe"?1:2));
+      panels.cancel("not-the-owner");
+      await expect(panels.connect("p",origin,"blocked")).rejects.toThrow(/выполняется/);
+      panels.cancel("old");
+      if(phase!=="probe")expect(fake.created[0].webContents.close).toHaveBeenCalledOnce();
+      const next=await panels.connect("p",origin,"new");
+      expect(next.kind).toBe("attached");
+      heldFetch.resolve(status("superseded"));
+      heldLoad.resolve();
+      await rejected;
+      expect(panels.list().length).toBe(1);
+      expect(fake.created.at(-1).webContents.close).not.toHaveBeenCalled();
+    });
+    it("keeps a previously external row observation-only, and deduplicates a previously owned pin", async ()=>{
+      const row = {id:"owned",projectId:"p",kind:"pipeline",status:"running",url:origin,dashboardRunId:"run-a",dashboardReconnect:true} as Run;
+      const {panels,runs}=setup([row]);
+      expect(await panels.connect("p",origin,"managed")).toEqual({kind:"managed",id:"owned"});
+      expect(panels.list()).toHaveLength(0);
+      expect(fake.created).toHaveLength(0);
+      runs.length=0;
+      const external = await panels.connect("p",origin,"observer");
+      runs.push(row);
+      expect(await panels.connect("p",origin,"again")).toEqual(external);
+      expect(fake.created).toHaveLength(1);
+      expect(panels.list()).toHaveLength(1);
+    });
+    it.each(["opening","pre-refresh","post-refresh","recovery"] as const)("reports port reuse during %s without publishing a substituted run", async phase=>{
+      const {panels,fetcher,views}=setup();
+      if(phase==="opening") {
+        fetcher.mockResolvedValueOnce(status()).mockResolvedValueOnce(status("run-b"));
+        await expect(panels.connect("p",origin,"a")).rejects.toThrow(/другому запуску/);
+        expect(panels.list()).toHaveLength(0);
+      } else {
+        const first = await panels.connect("p",origin,"a");
+        if(first.kind!=="attached") throw Error("expected external");
+        const id=first.panel.id;
+        panels.select("p",id);
+        if(phase==="post-refresh")fetcher.mockResolvedValueOnce(status());
+        if(phase==="recovery")fake.created[0].webContents.emit("render-process-gone");
+        if(phase==="recovery")fetcher.mockResolvedValueOnce(status());
+        fetcher.mockResolvedValueOnce(status("run-b"));
+        await expect(panels.refresh("p",id,phase==="recovery")).rejects.toThrow(/другому запуску/);
+        expect(panels.list()[0].runId).toBe("run-a");
+        expect(views.isSelected(id)).toBe(false);
+      }
+      expect(fake.created.every(page=>!page.visible)).toBe(true);
+    });
+    it("ignores recovery requested by a hidden tab", async ()=>{
+      const {panels,views,fetcher}=setup();
+      const result=await panels.connect("p",origin,"a");
+      if(result.kind!=="attached")throw Error();
+      const page=fake.created[0];
+      panels.select("p",result.panel.id);
+      page.webContents.emit("render-process-gone");
+      views.select(null);
+      fetcher.mockClear();
+      await expect(panels.refresh("p",result.panel.id,true)).rejects.toThrow();
+      expect(fetcher).not.toHaveBeenCalled();
+      expect(fake.created).toHaveLength(1);
+    });
+    it("a repeated attachment returns its existing tab without starting an uncancellable recovery", async ()=>{
+      const {panels}=setup();
+      const first=await panels.connect("p",origin,"first");
+      fake.created[0].webContents.emit("render-process-gone");
+      expect(await panels.connect("p",origin,"duplicate")).toEqual(first);
+      expect(fake.created).toHaveLength(1);
+    });
+    it("a renderer recovery flag cannot leave a healthy but replaced document visible", async ()=>{
+      const {panels,views,fetcher}=setup();
+      const first=await panels.connect("p",origin,"first");
+      if(first.kind!=="attached")throw Error();
+      panels.select("p",first.panel.id);
+      fetcher.mockResolvedValueOnce(status("new-owner"));
+      await expect(panels.refresh("p",first.panel.id,true)).rejects.toThrow(/другому запуску/);
+      expect(views.isSelected(first.panel.id)).toBe(false);
+      expect(fake.created[0].visible).toBe(false);
+    });
+  });
+  it("checks a managed pin again after reloading if a validator was supplied", async()=>{
+    const {views}=fixture();
+    views.select("a");
+    await views.ensure("a","http://localhost:4101");
+    const post=deferred<boolean>();
+    const validate=vi.fn().mockResolvedValueOnce(true).mockReturnValueOnce(post.promise);
+    const reload=views.refresh("a",validate);
+    await vi.waitFor(()=>expect(validate).toHaveBeenCalledTimes(2));
+    views.select("a");
+    expect(fake.created[0].visible).toBe(false);
+    post.resolve(false);
+    expect(await reload).toBe(false);
+    expect(fake.created[0].visible).toBe(false);
+    expect(validate).toHaveBeenCalledTimes(2);
+  });
+  it("a rejected off-origin navigation cannot poison a healthy retained document", async()=>{
+    const {views,error}=fixture();
+    await views.ensure("a","http://localhost:4101");
+    views.select(null);
+    fake.created[0].webContents.emit("did-fail-load",{},-20,"blocked","https://elsewhere.test",true);
+    expect(error).not.toHaveBeenCalled();
+    views.select("a");
+    expect(views.isSelected("a")).toBe(true);
+  });
+  it("reloads only the selected healthy document, in place, coalescing repeat requests", async () => {
+    const {views, opened} = fixture();
+    views.reconcile(["one","two"]);
+    await views.ensure("one","http://localhost:4101");
+    await views.ensure("two","http://localhost:4102");
+    views.select("one");
+    const wc = fake.created[0].webContents;
+    wc.url += "/stages/11#details";
+    const validation = deferred<boolean>(), validate = vi.fn(() => validation.promise);
+    const first = views.refresh("one", validate);
+    expect(views.refresh("one", validate)).toBe(first);
+    expect(await views.refresh("two")).toBe(false);
+    expect(await views.refresh("unknown")).toBe(false);
+    expect(wc.reload).not.toHaveBeenCalled();
+    validation.resolve(true);
+    expect(await first).toBe(true);
+    expect(wc.getURL()).toBe("http://localhost:4101/stages/11#details");
+    expect(wc.reload).toHaveBeenCalledOnce();
+    expect(wc.loadURL).toHaveBeenCalledOnce();
+    expect(fake.created[1].webContents.reload).not.toHaveBeenCalled();
+    expect(opened).toHaveBeenCalledTimes(2);
+    expect(fake.sessions).toHaveLength(2);
+    expect(fake.sessions[0].clearStorageData).not.toHaveBeenCalled();
+    expect(fake.created[0].visible).toBe(true);
+    wc.url = "http://localhost:4103";
+    expect(await views.refresh("one")).toBe(false);
+    expect(wc.reload).toHaveBeenCalledOnce();
+  });
+  it("does not confuse an already pending frame navigation with a requested refresh", async () => {
+    const {views} = fixture();
+    await views.ensure("a","http://localhost:4101");
+    views.select("a");
+    const wc = fake.created[0].webContents;
+    wc.isLoadingMainFrame.mockReturnValue(true);
+    expect(await views.refresh("a")).toBe(false);
+    expect(wc.reload).not.toHaveBeenCalled();
+  });
+  it("does not reload after switching away and back while validation is pending", async () => {
+    const {views} = fixture();
+    await views.ensure("a","http://localhost:4101");
+    views.select("a");
+    const pin = deferred<boolean>(), validate = vi.fn(()=>pin.promise);
+    const pending = views.refresh("a",validate);
+    await vi.waitFor(()=>expect(validate).toHaveBeenCalledOnce());
+    views.select(null);
+    views.select("a");
+    pin.resolve(true);
+    expect(await pending).toBe(false);
+    expect(fake.created[0].webContents.reload).not.toHaveBeenCalled();
+  });
+  it("makes a failed reload recoverable without reloading a failed page or affecting a sibling", async () => {
+    const {views, error} = fixture();
+    views.reconcile(["a","b"]);
+    await views.ensure("a","http://localhost:4101");
+    await views.ensure("b","http://localhost:4102");
+    views.select("a");
+    const old = fake.created[0], wc = old.webContents;
+    wc.reload.mockImplementationOnce(()=> {
+      wc.emit("did-fail-load", {}, -105, "unavailable", wc.url, true);
+      wc.emit("did-finish-load");
+    });
+    expect(await views.refresh("a")).toBe(false);
+    expect(error).toHaveBeenCalledExactlyOnceWith("a",expect.any(String));
+    expect(old.visible).toBe(false);
+    expect(await views.refresh("a")).toBe(false);
+    expect(await views.restore("a","http://localhost:4101")).toBe(true);
+    wc.emit("did-finish-load");
+    expect(old.visible).toBe(false);
+    expect(fake.created[2].visible).toBe(true);
+    expect(fake.created[1].webContents.reload).not.toHaveBeenCalled();
+  });
+  it("routes native refresh keys to the selected target only; suppresses browser defaults and repeats", async () => {
+    const {views, shortcut} = fixture();
+    await views.ensure("a","http://localhost:4101");
+    views.select("a");
+    const wc = fake.created[0].webContents;
+    const press = (key:string, overrides = {}) => {
+      const event = {preventDefault:vi.fn()};
+      wc.emit("before-input-event",event,{type:"keyDown",key,...overrides});
+      return event.preventDefault.mock.calls.length;
+    };
+    expect(press("F5")).toBe(1);
+    expect(press("r",{meta:true})).toBe(1);
+    expect(press("R",{control:true})).toBe(1);
+    expect(press("R",{meta:true,shift:true})).toBe(1);
+    expect(press("F5",{isAutoRepeat:true})).toBe(1);
+    expect(press("r")).toBe(0);
+    expect(press("r",{control:true,alt:true})).toBe(0);
+    views.select(null);
+    expect(press("F5")).toBe(1);
+    views.remove("a");
+    expect(press("F5")).toBe(1);
+    expect(shortcut.mock.calls).toEqual([["a"],["a"],["a"],["a"]]);
+    expect(wc.reload).not.toHaveBeenCalled();
+  });
+  it("isolates attached pages without AFM IPC and permits only same-origin HTTP reads", async () => {
+    const {views} = fixture(), id = "attached:one", origin = "http://localhost:4101";
+    views.reconcile([id]);
+    await views.restore(id, origin);
+    views.select(id);
+    const {options, webContents:wc} = fake.created[0];
+    expect(options.webPreferences).toMatchObject({sandbox:true,contextIsolation:true,nodeIntegration:false,devTools:false});
+    expect(options.webPreferences).not.toHaveProperty("preload");
+    expect(options.webPreferences).not.toHaveProperty("additionalArguments");
+    wc.send = vi.fn();
+    expect(await views.focusStage(id,"worker")).toBe(false);
+    expect(wc.send).not.toHaveBeenCalled();
+    const ses = fake.sessions[0], filter = ses.webRequest.onBeforeRequest.mock.calls[0][1];
+    expect(wc.setWebRTCIPHandlingPolicy).toHaveBeenCalledExactlyOnceWith("disable_non_proxied_udp");
+    expect(ses.setDevicePermissionHandler.mock.calls[0][0]({})).toBe(false);
+    const hdr=ses.webRequest.onHeadersReceived.mock.calls[0][0], headerResult=vi.fn();
+    hdr({responseHeaders:{"content-type":["text/html"],"Connection-Allowlist":["(response-origin); webrtc=allow"]}},headerResult);
+    expect(headerResult.mock.calls[0][0].responseHeaders).toMatchObject({
+      "content-type":["text/html"],"Connection-Allowlist":["(response-origin)"],
+    });
+    const checks: Array<[string, string, boolean]> = [
+      [origin+"/api/status","GET",false], [origin+"/style.css","HEAD",false],
+      ...["POST","PUT","DELETE","PATCH","OPTIONS"].map(method=>[origin+"/api/action",method,true] as [string,string,boolean]),
+      ["ws://localhost:4101/live","GET",true], ["http://localhost:4102/api","GET",true],
+      ["https://evil.test/a","GET",true], ["file:///etc/passwd","GET",true],
+    ];
+    for (const [url,method,cancel] of checks) {
+      const cb = vi.fn();
+      filter({url,method},cb);
+      expect(cb,`${method} ${url}`).toHaveBeenCalledExactlyOnceWith({cancel});
+    }
+    const download = {preventDefault:vi.fn()};
+    ses.emit("will-download",download);
+    expect(download.preventDefault).toHaveBeenCalledOnce();
+    expect(wc.setWindowOpenHandler.mock.calls[0][0]({url:origin})).toEqual({action:"deny"});
+    views.remove(id);
+    const late = vi.fn();
+    filter({url:origin,method:"GET"},late);
+    expect(late).toHaveBeenCalledExactlyOnceWith({cancel:true});
+  });
+  it("revalidates attached identity around reload, hiding the document until confirmed", async () => {
+    const {views, error} = fixture(), id = "attached:a", origin = "http://localhost:4101";
+    views.reconcile([id]);
+    views.select(id);
+    expect(await views.restore(id,origin)).toBe(true);
+    const page = fake.created[0], pin = deferred<boolean>();
+    const validate = vi.fn<()=>Promise<boolean>>().mockResolvedValueOnce(true).mockReturnValueOnce(pin.promise);
+    const pending = views.refresh(id, validate);
+    await vi.waitFor(()=>expect(validate).toHaveBeenCalledTimes(2));
+    expect(page.webContents.reload).toHaveBeenCalledOnce();
+    views.select(null);
+    views.select(id);
+    expect(page.visible).toBe(false);
+    pin.resolve(false);
+    expect(await pending).toBe(false);
+    expect(error).toHaveBeenCalledExactlyOnceWith(id, expect.any(String));
+    views.select(id);
+    expect(page.visible).toBe(false);
+    expect(await views.restore(id,origin)).toBe(true);
+    expect(fake.created[1].visible).toBe(true);
+    expect(await views.refresh(id)).toBe(false);
+    expect(fake.created[1].webContents.reload).not.toHaveBeenCalled();
+  });
+  it("ignores an external post-refresh check that finishes after detach", async () => {
+    const {views, error} = fixture(), id = "attached:a", origin = "http://localhost:4101";
+    views.reconcile([id]);
+    views.select(id);
+    expect(await views.restore(id,origin)).toBe(true);
+    const page = fake.created[0], pin = deferred<boolean>();
+    const validate = vi.fn<()=>Promise<boolean>>().mockResolvedValueOnce(true).mockReturnValueOnce(pin.promise);
+    const pending = views.refresh(id,validate);
+    await vi.waitFor(()=>expect(validate).toHaveBeenCalledTimes(2));
+    views.remove(id);
+    pin.reject(Error("late private details"));
+    expect(await pending).toBe(false);
+    expect(page.visible).toBe(false);
+    expect(error).not.toHaveBeenCalled();
+  });
+  it("gives up on a hanging observer document and ignores late root navigation", async () => {
+    vi.useFakeTimers();
+    try {
+      const {views, opened} = fixture(), id="attached:timeout", origin="http://localhost:4101";
+      const navigation = deferred<void>();
+      fake.loads.push(()=>navigation.promise);
+      views.reconcile([id]);
+      views.select(id);
+      const pending = views.restore(id,origin);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(fake.created[0].webContents.stop).toHaveBeenCalledOnce();
+      expect(await pending).toBe(false);
+      navigation.resolve();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(opened).not.toHaveBeenCalled();
+      expect(fake.created[0].visible).toBe(false);
+    } finally { vi.useRealTimers(); }
+  });
+  it("never reveals a document that changed origin during the opening acknowledgement", async () => {
+    const {views, opened} = fixture(), id="attached:late", origin="http://localhost:4101";
+    const pin = deferred<boolean>();
+    opened.mockReturnValue(pin.promise);
+    views.reconcile([id]);
+    views.select(id);
+    const pending = views.restore(id,origin);
+    await vi.waitFor(()=>expect(opened).toHaveBeenCalledOnce());
+    fake.created[0].webContents.url = "http://localhost:4102";
+    pin.resolve(true);
+    expect(await pending).toBe(false);
+    expect(fake.created[0].visible).toBe(false);
+  });
   it("awaits async browser acknowledgement before revealing a current page", async () => {
     const { views, opened } = fixture();
     const acknowledgement = deferred<boolean>();

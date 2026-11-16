@@ -192,3 +192,87 @@ it("does not reuse an old branch after an external checkout to detached HEAD", a
   expect(screen.queryByLabelText("Ветка: main")).toBeNull();
   expect(screen.getByLabelText("Ветка: HEAD (без ветки)")).toBeTruthy();
 });
+
+it("shows a plain folder as Git not initialized without fake zero counts or blocked file work, then detects Git", async () => {
+  api.readGitSummary.mockResolvedValue({
+    scope: "p",
+    branch: null,
+    changedFiles: 0,
+    conflicts: 0,
+    repository: "missing",
+  });
+  api.readGitBranches = vi.fn();
+  const mounted = render(
+    <GitWorkspace
+      scope="p"
+      open={false}
+      bodyContainer={portal}
+      onOpen={vi.fn()}
+      onClose={vi.fn()}
+      onHistoryOpen={vi.fn()}
+      revision={0}
+    />,
+  );
+  await flush();
+  expect(screen.getByText("Git не инициализирован")).toBeTruthy();
+  expect(screen.getByRole("button", { name: /Изменения/ })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  expect(screen.getByRole("button", { name: "Коммиты" })).toHaveProperty(
+    "disabled",
+    true,
+  );
+  expect(
+    screen.getByRole("button", { name: /Изменения/ }).textContent,
+  ).not.toContain("0");
+  expect(api.readGitWorkspace).not.toHaveBeenCalled();
+  expect(api.readGitBranches).not.toHaveBeenCalled();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  api.readGitSummary.mockResolvedValue(summary());
+  await tick(3000);
+  expect(screen.queryByText("Git не инициализирован")).toBeNull();
+  expect(screen.getByRole("button", { name: "Ветка: main" })).toHaveProperty(
+    "disabled",
+    false,
+  );
+  expect(screen.getByRole("button", { name: /Изменения/ })).toHaveProperty(
+    "disabled",
+    false,
+  );
+});
+it("rejects contradictory missing-Git summary rather than masking actual changes", async () => {
+  api.readGitSummary.mockResolvedValue({ ...summary(), repository: "missing" });
+  render(view());
+  await flush();
+  expect(screen.queryByText("Git не инициализирован")).toBeNull();
+  expect(
+    screen.getByRole("button", { name: /Изменения/ }).textContent,
+  ).toContain("—");
+});
+
+it("discards a delayed workspace snapshot when its primary folder has no Git", async () => {
+  let release!: (value: any) => void;
+  api.readGitWorkspace.mockReturnValue(
+    new Promise((resolve) => {
+      release = resolve;
+    }),
+  );
+  api.readGitSummary.mockResolvedValue({
+    scope: "p",
+    branch: null,
+    changedFiles: 0,
+    conflicts: 0,
+    repository: "missing",
+  });
+  render(view("p", true));
+  await flush();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(
+    screen.queryByRole("status", { name: "Загрузка изменений" }),
+  ).toBeNull();
+  await act(async () => release(snapshot));
+  await flush();
+  expect(screen.getByText("Git не инициализирован")).toBeTruthy();
+  expect(screen.queryByText("Нет изменений для просмотра")).toBeNull();
+});

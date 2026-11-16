@@ -47,6 +47,7 @@ interface Plan {
     endpoint: string;
     source: string;
     destination: string;
+    force: boolean;
   };
 }
 export class GitBranchActions extends GitMergeSafety {
@@ -152,6 +153,7 @@ export class GitBranchActions extends GitMergeSafety {
       name,
       endpoint,
       source,
+      force: get("fetch")[0].startsWith("+"),
       destination: `refs/remotes/${name}/${source.slice(11)}`,
     };
   }
@@ -900,7 +902,7 @@ export class GitBranchActions extends GitMergeSafety {
                   "--no-write-commit-graph",
                   "--",
                   remote.endpoint,
-                  `${remote.source}:${remote.destination}`,
+                  `${remote.force ? "+" : ""}${remote.source}:${remote.destination}`,
                 ],
               });
               lines.push(

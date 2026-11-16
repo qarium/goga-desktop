@@ -19,6 +19,7 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 const project = { id: "p", name: "Project Alpha", path: "/tmp/alpha" };
 const other = { id: "q", name: "Project Beta", path: "/tmp/beta" };
@@ -133,6 +134,7 @@ it("opens during an active run and returns to the same native run without reload
     },
   ]);
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByRole("heading", { name: "Проект" });
   act(() => focusRun("run"));
@@ -150,6 +152,7 @@ it("opens during an active run and returns to the same native run without reload
 });
 it("masks persisted secret values and keeps independent secret/runtime choices", async () => {
   render(<App />);
+  await openFirstProject();
   await openSettings();
   expect((screen.getByLabelText("Значение 1") as HTMLInputElement).type).toBe(
     "password",
@@ -197,11 +200,12 @@ it("masks persisted secret values and keeps independent secret/runtime choices",
 });
 it("guards every exit, keeps Cancel focused, and preserves edits on save failure", async () => {
   render(<App />);
+  await openFirstProject();
   await openSettings();
   fireEvent.change(screen.getByLabelText("Исполняемый файл"), {
     target: { value: "goga-next" },
   });
-  fireEvent.click(screen.getByRole("button", { name: /Project Beta/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Project Beta" }));
   expect(await screen.findByRole("dialog")).toBeTruthy();
   expect(document.activeElement).toBe(
     screen.getByRole("button", { name: "Отмена" }),
@@ -228,6 +232,7 @@ it("retries loading and shows a missing saved profile without replacing it", asy
       value: { ...settings.value, profile: "missing" },
     });
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   fireEvent.click(
     await screen.findByRole("button", { name: "Повторить загрузку" }),
@@ -245,6 +250,7 @@ it("retries loading and shows a missing saved profile without replacing it", asy
 });
 it("preserves launch composition and task draft, then refreshes discovery and preview after save", async () => {
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   await screen.findByRole("checkbox", { name: /Stage B/ });
   selectCatalog(screen.getByLabelText("Рабочий процесс"), "file:quality");
@@ -319,6 +325,7 @@ it("guards notification focus and disables navigation and edits while save is pe
       }),
   );
   render(<App />);
+  await openFirstProject();
   await openSettings();
   fireEvent.change(screen.getByLabelText("Исполняемый файл"), {
     target: { value: "next" },
@@ -332,7 +339,7 @@ it("guards notification focus and disables navigation and edits while save is pe
       "fieldset",
     )?.disabled,
   ).toBe(true);
-  fireEvent.click(screen.getByRole("button", { name: /Project Beta/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Project Beta" }));
   act(() => focusRun("run"));
   expect(screen.getByRole("heading", { name: "Project Alpha" })).toBeTruthy();
   await act(async () =>
@@ -345,18 +352,19 @@ it("guards notification focus and disables navigation and edits while save is pe
 });
 it("finishes save-and-navigate without leaving the shell disabled", async () => {
   render(<App />);
+  await openFirstProject();
   await openSettings();
   fireEvent.change(screen.getByLabelText("Исполняемый файл"), {
     target: { value: "next" },
   });
-  fireEvent.click(screen.getByRole("button", { name: /Project Beta/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Project Beta" }));
   fireEvent.click(screen.getByRole("button", { name: "Сохранить и перейти" }));
   await screen.findByRole("heading", { name: "Project Beta" });
   expect(
-    (screen.getByRole("button", { name: /Project Alpha/ }) as HTMLButtonElement)
+    (screen.getByRole("button", { name: "Project Alpha" }) as HTMLButtonElement)
       .disabled,
   ).toBe(false);
-  fireEvent.click(screen.getByRole("button", { name: /Project Alpha/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Project Alpha" }));
   await screen.findByRole("heading", { name: "Project Alpha" });
 });
 it("ignores a late read from another project and keeps general settings separate", async () => {
@@ -368,12 +376,13 @@ it("ignores a late read from another project and keeps general settings separate
       }),
   );
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   api.readProjectSettings.mockResolvedValueOnce({
     ...settings,
     value: { ...settings.value, executable: "beta-goga" },
   });
-  fireEvent.click(screen.getByRole("button", { name: /Project Beta/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Project Beta" }));
   await openSettings();
   await act(async () => first(settings));
   expect(
@@ -387,6 +396,7 @@ it("ignores a late read from another project and keeps general settings separate
 });
 it("blocks stale launch and composition edits until refreshed project settings arrive", async () => {
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   await screen.findByRole("checkbox", { name: /Stage B/ });
   fireEvent.change(screen.getByLabelText("Что нужно сделать?"), {
@@ -437,9 +447,10 @@ it.each([
   "Настройки",
   "Добавить проект",
   "Запустить конвейер через меню",
-  /Project Beta/,
+  "Project Beta",
 ])("asks before leaving dirty settings via %s", async (name) => {
   render(<App />);
+  await openFirstProject();
   await openSettings();
   fireEvent.change(screen.getByLabelText("Исполняемый файл"), {
     target: { value: "unsaved" },
@@ -471,6 +482,7 @@ it("waits for explicit discard before showing a notification-selected native run
     },
   ]);
   render(<App />);
+  await openFirstProject();
   await openSettings();
   fireEvent.change(screen.getByLabelText("Исполняемый файл"), {
     target: { value: "unsaved" },
@@ -489,6 +501,7 @@ it("waits for explicit discard before showing a notification-selected native run
 it("offers a keyboard-accessible runtime toggle independently of Secret", async () => {
   const user = userEvent.setup();
   render(<App />);
+  await openFirstProject();
   await openSettings();
   const runtime = screen.getByRole("switch", {
     name: "Передавать в runtime 1",
@@ -510,6 +523,7 @@ it("offers a keyboard-accessible runtime toggle independently of Secret", async 
 });
 it("keeps input and blocks launch when refreshed discovery fails, then retries without rereading task", async () => {
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   await screen.findByRole("checkbox", { name: /Stage B/ });
   fireEvent.change(screen.getByLabelText("Что нужно сделать?"), {
@@ -567,6 +581,7 @@ async function launchThenEditSettings() {
       }),
   );
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   await screen.findByRole("checkbox", { name: /Stage B/ });
   fireEvent.click(executionButton());
@@ -656,7 +671,7 @@ it("registers late launch without interrupting pending settings save or leaving 
     }),
   );
   expect(
-    (screen.getByRole("button", { name: /Project Beta/ }) as HTMLButtonElement)
+    (screen.getByRole("button", { name: "Project Beta" }) as HTMLButtonElement)
       .disabled,
   ).toBe(false);
   act(() => focusRun("late-run"));
@@ -664,7 +679,7 @@ it("registers late launch without interrupting pending settings save or leaving 
   await waitFor(() =>
     expect(api.selectRun).toHaveBeenLastCalledWith("late-run"),
   );
-  fireEvent.click(screen.getByRole("button", { name: /Project Beta/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Project Beta" }));
   expect(
     await screen.findByRole("heading", { name: "Project Beta" }),
   ).toBeTruthy();
@@ -679,9 +694,11 @@ it("guards a late native project choice without discarding settings edits", asyn
       }),
   );
   render(<App />);
+  await openFirstProject();
   fireEvent.click(
     await screen.findByRole("button", { name: "Добавить проект" }),
   );
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Открыть существующий…" }));
   await openSettings();
   fireEvent.change(screen.getByLabelText("Исполняемый файл"), {
     target: { value: "unsaved-goga" },
@@ -693,7 +710,7 @@ it("guards a late native project choice without discarding settings edits", asyn
   ).toBe("unsaved-goga");
   expect(await screen.findByRole("dialog")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Отмена" }));
-  expect(screen.getByRole("button", { name: /New project/ })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "New project" })).toBeTruthy();
   expect(screen.getByRole("heading", { name: "Project Alpha" })).toBeTruthy();
 });
 it("registers a late native project choice without interrupting a pending save", async () => {
@@ -712,9 +729,11 @@ it("registers a late native project choice without interrupting a pending save",
       }),
   );
   render(<App />);
+  await openFirstProject();
   fireEvent.click(
     await screen.findByRole("button", { name: "Добавить проект" }),
   );
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Открыть существующий…" }));
   await openSettings();
   fireEvent.change(screen.getByLabelText("Исполняемый файл"), {
     target: { value: "saved-goga" },
@@ -732,7 +751,7 @@ it("registers a late native project choice without interrupting a pending save",
       version: "v2",
     }),
   );
-  fireEvent.click(screen.getByRole("button", { name: /New project/ }));
+  fireEvent.click(screen.getByRole("button", { name: "New project" }));
   expect(
     await screen.findByRole("heading", { name: "New project" }),
   ).toBeTruthy();
@@ -740,6 +759,7 @@ it("registers a late native project choice without interrupting a pending save",
 it("recovers an initial failed catalog after fixing the executable without inventing an old selection", async () => {
   api.discover.mockRejectedValueOnce(Error("Executable not found"));
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   await screen.findByText("Executable not found");
   await openSettings();
@@ -764,6 +784,7 @@ it("recovers an initial failed catalog after fixing the executable without inven
 });
 it("publishes replacement pipelines while retaining a missing selection and draft until explicit reselection", async () => {
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   await screen.findByRole("checkbox", { name: /Stage B/ });
   fireEvent.change(screen.getByLabelText("Что нужно сделать?"), {
@@ -823,6 +844,7 @@ it.each([true, false])(
   async (secret) => {
     const user = userEvent.setup();
     render(<App />);
+    await openFirstProject();
     await openSettings();
     if (!secret) fireEvent.click(screen.getByLabelText("Скрывать значение 1"));
     const input = screen.getByLabelText("Значение 1") as HTMLInputElement;
@@ -862,6 +884,7 @@ it.each(["\n", "\r", "\r\n", "\0", "\ud800", "\udfff"])(
   async (fragment) => {
     const user = userEvent.setup();
     render(<App />);
+    await openFirstProject();
     await openSettings();
     const input = screen.getByLabelText("Значение 1") as HTMLInputElement;
     input.focus();
@@ -878,6 +901,7 @@ it.each([true, false])(
   "guards native beforeinput and drop for secret=%s",
   async (secret) => {
     render(<App />);
+    await openFirstProject();
     await openSettings();
     if (!secret) fireEvent.click(screen.getByLabelText("Скрывать значение 1"));
     const input = screen.getByLabelText("Значение 1") as HTMLInputElement;
@@ -915,6 +939,7 @@ it.each(["paste", "drop"])(
   async (kind) => {
     const user = userEvent.setup();
     render(<App />);
+    await openFirstProject();
     await openSettings();
     const input = screen.getByLabelText("Значение 1") as HTMLInputElement;
     const inserted = "\\n\t'\" 🙂 $HOME; $(echo nope) ";
@@ -940,6 +965,7 @@ it.each(["paste", "drop"])(
 
 it("validates runtime transport before IPC and keeps oversized draft editable", async () => {
   render(<App />);
+  await openFirstProject();
   await openSettings();
   const input = screen.getByLabelText("Значение 1") as HTMLInputElement;
   const oversized = "x".repeat(50000);
@@ -956,6 +982,7 @@ it("validates runtime transport before IPC and keeps oversized draft editable", 
 
 it("restores the prior draft if an invalid beforeinput cannot be canceled", async () => {
   render(<App />);
+  await openFirstProject();
   await openSettings();
   const input = screen.getByLabelText("Значение 1") as HTMLInputElement;
   fireEvent.change(input, { target: { value: "unsaved" } });
@@ -993,6 +1020,7 @@ it("restores the prior draft if an invalid beforeinput cannot be canceled", asyn
 it("keeps rejected-input errors attached to their row when earlier rows are removed", async () => {
   const user = userEvent.setup();
   render(<App />);
+  await openFirstProject();
   await openSettings();
   fireEvent.click(
     screen.getByRole("button", { name: "＋ Добавить переменную" }),
@@ -1020,6 +1048,7 @@ it("keeps rejected-input errors attached to their row when earlier rows are remo
 });
 it("reveals launch validation errors when guarded save is requested from another settings section", async () => {
   render(<App />);
+  await openFirstProject();
   await openSettings();
   fireEvent.paste(screen.getByLabelText("Значение 1"), {
     clipboardData: { getData: () => "invalid\nvalue" },

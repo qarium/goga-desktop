@@ -319,9 +319,7 @@ it("does not label a later read failure as a merge conflict", async () => {
   fireEvent.click(screen.getByRole("button", { name: "Закрыть" }));
   api.readGitBranches.mockRejectedValueOnce(new Error("read failed"));
   fireEvent.click(screen.getByRole("button", { name: "Ветка: main" }));
-  expect(
-    await screen.findByRole("dialog", { name: "Результат операции Git" }),
-  ).toBeTruthy();
+  expect(await screen.findByRole("alert")).toBeTruthy();
   expect(
     screen.queryByRole("button", { name: "Просмотреть конфликты" }),
   ).toBeNull();
@@ -467,4 +465,57 @@ it("supports keyboard movement inside the source list without starting merge", a
   fireEvent.keyDown(document.activeElement!, { key: "Home" });
   expect(document.activeElement).toBe(first);
   expect(select).not.toHaveBeenCalled();
+});
+it("retains the native branch result and recovery facts when Git becomes unavailable", async () => {
+  inventory.dirty = false;
+  api.readGitSummary = vi.fn(async () => ({
+    scope: "p",
+    branch: "main",
+    changedFiles: 0,
+    conflicts: 0,
+  }));
+  api.executeGitBranch.mockResolvedValue({
+    projectId: "p",
+    action: "switch-local",
+    status: "uncertain",
+    changed: true,
+    message: "Known branch outcome",
+    log: "native evidence",
+    recoveryPath: "/fixture/branch-recovery",
+    retainedLocks: ["HEAD.lock"],
+  });
+  render(
+    <GitWorkspace
+      scope="p"
+      open={false}
+      bodyContainer={portal}
+      onOpen={() => {}}
+      onClose={() => {}}
+      revision={0}
+    />,
+  );
+  await screen.findByRole("button", { name: "Ветка: main" });
+  await menu();
+  fireEvent.click(screen.getByRole("button", { name: "feature" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Подтвердить" }));
+  const result = await screen.findByRole("dialog", {
+    name: "Результат операции Git",
+  });
+  api.readGitSummary.mockResolvedValue({
+    scope: "p",
+    branch: null,
+    changedFiles: 0,
+    conflicts: 0,
+    repository: "missing",
+  });
+  fireEvent(window, new Event("focus"));
+  await screen.findByText("Git не инициализирован");
+  expect(screen.getByRole("dialog", { name: "Результат операции Git" })).toBe(
+    result,
+  );
+  expect(result.textContent).toContain("/fixture/branch-recovery");
+  expect(result.textContent).toContain("HEAD.lock");
+  fireEvent.click(within(result).getByRole("button", { name: "Закрыть" }));
+  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(api.executeGitBranch).toHaveBeenCalledOnce();
 });

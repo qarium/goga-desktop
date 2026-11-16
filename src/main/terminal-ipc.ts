@@ -1,3 +1,6 @@
+import { terminalPresetEnvelopeSchema } from "../shared/terminal-preset-control";
+import type { TerminalPresetStore } from "../host/terminal-preset-store";
+import type { TerminalCatalogSnapshot } from "../shared/terminal-catalog";
 import { randomUUID } from "node:crypto";
 import type { BrowserWindow, IpcMain, IpcMainInvokeEvent } from "electron";
 import type { ScopeRef } from "../shared/context";
@@ -22,6 +25,10 @@ interface Dependencies {
   window: BrowserWindow;
   shellURL: string;
   catalog: TerminalCatalog;
+  presetStore?: Pick<
+    TerminalPresetStore,
+    "menu" | "list" | "read" | "save" | "remove"
+  >;
   sessions: Pick<
     TerminalSessions,
     | "open"
@@ -128,7 +135,12 @@ export function registerTerminalIPC(
       /* Already consumed/expired is not a reason to stop anything. */
     }
   };
+  const clicks = new Map<
+    string,
+    { key: string; done: Promise<TerminalCatalogSnapshot> }
+  >();
   const invalidate = () => {
+    clicks.clear();
     epoch++;
     presented.clear();
     documentId = undefined;
@@ -184,6 +196,29 @@ export function registerTerminalIPC(
     documentId ??= randomUUID();
     return documentId;
   });
+  ipc.handle("goga:terminal-presets", async (event, raw, ...extra) => {
+    if (!valid(event) || extra.length || !documentId || !d.presetStore)
+      throw denied();
+    const sender = { sender: event.sender, senderFrame: event.senderFrame },
+      captured = epoch;
+    const parsed = terminalPresetEnvelopeSchema.safeParse(raw);
+    if (!parsed.success || parsed.data.documentId !== documentId)
+      throw Error("Недопустимые параметры пресета терминала.");
+    const req = parsed.data.request,
+      store = d.presetStore;
+    const result =
+      req.kind === "menu"
+        ? await store.menu()
+        : req.kind === "list"
+          ? await store.list()
+          : req.kind === "read"
+            ? await store.read(req.id)
+            : req.kind === "remove"
+              ? (await store.remove(req.id, req.revision), null)
+              : await store.save(req.draft, req.id, req.revision);
+    if (captured !== epoch || !valid(sender)) throw denied();
+    return result;
+  });
   ipc.handle(channel, async (event, raw, ...extra) => {
     if (!valid(event) || extra.length) throw denied();
     const sender = { sender: event.sender, senderFrame: event.senderFrame };
@@ -200,6 +235,27 @@ export function registerTerminalIPC(
     )
       throw denied();
     const request = parsed.data.request;
+    if (request.kind === "create-from-preset") {
+      const key = JSON.stringify(request),
+        existing = clicks.get(request.actionId);
+      if (existing && existing.key !== key) throw denied();
+      if (!existing) {
+        // Evicted deliveries still carry their spent registry revision, so CAS
+        // cannot create another tab for the same old envelope.
+        if (clicks.size >= 128) clicks.delete(clicks.keys().next().value!);
+        clicks.set(request.actionId, {
+          key,
+          done: d.catalog.change(request, guard),
+        });
+      }
+      try {
+        const result = await clicks.get(request.actionId)!.done;
+        guard();
+        return result;
+      } finally {
+        if (epoch === captured) notify();
+      }
+    }
     const showOrder =
       request.kind === "show" ||
       request.kind === "preview" ||
@@ -381,6 +437,7 @@ export function registerTerminalIPC(
     invalidate();
     disposed = true;
     ipc.removeHandler(channel);
+    ipc.removeHandler("goga:terminal-presets");
     ipc.removeHandler("goga:terminal-connect");
     unsubscribe();
     d.window.webContents.removeListener("did-start-navigation", navigation);

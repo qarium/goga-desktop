@@ -109,6 +109,9 @@ export function ContractPane({
           <FileCode2 size={16} />
         </IconButton>
       </div>
+      {busy && data !== null && (
+        <p className="ov-hint" role="status">Обновляем контракт…</p>
+      )}
       {error && (
         <div className="ov-notice" role="alert">
           {error}
@@ -167,7 +170,7 @@ export function ContractPane({
                 <h4>
                   <code>{t}</code>
                 </h4>
-                {busy ? (
+                {busy && data === null ? (
                   <p role="status">Загрузка…</p>
                 ) : details ? (
                   <>

@@ -3,12 +3,14 @@ import "./helpers/overview-browser-fixture";
 import React from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   render,
   screen,
   within,
   fireEvent,
 } from "@testing-library/react";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 import { version } from "../package.json";
 afterEach(cleanup);
@@ -31,6 +33,7 @@ beforeEach(() => {
 });
 it("shows real package version only beside the footer copyright, not in titlebar", async () => {
   const { container } = render(<App />);
+  await openFirstProject();
   await screen.findByRole("heading", { name: "Synthetic project" });
   const footer = container.querySelector(".sidebar-footer")!;
   expect(within(footer as HTMLElement).getByText(`v${version}`)).toBeTruthy();
@@ -42,6 +45,7 @@ it("shows real package version only beside the footer copyright, not in titlebar
 });
 it("keeps a compact project header with Runs and Launch actions and settings in Home", async () => {
   const { container } = render(<App />);
+  await openFirstProject();
   await screen.findByRole("heading", { name: "Synthetic project" });
   const header = container.querySelector(".project-bar") as HTMLElement;
   expect(within(header).getByRole("button", { name: "Запуски" })).toBeTruthy();
@@ -75,11 +79,12 @@ it.each(["button", "escape"])(
     };
     const failure =
       "Хранилище занято. " + "Полная диагностика без обрезания. ".repeat(80);
-    window.goga.runs = vi.fn(async () => {
-      throw Error(failure);
-    });
+    let reject!: (error: Error) => void;
+    window.goga.runs = vi.fn(() => new Promise<never>((_, fail) => { reject = fail; }));
     const { container } = render(<App />);
+    await openFirstProject();
     await screen.findByRole("heading", { name: "Synthetic project" });
+    await act(async () => reject(Error(failure)));
     const dialog = await screen.findByRole("dialog", {
       name: "Не удалось выполнить операцию",
     });

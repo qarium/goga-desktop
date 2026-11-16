@@ -15,15 +15,17 @@ import { EditorView } from "@codemirror/view";
 import { undo, undoDepth } from "@codemirror/commands";
 import { installHistoryWorker } from "./helpers/history-worker";
 import { ProjectOverview } from "../src/renderer/overview/ProjectOverview";
+const renderCounts = vi.hoisted(() => ({ graph: 0, tree: 0 }));
 vi.mock("../src/renderer/overview/SchemaGraph", () => ({
-  SchemaGraph: ({ onContract, onDrill, scope }: any) => (
-    <div>
+  SchemaGraph: ({ onContract, onDrill, scope }: any) => {
+    renderCounts.graph++;
+    return <div>
       Граф<output aria-label="Область схемы">{scope}</output>
       <button onClick={() => onContract(".")}>Контракт узла</button>
       <button onClick={() => onContract("B")}>Контракт области B</button>
       <button onClick={() => onDrill("B")}>Войти в область B</button>
-    </div>
-  ),
+    </div>;
+  },
   IconButton: ({ label, onClick, disabled, children }: any) => (
     <button
       className="ov-icon"
@@ -44,8 +46,9 @@ vi.mock("../src/renderer/overview/FileTree", () => ({
     onNavigate,
     onContextMenu,
     scope,
-  }: any) => (
-    <>
+  }: any) => {
+    renderCounts.tree++;
+    return <>
       <button onClick={() => onFile("main.go")}>main.go</button>
       {scope !== "B" && (
         <button onClick={() => onFile("A/file.txt")}>Файл области A</button>
@@ -93,8 +96,8 @@ vi.mock("../src/renderer/overview/FileTree", () => ({
       >
         Раскрыть nested
       </button>
-    </>
-  ),
+    </>;
+  },
 }));
 const file = {
   text: "package main\n",
@@ -1101,4 +1104,30 @@ it("explicit show-file-in-tree navigation selects the shown file's parent rather
   expect(api.copyOverviewEntries).toHaveBeenCalledExactlyOnceWith("p", [
     "A/file.txt",
   ]);
+});
+
+it("publishes the live buffer without rendering the tree and graph for every dirty keystroke", async () => {
+  const api = setup();
+  fireEvent.click(screen.getByText("README.md"));
+  await waitFor(() => expect(overviewEditor()?.state.doc.toString()).toContain("# Readme"));
+  const editor = overviewEditor()!;
+  const initial = editor.state.doc.toString();
+  act(() => editor.dispatch({ changes: { from: 0, insert: "1" } }));
+  expect(document.querySelector(".ov-tab-active .ov-dirty")).toBeTruthy();
+  expect(renderCounts.tree).toBeGreaterThan(0);
+  expect(renderCounts.graph).toBeGreaterThan(0);
+  const before = { ...renderCounts };
+  for (const ch of ["2", "3", "4"]) {
+    act(() => editor.dispatch({ changes: { from: 0, insert: ch } }));
+  }
+  expect(renderCounts).toEqual(before);
+  expect(overviewEditor()).toBe(editor);
+  act(() => editor.dispatch({ changes: { from: 0, to: 4 } }));
+  expect(document.querySelector(".ov-tab-active .ov-dirty")).toBeNull();
+  act(() => editor.dispatch({ changes: { from: 0, insert: "dirty" } }));
+  act(() => editor.dispatch({ changes: { from: 0, insert: "latest " } }));
+  fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() => expect(api.saveOverviewFile).toHaveBeenCalledWith(
+    "p", "README.md", "latest dirty" + initial, file.version,
+  ));
 });

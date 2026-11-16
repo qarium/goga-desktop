@@ -9,7 +9,12 @@ import {
   within,
 } from "@testing-library/react";
 import { TopicsWorkspace } from "../src/renderer/TopicsWorkspace";
-import { createTopicsStore } from "../src/renderer/topics-model";
+import {
+  indexTopicTableOwners,
+  createTopicsStore,
+  defaultTopicFilters,
+  topicRowActivity,
+} from "../src/renderer/topics-model";
 import type { RunWithContext } from "../src/renderer/topic-context";
 import type { WorktreeRecord } from "../src/shared/worktrees";
 import type { TopicBoardSnapshot } from "../src/shared/topics";
@@ -75,7 +80,15 @@ const run = (patch: Partial<RunWithContext> = {}): RunWithContext => ({
 let readBoard: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   // This suite exercises the existing table; board defaults/behaviour have separate tests.
-  localStorage.setItem("goga.desktop.topicsBoard.v1.p", JSON.stringify({ schemaVersion: 1, view: "table", columns: [], statusCategory: {} }));
+  localStorage.setItem(
+    "goga.desktop.topicsBoard.v1.p",
+    JSON.stringify({
+      schemaVersion: 1,
+      view: "table",
+      columns: [],
+      statusCategory: {},
+    }),
+  );
   readBoard = vi.fn(async () => board);
   window.goga = { readTopicTable: readBoard } as any;
 });
@@ -253,4 +266,101 @@ it("keeps runs and active filtering separate for branches that normalize to the 
   expect(
     screen.getByRole("button", { name: /Открыть запуск twin-run/ }),
   ).toBeTruthy();
+});
+
+it("does not inspect unrelated topic data when changing just the row selection", async () => {
+  const probe = vi.fn(() => ["planned"]);
+  const second = Object.defineProperty({ ...board.entries[1]! }, "statuses", {
+    get: probe,
+  });
+  readBoard.mockResolvedValue({
+    ...board,
+    entries: [board.entries[0]!, second],
+  });
+  render(<TopicsWorkspace {...props()} />);
+  const toggle = await screen.findByRole("checkbox", {
+    name: "Выбрать топик feature-a",
+  });
+  probe.mockClear();
+  fireEvent.click(toggle);
+  expect(screen.getByText("Выбрано: 1")).toBeTruthy();
+  expect(probe).not.toHaveBeenCalled();
+  fireEvent.click(toggle);
+  expect(screen.queryByText("Выбрано: 1")).toBeNull();
+  expect(probe).not.toHaveBeenCalled();
+});
+
+it("reuses displayed rows of a large table when changing its filter without exposing hidden results to keyboard or selection", async () => {
+  const entries = Array.from({ length: 256 }, (_, i) => ({
+    ...board.entries[0]!,
+    topic: `key-${i}`,
+    branch: `b-${i}`,
+  }));
+  readBoard.mockResolvedValue({ ...board, entries });
+  const initial = props();
+  const view = render(<TopicsWorkspace {...initial} />);
+  const first = await screen.findByRole("button", {
+    name: "Открыть топик key-0",
+  });
+  const input = screen.getByRole("searchbox");
+  fireEvent.change(input, { target: { value: "key-17" } });
+  expect(
+    screen.queryByRole("button", { name: "Открыть топик key-0" }),
+  ).toBeNull();
+  fireEvent.click(screen.getByLabelText("Выбрать топики таблицы"));
+  expect(screen.getByText("Выбрано: 11")).toBeTruthy();
+  fireEvent.change(input, { target: { value: "" } });
+  expect(screen.getByRole("button", { name: "Открыть топик key-0" })).toBe(
+    first,
+  );
+  expect(
+    view.container.querySelectorAll("tbody tr:not([hidden])"),
+  ).toHaveLength(256);
+});
+
+it("indexes exact activity without admitting orphaned, stale, repository-mismatched or remote-only owners", () => {
+  const twin = { ...context, contextId: "twin", state: "conflict" as const };
+  const unknown = { ...context, repositoryKey: "other" };
+  const previousYear = { ...context, year: "2025" };
+  const remoteOnly = { ...context, branch: remote.branch };
+  const owners = [context, context, previousYear, twin, remoteOnly];
+  const runs = [
+    run(),
+    run({ id: "twin", context: twin }),
+    run({ id: "wrong-repository", context: unknown }),
+    run({ id: "wrong-project", projectId: "another" }),
+    run({ id: "wrong-context", context: { ...context, contextId: "orphan" } }),
+    run({ id: "wrong-year", context: previousYear }),
+    run({ id: "no-context", context: undefined }),
+    run({ id: "remote-only", branch: remote.branch, context: remoteOnly }),
+    run({ id: "finished", status: "exited" }),
+  ];
+  const lookup = indexTopicTableOwners(board, runs, owners);
+  expect(lookup(a).owners).toEqual([context, context, twin]); // duplicated owner is ambiguous for choosing/deleting
+  expect(lookup(a).activity).toEqual(
+    topicRowActivity(board, a, runs, owners, true),
+  );
+  expect(lookup(a).activity.activeRuns.map((r) => r.id)).toEqual([
+    "run-a",
+    "twin",
+  ]);
+  expect(lookup(a).activity.unverifiedRunIds).toEqual(["twin"]);
+  expect(lookup(remote).activity.activeCount).toBe(0);
+});
+
+it("does not pre-mount filtered rows when opening a large table with a restored query", async () => {
+  const entries = Array.from({ length: 256 }, (_, i) => ({
+    ...board.entries[0]!,
+    topic: `key-${i}`,
+    branch: `b-${i}`,
+  }));
+  readBoard.mockResolvedValue({ ...board, entries });
+  const initial = props();
+  initial.store.filters.set(project.id, {
+    ...defaultTopicFilters(),
+    query: "key-255",
+  });
+  const view = render(<TopicsWorkspace {...initial} />);
+  await screen.findByRole("button", { name: "Открыть топик key-255" });
+  expect(view.container.querySelectorAll("tbody tr")).toHaveLength(1);
 });

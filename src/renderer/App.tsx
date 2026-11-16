@@ -1,4 +1,25 @@
+import {Cable} from "lucide-react";
+import {AttachPanelDialog,PanelRefreshButton,useAttachedPanels} from "./AttachedPanels";
+import {sameDashboardOwner,type AttachedDashboard} from "../shared/attached-dashboard";
+import {demoScopeKey, DEMO_EMBEDDED_START_ERROR} from "../shared/demonstrations";
+import {demoDirectory,demoError,useDemoMonitor,useDemoValue} from "./demonstrations/directory";
+import {DemoPanel} from "./demonstrations/DemoPanel";
+import {DemoRunTab} from "./demonstrations/DemoRunTab";
+import {DemoLaunchItem} from "./demonstrations/DemoLaunchItem";
+import { ProjectRemovalDialog } from "./ProjectListMenu";
+import { ProjectSidebar } from "./ProjectSidebar";
+import { useProjectOrganization } from "./useProjectOrganization";
+import { HomePage } from "./home/HomePage";
+import { createHomeVisits } from "./home/visits-store";
+import { resolveHomeOwner } from "./home/navigation";
+import { useHomeSessions } from "./home/session-summary";
+import { SessionBuffer } from "./home/SessionBuffer";
+import type { HomeSection, HomeTarget, SessionEntry, WorkspaceAddress } from "./home/types";
+import { gitSummaryCacheFor } from "./git-summary-cache";
+import { ProjectAddMenu, type ProjectAddTarget } from "./ProjectAddMenu";
+import { ProjectCreationDialog } from "./ProjectCreation";
 import { createSpecificationsState } from "./project-specifications-state";
+import {canRestoreRunDashboard} from "./run-dashboard-state";
 import {dashboardRecoveryAllowed} from "../shared/dashboard-connection";
 import { TopicRemovalProvider, TopicRemovalPopup, useTopicRemovalController } from "./TopicRemovalController";
 import { useDashboardViewport } from "./useDashboardViewport";
@@ -49,10 +70,12 @@ import { ContextMigration } from "./ContextMigration";
 import { readRequest, useReadScope } from "./read-request";
 import {
   useEffect,
+  useLayoutEffect,
   useState,
   useRef,
   useSyncExternalStore,
   useCallback,
+  useMemo,
 } from "react";
 import type { Project, Run } from "../shared/types";
 import "../shared/bridge";
@@ -79,7 +102,6 @@ import {
 } from "./TopicContextPicker";
 import {
   RepositoryActions,
-  TooltipButton,
   RepositoryOperationPopup,
 } from "./RepositoryActions";
 import { useRepositoryActionController } from "./repository-action-controller";
@@ -202,7 +224,47 @@ export function App() {
   const overviewCloseStates = useRef(
     new Map<string, { paths: string[]; busy: boolean }>(),
   );
+  const [, refreshOverviewCloseState] = useState(0);
+  const [organizationModal, setOrganizationModal] = useState(false);
+  const [sessionBuffer, setSessionBuffer] = useState<Extract<
+    HomeTarget,
+    { kind: "document" }
+  > | null>(null);
+  const [visitsStore] = useState(() => createHomeVisits());
+  const visits = useSyncExternalStore(
+    visitsStore.subscribe,
+    visitsStore.getSnapshot,
+  );
+  const [catalogReady, setCatalogReady] = useState(false),
+    [catalogError, setCatalogError] = useState(""),
+    [catalogAttempt, retryCatalog] = useState(0);
+  const [runsReady, setRunsReady] = useState(false),
+    [runsError, setRunsError] = useState(""),
+    [runsAttempt, retryRuns] = useState(0);
+  const runStreamVersion = useRef(0);
+  const settingsBack = useRef<"home" | "project-settings" | "terminal" | "demonstration">("home");
+  const [demoCloseOpen, setDemoCloseOpen] = useState(false);
+  const settingsTerminalOwner = useRef<string | null>(null);
+  const [globalSettingsTab, setGlobalSettingsTab] = useState("config");
+  const [projectRemoval, setProjectRemoval] = useState<{
+    project: Project;
+    busy: boolean;
+    error: string;
+  } | null>(null);
+  const projectRemovalFlight = useRef(false);
+  const [projectAddMenu, setProjectAddMenu] = useState<ProjectAddTarget | null>(
+    null,
+  );
+  const [projectCreationOpen, setProjectCreationOpen] = useState(false);
+  const [createdProject, setCreatedProject] = useState<Project | null>(null);
+  const [openAfterCreation, setOpenAfterCreation] = useState(false);
+  const [projectCreationNotice, setProjectCreationNotice] = useState("");
+  const initialProjectsPending = useRef(true);
+  const initialProjectChanges = useRef(new Map<string, Project | null>());
   const [gitRevision, setGitRevision] = useState<Record<string, number>>({});
+  const [gitRepositories, setGitRepositories] = useState<
+    ReadonlyMap<string, "missing" | "ready">
+  >(new Map());
   const [gitModals, setGitModals] = useState<ReadonlyMap<string, string>>(
     new Map(),
   );
@@ -210,7 +272,7 @@ export function App() {
     ReadonlyMap<string, string>
   >(new Map());
   useEffect(() => {
-    if (repositoryActions.revision) topicsChanged();
+    if (repositoryActions.revision) { gitSummaryCacheFor(window.goga).invalidateAll(); topicsChanged(); }
   }, [repositoryActions.revision]);
   const draftStore = useRef(createDraftStore());
   const buildDrafts = useRef(createBuildDrafts());
@@ -236,6 +298,7 @@ export function App() {
     [runs, setRuns] = useState<Run[]>([]),
     [selected, setSelected] = useState<string | null>(null),
     [page, setPage] = useState<
+      | "home"
       | "overview"
       | "project"
       | "launch"
@@ -246,11 +309,23 @@ export function App() {
       | "build"
       | "context-runs"
       | "context-preparation"
+      | "demonstration"
       | "changes"
       | "commits"
-    >("overview"),
+    >("home"),
     [error, setError] = useState(""),
     [viewErrors, setViewErrors] = useState<Record<string, string>>({});
+  const attachedPanels=useAttachedPanels();
+  const attachedRef=useRef(attachedPanels);attachedRef.current=attachedPanels;
+  const [attachDialog,setAttachDialog]=useState<string|null>(null);
+  const refreshFlights=useRef(new Set<string>());
+  const [refreshingIds,setRefreshingIds]=useState<string[]>([]);
+  const projectPageVisible=page!=="home" && page!=="settings";
+  const organization=useProjectOrganization(projects,catalogReady);
+  const sessionStore=useHomeSessions(settingsDocuments,projects);
+  const documentEntries=useSyncExternalStore(sessionStore.subscribe,sessionStore.getSnapshot);
+  const projectsRef = useRef(projects);
+  projectsRef.current = projects;
   const launchOwnerErrors = useRef(new Map<string, string>());
   const viewportError = useCallback(
     (error: unknown) => setError(message(error)),
@@ -326,7 +401,7 @@ export function App() {
     >(),
   );
   useEffect(() => {
-    if (projectId && page !== "settings")
+    if (projectId && projectPageVisible)
       projectNavigation.current.set(projectId, {
         // Preparation is a captured mutation intent, not a browsable section.
         // Its in-flight result remains in initialFlights; navigation must never
@@ -340,6 +415,10 @@ export function App() {
     () => new Set<string>(),
   );
   function openContextRun(target: Run, verifiedOwner?: WorktreeRecord) {
+    if (!projectsRef.current.some(project => project.id === target.projectId)) {
+      setError("Проект убран из списка. Добавьте его папку обратно, чтобы открыть запуск. История запусков сохранена.");
+      return false;
+    }
     const ref = (target as RunWithContext).context;
     if (ref) {
       const owner = [
@@ -368,6 +447,7 @@ export function App() {
     setSelected(target.id);
     setPage("project");
     setError(launchOwnerErrors.current.get(target.id) ?? "");
+    return true;
   }
   const openRunRef = useRef(openContextRun);
   openRunRef.current = openContextRun;
@@ -380,7 +460,7 @@ export function App() {
   const [launchSettingsBusy, setSettingsBusy] = useState(false);
   const [topicsBusy, setTopicsBusy] = useState(false);
   const settingsBusy =
-    launchSettingsBusy || documentsBusy || topicsBusy || repeatBusy;
+    launchSettingsBusy || documentsBusy || topicsBusy || repeatBusy || !!projectRemoval?.busy;
   const topicsStore = useRef(createTopicsStore());
   const [topicsRevision, setTopicsRevision] = useState(0);
   const [currentTopics, setCurrentTopics] = useState<DisplayCatalog | null>(
@@ -578,7 +658,7 @@ export function App() {
   const [pendingNavigation, setPendingNavigation] = useState<
     (() => void) | null
   >(null);
-  const navigateRef = useRef<(action: () => void) => void>(() => {});
+  const navigateRef = useRef<(action: () => void, preserveProjectDraft?: boolean) => void>(() => {});
   function navigationBlocked() {
     return Boolean(
       topicsBusy ||
@@ -589,7 +669,7 @@ export function App() {
       topicCard ||
       settingsDocuments.busy() ||
       settingsGuard.current?.busy ||
-      pendingNavigation,
+      pendingNavigation || projectRemoval || projectCreationOpen || organizationModal || sessionBuffer || demoCloseOpen,
     );
   }
   function navigate(action: () => void, preserveProjectDraft = false) {
@@ -600,6 +680,19 @@ export function App() {
     else action();
   }
   navigateRef.current = navigate;
+  useEffect(() => {
+    if (projectCreationOpen || navigationBlocked()) return;
+    if (createdProject) {
+      const created = createdProject;
+      setCreatedProject(null);
+      navigateRef.current(() => {
+        setProjectId(created.id); setSelected(null); setPage("overview"); setActiveDraft("");
+      });
+    } else if (openAfterCreation) {
+      setOpenAfterCreation(false);
+      navigateRef.current(() => void add());
+    }
+  });
   useEffect(() => {
     // Accepted mutations finish independently from presentation admission. Keep
     // the original preparation loader while a modal/editor guard owns the UI,
@@ -626,7 +719,7 @@ export function App() {
       if(notificationIntent.current!==nonce)return;
       notifications.setOpen(false);
       setShowLogs(previous=>({...previous,[target.run.id]:false}));
-      openRunRef.current(target.run);
+      if (!openRunRef.current(target.run)) return;
       setNotificationOpen({ticket:target.ticket,runId:target.run.id,nonce});
     });
   }
@@ -653,7 +746,7 @@ export function App() {
     for (const id of launchOwnerErrors.current.keys())
       if (!next.some((run) => run.id === id)) launchOwnerErrors.current.delete(id);
     const id = selectedRef.current;
-    if (id && !next.some((r) => r.id === id)) {
+    if (id && !id.startsWith("attached:") && !next.some((r) => r.id === id)) {
       const old = previous.find((r) => r.id === id);
       if ((old as RunWithContext | undefined)?.context) {
         selectedRef.current = null;
@@ -692,7 +785,7 @@ export function App() {
     );
     setViewErrors((errors) =>
       Object.fromEntries(
-        Object.entries(errors).filter(([id]) => next.some((r) => r.id === id)),
+        Object.entries(errors).filter(([id]) => id.startsWith("attached:") || next.some((r) => r.id === id)),
       ),
     );
   }
@@ -733,21 +826,29 @@ export function App() {
       setClosingIds([...closing.current]);
     }
   }
-  const read = useReadScope(projectId);
+  const read = useReadScope(projectPageVisible ? projectId : "");
   useEffect(() => { specificationsState.retainProjects(projects.map(project => project.id)); }, [projects, specificationsState]);
   const project = projects.find((p) => p.id === projectId),
     run = runs.find(
       (r) =>
         r.id === selected && runMatchesWorkspace(r, projectId, selectedContext),
     );
+  const panelOwner={projectId,context:selectedContext?contextRef(selectedContext):undefined};
+  const workspacePanels=attachedPanels.filter(v=>sameDashboardOwner(v.owner,panelOwner));
+  const attached=workspacePanels.find(v=>v.id===selected);
+  const activePanelScope=selectedContext?contextRef(selectedContext):projectId;
+  const attachmentKey=JSON.stringify([projectId,selectedContext?contextKey(selectedContext):null,selectedContext?.revision]);
+  const dialogVisible=!!project && page==="context-runs"&&attachDialog===attachmentKey;
+  useEffect(()=>{if(attachDialog&&!dialogVisible)setAttachDialog(null)},[attachDialog,dialogVisible]);
   const handoff = useGitUpdateHandoff({
-    scope: project
+    scope: project && projectPageVisible
       ? selectedContext
         ? contextRef(selectedContext)
         : project.id
       : null,
     onError: setError,
     onChanged: (scope) => {
+      gitSummaryCacheFor(window.goga).invalidate(scope);
       const owner = documentScopeId(scope);
       setGitRevision((previous) => ({
         ...previous,
@@ -775,8 +876,17 @@ export function App() {
     readRequest("listProjects").then(
       (p) => {
         if (alive) {
+          // Catalogue loading is not an admission lock. Reconcile additions and
+          // removals accepted while it was in flight, never reset their selection.
+          const merged = new Map(p.map(project => [project.id, project]));
+          for (const [id, value] of initialProjectChanges.current) {
+            if (value) merged.set(id, value); else merged.delete(id);
+          }
+          const loaded = [...merged.values()];
+          initialProjectsPending.current = false;
+          initialProjectChanges.current.clear();
           const saved: Record<string, WorktreeRecord | null> = {};
-          for (const project of p) {
+          for (const project of loaded) {
             const record = readWorkspaceSelection(project);
             if (record !== undefined) {
               saved[project.id] = record;
@@ -784,26 +894,47 @@ export function App() {
             }
           }
           setContextSelections((previous) => ({ ...saved, ...previous }));
-          setProjects(p);
-          setProjectId(p[0]?.id ?? "");
+          setProjects(loaded);
+          setCatalogError(""); setCatalogReady(true);
+        }
+      },
+      (e) => { if (alive) setCatalogError(preparationErrorMessage(e)); },
+    );
+    return ()=>{alive=false;};
+  },[catalogAttempt]);
+  useEffect(() => {
+    let alive = true;
+    const version = runStreamVersion.current;
+    readRequest("runs").then(
+      (next) => {
+        if (alive && version === runStreamVersion.current) {
+          applyRuns(next);
+          setRunsReady(true);
+          setRunsError("");
         }
       },
       (e) => {
-        if (alive) setError(message(e));
+        if (alive && version === runStreamVersion.current) {
+          setRunsError(preparationErrorMessage(e));
+          if (pageRef.current !== "home") setError(preparationErrorMessage(e));
+        }
       },
     );
-    let receivedRuns = false;
-    readRequest("runs").then(
-      (r) => {
-        if (alive && !receivedRuns) applyRuns(r);
-      },
-      (e) => {
-        if (alive) setError(message(e));
-      },
-    );
+    return () => {
+      alive = false;
+    };
+  }, [runsAttempt]);
+  useEffect(() => {
+    if (catalogReady) visitsStore.retain(projects.map((p) => p.id));
+  }, [catalogReady, projects, visitsStore]);
+  useEffect(() => {
+    let alive = true;
     const off = window.goga.onRuns((next) => {
-        receivedRuns = true;
-        if (alive) applyRuns(next);
+        if (!alive) return;
+        runStreamVersion.current++;
+        applyRuns(next);
+        setRunsReady(true);
+        setRunsError("");
       }),
       focus = window.goga.onFocusRun((id) => {
         if (!runsRef.current.some((r) => r.id === id)) return;
@@ -814,7 +945,7 @@ export function App() {
         });
       }),
       failed = window.goga.onViewError(({ id, error }) => {
-        if (runsRef.current.some((r) => r.id === id))
+        if (id.startsWith("attached:") || runsRef.current.some((r) => r.id === id))
           setViewErrors((v) => ({ ...v, [id]: error }));
       });
     return () => {
@@ -831,6 +962,7 @@ export function App() {
     }
   }, [projects, contextSelections]);
   useEffect(() => {
+    if(!projectPageVisible)return;
     const saved = restoration.current.get(projectId);
     if (!saved || contextSelectionsRef.current[projectId] !== saved) return;
     let alive = true;
@@ -872,7 +1004,7 @@ export function App() {
     return () => {
       alive = false;
     };
-  }, [projectId]);
+  }, [projectId, selectedContext, projectPageVisible]);
   useEffect(() => {
     if (page === "project" && run) setProjectId(run.projectId);
   }, [selected]);
@@ -883,15 +1015,16 @@ export function App() {
   const canShowDashboard =
     !!run && dashboardReady(run) && !run.error && !viewErrors[run.id];
   const visibleRun =
-    !handoff.candidate &&
+    !handoff.candidate && !dialogVisible &&
+    !projectRemoval &&
+    !demoCloseOpen && !projectCreationOpen && !organizationModal &&
+    !pendingNavigation &&
     !gitModals.size &&
     !error &&
     !topicCard &&
     page === "project" &&
-    run &&
-    canShowDashboard &&
-    !showLogs[run.id]
-      ? run.id
+    (!attached || (!projectAddMenu && !sessionBuffer))
+      ? attached ? attached.id : run && canShowDashboard && !showLogs[run.id] ? run.id : null
       : null;
   const notificationView =
     page === "project" &&
@@ -900,10 +1033,12 @@ export function App() {
     !error &&
     !topicCard &&
     !gitModals.size &&
-    !handoff.candidate &&
+    !handoff.candidate && !demoCloseOpen &&
     !pendingNavigation &&
     !notifications.open &&
     !notificationOpen &&
+    !projectRemoval &&
+    !projectCreationOpen && !organizationModal &&
     (visibleRun === run.id ||
       ["exited", "failed", "stopped"].includes(run.status))
       ? run.id
@@ -929,7 +1064,11 @@ export function App() {
     // Revoke the previous screen before waiting for native selection. A late
     // acknowledgement cannot claim a run after navigation or an overlay.
     reportView(null);
-    void api.selectRun(visibleRun).then(
+    const currentAttachment=attachedRef.current.find(v=>v.id===visibleRun);
+    const selection=currentAttachment&&api.selectAttachedDashboard
+      ? api.selectAttachedDashboard(currentAttachment.owner.context??currentAttachment.owner.projectId,currentAttachment.id)
+      : api.selectRun(visibleRun);
+    void selection.then(
       () => {
         if (alive) reportView(notificationView);
       },
@@ -978,11 +1117,40 @@ export function App() {
       );
     target?.focus();
   }, [runs, selected]);
+  const refreshAction=useRef<(id:string)=>void>(()=>{});
+  refreshAction.current=(id)=>{
+    if(!window.goga.refreshDashboard||!id||id!==visibleRun||refreshFlights.current.has(id))return;
+    const key=notificationIntent.current;
+    refreshFlights.current.add(id);setRefreshingIds([...refreshFlights.current]);
+    const req=window.goga.refreshDashboard(id,attached?activePanelScope:undefined,attached?!!viewErrors[id]:undefined);
+    void req.then(()=>setViewErrors(v=>{const next={...v};delete next[id];return next}))
+      .catch(e=>{if(pageRef.current==="project"&&selectedRef.current===id&&key===notificationIntent.current)setViewErrors(v=>({...v,[id]:preparationErrorMessage(e)}))})
+      .finally(()=>{refreshFlights.current.delete(id);setRefreshingIds([...refreshFlights.current])});
+  };
+  useEffect(()=>window.goga.onDashboardRefresh?.(id=>refreshAction.current(id)),[]);
+  useEffect(()=>{
+    if(!visibleRun||!window.goga.refreshDashboard)return;
+    const key=(e:KeyboardEvent)=>{
+      if((e.key==="F5"||((e.metaKey||e.ctrlKey)&&e.key.toLowerCase()==="r"))&&!e.altKey&&!e.shiftKey&&!e.isComposing&&!document.querySelector("dialog[open]")){
+        e.preventDefault();if(!e.repeat)refreshAction.current(visibleRun)
+      }
+    };
+    window.addEventListener("keydown",key);return()=>window.removeEventListener("keydown",key)
+  },[visibleRun]);
+  function openAttachedPanel(id:string){setSelected(id);setPage("project");setError("")}
+  async function detachPanel(row:AttachedDashboard){
+    try{
+      await window.goga.detachDashboard!(row.owner.context??row.owner.projectId,row.id);
+      setViewErrors(v=>{const next={...v};delete next[row.id];return next});
+      if(selectedRef.current===row.id){setSelected(null);if(pageRef.current==="project")setPage("context-runs")}
+    }catch(e){setError(preparationErrorMessage(e))}
+  }
   async function add() {
     setError("");
     try {
       const p = await window.goga.chooseProject();
       if (!p) return;
+      if (initialProjectsPending.current) initialProjectChanges.current.set(p.id, p);
       setProjects((items) =>
         items.some((i) => i.id === p.id) ? items : [...items, p],
       );
@@ -996,7 +1164,88 @@ export function App() {
         setActiveDraft(saved?.activeDraft ?? "");
       });
     } catch (e) {
-      setError(message(e));
+      setError(preparationErrorMessage(e));
+    }
+  }
+  const projectOverviewStates = (id: string) =>
+    [...overviewCloseStates.current]
+      .filter(([key]) => JSON.parse(key)[0] === id)
+      .map(([, state]) => state);
+  const projectRemovalBlocked = (id: string) => {
+    if (projectOverviewStates(id).some((state) => state.busy))
+      return "Дождитесь завершения файловой операции в Обзоре этого проекта.";
+    if (
+      runsRef.current.some(
+        (run) =>
+          run.projectId === id &&
+          (["starting", "running"].includes(run.status) ||
+            run.recovery === "unverified"),
+      )
+    )
+      return "Сначала завершите запуск этого проекта или проверьте его состояние. Никакие процессы не будут остановлены автоматически.";
+    return undefined;
+  };
+  function requestProjectRemoval(target: Project) {
+    const open = () =>
+      setProjectRemoval({ project: target, busy: false, error: "" });
+    if (target.id === projectIdRef.current) navigateRef.current(open);
+    else if (!navigationBlocked()) open();
+  }
+  async function removeSelectedProject() {
+    const target = projectRemoval?.project;
+    if (
+      !target ||
+      projectRemovalFlight.current ||
+      projectRemovalBlocked(target.id)
+    )
+      return;
+    projectRemovalFlight.current = true;
+    setProjectRemoval({ project: target, busy: true, error: "" });
+    try {
+      await window.goga.removeProject({ id: target.id, path: target.path });
+      if (initialProjectsPending.current) initialProjectChanges.current.set(target.id, null);
+      const remaining = projectsRef.current.filter(
+        (item) => item.id !== target.id || item.path !== target.path,
+      );
+      // Apply the captured binding only; a late reply cannot erase other additions.
+      setProjects((items) =>
+        items.filter(
+          (item) => item.id !== target.id || item.path !== target.path,
+        ),
+      );
+      projectNavigation.current.delete(target.id);
+      visitsStore.forget(target.id);
+      restoration.current.delete(target.id);
+      setContextSelections((values) => {
+        const next = { ...values };
+        delete next[target.id];
+        return next;
+      });
+      setKnownContexts((values) =>
+        values.filter((item) => item.projectId !== target.id),
+      );
+      if (projectIdRef.current === target.id) {
+        const next = remaining[0];
+        const saved = next ? projectNavigation.current.get(next.id) : undefined;
+        setProjectId(next?.id ?? "");
+        setSelected(saved?.selected ?? null);
+        setActiveDraft(saved?.activeDraft ?? "");
+        setPage(!next || pageRef.current==="home" ? "home" : saved?.page ?? "overview");
+        setError(
+          saved?.page === "project" && saved.selected
+            ? (launchOwnerErrors.current.get(saved.selected) ?? "")
+            : "",
+        );
+      }
+      setProjectRemoval(null);
+    } catch (error) {
+      setProjectRemoval({
+        project: target,
+        busy: false,
+        error: preparationErrorMessage(error),
+      });
+    } finally {
+      projectRemovalFlight.current = false;
     }
   }
   async function stop() {
@@ -1145,6 +1394,7 @@ export function App() {
   ]);
   useEffect(() => {
     let alive = true;
+    if (!projectPageVisible) return;
     const year = String(new Date().getFullYear());
     setCurrentTopics(project ? readCatalogCache(project, year) : null);
     setCurrentTopicsError("");
@@ -1175,9 +1425,10 @@ export function App() {
     return () => {
       alive = false;
     };
-  }, [topicScope]);
+  }, [topicScope,projectPageVisible]);
   useEffect(() => {
     let alive = true;
+    if(!projectPageVisible)return;
     setKnownContexts([]);
     setContextsError("");
     setContextsLoading(contextsEnabled && Boolean(projectId));
@@ -1199,7 +1450,7 @@ export function App() {
     return () => {
       alive = false;
     };
-  }, [read, projectId, topicsRevision, contextsEnabled]);
+  }, [read, projectId, topicsRevision, contextsEnabled, projectPageVisible]);
   // Only an explicit selection owns clone actions. Null is the original folder.
   const displayOwner = selectedContext;
 
@@ -1227,6 +1478,46 @@ export function App() {
           ? "Рабочая копия не готова к запуску. Выберите проверенный автономный клон."
           : ""
     : "";
+  const repositoryMissing = Boolean(
+    project &&
+    gitRepositories.get(documentScopeId(displayOwner ? contextRef(displayOwner) : project.id)) === "missing",
+  );
+  const demonstrations=demoDirectory();
+  // A demo needs a registered owner, not a Git repository, executable, or idle pipeline.
+  const demoScope=project&&!contextUnavailable?(displayOwner?contextRef(displayOwner):project.id):null;
+  const demoKey=demoScope===null?null:demoScopeKey(demoScope);
+  const demoKeyRef=useRef(demoKey);demoKeyRef.current=demoKey;
+  const demoShowId=useDemoValue(demonstrations,()=>demonstrations.showFor(demoKey)?.showId);
+  const demoStarting=useDemoValue(demonstrations,()=>demoKey!==null&&demonstrations.starting.has(demoKey));
+  const [demoRetry, setDemoRetry] = useState<{key:string; intent:number; reason:string} | null>(null);
+  // A retry is offered only for an embedded startup failure in this workspace.
+  // Neither a port conflict nor a stale selection is repaired by changing browsers.
+  const canRetryDemo = !!demoRetry && demoRetry.key === demoKey &&
+    demoRetry.intent === notificationIntent.current && demoRetry.reason === error;
+  function enterDemo(start: boolean, engine?: "system") {
+    if (!project || !demoScope || !demoKey) return;
+    const intent = notificationIntent.current;
+    const stillHere = () => demoKeyRef.current === demoKey && projectIdRef.current === project.id &&
+      intent === notificationIntent.current;
+    if (!stillHere()) return;
+    setDemoRetry(null);
+    if (!start) {
+      if (demonstrations.showFor(demoKey)) setPage("demonstration");
+      return;
+    }
+    void demonstrations.start(demoScope, engine).then(
+      () => { if (stillHere()) setPage("demonstration"); },
+      e => {
+        if (!stillHere()) return;
+        const reason = demoError(e);
+        if (!engine && reason.startsWith(DEMO_EMBEDDED_START_ERROR))
+          setDemoRetry({key: demoKey, intent, reason});
+        setError(reason);
+      },
+    );
+  }
+  useDemoMonitor(demonstrations,!!project&&projectPageVisible,page==="demonstration");
+  useEffect(()=>{if(page==="demonstration"&&!demoShowId)setPage("overview");},[page,demoShowId]);
   const launchUnavailable =
     contextUnavailable ||
     workspaceLaunchBlockReason(runs, projectId, selectedContext, "pipeline");
@@ -1256,6 +1547,8 @@ export function App() {
       topicRemoval.busy ||
       settingsGuard.current?.busy ||
       topicCard ||
+      projectRemoval ||
+      projectCreationOpen || organizationModal || sessionBuffer ||
       pendingNavigation
     )
       return;
@@ -1286,7 +1579,7 @@ export function App() {
       const previous =
         gitReturnPages.current.get(sectionKey("git") ?? "") ??
         "project-settings";
-      setPage(previous === "project" && !run ? "project-settings" : previous);
+      setPage(previous === "project" && !run && !attached ? "project-settings" : previous);
     }, true);
   const retainProjectView = (key: string) => {
     const [id, path] = JSON.parse(key);
@@ -1394,6 +1687,310 @@ export function App() {
     createdTopic, initialPreparation, page, projectId, topicCard,
     pendingNavigation, settingsBusy, deletion.busy, topicRemoval.busy,
   ]);
+  function openAddMenu(trigger: HTMLElement) {
+    const box = trigger.getBoundingClientRect();
+    navigate(() =>
+      setProjectAddMenu({ trigger, x: box.left, y: box.bottom + 6 }),
+    );
+  }
+  function address(
+    id: string,
+    record?: WorktreeRecord | null,
+  ): WorkspaceAddress {
+    return record
+      ? { kind: "topic", ref: contextRef(record) }
+      : { kind: "primary", projectId: id };
+  }
+  const sessionEntries = useMemo<SessionEntry[]>(() => {
+    const forms: SessionEntry[] = [];
+    for (const [ids, kind] of [
+      [openLaunches, "pipeline"],
+      [openBuilds, "build"],
+    ] as const) {
+      for (const { id, owner, project: p } of preparationEntries(ids)) {
+        forms.push({
+          id: JSON.stringify([kind, id]),
+          target: {
+            kind: "draft",
+            owner: address(p.id, owner),
+            draftKind: kind,
+            key: id,
+          },
+          dirty: false,
+          busy: !!(kind === "build" ? buildBusy[id] : launchBusy[id]),
+          touchedAt: 0,
+        });
+      }
+    }
+    return [...forms, ...documentEntries];
+  }, [
+    openLaunches,
+    openBuilds,
+    draftOwners,
+    projects,
+    repeatSeeds,
+    buildBusy,
+    launchBusy,
+    documentEntries,
+  ]);
+  const homeOperations = useMemo(() => {
+    const labels: Record<string, string> = Object.create(null);
+    for (const operation of repositoryActions.busy.values())
+      labels[operation.projectId] = operation.label;
+    return labels;
+  }, [repositoryActions.busy]);
+  // Only actual workspace transitions enter MRU. Output, badges, ticks or a
+  // hidden Home do not count as visiting a project.
+  useEffect(() => {
+    if (!project || !projectPageVisible || page==="demonstration") return;
+    const owner = address(project.id, selectedContext);
+    let target: HomeTarget;
+    if (page === "launch" || page === "build") {
+      if (!activeDraft) return;
+      target = {
+        kind: "draft",
+        owner,
+        draftKind: page === "launch" ? "pipeline" : "build",
+        key: activeDraft,
+      };
+    } else if (page === "project" && selected)
+      target = { kind: "run", owner, runId: selected };
+    else if (page === "changes") target = { kind: "changes", owner };
+    else
+      target = {
+        kind: "section",
+        owner,
+        section:
+          page === "context-preparation"
+            ? "context-runs"
+            : page === "project"
+              ? "overview"
+              : page,
+      };
+    visitsStore.remember(target);
+  }, [
+    project?.id,
+    projectPageVisible,
+    page,
+    selected,
+    activeDraft,
+    selectedContext?.contextId,
+    selectedContext?.revision,
+    visitsStore,
+  ]);
+  const homeNavigationState = useRef({ sessionEntries, sessionStore });
+  homeNavigationState.current = { sessionEntries, sessionStore };
+  // Opening a modal supersedes a pending Home shortcut even if the user
+  // closes it before the owner read finishes. Other navigation remains unchanged.
+  const homeIntentBlocked = page !== "home" || navigationBlocked() ||
+    notifications.open || !!projectAddMenu || !!error;
+  const homeGuardEpoch = useRef(0);
+  useLayoutEffect(() => {
+    if (homeIntentBlocked) homeGuardEpoch.current++;
+    return () => { homeGuardEpoch.current++; };
+  }, [homeIntentBlocked]);
+  function openHomeTarget(target: HomeTarget) {
+    if (homeIntentBlocked) return;
+    const guardEpoch = homeGuardEpoch.current;
+    const ticket = ++notificationIntent.current;
+    const current = () =>
+      ticket === notificationIntent.current &&
+      guardEpoch === homeGuardEpoch.current && pageRef.current === "home";
+    const pid =
+      target.owner.kind === "primary"
+        ? target.owner.projectId
+        : target.owner.ref.projectId;
+    const p = projectsRef.current.find((v) => v.id === pid);
+    if (!p) {
+      setError("Проект больше не находится в списке.");
+      return;
+    }
+    if (target.kind === "run") {
+      const r = runsRef.current.find(
+        (v) => v.id === target.runId && v.projectId === pid,
+      );
+      if (r) {
+        const same = r.context
+          ? target.owner.kind === "topic" &&
+            contextKey(r.context) === contextKey(target.owner.ref)
+          : target.owner.kind === "primary";
+        if (!same) {
+          setError("Сохранённый запуск относится к другой рабочей области.");
+          return;
+        }
+        navigate(() => openContextRun(r), true);
+        return;
+      }
+    }
+    void (async () => {
+      const owner = await resolveHomeOwner(
+        p,
+        target.owner,
+        (ref) => readRequest("resolveTopicContext", ref),
+        (id) => readRequest("listTopicContexts", id),
+        current,
+      );
+      if (
+        !current() ||
+        !projectsRef.current.some((v) => v.id === pid && v.path === p.path)
+      )
+        return;
+      navigateRef.current(() => {
+        let next: HomeSection | "launch" | "build" | "changes" | "project" = "overview",
+          notice = "";
+        let nextSelected:string|null=null;
+        let draft = "";
+        const { sessionEntries: live, sessionStore: store } =
+          homeNavigationState.current;
+        if (target.kind === "document") {
+          if (!store.has(target)) {
+            setError("Файл больше не содержит несохранённых изменений.");
+            return;
+          }
+          const sameRevision =
+            target.owner.kind === "primary" ||
+            target.owner.ref.revision === owner?.revision;
+          const opened = sameRevision ? store.reveal(target) : null;
+          if (!opened) {
+            setSessionBuffer(target);
+            return;
+          }
+          if (opened.page === "project-settings")
+            setProjectSettingsTabs((old) => ({ ...old, [pid]: opened.tab }));
+          next = opened.page;
+        } else if (target.kind === "draft") {
+          const exists = live.some(
+            (e) =>
+              e.target.kind === "draft" &&
+              e.target.key === target.key &&
+              e.target.draftKind === target.draftKind &&
+              JSON.stringify(e.target.owner) === JSON.stringify(target.owner),
+          );
+          if (
+            exists &&
+            (target.owner.kind === "primary" ||
+              target.owner.ref.revision === owner?.revision)
+          ) {
+            next = target.draftKind === "pipeline" ? "launch" : "build";
+            draft = target.key;
+          } else
+            notice =
+              "Прежняя форма недоступна в этой рабочей области. Открыт Обзор; новый запуск не создан.";
+        } else if (target.kind === "changes") next = "changes";
+        else if (target.kind === "section") next = target.section;
+        else if(target.kind==="run"&&attachedRef.current.some(v=>v.id===target.runId&&sameDashboardOwner(v.owner,{projectId:pid,context:owner?contextRef(owner):undefined}))){
+          next="project";nextSelected=target.runId;
+        }
+        else
+          notice =
+            "Прежняя вкладка запуска недоступна. Открыт Обзор этой рабочей области.";
+        restoration.current.delete(pid);
+        setContextSelections((v) => ({ ...v, [pid]: owner }));
+        setProjectId(pid);
+        setSelected(nextSelected);
+        setActiveDraft(draft);
+        setPage(next);
+        setError(notice);
+      }, true);
+    })().catch((e) => {
+      if (!current()) return;
+      if (
+        target.kind === "document" &&
+        homeNavigationState.current.sessionStore.has(target)
+      )
+        setSessionBuffer(target);
+      else setError(preparationErrorMessage(e));
+    });
+  }
+  const restoringPanels = useRef(new Map<string, Promise<void>>());
+  function restorePanel(id: string) {
+    const pending = restoringPanels.current.get(id);
+    if (pending) return pending;
+    const attempt = window.goga.restoreDashboard!(id)
+      .then(() => {
+        setViewErrors((previous) => {
+          const next = { ...previous };
+          delete next[id];
+          return next;
+        });
+        setShowLogs((previous) => ({ ...previous, [id]: false }));
+      })
+      .finally(() => restoringPanels.current.delete(id));
+    restoringPanels.current.set(id, attempt);
+    return attempt;
+  }
+  function replaceSubmittedHomeSlot(
+    kind: "build" | "pipeline",
+    id: string,
+    source: Project,
+    owner: WorktreeRecord | undefined,
+    r: Run,
+    createdOwner?: WorktreeRecord,
+  ) {
+    if (
+      source.id !== r.projectId ||
+      !projectsRef.current.some(
+        (p) => p.id === source.id && p.path === source.path,
+      )
+    )
+      return;
+    const historyOwner =
+      createdOwner ??
+      (r.context
+        ? owner &&
+          contextKey(owner) === contextKey(r.context) &&
+          owner.revision === r.context.revision
+          ? owner
+          : recordedRunOwner(r.context)
+        : null);
+    visitsStore.replaceDraft(
+      {
+        kind: "draft",
+        key: id,
+        draftKind: kind,
+        owner: address(source.id, owner),
+      },
+      { kind: "run", runId: r.id, owner: address(r.projectId, historyOwner) },
+    );
+    const saved = projectNavigation.current.get(source.id);
+    if (
+      (projectIdRef.current !== source.id ||
+        pageRef.current === "home" ||
+        pageRef.current === "settings") &&
+      saved?.page === (kind === "build" ? "build" : "launch") &&
+      saved.activeDraft === id
+    ) {
+      projectNavigation.current.set(source.id, {
+        page: "project",
+        selected: r.id,
+        activeDraft: "",
+      });
+      if (historyOwner)
+        setContextSelections((values) => ({
+          ...values,
+          [source.id]: historyOwner,
+        }));
+    }
+  }
+  function restoreFromHome(id: string) {
+    const r = runsRef.current.find((v) => v.id === id);
+    if (
+      !r ||
+      !canRestoreRunDashboard(r, viewErrors[id]) ||
+      !window.goga.restoreDashboard
+    )
+      return;
+    navigate(() => {
+      if (openContextRun(r)) {
+        void restorePanel(id).catch((e) =>
+          setViewErrors((prev) => ({
+            ...prev,
+            [id]: preparationErrorMessage(e),
+          })),
+        );
+      }
+    }, true);
+  }
   const content = (
     <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
       <header className="titlebar">
@@ -1412,60 +2009,28 @@ export function App() {
         <div className="local-label">
           <i /> Только локальная рабочая область
         </div>
-        <div className="sidebar-heading">
-          <span className="eyebrow">ПРОЕКТЫ</span>
-          <button
-            aria-label="Добавить проект"
-            onClick={() => navigate(() => void add())}
-            className="icon-button"
-          >
-            ＋
-          </button>
-        </div>
-        <nav className="project-list">
-          {projects.map((p) => (
-            <div className="project-notification-row" key={p.id}>
-            <TooltipButton
-              label={p.name}
-              tooltipLabel={p.name}
-              description={p.path}
-              sidebar
-              tooltipEnabled={sidebarCollapsed}
-              busy={false}
-              key={p.id}
-              buttonClassName={`project-button ${page !== "settings" && p.id === projectId ? "active" : ""}`}
-              disabled={settingsBusy}
-              onClick={() =>
-                navigate(() => {
-                  const saved = projectNavigation.current.get(p.id);
-                  setProjectId(p.id);
-                  setPage(saved?.page ?? "overview");
-                  setSelected(saved?.selected ?? null);
-                  setActiveDraft(saved?.activeDraft ?? "");
-                  setError(
-                    saved?.page === "project" && saved.selected
-                      ? launchOwnerErrors.current.get(saved.selected) ?? ""
-                      : "",
-                  );
-                })
-              }
-            >
-              <span className="folder-icon">▱</span>
-              <span>
-                {p.name}
-                <small>{p.path.split("/").slice(-2).join("/")}</small>
-              </span>
-            </TooltipButton>
-            {!!notifications.snapshot.byProject[p.id]&&<button type="button" className="project-notification-badge" aria-label={`Уведомления проекта ${p.name}: ${notifications.snapshot.byProject[p.id]}`} title="Уведомления" onClick={()=>notifications.setOpen(true)}><span className="notification-count">{notifications.snapshot.byProject[p.id]>99?"99+":notifications.snapshot.byProject[p.id]}</span></button>}
-            </div>
-          ))}
-        </nav>
+        <ProjectSidebar projects={projects} controller={organization} activeProjectId={projectPageVisible?projectId:null}
+          collapsed={sidebarCollapsed} disabled={settingsBusy} homeActive={page==="home"}
+          onHome={()=>navigate(()=>{setPage("home");setError("");},true)}
+          onOpen={p=>navigate(()=>{
+            const saved=projectNavigation.current.get(p.id);
+            setProjectId(p.id); setPage(saved?.page??"overview");setActiveDraft(saved?.activeDraft??"");setSelected(saved?.selected??null);
+            setError(saved?.page==="project" && saved.selected ? launchOwnerErrors.current.get(saved.selected)??"" : "");
+          })}
+          onAdd={openAddMenu} addMenuOpen={!!projectAddMenu}
+          onRemove={requestProjectRemoval} canOpenMenu={()=>!settingsBusy && !navigationBlocked()}
+          unreadByProject={notifications.snapshot.byProject} onNotifications={()=>notifications.setOpen(true)}
+          onError={e=>setError(preparationErrorMessage(e))} onModalChange={setOrganizationModal}/>
         <button
           aria-label="Настройки"
           className={`settings-button ${page === "settings" ? "active" : ""}`}
           disabled={settingsBusy}
           onClick={() =>
             navigate(() => {
+              if (page !== "settings") {
+                settingsBack.current=page==="demonstration"?"demonstration":page==="home"||!project?"home":"project-settings";
+                settingsTerminalOwner.current=null;
+              }
               setPage("settings");
               setError("");
             })
@@ -1496,7 +2061,7 @@ export function App() {
         </small>
       </aside>
       <main className="main-area">
-        <div className="project-bar" ref={repositoryPopupAnchor}>
+        {page!=="home" && <div className="project-bar" ref={repositoryPopupAnchor}>
           <div className="project-heading">
             <span className="eyebrow">
               Мой компьютер / {page === "settings" ? "НАСТРОЙКИ" : "ПРОЕКТ"}
@@ -1569,7 +2134,7 @@ export function App() {
                     selectedContextRef.current = record;
                     setSelected(null);
                     setPage(
-                      pageRef.current === "overview" ||
+                      pageRef.current === "demonstration" || pageRef.current === "overview" ||
                         pageRef.current === "project-settings" ||
                         pageRef.current === "topics" ||
                         pageRef.current === "changes" ||
@@ -1592,7 +2157,7 @@ export function App() {
                     selectedContextRef.current = null;
                     setSelected(null);
                     setPage(
-                      pageRef.current === "overview" ||
+                      pageRef.current === "demonstration" || pageRef.current === "overview" ||
                         pageRef.current === "project-settings" ||
                         pageRef.current === "topics" ||
                         pageRef.current === "changes" ||
@@ -1624,7 +2189,8 @@ export function App() {
                 selected={selectedContext}
                 disabled={
                   settingsBusy ||
-                  [...gitBranchBusy.values()].includes(project.id)
+                  [...gitBranchBusy.values()].includes(project.id) ||
+                  repositoryMissing
                 }
               />
             )}
@@ -1661,6 +2227,7 @@ export function App() {
                   {contextActivity.activeCount}
                 </span>
               </button>
+              {demoStarting&&<small role="status">Запускаем демонстрацию…</small>}
               <ContextLaunchMenu
                 context={displayOwner}
                 runs={runs as RunWithContext[]}
@@ -1669,6 +2236,11 @@ export function App() {
                 prepareWithoutContext={!selectedContext}
                 primaryProjectId={projectId}
                 onPrepare={(kind) => navigate(() => prepareFromHeader(kind))}
+                demoItem={demonstrations.available&&demoScope&&demoKey ? closeMenu=><DemoLaunchItem key={demoKey}
+                  store={demonstrations} scopeKey={demoKey} enter={start=>{
+                    closeMenu();
+                    navigate(() => enterDemo(start));
+                  }}/> : undefined}
               />
             </div>
           )}
@@ -1676,7 +2248,7 @@ export function App() {
             anchor={repositoryPopupAnchor}
             onHandoff={openHandoff}
           />
-        </div>
+        </div>}
         {handoff.candidate && (
           <GitUpdateHandoff
             candidate={handoff.candidate}
@@ -1690,20 +2262,40 @@ export function App() {
             title="Не удалось выполнить операцию"
             closeLabel="Закрыть сообщение"
             className="app-error-dialog"
-            onClose={() => setError("")}
+            onClose={() => { setError(""); setDemoRetry(null); }}
           >
             <pre role="alert">{error}</pre>
+            {canRetryDemo && <div className="form-actions">
+              <button type="button" onClick={() => {
+                if (demoRetry?.intent !== notificationIntent.current || demoRetry.key !== demoKeyRef.current) return;
+                setError("");
+                enterDemo(true, "system");
+              }}>Запустить в системном браузере</button>
+            </div>}
           </TopicModal>
         )}
         <RetainedViews activeKey={page === "settings" ? "settings" : null}>
           <div className="scroll-area global-settings-scroll-area">
             <Settings
               documents={settingsDocuments}
-              onBack={() => navigate(() => setPage("project-settings"))}
+              selectedTab={globalSettingsTab}
+              onTabChange={setGlobalSettingsTab}
+              onBack={() => navigate(() => {
+                // Metadata revisions do not change a retained terminal owner. Never
+                // silently substitute an unrelated project/topic if the owner vanished.
+                const dest=settingsBack.current;
+                setPage(dest==="terminal" && sectionKey("terminal",displayOwner)!==settingsTerminalOwner.current ? "home" : dest);
+              })}
             />
           </div>
         </RetainedViews>
-        <div className="project-page" hidden={page === "settings"}>
+        {page==="home" && <HomePage projects={projects} runs={runs} attached={attachedPanels} organization={organization.organization}
+          visits={visits} sessionEntries={sessionEntries} notifications={notifications.available?{byProject:notifications.snapshot.byProject,error:notifications.error||undefined}:null}
+          viewErrors={viewErrors} catalogReady={catalogReady} catalogError={catalogError} onRetry={()=>{setCatalogError("");retryCatalog(n=>n+1);}}
+          runsReady={runsReady} runsError={runsError} onRetryRuns={()=>{setRunsError("");retryRuns(n=>n+1);}}
+          onDetachPanel={row=>void detachPanel(row)} operations={homeOperations} onAdd={openAddMenu} onNavigate={openHomeTarget} onReconnect={typeof window.goga.restoreDashboard === "function" ? restoreFromHome : undefined}/>}
+        {sessionBuffer && <SessionBuffer store={sessionStore} target={sessionBuffer} onClose={()=>setSessionBuffer(null)}/>}
+        <div className="project-page" hidden={!projectPageVisible}>
           <div className="tabs" role="tablist" aria-label="Разделы проекта">
             {project && (
               <button
@@ -1753,6 +2345,8 @@ export function App() {
                 Топики
               </button>
             )}
+            {projectPageVisible&&demoShowId&&<DemoRunTab key={demoShowId} store={demonstrations} showId={demoShowId}
+              selected={page==="demonstration"} disabled={settingsBusy} onSelect={()=>navigate(()=>setPage("demonstration"))} onModalChange={setDemoCloseOpen} onError={setError}/>}
             {(
               [
                 [openBuilds, "build"],
@@ -1848,6 +2442,12 @@ export function App() {
                   );
                 }),
             )}
+            {workspacePanels.map(row=><div className="run-tab-group" key={row.id}>
+              <button role="tab" aria-selected={page==="project"&&selected===row.id} className={`run-tab ${page==="project"&&selected===row.id?"active":""}`}
+                onClick={()=>navigate(()=>openAttachedPanel(row.id))}><Cable size={15}/><span>{row.name}<small>Подключён по URL</small></span></button>
+              <button className="close-tab" title="Отключить панель, не останавливая процесс" aria-label={`Отключить панель ${row.name}`}
+                onClick={()=>navigate(()=>void detachPanel(row))}>×</button>
+            </div>)}
             {runs
               .filter(
                 (r) =>
@@ -1929,7 +2529,8 @@ export function App() {
             >
               {displayedPath.display}
             </span>
-            {run && page === "project" ? (
+            {attached&&page==="project"?<div className="run-actions"><span className="run-state">{viewErrors[attached.id]?"Панель недоступна":"Подключено · только просмотр"}</span>
+              <PanelRefreshButton busy={refreshingIds.includes(attached.id)} onClick={()=>refreshAction.current(attached.id)}/></div>:run && page === "project" ? (
               <>
                 {run.kind === "build" && (
                   <span>
@@ -1968,6 +2569,7 @@ export function App() {
                         : labels[run.status]}
                     </span>
                   )}
+                  {visibleRun===run.id&&window.goga.refreshDashboard&&<PanelRefreshButton busy={refreshingIds.includes(run.id)} onClick={()=>refreshAction.current(run.id)}/>}
                   {run.recovery && (
                     <button
                       type="button"
@@ -2041,7 +2643,7 @@ export function App() {
             {project && typeof window.goga.readGitWorkspace === "function" && (
               <div className="git-workspace-controls-host">
                 <RetainedViews
-                  activeKey={page !== "settings" ? sectionKey("git") : null}
+                  activeKey={projectPageVisible ? sectionKey("git") : null}
                   retain={retainProjectView}
                 >
                   <>
@@ -2082,20 +2684,39 @@ export function App() {
                           gitOwnerFlag(previous, id, owner, visible),
                         )
                       }
+                      onRepositoryStateChange={(scope, state) => {
+                        const owner = documentScopeId(scope);
+                        setGitRepositories((previous) => {
+                          if (state === "unknown") {
+                            if (!previous.has(owner)) return previous;
+                            const next = new Map(previous);
+                            next.delete(owner);
+                            return next;
+                          }
+                          if (previous.get(owner) === state) return previous;
+                          return new Map(previous).set(owner, state);
+                        });
+                      }}
                       onCurrentBranchChanged={(issuedScope) => {
+                        gitSummaryCacheFor(window.goga).invalidate(issuedScope, true);
                         const owner = documentScopeId(issuedScope);
                         setGitRevision((previous) => ({
                           ...previous,
                           [owner]: (previous[owner] ?? 0) + 1,
                         }));
                       }}
-                      onChanged={(id, issuedScope = id) => {
+                      onChanged={(id, issuedScope = id, change) => {
                         if (scopeProjectId(issuedScope) !== id) return;
+                        gitSummaryCacheFor(window.goga).invalidate(issuedScope);
                         const owner = documentScopeId(issuedScope);
                         setGitRevision((previous) => ({
                           ...previous,
                           [owner]: (previous[owner] ?? 0) + 1,
                         }));
+                        // Fetch imports tracking refs, not topics or working files.
+                        // Reloading their catalogs would temporarily disable Git
+                        // and dismiss the branch popup that owns this update.
+                        if (change === "references-only") return;
                         topicsChanged();
                         void settingsDocuments.refreshProject(issuedScope);
                       }}
@@ -2122,7 +2743,7 @@ export function App() {
                         ] ?? 0)
                       }
                       disabled={
-                        !!contextUnavailable || contextsLoading || settingsBusy
+                        !!contextUnavailable || contextsLoading || settingsBusy || repositoryMissing
                       }
                       onClose={closeGitView}
                       onOverlayChange={(visible) =>
@@ -2151,6 +2772,12 @@ export function App() {
             className="scroll-area"
             hidden={page === "changes" || page === "commits"}
           >
+            {dialogVisible&&<AttachPanelDialog key={attachmentKey} scope={activePanelScope} ownerLabel={project!.name+(selectedContext?" · "+selectedContext.topic:"")} onClose={()=>setAttachDialog(null)}
+              onOpen={r=>{setAttachDialog(null);if(r.kind==="managed"){const match=runsRef.current.find(v=>v.id===r.id);
+                if(match)navigate(()=>openContextRun(match));else setError("Запуск уже закрыт.");}
+                else navigate(()=>openAttachedPanel(r.panel.id))}}/>}
+            {page==="demonstration"&&demoShowId&&<DemoPanel key={demoShowId} store={demonstrations} showId={demoShowId}
+              onSettings={()=>navigate(()=>{settingsBack.current="demonstration";setGlobalSettingsTab("demonstrations");setPage("settings");})}/>}
             <RetainedViews
               activeKey={page === "overview" ? sectionKey("overview") : null}
               retain={retainProjectView}
@@ -2161,7 +2788,9 @@ export function App() {
                   workspacePath={
                     displayOwner ? displayOwner.path : project.path
                   }
+                  sessions={sessionStore} retainedViewKey={sectionKey("overview")!}
                   onMutation={() => {
+                    gitSummaryCacheFor(window.goga).invalidate(displayOwner ? contextRef(displayOwner) : project.id);
                     const owner = documentScopeId(
                       displayOwner ? contextRef(displayOwner) : project.id,
                     );
@@ -2172,7 +2801,8 @@ export function App() {
                   }}
                   onCloseState={(paths, busy) => {
                     const key = sectionKey("overview")!;
-                    overviewCloseStates.current.set(key, {
+                    const previous = overviewCloseStates.current.get(key);
+                    const next = {
                       paths: paths.map(
                         (p) =>
                           project.name +
@@ -2182,7 +2812,10 @@ export function App() {
                           p,
                       ),
                       busy,
-                    });
+                    };
+                    overviewCloseStates.current.set(key, next);
+                    if (previous?.busy !== next.busy || JSON.stringify(previous?.paths ?? []) !== JSON.stringify(next.paths))
+                      refreshOverviewCloseState(value => value + 1);
                     const entries = [...overviewCloseStates.current.values()];
                     void window.goga
                       .reportOverviewCloseState?.(
@@ -2235,6 +2868,10 @@ export function App() {
                 {contextsError && <p role="alert">{contextsError}</p>}
                 <ContextRuns
                   context={displayOwner}
+                  panels={workspacePanels}
+                  viewErrors={viewErrors}
+                  onAttach={window.goga.attachDashboard&&!contextUnavailable?()=>setAttachDialog(attachmentKey):undefined}
+                  onOpenPanel={id=>navigate(()=>openAttachedPanel(id))}
                   contextLabel={headerTopic}
                   primaryProjectId={selectedContext ? undefined : projectId}
                   unavailableReason={
@@ -2443,36 +3080,24 @@ export function App() {
                     ])}
                     onBusyChange={onBuildBusy}
                     onCancel={() => closeBuild(id)}
-                    onLaunched={(r, stale) => {
+                    onLaunched={(r, stale, superseded) => {
                       if (!runsRef.current.some((i) => i.id === r.id))
                         applyRuns([...runsRef.current, r]);
-                      if (
-                        stale ||
-                        !matchesWorkspace(
-                          buildProject.id,
-                          owner,
-                          projectIdRef.current,
-                          selectedContextRef.current,
-                        )
-                      )
-                        return;
-                      if (owner || repeatSeeds[id])
-                        setOpenBuilds((values) => {
-                          const next = new Set(values);
-                          next.delete(id);
-                          return next;
-                        });
-                      if (repeatSeeds[id]) {
-                        buildDrafts.current.delete(id);
-                        setRepeatSeeds((previous) => {
-                          const next = { ...previous };
-                          delete next[id];
-                          return next;
-                        });
-                      }
-                      navigateRef.current(() => {
-                        openRunRef.current(r);
+                      setContextOpenRuns(values => new Set(values).add(r.id));
+                      if (superseded) return;
+                      const visible = pageRef.current === "build" && activeDraftRef.current === id &&
+                        matchesWorkspace(buildProject.id, owner, projectIdRef.current, selectedContextRef.current);
+                      replaceSubmittedHomeSlot("build", id, buildProject, owner, r);
+                      setOpenBuilds(values => {
+                        const next = new Set(values); next.delete(id); return next;
                       });
+                      buildDrafts.current.delete(id);
+                      if (repeatSeeds[id]) setRepeatSeeds(previous => {
+                        const next = {...previous}; delete next[id]; return next;
+                      });
+                      if (!visible) return;
+                      if (!stale) navigateRef.current(() => openRunRef.current(r));
+                      else setPage(owner ? "context-runs" : "project-settings");
                     }}
                   />
                 </div>
@@ -2632,37 +3257,7 @@ export function App() {
                             next.delete(id);
                             return next;
                           });
-                          // Also replace a background project's saved exact slot,
-                          // without changing the currently visible workspace.
-                          const saved = projectNavigation.current.get(
-                            launchProject.id,
-                          );
-                          if (
-                            projectIdRef.current !== launchProject.id &&
-                            saved?.page === "launch" &&
-                            saved.activeDraft === id
-                          ) {
-                            projectNavigation.current.set(launchProject.id, {
-                              page: "project",
-                              selected: r.id,
-                              activeDraft: "",
-                            });
-                            const historyOwner =
-                              createdOwner ??
-                              (owner &&
-                              r.context &&
-                              contextKey(owner) === contextKey(r.context) &&
-                              owner.revision === r.context.revision
-                                ? owner
-                                : r.context
-                                  ? recordedRunOwner(r.context)
-                                  : undefined);
-                            if (historyOwner)
-                              setContextSelections((values) => ({
-                                ...values,
-                                [launchProject.id]: historyOwner,
-                              }));
-                          }
+                          replaceSubmittedHomeSlot("pipeline", id, launchProject, owner, r, createdOwner);
                           if (
                             activate &&
                             canActivate() &&
@@ -2696,16 +3291,25 @@ export function App() {
                 <TerminalWorkspace
                   suspendOpen={deletion.busy || topicRemoval.busy}
                   api={window.goga.terminal}
+                  onPresetSettings={() => navigate(() => {
+                    settingsBack.current="terminal";
+                    settingsTerminalOwner.current=sectionKey("terminal", displayOwner);
+                    setGlobalSettingsTab("terminal");
+                    setPage("settings");
+                    setError("");
+                  })}
                   scope={displayOwner ? contextRef(displayOwner) : project.id}
                   blocked={contextUnavailable || undefined}
                   obscured={Boolean(
                     error ||
                     handoff.candidate ||
                     topicCard ||
+                    projectRemoval ||
+                    projectCreationOpen || organizationModal ||
                     pendingNavigation ||
                     repeatPending ||
                     repositoryActions.failures.length ||
-                    gitModals.size ||
+                    gitModals.size || demoCloseOpen ||
                     deletion.operation ||
                     topicRemoval.operation,
                   )}
@@ -2762,7 +3366,7 @@ export function App() {
                 />
               )}
             </RetainedViews>
-            {(page === "overview" && project) ||
+            {!projectPageVisible || (page === "overview" && project) ||
             page === "launch" ||
             page === "terminal" ||
             page === "topics" ||
@@ -2773,20 +3377,21 @@ export function App() {
                 <div className="empty-symbol">⌘</div>
                 <h2>Добавьте локальный проект</h2>
                 <p>
-                  Выберите реальную папку Git-проекта с конфигурацией Goga.
-                  <br />
-                  Конвейеры и стадии загрузятся из его каталога.
+                  Откройте существующую папку, создайте пустой проект
+                  или клонируйте Git-репозиторий.
                 </p>
-                <button
-                  onClick={() => navigate(() => void add())}
-                  className="primary"
-                >
-                  Выбрать папку проекта
-                </button>
+                <div className="creation-welcome-actions">
+                  <button onClick={() => navigate(() => void add())}>Открыть существующий…</button>
+                  <button onClick={() => navigate(() => setProjectCreationOpen(true))} className="primary">Создать новый…</button>
+                </div>
                 <small>Для запуска нужны установленные Goga и Docker.</small>
               </div>
+            ) : page==="project"&&attached ? (
+              viewErrors[attached.id]?<section className="context-stage"><h2>Панель конвейера недоступна</h2><p className="error" role="alert">{viewErrors[attached.id]}</p>
+              <button disabled={refreshingIds.includes(attached.id)} onClick={()=>refreshAction.current(attached.id)}>Восстановить панель</button></section>
+              : <div className="afm-placeholder" aria-label="Подключённая панель конвейера">{refreshingIds.includes(attached.id)&&<p role="status">Обновляем страницу панели…</p>}</div>
             ) : page === "context-runs" ||
-              page === "context-preparation" ? null : !run ? (
+              page === "context-preparation" || page==="demonstration" ? null : !run ? (
               <div className="empty-state">
                 <div className="empty-symbol">↗</div>
                 <h2>Откройте новый запуск</h2>
@@ -2826,11 +3431,7 @@ export function App() {
                 runs.some((run) => run.id === JSON.parse(key)[2])
               }
             >
-              {run && <LoadingBoundary pending={repeatingPipelines.has(run.id)} label="Подготавливаем повторный запуск…"><RunOutput key={run.id} run={run} viewError={viewErrors[run.id]} onRestore={typeof window.goga.restoreDashboard==="function" ? async()=>{
-                  await window.goga.restoreDashboard!(run.id);
-                  setViewErrors(previous=>{const next={...previous};delete next[run.id];return next;});
-                  setShowLogs(previous=>({...previous,[run.id]:false}));
-                }:undefined} /></LoadingBoundary>}
+              {run && <LoadingBoundary pending={repeatingPipelines.has(run.id)} label="Подготавливаем повторный запуск…"><RunOutput key={run.id} run={run} viewError={viewErrors[run.id]} onRestore={typeof window.goga.restoreDashboard === "function" ? () => restorePanel(run.id) : undefined} /></LoadingBoundary>}
             </RetainedViews>
           </div>
         </div>
@@ -2910,6 +3511,30 @@ export function App() {
           onConfirm={() => void repeatBuild(repeatPending, true)}
         />
       )}
+      {projectAddMenu && <ProjectAddMenu target={projectAddMenu}
+        onClose={restoreFocus => { if (restoreFocus) projectAddMenu.trigger.focus(); setProjectAddMenu(null); }}
+        onAction={action => navigateRef.current(() => action === "open" ? void add() : setProjectCreationOpen(true))}
+        onError={error => setError(preparationErrorMessage(error))} />}
+      {projectCreationOpen && <ProjectCreationDialog onClose={() => setProjectCreationOpen(false)}
+        onOpenExisting={() => {setProjectCreationOpen(false);setOpenAfterCreation(true);}}
+        onSuccess={(created, warning) => {
+          if (initialProjectsPending.current) initialProjectChanges.current.set(created.id, created);
+          // A new directory is a new primary workspace, even if its path once
+          // belonged to a removed project with a cached topic selection.
+          restoration.current.delete(created.id);
+          setContextSelections(previous => ({...previous,[created.id]:null}));
+          setProjects(items => items.some(item => item.id === created.id) ? items : [...items,created]);
+          setProjectCreationNotice(warning ?? "");
+          setProjectCreationOpen(false);setCreatedProject(created);
+        }} />}
+      {projectCreationNotice && <div className="project-creation-notice" role="status">
+        <span>{projectCreationNotice}</span><button aria-label="Закрыть сообщение о создании" onClick={() => setProjectCreationNotice("")}>×</button>
+      </div>}
+      {projectRemoval && <ProjectRemovalDialog project={projectRemoval.project} busy={projectRemoval.busy}
+        error={projectRemoval.error} dirty={projectOverviewStates(projectRemoval.project.id).flatMap(state => state.paths)}
+        blocked={projectRemovalBlocked(projectRemoval.project.id)}
+        onClose={() => { if (!projectRemovalFlight.current) setProjectRemoval(null); }}
+        onConfirm={() => void removeSelectedProject()} />}
       {pendingNavigation && (
         <ProjectSettingsConfirmation
           busy={settingsBusy}
@@ -2936,7 +3561,7 @@ export function App() {
   return (
     <ContextDeletionProvider value={deletion.execute}>
       <TopicRemovalProvider value={topicRemoval.execute}>
-        <NativeTopicPopupProvider value={!!visibleRun || page === "terminal"}>
+        <NativeTopicPopupProvider value={(!!visibleRun && !viewErrors[visibleRun]) || page === "terminal"}>
           {content}
         </NativeTopicPopupProvider>
       </TopicRemovalProvider>

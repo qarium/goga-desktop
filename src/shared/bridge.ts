@@ -1,5 +1,9 @@
+import type { DemoCommand, DemoState, DemoStreamFrame } from "./demonstrations";
+import type { ProjectRemovalRequest } from "./project-registration";
+import type { ProjectCreationRequest, ProjectCreationResult, ProjectCreationProgress } from "./project-creation";
 import type { SpecificationCatalog, SpecificationDocument } from "./project-specifications";
 import type { TopicRemovalRequest, TopicRemovalPreview, TopicRemovalResult, TopicCloneCleanupRequest } from "./topic-removal";
+import type { AttachedDashboard } from "./attached-dashboard";
 import type { DashboardViewport } from "./dashboard-viewport";
 import type {
   OverviewDirectory,
@@ -145,6 +149,7 @@ import type {
   Discovery,
   Preview,
   Run,
+  RunJournalSlice,
   PipelineRequest,
   LaunchRequest,
   TopicTaskRequest,
@@ -156,6 +161,14 @@ export interface SettingsFile {
   version: string;
 }
 export interface DesktopAPI {
+  demoState(): Promise<DemoState>;
+  demoExecute(command: DemoCommand): Promise<void>;
+  demoNextFrame(showId: string, tabId: string, after: string | null): Promise<DemoStreamFrame | null>;
+  demoFrame(showId: string): Promise<Uint8Array>;
+  demoOpenBrowser(showId: string): Promise<void>;
+  demoCopyURL(showId: string, tabId: string): Promise<void>;
+  demoCopySelection(showId: string, tabId: string, requestId: string): Promise<boolean>;
+  demoCancelSelectionCopy(requestId: string): Promise<void>;
   notifications(page?: import("./notifications").NotificationPageRequest): Promise<import("./notifications").NotificationSnapshot>;
   markNotificationRead(id: string, expectedSequence?: number): Promise<import("./notifications").NotificationSnapshot>;
   setNotificationView(runId: string | null): Promise<void>;
@@ -259,6 +272,7 @@ export interface DesktopAPI {
   readGitDiff(request: GitDiffRequest): Promise<GitWorkspaceDiff>;
   /** Optional for compatibility with older hosts and isolated fixtures. */
   terminal?: TerminalAPI;
+  terminalPresets?: import("./terminal-preset-control").TerminalPresetAPI;
   runRepositoryAction(
     request: RepositoryActionRequest,
   ): Promise<RepositoryActionResult>;
@@ -382,6 +396,7 @@ export interface DesktopAPI {
   ): Promise<DeletionTicket>;
   deleteDocument(token: string): Promise<DeletionResult>;
   listProjects(): Promise<Project[]>;
+  removeProject(project: ProjectRemovalRequest): Promise<Project[]>;
   listProjectProfiles(projectId: ScopeRef): Promise<ProjectProfile[]>;
   listProjectTools(projectId: ScopeRef): Promise<ProjectTool[]>;
   listProjectWorkflows(projectId: ScopeRef): Promise<ProjectWorkflow[]>;
@@ -399,6 +414,10 @@ export interface DesktopAPI {
     version: string,
   ): Promise<ProjectDocument>;
   chooseProject(): Promise<Project | null>;
+  chooseProjectLocation(): Promise<string | null>;
+  createProject(request: ProjectCreationRequest): Promise<ProjectCreationResult>;
+  cancelProjectCreation(id: string): Promise<ProjectCreationResult>;
+  onProjectCreation(callback: (progress: ProjectCreationProgress) => void): () => void;
   readProjectSettings(projectId: ScopeRef): Promise<ProjectSettingsView>;
   saveProjectSettings(
     projectId: ScopeRef,
@@ -411,8 +430,18 @@ export interface DesktopAPI {
   preview(request: PipelineRequest): Promise<Preview>;
   launch(request: LaunchRequest): Promise<Run>;
   runs(): Promise<Run[]>;
+  readRunJournal?(id: string, after?: number): Promise<RunJournalSlice>;
+  onRunOutputChanged?(callback: (change: { id: string; sequence: number }) => void): () => void;
   closeRun(id: string): Promise<boolean>;
   stopRun(id: string): Promise<void>;
+  listAttachedDashboards?():Promise<AttachedDashboard[]>;
+  attachDashboard?(scope:ScopeRef,url:string,requestId:string):Promise<{kind:"managed";id:string}|{kind:"attached";panel:AttachedDashboard}>;
+  cancelDashboardAttach?(requestId:string):Promise<void>;
+  detachDashboard?(scope:ScopeRef,id:string):Promise<void>;
+  selectAttachedDashboard?(scope:ScopeRef,id:string):Promise<void>;
+  refreshDashboard?(id:string,scope?:ScopeRef,recover?:boolean):Promise<void>;
+  onDashboardRefresh?(callback:(id:string)=>void):()=>void;
+  onAttachedDashboards?(callback:(rows:AttachedDashboard[])=>void):()=>void;
   restoreDashboard?(id: string): Promise<void>;
   selectRun(id: string | null): Promise<void>;
   setDashboardViewport?(bounds: DashboardViewport): Promise<void>;

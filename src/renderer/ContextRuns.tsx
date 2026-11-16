@@ -1,3 +1,6 @@
+import type {AttachedDashboard} from "../shared/attached-dashboard";
+import {Cable} from "lucide-react";
+import {AttachedPanelCard} from "./AttachedPanels";
 import { useState } from "react";
 import type { Pipeline, Run } from "../shared/types";
 import {
@@ -13,6 +16,10 @@ export interface ContextRunsProps {
   runs: RunWithContext[];
   context: TopicContextIdentity | null;
   onOpen: (runId: string) => void;
+  panels?: AttachedDashboard[];
+  onAttach?:()=>void;
+  onOpenPanel?:(id:string)=>void;
+  viewErrors?:Record<string,string>;
   pipelines?: Pipeline[];
   contextLabel?: string;
   unavailableReason?: string;
@@ -31,6 +38,7 @@ export function ContextRuns({
   runs,
   context,
   onOpen,
+  panels=[],onAttach,onOpenPanel,viewErrors,
   pipelines = [],
   contextLabel,
   unavailableReason,
@@ -41,11 +49,11 @@ export function ContextRuns({
     !context && primaryProjectId
       ? runs.filter((run) => run.projectId === primaryProjectId && !run.context)
       : runsForContext(runs, context);
-  const pipelineCount = scoped.filter((run) => run.kind !== "build").length;
+  const pipelineCount = scoped.filter((run) => run.kind !== "build").length + panels.length;
   const filtered = scoped.filter((run) => (run.kind ?? "pipeline") === filter);
   return (
     <section className="context-runs" aria-label="Запуски выбранного топика">
-      <h2>Запуски</h2>
+      <div className="context-runs-heading"><h2>Запуски</h2>{onAttach&&<button onClick={onAttach}><Cable size={16}/>Подключить конвейер</button>}</div>
       {contextLabel && (
         <p className="context-run-hint">Топик: {contextLabel}</p>
       )}
@@ -83,7 +91,7 @@ export function ContextRuns({
             остаются в истории.
           </p>
         )}
-        {filtered.length === 0 && (
+        {filtered.length === 0 && (filter==="build"||!panels.length) && (
           <p className="context-run-hint">
             {filter === "build"
               ? "Сборка ещё не запускалась."
@@ -91,6 +99,7 @@ export function ContextRuns({
           </p>
         )}
         <div className="context-run-list">
+          {filter==="pipeline"&&panels.map(row=><AttachedPanelCard key={row.id} row={row} error={viewErrors?.[row.id]} onOpen={()=>onOpenPanel?.(row.id)}/>)}
           {filtered.map((run) => {
             const isBuild = run.kind === "build";
             const pipeline = pipelines.find((item) => item.id === run.pipeline);

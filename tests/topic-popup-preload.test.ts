@@ -103,3 +103,20 @@ it("bridges dashboard geometry separately from selecting or launching a run", as
     bounds,
   );
 });
+it("keeps journal reads and removable revision notifications on fixed shell channels", async () => {
+  vi.resetModules();
+  fake.invoke.mockClear();
+  await import("../src/main/preload");
+  const api = fake.expose.mock.calls.at(-1)![1];
+  const listener = vi.fn();
+  const off = api.onRunOutputChanged(listener);
+  expect(fake.invoke).not.toHaveBeenCalled();
+  const [channel, fn] = fake.on.mock.calls.at(-1)!;
+  expect(channel).toBe("goga:run-output");
+  fn({sender:"private"}, {id:"fixture",sequence:3});
+  expect(listener).toHaveBeenCalledExactlyOnceWith({id:"fixture",sequence:3});
+  off();
+  expect(fake.removeListener).toHaveBeenLastCalledWith(channel,fn);
+  await api.readRunJournal("fixture",25);
+  expect(fake.invoke).toHaveBeenCalledExactlyOnceWith("goga:run-journal","fixture",25);
+});

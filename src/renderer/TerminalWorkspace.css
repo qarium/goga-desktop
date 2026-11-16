@@ -26,21 +26,6 @@
   min-width: 0;
   gap: 2px;
 }
-.terminal-tab {
-  display: inline-flex;
-  align-items: center;
-  flex: 0 0 auto;
-  min-width: 0;
-  max-width: 240px;
-  border-bottom: 2px solid transparent;
-  color: #91a2ba;
-}
-.terminal-tab[data-selected="true"] {
-  border-bottom-color: #19cabb;
-  color: #19cabb;
-}
-.terminal-tab button,
-.terminal-add-button,
 .terminal-icon-button {
   background: transparent;
   border: 0;
@@ -51,25 +36,6 @@
   justify-content: center;
   gap: 6px;
   min-height: 36px;
-}
-.terminal-tab [role="tab"] {
-  min-width: 0;
-  padding: 9px 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  display: inline-flex;
-}
-.terminal-tab button:not([role="tab"]) {
-  width: 26px;
-  padding: 6px;
-  flex-shrink: 0;
-  color: #91a2ba;
-}
-.terminal-add-button {
-  width: 34px;
-  padding: 5px;
-  flex-shrink: 0;
 }
 .terminal-tabtools {
   position: relative;
@@ -85,8 +51,6 @@
   padding: 5px;
   border-radius: 6px;
 }
-.terminal-tab button:hover,
-.terminal-add-button:hover,
 .terminal-icon-button:hover {
   color: #19cabb;
   background: #101728;
@@ -174,7 +138,8 @@
 
 /* Native overlay content must participate in its own document's measurement. */
 .topic-context-native-root .terminal-actions-menu,
-.topic-context-native-root .terminal-add-menu {
+.topic-context-native-root .terminal-add-menu,
+.topic-context-dom-root .terminal-add-menu {
   position: relative;
   top: auto;
   right: auto;
@@ -212,11 +177,6 @@
 .terminal-type-button[aria-expanded="true"] {
   color: #19cabb;
   background: #101728;
-}
-.terminal-tab-label span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 .terminal-inline-rename {
   padding: 3px 4px;
@@ -278,4 +238,24 @@
   min-height: 180px;
   display: grid;
   place-items: center;
+}
+.terminal-preset-menu-title {
+  padding: 7px 10px 2px;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.terminal-add-menu .terminal-preset-menu-note {
+  margin: 2px 10px 6px;
+  overflow-wrap: anywhere;
+}
+.terminal-add-menu button span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.terminal-preset-progress {
+  color: var(--muted);
+  font-size: 12px;
+  margin: 4px 0;
 }

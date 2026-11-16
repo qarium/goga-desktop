@@ -19,6 +19,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 import { LaunchForm } from "../src/renderer/LaunchForm";
 import { ProjectSettings } from "../src/renderer/ProjectSettings";
@@ -76,6 +77,7 @@ async function openSettings(primary = false) {
 }
 async function setup() {
   render(<App />);
+  await openFirstProject();
   await screen.findByRole("button", { name: "Проект" });
   await openSettings();
 }
@@ -259,11 +261,11 @@ it("retains named drafts and unfinished name across tabs, Back, and project swit
   expect(
     (screen.getByLabelText("Имя конвейера") as HTMLInputElement).value,
   ).toBe("unfinished");
-  fireEvent.click(screen.getByRole("button", { name: /Beta/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Beta" }));
   await openSettings(true);
   await create("draft");
   replace("# beta");
-  fireEvent.click(screen.getByRole("button", { name: /Alpha/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
   await openSettings(true);
   expect(editor()!.state.doc.toString()).toBe(raw);
   expect(
@@ -410,6 +412,7 @@ it.each(["success", "failure"])(
   "refreshes App launch only after successful pipeline save, retains edited task and ignores stale preview %s",
   async (outcome) => {
     render(<App />);
+    await openFirstProject();
     await openPrototypeLaunch();
     await screen.findByRole("checkbox", { name: /One/ });
     await waitFor(() =>
@@ -700,6 +703,7 @@ it.each(["success", "failure"])(
       ],
     });
     render(<App />);
+    await openFirstProject();
     await openPrototypeLaunch();
     await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(1));
     await openSettings();
@@ -729,6 +733,7 @@ it("releases the discovery lock if refresh supersedes a pending initial discover
   api.discover.mockImplementationOnce(() => new Promise(() => {}));
   api.discover.mockRejectedValue(Error("fresh catalog unavailable"));
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(1));
   await openSettings();
@@ -747,6 +752,7 @@ it.each(["success", "failure"])(
     const original = await api.discover();
     api.discover.mockClear();
     render(<App />);
+    await openFirstProject();
     await openPrototypeLaunch();
     await screen.findByRole("checkbox", { name: /One/ });
     await waitFor(() =>
@@ -937,6 +943,7 @@ it.each(["discover", "preview"])(
   "blocks launch after pipeline refresh %s failure and retries without losing edited task",
   async (stage) => {
     render(<App />);
+    await openFirstProject();
     await openPrototypeLaunch();
     await screen.findByRole("checkbox", { name: /One/ });
     await waitFor(() =>
@@ -982,6 +989,7 @@ it("blocks a removed selected pipeline and preserves edited task until another p
   const original = await api.discover();
   api.discover.mockClear();
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   await screen.findByRole("checkbox", { name: /One/ });
   await waitFor(() =>
@@ -1044,6 +1052,7 @@ it.each([
     const original = await api.discover();
     api.discover.mockClear();
     render(<App />);
+    await openFirstProject();
     await openPrototypeLaunch();
     await screen.findByRole("checkbox", { name: /One/ });
     await waitFor(() =>
@@ -1276,6 +1285,7 @@ it("preserves standalone new-topic fields, profile, workflow and skip selection 
 
 it("isolates primary pipeline saves from an owner form and refreshes only its clone definitions", async () => {
   render(<App />);
+  await openFirstProject();
   await openPrototypeLaunch();
   await screen.findByRole("checkbox", { name: /One/ });
   await waitFor(() =>

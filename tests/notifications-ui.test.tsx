@@ -11,6 +11,7 @@ import {
 } from "@testing-library/react";
 import { NotificationBell } from "../src/renderer/notifications/Notifications";
 import { useNotifications } from "../src/renderer/notifications/useNotifications";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 vi.mock("../src/renderer/overview/ProjectOverview", () => ({
   ProjectOverview: () => <p>Обзор проекта</p>,
@@ -284,6 +285,7 @@ it("ignores a late notification preparation after a new topic selection intent",
   };
   window.goga = api;
   render(<App />);
+  await openFirstProject();
   fireEvent.click(
     await screen.findByRole("button", { name: /Уведомления: 1/ }),
   );
@@ -346,6 +348,7 @@ it.each(["running", "exited"])(
         }),
     );
     render(<App />);
+    await openFirstProject();
     fireEvent.click(await screen.findByRole("tab", { name: /editor/ }));
     await waitFor(() =>
       expect(api.selectRun).toHaveBeenLastCalledWith(
@@ -370,6 +373,7 @@ it("does not restore a stale viewed-run acknowledgement after navigating away", 
       : Promise.resolve(),
   );
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("tab", { name: /editor/ }));
   await waitFor(() => expect(api.selectRun).toHaveBeenLastCalledWith("r"));
   fireEvent.click(screen.getByRole("button", { name: "Обзор" }));
@@ -380,6 +384,7 @@ it("does not restore a stale viewed-run acknowledgement after navigating away", 
 it("revokes viewing while the notification list covers the run and restores it on close", async () => {
   const api = viewedRunApp();
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("tab", { name: /editor/ }));
   await waitFor(() =>
     expect(api.setNotificationView).toHaveBeenLastCalledWith("r"),
@@ -414,6 +419,7 @@ it("never acknowledges a run whose native selection failed", async () => {
   });
   try {
     render(<App />);
+    await openFirstProject();
     fireEvent.click(await screen.findByRole("tab", { name: /editor/ }));
     await screen.findByRole("dialog");
     expect(api.setNotificationView).not.toHaveBeenCalledWith("r");
@@ -434,6 +440,7 @@ it("reacknowledges the same active run when its native dashboard finishes loadin
     return () => {};
   };
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("tab", { name: /editor/ }));
   await waitFor(() =>
     expect(api.setNotificationView).toHaveBeenLastCalledWith("r"),

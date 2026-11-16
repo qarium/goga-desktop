@@ -186,6 +186,30 @@ export function createTerminalInspector(
   return {
     prepare,
     check,
+    presetPeer(fd, rootPid) {
+      if (
+        !Number.isInteger(fd) ||
+        fd < 3 ||
+        !Number.isInteger(rootPid) ||
+        rootPid < 2 ||
+        rootPid > 2147483647
+      )
+        return false;
+      try {
+        check();
+        verify();
+        return (
+          JSON.parse(
+            execute(helper, ["preset-peer", String(rootPid)], {
+              ...settings(1000),
+              stdio: ["ignore", "pipe", "ignore", fd],
+            }),
+          ).ok === true
+        );
+      } catch {
+        return false;
+      }
+    },
     birth: (pid, timeout) => read("birth", pid, timeout),
     root: (pid, timeout) => read("root", pid, timeout),
     snapshot: (pid) => read("snapshot", pid),
@@ -275,6 +299,7 @@ export function createIsolatedTerminalInspector(
   return {
     prepare,
     check: () => get().check!(),
+    presetPeer: (fd, rootPid) => get().presetPeer!(fd, rootPid),
     birth: (pid, timeout) => get().birth(pid, timeout),
     root: (pid, timeout) => get().root(pid, timeout),
     snapshot: (pid) => get().snapshot(pid),

@@ -11,6 +11,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 const owner = {
   projectId: "p",
@@ -120,6 +121,7 @@ beforeEach(() => {
 afterEach(cleanup);
 async function openRun() {
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Исполняемый файл");
   await act(async () => focusRun("old-run"));

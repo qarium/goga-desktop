@@ -1,7 +1,8 @@
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
-import { ipcMain, type BrowserWindow } from "electron";
+import { createTerminalPresetCrypto } from "./terminal-preset-crypto";
+import { ipcMain, safeStorage, type BrowserWindow } from "electron";
 import {
   createTerminalRuntime,
   type TerminalRuntimeOptions,
@@ -93,6 +94,7 @@ export function createWindowTerminal(options: {
     home: options.home,
     host: options.host,
     driver: lazyTerminalDriver(options.appRoot),
+    presetCrypto: createTerminalPresetCrypto(safeStorage),
     inspector,
     createView: (lost) => {
       const view = new TerminalViews(options.window, {

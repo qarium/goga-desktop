@@ -272,3 +272,81 @@ it("uses asynchronous inspector preparation when restoring a persisted terminal 
     (await f.runtime.sessions.confirmClose(close.token, true)).status,
   ).toBe("success");
 });
+
+it("keeps preset env snapshots across edits, deletion, refresh and Desktop restart, without reissuing commands", async () => {
+  const f = await setup();
+  // Inject only in this synthetic test; no system keychain, native process or socket.
+  const cryptoProvider = {
+    seal: (s: string) => Buffer.from(s).toString("base64"),
+    open: (s: string) => Buffer.from(s, "base64").toString(),
+  };
+  const seen: string[] = [];
+  const options = {
+    ...f.options,
+    presetCrypto: cryptoProvider,
+    preparePreset: async (
+      launch: import("../src/host/terminal-environment").TerminalLaunch,
+      cmd: string,
+    ) => {
+      seen.push(cmd);
+      return {
+        launch,
+        result: Promise.resolve("delivered" as const),
+        arm: () => {},
+        dispose: () => {},
+      };
+    },
+  };
+  const runtime = createTerminalRuntime(options),
+    store = runtime.presetStore!;
+  const create = async (
+    port: string,
+    item?: Awaited<ReturnType<typeof store.read>>,
+  ) => {
+    const saved = await store.save(
+      {
+        name: "Dev",
+        command: "echo synthetic",
+        env: [{ key: "PORT", value: port }],
+      },
+      item?.id,
+      item?.revision,
+    );
+    const s = await runtime.catalog.change({
+      kind: "create-from-preset",
+      scope: topic,
+      revision: (await runtime.catalog.read(topic)).revision,
+      presetId: saved.id,
+      presetRevision: saved.revision,
+      actionId: crypto.randomUUID(),
+    });
+    return { saved, tab: s.tabs.find((t) => t.id === s.selectedId)! };
+  };
+  const a = await create("4100"),
+    b = await create("4200", a.saved);
+  await store.remove(b.saved.id, b.saved.revision);
+  expect(seen).toEqual(["echo synthetic", "echo synthetic"]);
+  const first = await runtime.sessions.open(a.tab, topic);
+  const ticket = runtime.sessions.prepareClose({
+    kind: "refresh",
+    scope: topic,
+    ref: first,
+  });
+  expect((await runtime.sessions.confirmClose(ticket.token, true)).status).toBe(
+    "success",
+  );
+  const driver2 = createTerminalRuntime(options);
+  const restored = (await driver2.catalog.read(topic)).tabs.find(
+    (t) => t.id === a.tab.id,
+  )!;
+  await driver2.sessions.open(restored, topic);
+  expect(seen).toHaveLength(2);
+  expect(
+    f.host.acquireTerminalContext.mock.calls.map((c) => (c as unknown[])[1]),
+  ).toEqual(
+    ["4100", "4200", "4100", "4100"].map((value) => ({
+      presetEnv: [{ key: "PORT", value }],
+    })),
+  );
+  expect((await driver2.catalog.read("p")).tabs).toEqual([]);
+});

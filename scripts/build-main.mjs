@@ -5,7 +5,7 @@ await mkdir("dist-electron/assets", { recursive: true });
 await copyFile("resources/icon.png", "dist-electron/assets/icon.png");
 await build({
   entryPoints: [
-    "src/main/index.ts",
+    { in: "src/main/dispatch.cjs", out: "index" },
     "src/main/preload.ts",
     "src/main/afm-preload.ts",
     "src/main/terminal-preload.ts",

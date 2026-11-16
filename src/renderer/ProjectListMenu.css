@@ -1,0 +1,72 @@
+.project-menu-anchor {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+.project-list-menu {
+  position: relative;
+  max-height: var(--topic-popup-max-height, 70vh);
+  overflow-y: auto;
+  width: 100%;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: 0 14px 40px #0008;
+}
+.project-list-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 9px 10px;
+  border: 0;
+  border-radius: 5px;
+  background: transparent;
+  text-align: left;
+  font-size: 13px;
+}
+.project-list-menu button:hover,
+.project-list-menu button:focus-visible {
+  color: var(--teal);
+  background: #15332f;
+}
+.project-list-menu svg {
+  flex-shrink: 0;
+}
+.project-removal-copy {
+  display: grid;
+  gap: 20px;
+  margin-top: 22px;
+  line-height: 1.6;
+}
+.project-removal-copy p {
+  margin: 0;
+}
+.project-removal-target {
+  display: grid;
+  gap: 8px;
+}
+.project-removal-target code,
+.project-removal-warning li {
+  overflow-wrap: anywhere;
+}
+.project-removal-target code {
+  color: var(--muted);
+}
+.project-removal-warning {
+  color: #edc384;
+}
+.project-removal-warning ul {
+  margin: 12px 0;
+  padding-left: 22px;
+}
+.project-removal-dialog .form-actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 28px;
+}

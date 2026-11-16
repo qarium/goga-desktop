@@ -21,6 +21,7 @@ import {
   type RunWithContext,
 } from "./topic-context";
 import "./TopicContextPicker.css";
+import { useOptionFocus } from "./useOptionFocus";
 import { ContextOperationProgress } from "./ContextOperationProgress";
 import { readRequest } from "./read-request";
 import { TopicQuickSync } from "./TopicQuickSync";
@@ -183,7 +184,8 @@ export function TopicContextPicker({
   const mounted = useRef(true);
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
-  const [focused, setFocused] = useState(0);
+  const { focus, setFocused } = useOptionFocus();
+  const focused = focus.index;
   const [preparation, setPreparation] = useState<Preparation>(null);
   const progressCallback = useRef(onCreationProgress);
   progressCallback.current = onCreationProgress;
@@ -354,21 +356,24 @@ export function TopicContextPicker({
   const activeIndex = Math.min(focused, topics.length);
   const activeOption = activeIndex >= 0 ? optionId(activeIndex) : undefined;
   useEffect(() => {
-    if (!expanded || activeIndex < 0) return;
+    if (!expanded || activeIndex < 0 || focus.source === "pointer") return;
     const container = list.current;
     const option = container?.ownerDocument.getElementById(
       optionId(activeIndex),
     );
     if (!option || !container) return;
-    if (option.offsetTop < container.scrollTop)
-      container.scrollTop = option.offsetTop;
-    else if (
-      option.offsetTop + option.offsetHeight >
-      container.scrollTop + container.clientHeight
-    )
-      container.scrollTop =
-        option.offsetTop + option.offsetHeight - container.clientHeight;
-  }, [expanded, activeIndex, query]);
+    // offsetTop belongs to the positioned popup, not necessarily the list.
+    // Compare viewport rectangles in the same document (also for native portals)
+    // and scroll only this list, never the containing page or the search field.
+    const top = container.getBoundingClientRect().top + container.clientTop;
+    const bounds = option.getBoundingClientRect();
+    if (bounds.top < top) container.scrollTop += bounds.top - top;
+    else if (bounds.bottom > top + container.clientHeight)
+      container.scrollTop += Math.min(
+        bounds.top - top,
+        bounds.bottom - top - container.clientHeight,
+      );
+  }, [expanded, activeIndex, query, focus]);
 
   function close(restoreFocus = false) {
     setOpen(false);
@@ -637,7 +642,7 @@ export function TopicContextPicker({
         aria-selected={!current}
         className={`topic-context-option${primaryIndex === activeIndex ? " is-focused" : ""}`}
         onPointerDown={(event) => event.preventDefault()}
-        onPointerMove={() => setFocused(primaryIndex)}
+        onPointerMove={() => setFocused(primaryIndex, "pointer")}
         onClick={() => choose(primaryIndex)}
       >
         <div className="topic-context-lines" role="gridcell">
@@ -825,7 +830,7 @@ export function TopicContextPicker({
                       ))
                         event.preventDefault();
                     }}
-                    onPointerMove={() => setFocused(index)}
+                    onPointerMove={() => setFocused(index, "pointer")}
                     onClick={() => choose(index)}
                   >
                     <div className="topic-context-lines" role="gridcell">

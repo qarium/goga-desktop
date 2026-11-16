@@ -18,6 +18,7 @@ import {
 } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
 import { Settings } from "../src/renderer/Settings";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 const project = { id: "p", name: "Alpha", path: "/synthetic/alpha" };
 let api: any;
@@ -126,6 +127,7 @@ it("separates personal tabs, retains drafts through profile creation and reads o
 });
 async function projectTools() {
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByRole("textbox", { name: "Исполняемый файл" });
   fireEvent.click(screen.getByRole("button", { name: "Инструменты" }));
@@ -464,6 +466,7 @@ it("retains rejected environment input errors across inner tabs", async () => {
     profiles: [],
   });
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   const value = await screen.findByLabelText("Значение 1");
   fireEvent.paste(value, { clipboardData: { getData: () => "bad\nvalue" } });

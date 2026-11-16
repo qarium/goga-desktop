@@ -94,3 +94,25 @@ it.each([
     ).toBe(reason);
   },
 );
+it("removes only the native project chooser envelope and preserves its actionable reason", () => {
+  const reason = "Выбранная папка недоступна. Выберите другую папку.";
+  expect(
+    preparationErrorMessage(
+      Error(
+        `Error invoking remote method 'goga:choose-project': Error: ${reason}`,
+      ),
+    ),
+  ).toBe(reason);
+  const other = `Error invoking remote method 'goga:choose-project-other': Error: ${reason}`;
+  expect(preparationErrorMessage(Error(other))).toBe(other);
+});
+
+it("keeps a project-removal refusal readable without the Electron envelope", () => {
+  expect(
+    preparationErrorMessage(
+      Error(
+        "Error invoking remote method 'goga:remove-project': Error: Сначала закройте терминалы этого проекта.",
+      ),
+    ),
+  ).toBe("Сначала закройте терминалы этого проекта.");
+});

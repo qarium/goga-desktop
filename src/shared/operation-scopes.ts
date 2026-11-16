@@ -11,6 +11,14 @@ export type OperationScope =
   | "home"
   | "desktop-project";
 export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
+  "demo-state": "catalog",
+  "demo-execute": "context-lifecycle",
+  "demo-next-frame": "owner-ticket",
+  "demo-frame": "owner-ticket",
+  "demo-browser": "owner-ticket",
+  "demo-copy-url": "owner-ticket",
+  "demo-copy-selection": "owner-ticket",
+  "demo-cancel-selection-copy": "owner-ticket",
   "notifications": "transport",
   "set-notification-view": "transport",
   "mark-notification-read": "transport",
@@ -97,7 +105,11 @@ export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
   "prepare-document-deletion": "owner-ticket",
   "delete-document": "owner-ticket",
   "list-projects": "catalog",
+  "remove-project": "catalog",
   "choose-project": "catalog",
+  "choose-project-location": "catalog",
+  "create-project": "catalog",
+  "cancel-project-creation": "catalog",
   "list-project-profiles": "topic-or-primary-admin",
   "list-project-tools": "topic-or-primary-admin",
   "resolve-project-dockerfile": "topic-or-primary-admin",
@@ -130,6 +142,13 @@ export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
   preview: "topic-or-primary-admin",
   launch: "topic-or-primary-admin",
   runs: "run",
+  "run-journal": "run",
+  "attached-dashboards": "catalog",
+  "attach-dashboard": "topic-or-primary-admin",
+  "cancel-dashboard-attach": "owner-ticket",
+  "select-attached-dashboard": "owner-ticket",
+  "detach-dashboard": "owner-ticket",
+  "refresh-dashboard": "run",
   "select-run": "run",
   "set-dashboard-viewport": "transport",
   "close-run": "run",
@@ -142,6 +161,7 @@ export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
 
 /** Dedicated terminal control channel; each discriminated operation has its own boundary. */
 export const TERMINAL_CONTROL_SCOPES = {
+  "create-from-preset":"topic-or-primary-admin",
   read: "topic-or-primary-admin",
   initialize: "topic-or-primary-admin",
   create: "topic-or-primary-admin",

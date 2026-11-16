@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { TopicBoardSnapshot } from "../shared/topics";
 import {
   defaultBoardPreferences,
@@ -63,7 +63,19 @@ export function useTopicsBoard(
         : { owner, keys: new Set([...s.keys].filter((k) => known.has(k))) },
     );
   }, [board, projectId, year, owner]);
+  const toggleOne = useCallback(
+    (key: string) => {
+      setSelection((s) => {
+        if (s.owner !== owner) return s;
+        const keys = new Set(s.keys);
+        if (!keys.delete(key)) keys.add(key);
+        return { owner, keys };
+      });
+    },
+    [owner],
+  );
   return {
+    toggleOne,
     preferences:
       saved.projectId === projectId ? saved.value : defaultBoardPreferences(),
     error: saved.projectId === projectId ? saved.error : undefined,

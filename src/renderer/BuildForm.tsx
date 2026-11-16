@@ -110,7 +110,9 @@ export function BuildForm({
   project: Project;
   seed?: BuildRepeatPreparation;
   owner?: TopicContextRef;
-  onLaunched: (run: Run, stale?: boolean) => void;
+  // A hidden preparation loses navigation consent, not ownership of its
+  // result. Only a superseded slot must not be consumed by the parent.
+  onLaunched: (run: Run, stale?: boolean, superseded?: true) => void;
   onCancel: () => void;
   drafts?: Map<string, Draft>;
   /** UI storage identity only; never changes the execution owner. */
@@ -199,8 +201,9 @@ export function BuildForm({
   const epoch = useRef(0),
     flight = useRef(false),
     alive = useRef(false),
-    current = useRef({ suspended, projectId: project.id });
-  current.current = { suspended, projectId: project.id };
+    current = useRef({ suspended, projectId: project.id, ownerKey, storageKey });
+  current.current = { suspended, projectId: project.id, ownerKey, storageKey };
+  const inputVersion = useRef(0);
   useEffect(() => {
     alive.current = true;
     return () => {
@@ -209,6 +212,7 @@ export function BuildForm({
     };
   }, []);
   function edit(p: Partial<Draft>) {
+    inputVersion.current++;
     setRepeatReviewed(false);
     setDraft((d) => {
       const next = { ...d, ...p };
@@ -473,16 +477,12 @@ export function BuildForm({
     setBusy(true);
     setConfirmation(null);
     setError("");
-    const generation = epoch.current;
+    const generation = epoch.current, version = inputVersion.current;
     try {
       const run = await window.goga.launchBuild(request);
-      onLaunched(
-        run,
-        !alive.current ||
-          current.current.suspended ||
-          current.current.projectId !== project.id ||
-          epoch.current !== generation,
-      );
+      if (!alive.current || current.current.ownerKey !== ownerKey || current.current.storageKey !== storageKey || inputVersion.current !== version)
+        onLaunched(run, true, true);
+      else onLaunched(run, current.current.suspended || epoch.current !== generation);
     } catch (e) {
       if (alive.current) {
         let s = errorText(e);

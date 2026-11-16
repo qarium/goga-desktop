@@ -22,6 +22,7 @@ import {
 } from "@testing-library/react";
 import type { TopicTarget } from "../src/shared/topics";
 import { topicTargetSchema } from "../src/shared/topics-schema";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 import { ExistingTopicLaunchForm as LaunchForm } from "./helpers/existing-pipeline-draft";
 import { createDraftStore } from "../src/renderer/task-drafts";
@@ -210,6 +211,7 @@ afterEach(() => {
 });
 it("navigates board/card back to launch without losing task or pipeline or running/checkout", async () => {
   render(<App />);
+  await openFirstProject();
   await screen.findByRole("heading", { name: "Project" });
   await openPrototypeLaunch();
   const task = await screen.findByRole("textbox", {
@@ -300,6 +302,7 @@ it("run tab retains its own topic and branch without duplicate context-bar label
   };
   api.runs.mockResolvedValue([run]);
   render(<App />);
+  await openFirstProject();
   await screen.findByRole("heading", { name: "Project" });
   act(() => focusRun("run"));
   await screen.findByRole("tab", { name: /one · feature-b/ });
@@ -328,6 +331,7 @@ it("retains a manually selected owner and its independent draft across project n
     { ...p, id: "other", name: "Other project" },
   ]);
   render(<App />);
+  await openFirstProject();
   await screen.findByRole("heading", { name: "Project" });
   await openPrototypeLaunch();
   await screen.findByRole("textbox", { name: "Что нужно сделать?" });
@@ -358,7 +362,7 @@ it("retains a manually selected owner and its independent draft across project n
       target: { value: "Owner B draft" },
     },
   );
-  fireEvent.click(screen.getByRole("button", { name: /Other project/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Other project" }));
   fireEvent.click(screen.getByRole("button", { name: "Project" }));
   await openPrototypeLaunch();
   await waitFor(() =>
@@ -383,6 +387,7 @@ it("retains a manually selected owner and its independent draft across project n
 
 it("refresh updates the native board without changing explicit Without topic selection", async () => {
   render(<App />);
+  await openFirstProject();
   await screen.findByRole("button", { name: "Без топика" });
   fireEvent.click(screen.getByRole("button", { name: "Топики" }));
   await screen.findByRole("button", { name: "Открыть топик feature-b" });
@@ -496,6 +501,7 @@ it.each(["local"])(
       }),
     );
     render(<App />);
+    await openFirstProject();
     fireEvent.click(await screen.findByRole("button", { name: "Топики" }));
     if (mode === "remote")
       fireEvent.click(
@@ -570,6 +576,7 @@ function StandalonePreparationPopup() {
 
 it("switches from a table row through the existing context validation and pins it when returning", async () => {
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Топики" }));
   fireEvent.click(
     await screen.findByRole("button", {
@@ -595,6 +602,7 @@ it("switches from a table row through the existing context validation and pins i
 it("exposes Artifacts only from the header selector, never from the topics table", async () => {
   api.listHistoryArtifacts = vi.fn(async () => []);
   render(<App />);
+  await openFirstProject();
   await screen.findByRole("heading", { name: "Project" });
   const picker = await screen.findByRole("button", {
     name: "Выбрать другой топик",

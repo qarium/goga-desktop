@@ -1,3 +1,5 @@
+import {Demonstrations} from "../host/demonstrations/runtime";
+import {createWindowDemonstrations} from "./demo-window";
 import { OverviewExitGuard } from "./overview-close";
 import { createWindowTerminal } from "./terminal-bootstrap";
 import { ShutdownCoordinator } from "./shutdown-coordinator";
@@ -23,6 +25,8 @@ import { createFileClipboard } from "./file-clipboard";
 import { HostService } from "../host/service";
 import { SettingsStore } from "../host/settings";
 import { TopicPopup } from "./topic-popup";
+import { readDashboardIdentity } from "../shared/dashboard-connection";
+import { WindowDashboards } from "./dashboard-window";
 import { DashboardViews } from "./views";
 import { registerIPC } from "./ipc";
 import { loadShell } from "./load-shell";
@@ -104,7 +108,10 @@ if (!app.requestSingleInstanceLock()) {
         ]),
       );
       const settings = new SettingsStore(os.homedir());
+      const demos = new Demonstrations({settingsFile:path.join(app.getPath("userData"),"demonstrations.json")});
       const service = new HostService({
+        demonstrationActive:(projectId,contextId)=>contextId?
+          demos.shows().some(s=>typeof s.scope!=="string" && s.scope.projectId===projectId && s.scope.contextId===contextId):demos.hasProject(projectId),
         dataDir: app.getPath("userData"),
         settings,
         fileClipboard: createFileClipboard(clipboard, data => new ClipboardItem(data)),
@@ -120,20 +127,23 @@ if (!app.requestSingleInstanceLock()) {
       const notifications = new NotificationCenter(app.getPath("userData"));
       // Broken notification storage must never prevent the app/pipeline UI loading.
       await notifications.initialize().catch(()=>{});
+      let panels:WindowDashboards;
       const views = new DashboardViews(
         win,
         (id) => send("focus-run", id),
         (id, error) => {
           send("view-error", { id, error });
-          void service.dashboardFailed(id, error).catch(() => {});
+          if(!id.startsWith("attached:"))void service.dashboardFailed(id, error).catch(() => {});
         },
-        (id, url) => service.dashboardLoaded(id, url),
+        (id, url) => id.startsWith("attached:")?panels.opened(id,url):service.dashboardLoaded(id, url),
+        id=>send("dashboard-refresh",id),
       );
+      panels=new WindowDashboards(service,views,rows=>send("attached-dashboards",rows));
       const html = path.join(__dirname, "../dist/index.html"),
         shellURL = pathToFileURL(html).href;
       const notificationNavigation = new NotificationNavigation({
         center: notifications,
-        runs: () => service.runs(),
+        runs: () => service.runCatalog(),
         isSelected: (id) => views.isSelected(id),
         focusStage: (id, stage) => views.focusStage(id, stage),
         cancelStage: () => views.cancelStageNavigation(),
@@ -176,7 +186,7 @@ if (!app.requestSingleInstanceLock()) {
           if((previous??null)!==error)send("notifications",withNotificationErrors(notifications.snapshot()));
         },
       });
-      monitor.reconcile(service.runs());
+      monitor.reconcile(service.runCatalog());
       registerNotificationIPC(ipcMain,{center:notifications,navigation:notificationNavigation,window:win,shellURL,getSnapshot:(limit,before)=>withNotificationErrors(notifications.snapshot(limit,before))});
       const overviewExit = new OverviewExitGuard(async (paths) => {
         const result = await dialog.showMessageBox(win, {
@@ -206,7 +216,26 @@ if (!app.requestSingleInstanceLock()) {
           });
           return result.canceled ? null : (result.filePaths[0] ?? null);
         },
+        chooseProjectLocation: async () => {
+          const result = await dialog.showOpenDialog(win, {
+            title: "Выберите расположение нового проекта", properties: ["openDirectory"],
+          });
+          return result.canceled ? null : (result.filePaths[0] ?? null);
+        },
         confirmClose: (run) => confirmCloseRun(win, run),
+        panels,
+        refreshDashboard:async id=>{
+          const run=service.runCatalog().find(r=>r.id===id);
+          if(!run?.url||run.status!=="running"||run.kind==="build"||run.recovery==="unverified")
+            throw Error("Панель запуска недоступна.");
+          const {url,dashboardRunId:pin}=run;
+          const verify=async()=>{
+            if(pin&&await readDashboardIdentity(url)!==pin)return false;
+            const current=service.runCatalog().find(r=>r.id===id);
+            return current?.status==="running"&&current.url===url&&current.recovery!=="unverified"&&(!pin||current.dashboardRunId===pin);
+          };
+          if(!await views.refresh(id,verify))throw Error("Не удалось обновить страницу панели. Конвейер не перезапускался.");
+        },
         restoreDashboard: async (id) => {
           const url=await service.prepareDashboardReconnect(id);
           if(!(await views.restore(id,url)))throw Error("Не удалось восстановить панель. Процесс не перезапускался.");
@@ -228,7 +257,7 @@ if (!app.requestSingleInstanceLock()) {
       });
       const presentRuns = (runs: ReturnType<HostService["runs"]>) => {
         monitor.reconcile(runs);
-        views.reconcile(runs.map((run: { id: string }) => run.id));
+        panels.reconcile(runs);
         send("runs", runs);
         for (const run of runs) {
           if (
@@ -244,8 +273,12 @@ if (!app.requestSingleInstanceLock()) {
             });
         }
       };
+      // Only a revision crosses the shell boundary on stdout. No native view,
+      // notification monitor or catalog update is needed for journal-only data.
+      service.on("run-output", (id: string, sequence: number) => send("run-output", { id, sequence }));
       service.on("runs", presentRuns);
-      presentRuns(service.runs());
+      service.on("project-creation", (value) => send("project-creation", value));
+      presentRuns(service.runCatalog());
       win.webContents.on("will-navigate", (event) => event.preventDefault());
       win.webContents.on("will-attach-webview", (event) =>
         event.preventDefault(),
@@ -264,10 +297,13 @@ if (!app.requestSingleInstanceLock()) {
         host: service,
         canFocus: () => !topicPopup.isOpen,
       });
+      const demonstrations = createWindowDemonstrations(ipcMain,{window:win,shellURL,runtime:demos,service,openExternal:url=>shell.openExternal(url)});
       const shutdown = new ShutdownCoordinator({
         participants: [
+          { prepare: () => service.prepareProjectCreationShutdown() },
           { prepare: () => service.prepareShutdown() },
           { prepare: () => terminal.sessions.prepareShutdown() },
+          demonstrations,
         ],
         confirm: async (items) => {
           const answer = await dialog.showMessageBox(win, {
@@ -275,7 +311,7 @@ if (!app.requestSingleInstanceLock()) {
             message: "Закрыть Goga Desktop?",
             detail:
               items.map((item) => item.label).join("\n") +
-              "\n\nМожно оставить новые управляемые конвейеры работать и подключиться к ним при следующем открытии. Терминалы в обоих случаях будут завершены; их вкладки сохранятся, но процессы не перезапускаются. Если безопасное сохранение запуска невозможно, приложение останется открытым.",
+              "\n\nМожно оставить новые управляемые конвейеры работать и подключиться к ним при следующем открытии. Создание проектов будет отменено (готовые папки сохраняются). Открытые демонстрации и подключения агентов в обоих случаях будут закрыты. Терминалы будут завершены; их вкладки сохранятся, но процессы не перезапускаются. Если безопасное сохранение запуска невозможно, приложение останется открытым.",
             buttons: ["Остаться", "Оставить запуски работать и выйти", "Завершить и выйти"],
             defaultId: 0,
             cancelId: 0,
@@ -285,9 +321,11 @@ if (!app.requestSingleInstanceLock()) {
         finalize: async () => {
           overviewExit.validate();
           await service.finalizeShutdown();
+          await demonstrations.close();
           terminal.sessions.finalizeShutdown();
           terminal.disposeAfterExit();
           topicPopup.dispose();
+          panels.dispose();
           views.dispose();
           monitor.dispose();
           unsubscribeNotifications();

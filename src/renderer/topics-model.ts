@@ -6,7 +6,7 @@ import type {
 import type { WorktreeRecord } from "../shared/worktrees";
 import {
   contextKey,
-  contextRunActivity,
+  ownedContext,
   isActiveRun,
   runsForContext,
   type RunWithContext,
@@ -134,11 +134,19 @@ export function topicRowActivity(
       )
       .map((record) => [contextKey(record), record]),
   );
+  return collectActivity(contexts.values(), (owner) =>
+    runsForContext(runs, owner).filter(isActiveRun),
+  );
+}
+
+function collectActivity(
+  contexts: Iterable<WorktreeRecord>,
+  runsOf: (context: WorktreeRecord) => readonly RunWithContext[],
+): TopicRowActivity {
   const active = new Map<string, RunWithContext>();
   const unverified = new Set<string>();
-  for (const record of contexts.values()) {
-    if (!contextRunActivity(runs, record).activeCount) continue;
-    for (const run of runsForContext(runs, record).filter(isActiveRun)) {
+  for (const record of contexts) {
+    for (const run of runsOf(record)) {
       if (
         run.context?.repositoryKey &&
         run.context.repositoryKey !== record.repositoryKey
@@ -149,11 +157,78 @@ export function topicRowActivity(
         unverified.add(run.id);
     }
   }
-  result.activeRuns = [...active.values()];
-  result.activeCount = result.activeRuns.length;
-  result.unverifiedRunIds = [...unverified];
-  return result;
+  return {
+    activeCount: active.size,
+    activeRuns: [...active.values()],
+    unverifiedRunIds: [...unverified],
+  };
 }
+
+const emptyActivity: TopicRowActivity = {
+  activeCount: 0,
+  activeRuns: [],
+  unverifiedRunIds: [],
+};
+const noOwners: WorktreeRecord[] = [];
+const emptyExactRow = { owners: noOwners, activity: emptyActivity };
+
+/** The table and board use exact owners. Group only runs with a validated
+ * host-issued context and preserve the old repository and ambiguity checks. */
+export function indexTopicTableOwners(
+  board: TopicBoardSnapshot | null,
+  runs: RunWithContext[],
+  knownContexts: WorktreeRecord[],
+) {
+  type Entry = { owners: WorktreeRecord[]; activity: TopicRowActivity };
+  const byTarget = new Map<string, Entry>();
+  const key = (r: Pick<TopicTarget, "topic" | "branch">) =>
+    JSON.stringify([r.topic, r.branch]);
+  if (board && knownContexts.length) {
+    for (const owner of knownContexts) {
+      if (owner.projectId !== board.projectId || owner.year !== board.year)
+        continue;
+      const k = key(owner);
+      let entry = byTarget.get(k);
+      if (!entry)
+        byTarget.set(k, (entry = { owners: [], activity: emptyActivity }));
+      entry.owners.push(owner);
+    }
+    if (byTarget.size && runs.length) {
+      const byOwner = new Map<string, RunWithContext[]>();
+      for (const run of runs) {
+        if (!isActiveRun(run)) continue;
+        const owner = ownedContext(run);
+        if (
+          !owner ||
+          owner.projectId !== board.projectId ||
+          owner.year !== board.year
+        )
+          continue;
+        const k = contextKey(owner);
+        let bucket = byOwner.get(k);
+        if (!bucket) byOwner.set(k, (bucket = []));
+        bucket.push(run);
+      }
+      if (byOwner.size) {
+        // Placements alone never prove ownership.
+        const localTargets = new Set(
+          board.entries.filter((row) => !row.remote).map(key),
+        );
+        for (const [target, entry] of byTarget) {
+          if (!localTargets.has(target)) continue;
+          const unique = new Map(entry.owners.map((o) => [contextKey(o), o]));
+          entry.activity = collectActivity(
+            unique.values(),
+            (o) => byOwner.get(contextKey(o)) ?? [],
+          );
+        }
+      }
+    }
+  }
+  return (row: TopicTarget) =>
+    (byTarget.size && byTarget.get(key(row))) || emptyExactRow;
+}
+
 export interface TopicTextDraft {
   text: string;
   original: string;

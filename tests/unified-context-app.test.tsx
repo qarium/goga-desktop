@@ -12,6 +12,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 vi.mock("../src/renderer/ProjectSettings", () => ({
   ProjectSettings: ({ owner, project }: any) => {
@@ -196,6 +197,7 @@ beforeEach(() => {
 afterEach(cleanup);
 async function mount() {
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByTestId("settings");
   await waitFor(() => expect(api.listTopicContexts).toHaveBeenCalled());
@@ -419,6 +421,7 @@ it("keeps Without topic usable even without clone APIs or a readable topic catal
   delete api.resolveTopicContext;
   api.readTopicBoard.mockRejectedValue(Error("Catalog unavailable"));
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByTestId("settings");
   fireEvent.click(screen.getByRole("button", { name: "Без топика" }));

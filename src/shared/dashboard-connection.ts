@@ -16,16 +16,34 @@ export function allowedDashboardURL(value: string): boolean {
 }
 export const dashboardServerId = (value: unknown): value is string =>
   typeof value === "string" &&
-  value.length > 0 &&
+  value.trim().length > 0 &&
   value.length <= 256 &&
   !/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/.test(value);
 
-/** Server identity is only one factor; the host separately proves process ownership. */
-export async function readDashboardIdentity(
+/** Only bounded display fields leave the status parser. Stage bodies may contain
+ * arbitrary instructions/output and are never copied into an attachment. */
+const displayText = (value: unknown, max: number): string | undefined =>
+  typeof value === "string"
+    ? value
+        .replace(/[\x00-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069]/g, " ")
+        .trim()
+        .slice(0, max) || undefined
+    : undefined;
+
+export interface DashboardStatus {
+  runId: string;
+  name: string;
+  description?: string;
+  startedAt?: string;
+  status?: string;
+  terminal: boolean;
+}
+
+export async function readDashboardStatus(
   origin: string,
   signal?: AbortSignal,
   fetcher: typeof fetch = fetch,
-): Promise<string> {
+): Promise<DashboardStatus> {
   if (!allowedDashboardURL(origin))
     throw Error("Недопустимый адрес панели конвейера.");
   const controller = new AbortController();
@@ -44,33 +62,39 @@ export async function readDashboardIdentity(
     if (signal?.aborted) abort();
     timer = setTimeout(abort, 5000);
   });
+  let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   const read = async () => {
     if (controller.signal.aborted) throw unavailable();
-    const response = await fetcher(`${new URL(origin).origin}/api/status`, {
+    const endpoint = `${new URL(origin).origin}/api/status`;
+    const response = await fetcher(endpoint, {
       method: "GET",
+      cache: "no-store",
       redirect: "error",
       credentials: "omit",
       signal: controller.signal,
     });
-    if (!response.ok || response.redirected || !response.body)
-      throw unavailable();
     const max = 2 * 1024 * 1024;
-    if (Number(response.headers.get("content-length")) > max)
+    if (
+      controller.signal.aborted ||
+      !response.ok ||
+      response.redirected ||
+      (!!response.url && response.url !== endpoint) ||
+      !response.body ||
+      Number(response.headers.get("content-length")) > max
+    ) {
+      void response.body?.cancel().catch(() => {});
       throw unavailable();
-    const reader = response.body.getReader();
+    }
+    reader = response.body.getReader();
     let bytes = 0;
     const chunks: Uint8Array[] = [];
-    try {
-      for (;;) {
-        const next = await reader.read();
-        if (next.done) break;
-        bytes += next.value.byteLength;
-        if (bytes > max) throw unavailable();
-        chunks.push(next.value);
-      }
-    } finally {
-      void reader.cancel().catch(() => {});
-      reader.releaseLock();
+    for (;;) {
+      const next = await reader.read();
+      if (controller.signal.aborted) throw unavailable();
+      if (next.done) break;
+      bytes += next.value.byteLength;
+      if (bytes > max) throw unavailable();
+      if (next.value.byteLength) chunks.push(next.value);
     }
     const raw = new Uint8Array(bytes);
     let offset = 0;
@@ -88,7 +112,24 @@ export async function readDashboardIdentity(
       !Array.isArray(body.stages)
     )
       throw unavailable();
-    return body.run_id;
+    const data = body as Record<string, unknown>;
+    const status = displayText(data.run_status, 64);
+    const startedAt = displayText(data.started_at, 64);
+    return {
+      runId: body.run_id,
+      name: displayText(data.flow_name, 128) ?? body.run_id,
+      description: displayText(data.description, 1024),
+      startedAt:
+        startedAt && Number.isFinite(Date.parse(startedAt))
+          ? startedAt
+          : undefined,
+      status,
+      terminal:
+        !!data.ended_at ||
+        status === "finished" ||
+        status === "failed" ||
+        status === "interrupted",
+    };
   };
   try {
     return await Promise.race([read(), cancelled]);
@@ -98,7 +139,20 @@ export async function readDashboardIdentity(
     clearTimeout(timer);
     signal?.removeEventListener("abort", abort);
     controller.abort();
+    if (reader) {
+      void reader.cancel().catch(() => {});
+      reader.releaseLock();
+    }
   }
+}
+
+/** Server identity is only one factor; the host separately proves process ownership. */
+export async function readDashboardIdentity(
+  origin: string,
+  signal?: AbortSignal,
+  fetcher: typeof fetch = fetch,
+): Promise<string> {
+  return (await readDashboardStatus(origin, signal, fetcher)).runId;
 }
 
 /** Host-issued capability; never inferred from a URL supplied by the renderer. */

@@ -265,6 +265,11 @@ it("does not accept another factory's PTY or expose PID/env on the session-facin
     g = fixture(),
     p = f.adapter.spawn(launch);
   expect(() => g.adapter.processes(p)).toThrow();
+  const arm = vi.fn();
+  expect(() => g.adapter.armPreset(p, arm)).toThrow();
+  expect(arm).not.toHaveBeenCalled();
+  f.adapter.armPreset(p, arm);
+  expect(arm).toHaveBeenCalledExactlyOnceWith(200);
   expect("pid" in p).toBe(false);
   expect(JSON.stringify(p)).not.toContain("synthetic-secret");
 });

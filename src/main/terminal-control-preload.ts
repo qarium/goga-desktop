@@ -1,8 +1,21 @@
+import type { TerminalPresetAPI } from "../shared/terminal-preset-control";
 import {
   terminalChangedSchema,
   type TerminalAPI,
 } from "../shared/terminal-control";
 /** Called once by the shell preload, never by the terminal, dashboard or popup preload. */
+export function createTerminalPresetAPI(
+  invoke: (channel: string, ...args: unknown[]) => Promise<any>,
+): TerminalPresetAPI {
+  let token: Promise<string> | undefined;
+  return async (request) => {
+    token ??= invoke("goga:terminal-connect");
+    return invoke("goga:terminal-presets", {
+      documentId: await token,
+      request,
+    });
+  };
+}
 export function createTerminalControlAPI(
   invoke: (channel: string, value?: unknown) => Promise<any>,
   listen: (channel: string, callback: (value: unknown) => void) => () => void,

@@ -10,6 +10,7 @@ import {
   render,
   screen,
 } from "@testing-library/react";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 import type { Run } from "../src/shared/types";
 
@@ -68,6 +69,7 @@ afterEach(() => {
 async function open(runs: Run[] = [makeRun()]) {
   api.runs.mockResolvedValue(runs);
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("tab", { name: /topic-a/ }));
 }
 const ready = (patch: Partial<Run> = {}) =>
@@ -392,4 +394,43 @@ it("restores only the crashed dashboard with local busy state, preserving the sa
     screen.queryByRole("heading", { name: "Панель конвейера недоступна" }),
   ).toBeNull();
   expect(api.stopRun).not.toHaveBeenCalled();
+});
+it("reads only the visible journal and reconciles a newer notification during a snapshot", async () => {
+  let notify: ((event:{id:string;sequence:number})=>void) | undefined;
+  let first!: (v:any)=>void;
+  api.onRunOutputChanged = vi.fn((fn) => {notify=fn;return ()=>{notify=undefined;};});
+  api.readRunJournal = vi.fn()
+    .mockImplementationOnce(()=>new Promise(resolve=>{first=resolve;}))
+    .mockResolvedValueOnce({id:"a",sequence:2,start:0,from:5,end:8,text:"two",truncated:false})
+    .mockResolvedValueOnce({id:"a",sequence:3,start:0,from:0,end:12,text:"restored log",truncated:false});
+  await open([ready({output:undefined})]);
+  expect(api.readRunJournal).not.toHaveBeenCalled();
+  fireEvent.click(statusButton());
+  expect(api.readRunJournal).toHaveBeenCalledWith("a",undefined);
+  act(()=>notify?.({id:"a",sequence:2}));
+  await act(async()=>{first({id:"a",sequence:1,start:0,from:0,end:5,text:"first",truncated:false});});
+  expect(await screen.findByText("firsttwo")).toBeTruthy();
+  expect(api.readRunJournal).toHaveBeenCalledWith("a",5);
+  fireEvent.click(statusButton());
+  act(()=>notify?.({id:"a",sequence:3}));
+  expect(api.readRunJournal).toHaveBeenCalledTimes(2);
+  fireEvent.click(statusButton());
+  expect(await screen.findByText("restored log")).toBeTruthy();
+});
+it("ignores an old read after hiding and opening again, preserves final output and makes transient read errors retryable", async () => {
+  let stale!: (value: any) => void;
+  api.onRunOutputChanged=vi.fn(()=>()=>{});
+  api.readRunJournal=vi.fn()
+    .mockImplementationOnce(()=>new Promise(resolve=>{stale=resolve;}))
+    .mockRejectedValueOnce(Error("temporary IPC error"))
+    .mockResolvedValueOnce({id:"a",sequence:2,start:0,from:0,end:2,text:"ok",truncated:false})
+    .mockResolvedValueOnce({id:"a",sequence:4,start:0,from:0,end:4,text:"done",truncated:false});
+  await open([ready({output:undefined})]);
+  fireEvent.click(statusButton()); fireEvent.click(statusButton()); fireEvent.click(statusButton());
+  fireEvent.click(await screen.findByRole("button",{name:"Повторить загрузку журнала"}));
+  expect(await screen.findByText("ok")).toBeTruthy();
+  await act(async()=>{stale({id:"a",sequence:1,start:0,from:0,end:5,text:"stale",truncated:false});});
+  expect(screen.queryByText("stale")).toBeNull();
+  act(()=>publish([ready({status:"exited",output:undefined})]));
+  expect(await screen.findByText("done")).toBeTruthy();
 });

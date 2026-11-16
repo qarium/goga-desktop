@@ -29,6 +29,8 @@ export interface OverviewFileState {
   busy?: boolean;
   changedExternally?: boolean;
   memory: YamlEditorMemory;
+  /** Owner/revision at the start of this still-unsaved edit. */
+  dirtyOrigin?: ScopeRef;
 }
 export interface OverviewState {
   directories: Record<string, OverviewDirectory>;
@@ -47,6 +49,15 @@ export interface OverviewState {
   stale: boolean;
   creationError: string;
 }
+// Text is consumed by the document surface only. The tree, tabs and close guard
+// observe these flags; they should not retain another copy of a stale draft.
+type FilePresentation = Pick<
+  OverviewFileState,
+  "busy" | "error" | "changedExternally" | "memory" | "dirtyOrigin"
+> & { dirty: boolean; exists: boolean };
+type OverviewPresentation = Omit<OverviewState, "files"> & {
+  files: Record<string, FilePresentation>;
+};
 export type OverviewFileRefreshResult =
   "refreshed" | "needs-confirmation" | "failed";
 interface FileRuntime {
@@ -61,6 +72,25 @@ const message = (error: unknown) =>
 const dirty = (file: OverviewFileState) => file.text !== file.document.text;
 const parentPath = (path: string) =>
   path.slice(0, Math.max(0, path.lastIndexOf("/")));
+
+/** Compare full, bounded plain IPC data after a successful read, including
+ * record order (used for presentation). This is never a freshness/authority
+ * check. Avoid serializing potentially multi-megabyte schema strings twice. */
+function sameRead(a: unknown, b: unknown): boolean {
+  if (a === b) return true;
+  if (a === null || b === null || typeof a !== "object" || typeof b !== "object")
+    return false;
+  if (Array.isArray(a)) {
+    if (!Array.isArray(b) || a.length !== b.length) return false;
+    for (let i = 0; i < a.length; i++) if (!sameRead(a[i], b[i])) return false;
+    return true;
+  }
+  if (Array.isArray(b)) return false;
+  const left = a as Record<string, unknown>, right = b as Record<string, unknown>;
+  const keys = Object.keys(left), other = Object.keys(right);
+  if (keys.length !== other.length) return false;
+  return keys.every((key, i) => key === other[i] && sameRead(left[key], right[key]));
+}
 
 /** A small owner-scoped store; disposing an owner makes all late replies inert. */
 export function createOverviewStore(
@@ -88,6 +118,7 @@ export function createOverviewStore(
     stale: false,
     creationError: "",
   };
+  let presentation: OverviewPresentation = { ...state, files: {} };
   let disposed = false;
   let contractRequest = 0;
   let mutations = 0;
@@ -100,20 +131,40 @@ export function createOverviewStore(
     inScope(requestEpoch) && readEpoch === requestReadEpoch;
   const current = (path: string, runtime: FileRuntime) =>
     !disposed && files.get(path) === runtime;
+  function presentFile(file: OverviewFileState, previous?: FilePresentation): FilePresentation {
+    const { busy, error, changedExternally, memory, dirtyOrigin } = file;
+    const exists = file.document.exists, isDirty = dirty(file);
+    if (previous && previous.busy === busy && previous.error === error &&
+      previous.changedExternally === changedExternally && previous.memory === memory &&
+      previous.dirtyOrigin === dirtyOrigin && previous.exists === exists && previous.dirty === isDirty)
+      return previous;
+    return { busy, error, changedExternally, memory, dirtyOrigin, exists, dirty: isDirty };
+  }
+  const notify = () => { for (const listener of listeners) listener(); };
   const publish = (patch: Partial<OverviewState>) => {
     if (disposed) return;
     state = { ...state, ...patch };
-    for (const listener of listeners) listener();
+    // Structural operations (open/close, rename, revision) can touch many files.
+    const views = patch.files
+      ? Object.fromEntries(Object.entries(patch.files).map(([path, file]) =>
+          [path, presentFile(file, presentation.files[path])]))
+      : presentation.files;
+    presentation = { ...state, files: views };
+    notify();
   };
   const updateFile = (
     path: string,
     runtime: FileRuntime,
     patch: Partial<OverviewFileState>,
   ) => {
-    if (current(path, runtime))
-      publish({
-        files: { ...state.files, [path]: { ...state.files[path], ...patch } },
-      });
+    if (!current(path, runtime)) return;
+    const next = { ...state.files[path], ...patch };
+    state = { ...state, files: { ...state.files, [path]: next } };
+    const previous = presentation.files[path];
+    const view = presentFile(next, previous);
+    if (view !== previous)
+      presentation = { ...presentation, files: { ...presentation.files, [path]: view } };
+    notify();
   };
   function addFile(path: string, document: OverviewFile) {
     const existing = files.get(path);
@@ -185,7 +236,9 @@ export function createOverviewStore(
         const errors = { ...state.directoryErrors };
         delete errors[path];
         publish({
-          directories: { ...state.directories, [path]: directory },
+          directories: sameRead(state.directories[path], directory)
+            ? state.directories
+            : { ...state.directories, [path]: directory },
           directoryErrors: errors,
         });
         return true;
@@ -277,7 +330,8 @@ export function createOverviewStore(
     try {
       const schema = await api.readOverviewSchema(owner);
       if (!inReadScope(requestEpoch, requestReadEpoch)) return false;
-      publish({ schema, schemaError: "" });
+      if (!sameRead(state.schema, schema)) publish({ schema, schemaError: "" });
+      else if (state.schemaError) publish({ schemaError: "" });
       return true;
     } catch (error) {
       if (inReadScope(requestEpoch, requestReadEpoch))
@@ -296,7 +350,7 @@ export function createOverviewStore(
         state.contractCell !== cell
       )
         return false;
-      publish({ contract, contractError: "" });
+      if (!sameRead(state.contract, contract)) publish({ contract, contractError: "" });
       return true;
     } catch (error) {
       if (
@@ -406,6 +460,8 @@ export function createOverviewStore(
   }
   return {
     getSnapshot: () => state,
+    getPresentation: () => presentation,
+    sessionScope: () => owner,
     /** Revision changes retain drafts; a different logical owner needs its own store. */
     setScope(scope: ScopeRef) {
       if (disposed) return;
@@ -479,7 +535,12 @@ export function createOverviewStore(
       const runtime = files.get(path);
       if (!disposed && runtime) {
         runtime.edits++;
-        updateFile(path, runtime, { text });
+        const before = state.files[path];
+        const wasDirty = presentation.files[path].dirty;
+        const dirtyOrigin = text === before.document.text
+          ? undefined
+          : wasDirty ? before.dirtyOrigin ?? owner : owner;
+        updateFile(path, runtime, { text, dirtyOrigin });
       }
     },
     save(path: string): Promise<boolean> {

@@ -1,0 +1,322 @@
+/* Keep the tab flush with the same viewport as the overview editor. */
+.scroll-area:has(.demo-workspace) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  padding: 0;
+}
+
+.demo-workspace,
+.demo-full[open] {
+  display: flex;
+  flex: 1 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+  container-type: inline-size;
+  container-name: demo-toolbar;
+}
+.demo-bar {
+  position: relative;
+  box-sizing: border-box;
+  flex: 0 0 42px;
+  display: flex;
+  align-items: center;
+  flex-wrap: nowrap;
+  height: 42px;
+  min-height: 42px;
+  min-width: 0;
+  gap: 5px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface);
+  white-space: nowrap;
+}
+.demo-access,
+.demo-actions,
+.demo-action,
+.demo-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.demo-actions {
+  flex: none;
+  flex-wrap: nowrap;
+  gap: 2px;
+}
+.demo-access {
+  gap: 5px;
+  min-width: 0;
+  height: 28px;
+  padding: 0 3px;
+  font-size: 10px;
+  color: var(--muted);
+}
+.demo-access .status-dot {
+  flex: none;
+}
+.demo-action,
+.demo-tool {
+  box-sizing: border-box;
+  flex: none;
+  justify-content: center;
+  min-height: 28px;
+  padding: 4px 9px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.demo-tool {
+  width: 28px;
+  height: 28px;
+  padding: 5px;
+  color: var(--muted);
+  border-color: transparent;
+  background: transparent;
+}
+.demo-tabs-bar {
+  flex: 1 1 210px;
+  display: flex;
+  align-items: center;
+  align-self: stretch;
+  gap: 2px;
+  min-width: 101px;
+}
+.demo-tabs {
+  display: flex;
+  flex: 1 1 0;
+  align-self: stretch;
+  align-items: stretch;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+}
+.demo-tabs::-webkit-scrollbar {
+  display: none;
+}
+.demo-tab {
+  min-width: 68px;
+  max-width: 170px;
+}
+.demo-tab-create {
+  flex: none;
+}
+.demo-frame-area {
+  flex: 1 1 0;
+  display: flex;
+  position: relative;
+  min-height: 0;
+  min-width: 0;
+  background: var(--bg);
+  overflow: hidden;
+}
+.demo-frame {
+  display: block;
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  cursor: default;
+  -webkit-user-select: none;
+  user-select: none;
+  touch-action: manipulation;
+}
+.demo-frame:focus-visible {
+  outline: 1px solid var(--teal);
+  outline-offset: -1px;
+}
+.demo-frame:not(.is-ready) {
+  opacity: 0;
+}
+.demo-frame-wait {
+  margin: auto;
+  color: var(--muted);
+  font-size: 12px;
+}
+.demo-foot {
+  position: relative;
+  min-height: 29px;
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.demo-workspace [data-error="true"] {
+  color: #ffadb5;
+}
+.demo-full[open] {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+}
+.demo-full::backdrop {
+  background: var(--bg);
+}
+
+.demo-utils,
+.demo-foot-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px 12px;
+  flex-wrap: wrap;
+}
+.demo-connection-info {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 7px;
+}
+.demo-utils .demo-action {
+  background: transparent;
+  border-color: transparent;
+  color: var(--muted);
+  font-size: 11px;
+}
+.demo-utils .demo-action:hover {
+  border-color: var(--line);
+  color: var(--text);
+}
+.demo-foot-controls {
+  justify-content: space-between;
+}
+.demo-foot-controls .demo-utils {
+  margin-left: auto;
+}
+
+/* Tabs absorb overflow; the address and all essential tools stay on one row. */
+.demo-page-address {
+  display: flex;
+  flex: 0 1 260px;
+  align-items: center;
+  min-width: 142px;
+  max-width: 310px;
+}
+.demo-address-field {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  width: 100%;
+}
+.demo-page-url {
+  box-sizing: border-box;
+  min-width: 0;
+  width: 100%;
+  height: 28px;
+  margin: 0;
+  padding: 3px 8px;
+  font: inherit;
+  font-size: 11px;
+}
+.demo-address-open {
+  display: none;
+}
+@container demo-toolbar (max-width: 630px) {
+  .demo-access-label {
+    display: none;
+  }
+  .demo-page-address {
+    flex-basis: 185px;
+  }
+  .demo-tabs-bar {
+    flex-basis: 160px;
+  }
+  .demo-tab {
+    max-width: 125px;
+  }
+  .demo-tab-select span {
+    max-width: 88px;
+  }
+}
+@container demo-toolbar (max-width: 440px) {
+  .demo-bar {
+    gap: 2px;
+    padding-inline: 5px;
+  }
+  .demo-page-address {
+    flex: none;
+    min-width: 28px;
+    width: 28px;
+  }
+  .demo-address-open {
+    display: inline-flex;
+  }
+  .demo-address-field {
+    display: none;
+    box-sizing: border-box;
+    position: absolute;
+    z-index: 3;
+    top: 41px;
+    left: 5px;
+    right: 5px;
+    width: auto;
+    padding: 8px;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    background: var(--surface);
+  }
+  .demo-page-address.is-open .demo-address-field {
+    display: flex;
+  }
+  .demo-tabs-bar {
+    flex-basis: 130px;
+  }
+}
+
+.demo-address-copy {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+}
+.demo-copy-feedback:not(:empty) {
+  position: absolute;
+  z-index: 4;
+  right: 0;
+  top: calc(100% + 6px);
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--teal);
+  font-size: 11px;
+  pointer-events: none;
+}
+.demo-selection-menu {
+  position: absolute;
+  z-index: 6;
+  width: 184px;
+  max-width: calc(100% - 12px);
+}
+.demo-selection-feedback {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  z-index: 5;
+  padding: 6px 9px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 12px;
+  pointer-events: none;
+}

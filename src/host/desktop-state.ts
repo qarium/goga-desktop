@@ -1,4 +1,9 @@
+import {
+  projectRemovalRequestSchema,
+  type ProjectRemovalRequest,
+} from "../shared/project-registration";
 import { isStartupTimeoutMinutes } from "../shared/startup-timeout";
+import { isReservedProjectEnvKey } from "../shared/terminal-environment-policy";
 import { assertEnvironmentTransport } from "../shared/environment-transport";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, rename, unlink, link } from "node:fs/promises";
@@ -79,8 +84,7 @@ export function validateProjectSettings(value: unknown): ProjectSettings {
       typeof key !== "string" ||
       !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(key) ||
       keys.has(key) ||
-      /^(?:HOME|NODE_OPTIONS|PYTHONPATH|PYTHONHOME|NO_COLOR)$/.test(key) ||
-      /^(?:GOGA_|AFM_|ELECTRON_|GIT_)/.test(key) ||
+      isReservedProjectEnvKey(key) ||
       typeof entry !== "string" ||
       /[\0\r\n]/.test(entry) ||
       Buffer.byteLength(entry) > 65536 ||
@@ -341,12 +345,33 @@ export class DesktopStateStore {
     }, true);
   }
 
+  /** Registry-only removal: source directories and all other Desktop state remain. */
+  async removeProject(input: ProjectRemovalRequest): Promise<Project[]> {
+    const target = projectRemovalRequestSchema.parse(input);
+    if (!path.isAbsolute(target.path)) throw corrupt();
+    return this.locked(async () => {
+      const { projects, raw } = await this.registry();
+      const project = projects.find((row) => row.id === target.id);
+      if (!project || project.path !== target.path)
+        throw new StateError(
+          "Проект уже убран из списка или его папка изменилась. Обновите список проектов.",
+        );
+      const remaining = projects.filter((row) => row.id !== target.id);
+      await this.write(
+        path.join(this.root, "projects.json"),
+        { schemaVersion: 1, revision: randomUUID(), projects: remaining },
+        raw,
+      );
+      return remaining;
+    }, true);
+  }
+
   private async settings(projectId: string) {
-    if (
-      typeof projectId !== "string" ||
-      !(await this.registry()).projects.some((p) => p.id === projectId)
-    )
-      throw new StateError("Неизвестный проект.");
+    if (typeof projectId !== "string") throw new StateError("Неизвестный проект.");
+    const project = (await this.registry()).projects.find(
+      (p) => p.id === projectId,
+    );
+    if (!project) throw new StateError("Неизвестный проект.");
     const directory = path.join(this.root, "settings");
     await this.directory(directory);
     const file = path.join(directory, `${hash(projectId)}.json`);
@@ -365,7 +390,16 @@ export class DesktopStateStore {
     const disk = parse(raw);
     if (disk.projectId !== projectId) throw corrupt();
     const value = validateProjectSettings(disk.value);
-    return { file, raw, document: { value, version: hash(raw) } };
+    return { project, file, raw, document: { value, version: hash(raw) } };
+  }
+
+  /** Fresh registry binding and settings from the same lease. No owner data
+   * survives the read: each admission/verification boundary reopens the files. */
+  async readRegisteredProject(projectId: string) {
+    return this.locked(async () => {
+      const { project, document } = await this.settings(projectId);
+      return { project, document };
+    });
   }
 
   async read(projectId: string): Promise<ProjectSettingsDocument> {

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   ReactFlow,
   ReactFlowProvider,
@@ -6,12 +6,14 @@ import {
   Position,
   Background,
   useReactFlow,
+  useStore,
+  type ReactFlowState,
   type NodeProps,
   type Node,
 } from "@xyflow/react";
 import { Braces, Boxes, ChevronRight, Minus, Plus, Focus } from "lucide-react";
 import type { SchemaCell } from "../../shared/project-architecture";
-import { makeOverviewGraph, type GraphData } from "./graph";
+import { prepareOverviewGraph, type GraphData } from "./graph";
 import "@xyflow/react/dist/style.css";
 export function IconButton({
   label,
@@ -99,6 +101,14 @@ function Scope({ data }: NodeProps<Node<GraphData>>) {
   );
 }
 const nodeTypes = { cell: Cell, scope: Scope };
+const fitOptions = { padding: 0.13, maxZoom: 1.1 };
+const zoomPercent = (state: ReactFlowState) =>
+  Math.round(state.transform[2] * 100);
+function ZoomIndicator() {
+  const percent = useStore(zoomPercent);
+  return <span>{percent}%</span>;
+}
+
 function Graph({
   schema,
   scope,
@@ -112,32 +122,57 @@ function Graph({
   onDrill: (id: string) => void;
   onContract: (id: string) => void;
 }) {
-  const flow = useReactFlow(),
-    host = useRef<HTMLDivElement>(null),
-    [zoom, setZoom] = useState(1);
-  const model = useMemo(
-    () => makeOverviewGraph(schema, scope, selection),
-    [schema, scope, selection],
-  );
+  const flow = useReactFlow<Node<GraphData>>(),
+    host = useRef<HTMLDivElement>(null);
   const contractAction = useRef(onContract);
   contractAction.current = onContract;
+  const drillAction = useRef(onDrill);
+  drillAction.current = onDrill;
   const openContract = useCallback(
     (cell: string) => contractAction.current(cell),
     [],
   );
-  // Controlled React Flow nodes own measured geometry. Rebuilding every node
-  // for a new parent callback discards it and re-enters synchronous measurement.
-  const nodes = useMemo(
-    () =>
-      model.nodes.map((n) => ({
-        ...n,
-        data: { ...n.data, onContract: openContract },
-      })),
-    [model, openContract],
+  const nodeClick = useCallback((_: React.MouseEvent, n: Node<GraphData>) => {
+    if (n.type !== "scope" && n.data.navigable) drillAction.current(n.id);
+  }, []);
+  const geometry = useMemo(
+    () => prepareOverviewGraph(schema, scope, openContract),
+    [schema, scope, openContract],
+  );
+  const model = useMemo(
+    () => geometry.select(selection),
+    [geometry, selection],
   );
   const wasHidden = useRef(false),
     needsFit = useRef(true),
     fitFrame = useRef(0);
+  const pendingTarget = useRef<string | null>(null);
+  const reveal = useCallback(() => {
+    const id = pendingTarget.current;
+    if (!id || needsFit.current) return;
+    const size = host.current?.getBoundingClientRect();
+    if (!size?.width || !size.height) return;
+    const rect = flow.getNodesBounds([id]);
+    if (!rect.width || !rect.height) return;
+    const { x, y, zoom } = flow.getViewport();
+    const left = rect.x * zoom + x,
+      top = rect.y * zoom + y;
+    pendingTarget.current = null;
+    // If the node cannot fit at this scale, leave its visible portion alone.
+    // Otherwise pan just when needed, keeping the user's scale.
+    const visible = (start: number, length: number, viewport: number) =>
+      length > viewport
+        ? start < viewport && start + length > 0
+        : start >= 0 && start + length <= viewport;
+    if (
+      !visible(left, rect.width * zoom, size.width) ||
+      !visible(top, rect.height * zoom, size.height)
+    ) {
+      void flow.setCenter(rect.x + rect.width / 2, rect.y + rect.height / 2, {
+        zoom,
+      });
+    }
+  }, [flow]);
   const scheduleFit = useCallback(() => {
     cancelAnimationFrame(fitFrame.current);
     fitFrame.current = requestAnimationFrame(() => {
@@ -148,7 +183,8 @@ function Graph({
       }
       wasHidden.current = false;
       needsFit.current = false;
-      void flow.fitView({ padding: 0.13, maxZoom: 1.1 });
+      pendingTarget.current = null;
+      void flow.fitView(fitOptions);
     });
   }, [flow]);
   useEffect(() => {
@@ -166,18 +202,25 @@ function Graph({
       // model still needs fitting once it becomes visible; ordinary resizing
       // keeps the existing automatic fit behavior.
       if (!restored || needsFit.current) scheduleFit();
+      else reveal();
     });
     r.observe(host.current);
     return () => {
       r.disconnect();
       cancelAnimationFrame(fitFrame.current);
     };
-  }, [scheduleFit]);
+  }, [scheduleFit, reveal, geometry.tooLarge]);
   useEffect(() => {
     needsFit.current = true;
     scheduleFit();
     return () => cancelAnimationFrame(fitFrame.current);
-  }, [scheduleFit, model]);
+  }, [scheduleFit, geometry]);
+  useEffect(() => {
+    pendingTarget.current = geometry.visibleOwnerId(selection);
+    if (!pendingTarget.current || needsFit.current) return;
+    const frame = requestAnimationFrame(reveal);
+    return () => cancelAnimationFrame(frame);
+  }, [geometry, selection, reveal]);
   if (model.tooLarge)
     return (
       <div className="ov-empty">
@@ -188,21 +231,18 @@ function Graph({
   return (
     <div className="ov-canvas" ref={host}>
       <ReactFlow
-        nodes={nodes}
+        nodes={model.nodes}
         edges={model.edges}
         nodeTypes={nodeTypes}
-        onNodeClick={(_, n) => {
-          if (n.type !== "scope" && n.data.navigable) onDrill(n.id);
-        }}
+        onNodeClick={nodeClick}
         fitView
-        fitViewOptions={{ padding: 0.13, maxZoom: 1.1 }}
+        fitViewOptions={fitOptions}
         minZoom={0.2}
         maxZoom={1.8}
         nodesDraggable={false}
         nodesConnectable={false}
         deleteKeyCode={null}
         zoomOnDoubleClick={false}
-        onMove={(_, v) => setZoom(v.zoom)}
         colorMode="dark"
       >
         <Background color="#244963" gap={24} />
@@ -211,13 +251,13 @@ function Graph({
         <IconButton label="Уменьшить граф" onClick={() => void flow.zoomOut()}>
           <Minus size={15} />
         </IconButton>
-        <span>{Math.round(zoom * 100)}%</span>
+        <ZoomIndicator />
         <IconButton label="Увеличить граф" onClick={() => void flow.zoomIn()}>
           <Plus size={15} />
         </IconButton>
         <IconButton
           label="Показать весь граф"
-          onClick={() => void flow.fitView({ padding: 0.13, maxZoom: 1.1 })}
+          onClick={() => void flow.fitView(fitOptions)}
         >
           <Focus size={15} />
         </IconButton>

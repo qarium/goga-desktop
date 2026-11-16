@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import React, { useState } from "react";
+import { readFileSync } from "node:fs";
 import { afterEach, expect, it, vi } from "vitest";
 import {
   cleanup,
@@ -166,4 +167,44 @@ it("reveals an empty unassigned area after keyboard unassign and hides it after 
     { key: "ArrowRight", altKey: true },
   );
   expect(screen.queryByRole("region", { name: "Без категории" })).toBeNull();
+});
+
+it("uses the same app-styled native checkboxes for cards, columns and disabled empty columns", () => {
+  const style = document.createElement("style");
+  style.textContent = readFileSync("src/renderer/TopicsBoard.css", "utf8");
+  document.head.append(style);
+  try {
+    render(<Fixture />);
+    fireEvent.click(screen.getByRole("button", { name: "Добавить колонку" }));
+    fireEvent.change(
+      screen.getByRole("textbox", { name: "Название новой колонки" }),
+      {
+        target: { value: "Пустая" },
+      },
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Создать колонку" }));
+    const card = document.querySelector<HTMLInputElement>(
+      ".topic-board-card input[type=checkbox]",
+    )!;
+    const column = screen.getByRole("checkbox", {
+      name: "Выбрать топики колонки В работе",
+    });
+    const empty = screen.getByRole("checkbox", {
+      name: "Выбрать топики колонки Пустая",
+    }) as HTMLInputElement;
+    expect(empty.disabled).toBe(true);
+    for (const input of [card, column, empty]) {
+      expect(input.tagName).toBe("INPUT");
+      expect(input.getAttribute("type")).toBe("checkbox");
+      const css = getComputedStyle(input);
+      expect(css.appearance).toBe("none");
+      expect(css.width).toBe("15px");
+      expect(css.height).toBe("15px");
+      expect(css.borderRadius).toBe("3px");
+    }
+    fireEvent.click(column);
+    expect((column as HTMLInputElement).checked).toBe(true);
+  } finally {
+    style.remove();
+  }
 });

@@ -1,7 +1,15 @@
+import {
+  TerminalPresetStore,
+  type TerminalPresetCrypto,
+} from "../host/terminal-preset-store";
+import { TerminalStartupError } from "../host/terminal-errors";
 import type { HostService } from "../host/service";
 import { TerminalStore } from "../host/terminal-store";
 import { TerminalCatalog } from "../host/terminal-catalog";
-import { TerminalSessions } from "../host/terminal-sessions";
+import {
+  TerminalSessions,
+  type TerminalSessionDependencies,
+} from "../host/terminal-sessions";
 import { TerminalTransport } from "../host/terminal-transport";
 import {
   TerminalNativeAdapter,
@@ -12,6 +20,8 @@ import {
 
 export interface TerminalRuntimeOptions {
   home: string;
+  presetCrypto?: TerminalPresetCrypto;
+  preparePreset?: TerminalSessionDependencies["preparePreset"];
   host: Pick<HostService, "resolveTerminalOwner" | "acquireTerminalContext"> &
     Partial<Pick<HostService, "setTerminalDeletionController">>;
   driver: NativeTerminalDriver;
@@ -25,9 +35,20 @@ export interface TerminalRuntimeOptions {
  * The caller must use the session close protocol before tearing down its window.
  */
 export function createTerminalRuntime(options: TerminalRuntimeOptions) {
-  const catalog = new TerminalCatalog(
+  // No keychain, filesystem or subprocess activity during app start.
+  const presetStore = options.presetCrypto
+    ? new TerminalPresetStore(options.home, options.presetCrypto)
+    : undefined;
+  const catalog: TerminalCatalog = new TerminalCatalog(
     new TerminalStore(options.home),
     (scope) => options.host.resolveTerminalOwner(scope),
+    presetStore
+      ? {
+          store: presetStore,
+          start: (tab, scope, command) =>
+            sessions.startPreset(tab, scope, command),
+        }
+      : undefined,
   );
   const native = new TerminalNativeAdapter(
     options.driver,
@@ -35,8 +56,30 @@ export function createTerminalRuntime(options: TerminalRuntimeOptions) {
     options.system,
   );
   const surface = new TerminalTransport(options.createView);
-  const sessions = new TerminalSessions({
-    acquire: (scope) => options.host.acquireTerminalContext(scope),
+  const sessions: TerminalSessions = new TerminalSessions({
+    armPreset: native.armPreset,
+    preparePreset:
+      options.preparePreset ??
+      (async (launch, command) => {
+        const { preparePresetCommand } =
+          await import("../host/terminal-preset-command");
+        return preparePresetCommand(
+          launch,
+          command,
+          (fd, pid) => options.inspector.presetPeer?.(fd, pid) === true,
+        );
+      }),
+    acquire: async (scope, ref) => {
+      if (!ref) return options.host.acquireTerminalContext(scope);
+      if (!presetStore)
+        throw new TerminalStartupError("preset-environment", false);
+      const presetEnv = await presetStore
+        .readSnapshot(ref.id, { tabId: ref.tabId, context: ref.context })
+        .catch(() => {
+          throw new TerminalStartupError("preset-environment", false);
+        });
+      return options.host.acquireTerminalContext(scope, { presetEnv });
+    },
     prepareNative: native.prepare,
     spawn: native.spawn,
     processes: native.processes,
@@ -45,5 +88,5 @@ export function createTerminalRuntime(options: TerminalRuntimeOptions) {
   });
   options.host.setTerminalDeletionController?.(sessions);
   // Host-only objects; IPC exposes IDs and filtered snapshots, never this object.
-  return { catalog, sessions, surface };
+  return { catalog, sessions, surface, presetStore };
 }

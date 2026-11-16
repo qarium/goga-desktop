@@ -96,7 +96,7 @@ it("separates local/remote and filters substring without remote IO on open", asy
   render(view());
   await open();
   expect(screen.queryByText("origin/feature")).toBeNull();
-  fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+  fireEvent.click(screen.getByRole("tab", { name: "Удалённые" }));
   expect(screen.queryByRole("button", { name: "feature" })).toBeNull();
   expect(screen.getByRole("button", { name: /origin\/feature/ })).toBeTruthy();
   fireEvent.change(screen.getByRole("searchbox"), {
@@ -188,7 +188,7 @@ it("releases read loader on error and supports retry without executing an action
   fireEvent.click(screen.getByRole("button", { name: "Ветка: main" }));
   await screen.findByText(/no branches/);
   expect(screen.queryByRole("status")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "Закрыть" }));
+  fireEvent.click(screen.getByRole("button", { name: "Закрыть меню" }));
   await open();
   expect(api.executeGitBranch).not.toHaveBeenCalled();
 });
@@ -322,9 +322,9 @@ it("exits an inventory timeout and allows closing the error", async () => {
   });
   expect(screen.queryByRole("status")).toBeNull();
   expect(
-    screen.getByRole("dialog", { name: "Результат операции Git" }),
+    screen.getByRole("alert"),
   ).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Закрыть" }));
+  fireEvent.click(screen.getByRole("button", { name: "Закрыть меню" }));
   expect(screen.queryByRole("dialog")).toBeNull();
 });
 it("shows the actual upstream rather than calling the current local branch the source", async () => {
@@ -438,9 +438,9 @@ it("keeps inventory readable after a sequencer refresh failure without enabling 
     expect(
       screen.getByRole("button", { name: "Создать ветку…" }),
     ).toHaveProperty("disabled", true);
-    fireEvent.click(screen.getByRole("tab", { name: "Remote" }));
+    fireEvent.click(screen.getByRole("tab", { name: "Удалённые" }));
     expect(
-      screen.getByRole("button", { name: "Обновить список из remote" }),
+      screen.getByRole("button", { name: "Обновить из origin" }),
     ).toHaveProperty("disabled", true);
     expect(api.prepareGitBranch).not.toHaveBeenCalled();
     expect(api.executeGitBranch).not.toHaveBeenCalled();

@@ -261,3 +261,61 @@
 .git-merge-conditions p {
   margin-top: 8px;
 }
+
+.git-branch-searchbar {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+  min-width: 0;
+}
+.git-branch-searchbar input {
+  flex: 1;
+}
+.git-branch-searchbar .git-branch-refresh {
+  flex: 0 0 36px;
+  width: 36px;
+  height: 36px;
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.git-branch-refresh-spinning {
+  animation: git-branch-refresh-spin 1s linear infinite;
+}
+@keyframes git-branch-refresh-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .git-branch-refresh-spinning {
+    animation: none;
+  }
+}
+.git-branch-menu > :not(.git-branch-list) {
+  flex-shrink: 0;
+}
+.git-branch-refresh-error {
+  padding: 10px;
+  border: 1px solid #805043;
+  border-radius: 6px;
+}
+.git-branch-refresh-error pre {
+  margin: 0;
+  max-height: 120px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.git-branch-row > p {
+  margin: 8px 10px 0;
+  color: var(--muted);
+}
+.git-branch-list .git-branch-new {
+  border: 1px solid var(--teal);
+  padding: 1px 4px;
+  border-radius: 4px;
+  color: var(--teal);
+}

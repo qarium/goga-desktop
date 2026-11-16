@@ -1,6 +1,8 @@
 /** Fixed diagnostic codes survive Electron's error serialization without copying
  * native exceptions, cwd, environment, commands or output into a UI/log. */
 export type TerminalStartupPhase =
+  | "preset-environment"
+  | "preset-command"
   | "context"
   | "root"
   | "screen"
@@ -28,7 +30,11 @@ export class TerminalStartupError extends Error {
         ? "Открытие терминала отменено."
         : retained
           ? "Терминальный транспорт недоступен. Процесс сохранён; требуется безопасное завершение."
-          : "Не удалось запустить терминал. Проверьте контекст и оболочку; значения окружения скрыты.") +
+          : phase === "preset-environment"
+            ? "Не удалось открыть сохранённое окружение вкладки. Терминал не запущен."
+            : phase === "preset-command"
+              ? "Не удалось подготовить запуск команды пресета. Команда не отправлена."
+              : "Не удалось запустить терминал. Проверьте контекст и оболочку; значения окружения скрыты.") +
         " [terminal:" +
         phase +
         "]",

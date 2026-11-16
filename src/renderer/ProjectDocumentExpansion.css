@@ -1,0 +1,49 @@
+/* Only a mounted, visible project document can own the workspace.
+   Native titlebar, sidebar, modal dialogs and their shortcuts stay independent. */
+.main-area:has(.project-document-expanded) > .project-bar,
+.project-page:has(.project-document-expanded) > :is(.tabs, .run-context),
+.project-settings-panel:has(.project-document-expanded)
+  :is(
+    .section-heading,
+    .section-tabs,
+    .memory-note,
+    .tree-pane,
+    .tool-controls,
+    .new-profile,
+    .description
+  ) {
+  display: none;
+}
+
+.scroll-area:has(.project-document-expanded) {
+  display: flex;
+  flex-direction: column;
+}
+.scroll-area
+  :is(.retained-view, .project-settings-panel, .master-detail):has(
+    .project-document-expanded
+  ) {
+  display: contents;
+}
+
+.project-document-expanded {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  padding: 16px 20px;
+}
+.project-document-expanded .yaml-code-editor {
+  --settings-editor-height: 100%;
+  --settings-editor-min-height: 0;
+  flex: 1 0 48px;
+}
+.project-document-expanded :is(.editor-heading, .document-editor-footer) {
+  flex: none;
+}
+.document-size-toggle {
+  display: inline-grid;
+  place-items: center;
+  padding: 8px;
+}

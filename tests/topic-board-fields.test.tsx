@@ -161,6 +161,24 @@ it("assigns all seven table columns semantic widths, reserving compact selection
   // summary grid independent of column insertion and the legacy six-column grid.
   expect(css).not.toMatch(/\.topic-summary-table th:nth-child\(/);
 });
+it("keeps one full semantic table in the large-catalog layout; small tables use the native layout", async () => {
+  const small = render(workspace());
+  await screen.findByRole("button", { name: "Открыть топик alpha" });
+  expect(
+    screen.getByRole("table").closest("[data-retain-layout]") !== null,
+  ).toBe(false);
+  small.unmount();
+  const entries = Array.from({ length: 201 }, (_, i) =>
+    row(`large-${i}`, null, []),
+  );
+  api.readTopicTable.mockResolvedValue(makeBoard(entries));
+  render(workspace());
+  await screen.findByRole("button", { name: "Открыть топик large-200" });
+  const table = screen.getByRole("table");
+  expect(table.closest("[data-retain-layout]") !== null).toBe(true);
+  expect(table.querySelectorAll("tbody tr")).toHaveLength(entries.length);
+  expect(table.querySelectorAll("thead th")).toHaveLength(7);
+});
 it.each([
   ["base", "Совпадает с базой"],
   ["up-to-date", "База актуальна"],

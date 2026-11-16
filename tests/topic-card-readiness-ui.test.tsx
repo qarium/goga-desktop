@@ -11,6 +11,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 import { TopicCard } from "../src/renderer/TopicCard";
 import { topicError } from "../src/renderer/TopicsCommon";
@@ -457,6 +458,7 @@ it.each(["current-header", "selector", "board"])(
   "opens the failed clone card from %s with exact owner and no repair",
   async (entry) => {
     render(<App />);
+    await openFirstProject();
     fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
     await screen.findByLabelText("Исполняемый файл");
     await waitFor(() => expect(api.listTopicContexts).toHaveBeenCalled());

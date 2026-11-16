@@ -19,6 +19,7 @@ import {
   act,
   within,
 } from "@testing-library/react";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 let api: any;
 let focusRun: (id: string) => void;
@@ -176,6 +177,7 @@ async function mountReadyOwner() {
       }),
   );
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByRole("heading", { name: "Проект" });
   await waitFor(() => expect(resolveInventory).toBeTypeOf("function"));
@@ -247,10 +249,10 @@ it("isolates full launch preparation values and DOM between projects", async () 
   fireEvent.change(alpha, { target: { value: "alpha task" } });
   selectCatalog(screen.getByRole("combobox", { name: "Конвейер" }), "other");
   await screen.findByRole("textbox", { name: "Что нужно сделать?" });
-  fireEvent.click(screen.getByRole("button", { name: /Beta/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Beta" }));
   const beta = await launch();
   fireEvent.change(beta, { target: { value: "beta task" } });
-  fireEvent.click(screen.getByRole("button", { name: /Alpha/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
   fireEvent.click(screen.getByRole("tab", { name: /^Новый конвейер · / }));
   expect(
     await screen.findByRole("textbox", { name: "Что нужно сделать?" }),
@@ -264,7 +266,7 @@ it("isolates full launch preparation values and DOM between projects", async () 
     (screen.getByRole("combobox", { name: "Конвейер" }) as HTMLButtonElement)
       .value,
   ).toBe("other");
-  fireEvent.click(screen.getByRole("button", { name: /Beta/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Beta" }));
   fireEvent.click(screen.getByRole("tab", { name: /^Новый конвейер · / }));
   expect(
     await screen.findByRole("textbox", { name: "Что нужно сделать?" }),
@@ -351,7 +353,7 @@ it("a late launch from another project never steals the current preparation or d
   api.launch = vi.fn(() => new Promise((r) => (finish = r)));
   click("Запустить");
   await waitFor(() => expect(api.launch).toHaveBeenCalled());
-  fireEvent.click(screen.getByRole("button", { name: /Beta/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Beta" }));
   const beta = await launch();
   fireEvent.change(beta, { target: { value: "new beta task" } });
   const owner = (await api.listTopicContexts("p"))[0];
@@ -371,7 +373,7 @@ it("a late launch from another project never steals the current preparation or d
     beta,
   );
   expect(beta.value).toBe("new beta task");
-  fireEvent.click(screen.getByRole("button", { name: /Alpha/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
   expect(screen.queryByRole("tab", { name: /^Новый конвейер · / })).toBeNull();
   expect(
     screen
@@ -563,6 +565,7 @@ it("keeps the selected topic when another topic's pending launch succeeds", asyn
 
 it("replaces a successful no-topic preparation with its run instead of leaving the draft open", async () => {
   render(<App />);
+  await openFirstProject();
   await screen.findByRole("heading", { level: 1, name: "Alpha" });
   await openCurrentLaunch();
   const form = await screen.findByRole("heading", {
@@ -640,6 +643,7 @@ it("an early run event cannot leave the submitted preparation behind as a false 
 
 async function prepareNewTopic() {
   render(<App />);
+  await openFirstProject();
   await screen.findByRole("heading", { level: 1, name: "Alpha" });
   await openCurrentLaunch();
   const mode = await screen.findByRole("radio", { name: "Создать новый" });
@@ -866,7 +870,7 @@ it("keeps a background created-owner verification failure attached to its run, n
     }),
   );
   await waitFor(() => expect(failOwner).toBeTypeOf("function"));
-  fireEvent.click(screen.getByRole("button", { name: /Beta/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Beta" }));
   const beta = await launch();
   fireEvent.change(beta, { target: { value: "unrelated beta task" } });
   await act(async () =>
@@ -875,7 +879,7 @@ it("keeps a background created-owner verification failure attached to its run, n
   expect(screen.getByRole("heading", { level: 1, name: "Beta" })).toBeTruthy();
   expect(screen.queryByText("Synthetic owner verification failed")).toBeNull();
   expect(beta.value).toBe("unrelated beta task");
-  fireEvent.click(screen.getByRole("button", { name: /Alpha/ }));
+  fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
   expect(
     await screen.findByText("Synthetic owner verification failed"),
   ).toBeTruthy();
@@ -942,6 +946,7 @@ it("settles the visible header mount before opening the current launch with one 
   document.addEventListener("click", countTriggerClick, true);
   try {
     render(<App />);
+    await openFirstProject();
     await waitFor(() => expect(opening).toBeDefined());
     await opening;
     expect(

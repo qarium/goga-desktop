@@ -8,6 +8,7 @@ import {
 } from "react";
 import type { Topic } from "../shared/types";
 import "./TopicSelect.css";
+import { useOptionFocus } from "./useOptionFocus";
 
 export interface TopicSelectProps {
   topics: Topic[];
@@ -60,7 +61,8 @@ export function TopicSelect({
   const trigger = useRef<HTMLButtonElement>(null);
   const listbox = useRef<HTMLDivElement>(null);
   const [open, setOpen] = useState(false);
-  const [focused, setFocused] = useState(0);
+  const { focus, setFocused } = useOptionFocus();
+  const focused = focus.index;
   const [popup, setPopup] = useState({
     above: false,
     maxHeight: 320,
@@ -157,7 +159,7 @@ export function TopicSelect({
   }, [expanded]);
 
   useLayoutEffect(() => {
-    if (!expanded || !listbox.current) return;
+    if (!expanded || !listbox.current || focus.source === "pointer") return;
     const option = document.getElementById(optionId(active));
     if (!option) return;
     const list = listbox.current;
@@ -171,7 +173,7 @@ export function TopicSelect({
         bounds.top - visibleTop,
         bounds.bottom - visibleBottom,
       );
-  }, [expanded, active, id, popup.maxHeight, popup.above]);
+  }, [expanded, active, id, popup.maxHeight, popup.above, focus]);
 
   function show(index = selected < 0 ? 0 : selected) {
     if (isDisabled()) return;
@@ -298,7 +300,7 @@ export function TopicSelect({
               role="option"
               aria-selected={index === selected}
               onPointerDown={(event) => event.preventDefault()}
-              onPointerMove={() => setFocused(index)}
+              onPointerMove={() => setFocused(index, "pointer")}
               onClick={() => choose(index)}
             >
               <TopicLines topic={topic} currentBranch={currentBranch} />

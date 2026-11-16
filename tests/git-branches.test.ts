@@ -155,6 +155,85 @@ async function fixture(unborn = false) {
   };
 }
 describe("primary Git branches", () => {
+  it("settles all parallel metadata probes before returning an inventory read error", async () => {
+    const f = await fixture();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let refsStarted = false,
+      settled = false;
+    const pending: Promise<unknown>[] = [],
+      original = f.ctx.git;
+    f.ctx.git = (...args) => {
+      const task = original(...args);
+      pending.push(task);
+      return task;
+    };
+    f.intercept(async (args) => {
+      if (args.slice(-3).join(" ") === "config --null --list")
+        throw Error("config read failed");
+      if (args.includes("for-each-ref")) {
+        refsStarted = true;
+        await gate;
+      }
+    });
+    const reading = f.actions.inventory("project").then(
+      () => {
+        settled = true;
+        return null;
+      },
+      (error) => {
+        settled = true;
+        return error;
+      },
+    );
+    try {
+      await vi.waitFor(() => expect(refsStarted).toBe(true), { timeout: 5000 });
+      expect(settled).toBe(false);
+    } finally {
+      release();
+      await reading;
+      await Promise.allSettled(pending);
+    }
+    expect((await reading)?.message).toBe("config read failed");
+  });
+
+  it("reads independent branch metadata concurrently inside the verified snapshot boundary", async () => {
+    const f = await fixture();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let configStarted = false,
+      refsStarted = false,
+      worktreesStarted = false;
+    f.intercept(async (args) => {
+      if (args.slice(-3).join(" ") === "config --null --list") {
+        configStarted = true;
+        await gate;
+      }
+      if (args.includes("for-each-ref")) refsStarted = true;
+      if (args.includes("worktree")) worktreesStarted = true;
+    });
+    const reading = f.actions.inventory("project");
+    try {
+      await vi.waitFor(() => expect(configStarted).toBe(true), {
+        timeout: 5000,
+      });
+      await vi.waitFor(
+        () => {
+          expect(refsStarted).toBe(true);
+          expect(worktreesStarted).toBe(true);
+        },
+        { timeout: 5000 },
+      );
+    } finally {
+      release();
+      await reading;
+    }
+  });
+
   it("lists exact local and remote refs separately, excludes symbolic HEAD, supports unborn and detached", async () => {
     const f = await fixture();
     await f.git(["update-ref", "refs/remotes/origin/main", await f.head()]);
@@ -311,7 +390,122 @@ describe("primary Git branches", () => {
   });
 });
 describe("branch remote operations and safety", () => {
-  it("fetches origin explicitly without checkout, pruning, force, tags or FETCH_HEAD replacement", async () => {
+  it.each([true, false])(
+    "preserves configured fetch rewrite policy (%s) only for origin tracking refs",
+    async (force) => {
+      const f = await fixture(),
+        origin = await f.remote();
+      const base = await f.head();
+      await f.git([
+        "-c",
+        "core.hooksPath=/dev/null",
+        "commit",
+        "--allow-empty",
+        "-m",
+        "pages old",
+      ]);
+      const old = await f.head();
+      await f.git(["push", "origin", "HEAD:gh-pages"]);
+      await f.git(["fetch", "origin"]);
+      await f.git(["branch", "gh-pages", old]);
+      await f.git(["update-ref", "refs/heads/gh-pages", base], origin);
+      await f.git(["update-ref", "refs/heads/new-from-origin", base], origin);
+      await f.git([
+        "config",
+        "remote.origin.fetch",
+        `${force ? "+" : ""}refs/heads/*:refs/remotes/origin/*`,
+      ]);
+      await f.write("dirty", "untouched");
+      const index = await fs.readFile(path.join(f.root, ".git/index"));
+      const revision = (await f.actions.inventory("project")).revision;
+      const p = await f.actions.prepare({
+        action: "fetch",
+        projectId: "project",
+        revision,
+      });
+      const result = await f.actions.execute(p.token);
+      expect(result).toMatchObject({ status: force ? "success" : "error" });
+      expect(
+        (
+          await f.git(["rev-parse", "refs/remotes/origin/gh-pages"])
+        ).stdout.trim(),
+      ).toBe(force ? base : old);
+      expect(
+        (await f.git(["rev-parse", "refs/heads/gh-pages"])).stdout.trim(),
+      ).toBe(old);
+      expect(await f.head()).toBe(old);
+      expect(await fs.readFile(path.join(f.root, ".git/index"))).toEqual(index);
+      expect(await fs.readFile(path.join(f.root, "dirty"), "utf8")).toBe(
+        "untouched",
+      );
+      if (force)
+        expect(
+          (
+            await f.git(["rev-parse", "refs/remotes/origin/new-from-origin"])
+          ).stdout.trim(),
+        ).toBe(base);
+      else
+        await expect(
+          f.git([
+            "rev-parse",
+            "--verify",
+            "refs/remotes/origin/new-from-origin",
+          ]),
+        ).rejects.toThrow();
+    },
+  );
+
+  it("discovers a newly published origin branch, then checks it out only through a separate tracking confirmation", async () => {
+    const f = await fixture(),
+      origin = await f.remote();
+    const before = await f.actions.inventory("project"),
+      head = await f.head();
+    const index = await fs.readFile(path.join(f.root, ".git/index"));
+    await f.git(["update-ref", "refs/heads/new-from-origin", head], origin);
+    expect(
+      before.remote.some((row) => row.name === "origin/new-from-origin"),
+    ).toBe(false);
+    const fetch = await f.prepare({ action: "fetch" });
+    expect(await f.actions.execute(fetch.token)).toMatchObject({
+      projectId: "project",
+      action: "fetch",
+      status: "success",
+    });
+    const refreshed = await f.actions.inventory("project");
+    expect(refreshed.branch).toBe("main");
+    expect(await f.head()).toBe(head);
+    expect(await fs.readFile(path.join(f.root, ".git/index"))).toEqual(index);
+    expect(refreshed.local.some((row) => row.name === "new-from-origin")).toBe(
+      false,
+    );
+    expect(
+      refreshed.remote.some((row) => row.name === "origin/new-from-origin"),
+    ).toBe(true);
+    const checkout = await f.actions.prepare({
+      projectId: "project",
+      revision: refreshed.revision,
+      action: "switch-remote",
+      ref: "refs/remotes/origin/new-from-origin",
+    });
+    expect((await f.actions.inventory("project")).branch).toBe("main");
+    expect(await f.actions.execute(checkout.token)).toMatchObject({
+      projectId: "project",
+      action: "switch-remote",
+      status: "success",
+    });
+    expect(
+      (await f.actions.inventory("project")).local.find(
+        (row) => row.name === "new-from-origin",
+      )?.upstream,
+    ).toBe("refs/remotes/origin/new-from-origin");
+    expect((await f.actions.inventory("project")).branch).toBe(
+      "new-from-origin",
+    );
+    expect(await fs.readFile(path.join(f.root, "base"), "utf8")).toBe("base\n");
+    expect(f.calls.filter((call) => call.online)).toHaveLength(1);
+  });
+
+  it("fetches origin explicitly without checkout, pruning, global force, tags or FETCH_HEAD replacement", async () => {
     const f = await fixture();
     await f.remote();
     await f.git(["update-ref", "refs/remotes/origin/kept", await f.head()]);
@@ -345,7 +539,7 @@ describe("branch remote operations and safety", () => {
       ]),
     );
     expect(args).not.toContain("--force");
-    expect(args.some((a) => a.startsWith("+refs/"))).toBe(false);
+    expect(args.at(-1)).toBe("+refs/heads/*:refs/remotes/origin/*");
   });
   it("creates a tracking local branch from the selected remote OID and refuses local collisions", async () => {
     const f = await fixture();

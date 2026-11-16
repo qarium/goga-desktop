@@ -115,6 +115,15 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 export function createSettingsDocuments() {
   const entries = new Map<string, DocumentDraft>();
   const sources = new Map<string, DocumentSource>();
+  // Opaque, session-only buffer identity. Closing/reopening a source with the
+  // same filename must not redirect a stale Home shortcut to its replacement.
+  const instances = new Map<string, object>();
+  const selectedTools = new Map<string, string>();
+  function trackSource(source: DocumentSource) {
+    const key = documentKey(source);
+    sources.set(key, source);
+    if (source.scope === "project" && !instances.has(key)) instances.set(key, {});
+  }
   const loads = new Map<string, Promise<SettingsFile>>();
   const dockerfiles = new Map<
     string,
@@ -155,6 +164,8 @@ export function createSettingsDocuments() {
   function remove(source: DocumentSource) {
     removalRevision++;
     entries.delete(documentKey(source));
+    instances.delete(documentKey(source));
+    sources.delete(documentKey(source));
     removed.set(documentKey(source), removalRevision);
     if (source.scope === "project" && source.target.kind === "tool") {
       const scope = source.context ?? source.projectId;
@@ -220,7 +231,7 @@ export function createSettingsDocuments() {
   const get = (source: DocumentSource) =>
     entries.get(documentKey(source)) ?? empty;
   function put(source: DocumentSource, value: DocumentDraft) {
-    sources.set(documentKey(source), source);
+    trackSource(source);
     removed.delete(documentKey(source));
     entries.set(documentKey(source), value);
     if (
@@ -295,6 +306,7 @@ export function createSettingsDocuments() {
       target: { kind, name },
     };
     // Never read or write a file while creating an explicit in-memory draft.
+    trackSource(source);
     removed.delete(documentKey(source));
     entries.set(documentKey(source), {
       ...empty,
@@ -321,6 +333,47 @@ export function createSettingsDocuments() {
       };
     },
     get,
+    selectedTool: (scope: ScopeRef) => selectedTools.get(documentScopeId(scope)) ?? "",
+    selectTool(scope: ScopeRef, tool: string) {
+      const key = documentScopeId(scope);
+      if (selectedTools.get(key) === tool) return;
+      selectedTools.set(key, tool);
+      listeners.forEach(fn => fn());
+    },
+    /** Only addresses of dirty project files; never personal settings, raw text,
+     * paths inferred from a string key, or registry configuration fields. */
+    dirtyProjectDocuments() {
+      const result: { source: Extract<DocumentSource,{scope:"project"}>; instance: object; relativePath:string; busy:boolean }[] = [];
+      for (const [key,source] of sources) {
+        if (source.scope !== "project") continue;
+        const draft=entries.get(key), instance=instances.get(key);
+        if (!instance || !draft?.document || draft.text===draft.document.text) continue;
+        const target=source.target;
+        const relativePath = draft.document.relativePath || (target.kind==="tool" ? `.goga/tools/${target.tool}/${target.path}` :
+          target.kind==="config" ? ".goga/config.yml" : target.kind==="dockerfile" ? target.path : `.goga/${target.kind}s/${target.name}.yml`);
+        result.push({source,instance,relativePath,busy:draft.busy});
+      }
+      return result;
+    },
+    readSessionBuffer(source: Extract<DocumentSource,{scope:"project"}>, instance:object) {
+      if (instances.get(documentKey(source))!==instance) return null;
+      const draft = get(source);
+      return draft.document && draft.text!==draft.document.text ? draft.text:null;
+    },
+    revealSessionDocument(source: Extract<DocumentSource,{scope:"project"}>, instance:object) {
+      if (instances.get(documentKey(source))!==instance || !get(source).document) return null;
+      const target = source.target, scope = source.context ?? source.projectId;
+      if (target.kind==="tool"){
+        selectedTools.set(documentScopeId(scope),target.tool);
+        updateTool(scope,target.tool,{selected:target.path,creating:false});return "tools";
+      }
+      if (target.kind==="config") return "config";
+      if (target.kind==="dockerfile"){
+        return dockerfiles.get(documentScopeId(scope))?.relativePath === target.path ? "image" : null;
+      }
+      updateFlat(scope,target.kind,{selected:target.name,creating:false});
+      return target.kind+"s";
+    },
     toolState,
     /** Real in-memory sources only: stale empty form/selection state is not a tool. */
     loadedToolFiles(scope: ScopeRef) {
@@ -401,7 +454,7 @@ export function createSettingsDocuments() {
       };
       // Creation never invokes host reads or writes. Only the existing Save flow
       // can materialize this missing leaf inside an already existing parent.
-      sources.set(documentKey(source), source);
+      trackSource(source);
       removed.delete(documentKey(source));
       entries.set(documentKey(source), {
         ...empty,
@@ -664,6 +717,7 @@ export function createSettingsDocuments() {
     },
     discard(source: DocumentSource) {
       if (!get(source).busy) {
+        instances.delete(documentKey(source));
         if (get(source).memoryOnly)
           entries.set(documentKey(source), { ...empty, memoryOnly: true });
         else entries.delete(documentKey(source));

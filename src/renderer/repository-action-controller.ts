@@ -16,6 +16,7 @@ interface Snapshot {
   busy: ReadonlyMap<
     string,
     {
+      projectId: string;
       action: RepositoryActionRequest["action"];
       label: string;
     }
@@ -53,6 +54,7 @@ class RepositoryActionController {
     this.update({
       ...this.state,
       busy: new Map(this.state.busy).set(key, {
+        projectId: request.projectId,
         action: request.action,
         label,
       }),

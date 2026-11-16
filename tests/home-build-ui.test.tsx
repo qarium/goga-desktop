@@ -10,6 +10,7 @@ import {
   waitFor,
   within,
 } from "@testing-library/react";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 let api: any;
 beforeEach(() => {
@@ -57,6 +58,7 @@ afterEach(() => {
 });
 it("keeps existing Project editors after Overview and before Topics, without duplicate project heading", async () => {
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   expect(await screen.findByRole("heading", { name: "Проект" })).toBeTruthy();
   const tabs = screen.getByRole("tablist", { name: "Разделы проекта" });
@@ -75,6 +77,7 @@ it("keeps existing Project editors after Overview and before Topics, without dup
 });
 it("guards dirty Home edits before opening another project section", async () => {
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   fireEvent.change(await screen.findByLabelText("Исполняемый файл"), {
     target: { value: "/changed" },
@@ -116,6 +119,7 @@ it("build run shows live output without Dashboard budget and can repeat independ
     status: "running",
   }));
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("tab", { name: /Сборка/ }));
   expect(await screen.findByText("Built successfully")).toBeTruthy();
   expect(screen.queryByText(/Dashboard/)).toBeNull();
@@ -129,6 +133,7 @@ it("build run shows live output without Dashboard budget and can repeat independ
 
 it("enters the first project through Overview without eagerly loading Project settings", async () => {
   render(<App />);
+  await openFirstProject();
   await screen.findByRole("button", { name: "Обзор" });
   await waitFor(() =>
     expect(
@@ -155,6 +160,7 @@ it("enters unseen and added projects through Overview, but retains the last sect
     path: "/fixture/gamma",
   }));
   render(<App />);
+  await openFirstProject();
   await screen.findByRole("button", { name: "Alpha" });
   fireEvent.click(screen.getByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Исполняемый файл");
@@ -171,6 +177,7 @@ it("enters unseen and added projects through Overview, but retains the last sect
     screen.getByRole("button", { name: "Проект" }).getAttribute("aria-pressed"),
   ).toBe("true");
   fireEvent.click(screen.getByRole("button", { name: "Добавить проект" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Открыть существующий…" }));
   await screen.findByRole("button", { name: "Gamma" });
   await waitFor(() =>
     expect(
@@ -185,6 +192,7 @@ it("enters unseen and added projects through Overview, but retains the last sect
     path: "/fixture",
   });
   fireEvent.click(screen.getByRole("button", { name: "Добавить проект" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "Открыть существующий…" }));
   await waitFor(() =>
     expect(
       screen

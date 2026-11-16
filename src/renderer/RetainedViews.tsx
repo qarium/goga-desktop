@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
   type ReactNode,
+  type RefObject,
 } from "react";
 import "./RetainedViews.css";
 const ViewActive = createContext(true);
@@ -26,6 +27,7 @@ export function RetainedViews({
   retain?: (key: string) => boolean;
 }) {
   const parentActive = useViewActive();
+  const parkedSlot = useRef<HTMLElement | null>(null);
   const [entries, setEntries] = useState(new Map<string, ReactNode>());
   let next = entries;
   if (retain && [...entries.keys()].some((key) => !retain(key)))
@@ -42,7 +44,11 @@ export function RetainedViews({
   return (
     <>
       {[...next].map(([key, child]) => (
-        <RetainedEntry key={key} active={parentActive && key === activeKey}>
+        <RetainedEntry
+          key={key}
+          active={parentActive && key === activeKey}
+          parkedSlot={parkedSlot}
+        >
           {child}
         </RetainedEntry>
       ))}
@@ -52,8 +58,10 @@ export function RetainedViews({
 function RetainedEntry({
   active,
   children,
+  parkedSlot,
 }: {
   active: boolean;
+  parkedSlot: RefObject<HTMLElement | null>;
   children: ReactNode;
 }) {
   const root = useRef<HTMLDivElement>(null);
@@ -63,19 +71,45 @@ function RetainedEntry({
     return node;
   });
   const attach = () => {
-    content.hidden = !active;
+    // Only passive, explicitly opted-in large catalogs can keep layout. The
+    // rest (including editors, dialogs and native surfaces) still detach.
+    const parked =
+      !active &&
+      !!root.current &&
+      content.parentNode === root.current &&
+      !!content.firstElementChild?.hasAttribute("data-retain-layout");
+    if (parked && parkedSlot.current !== content) {
+      // Bound connected layout to one dormant catalog per outlet. Detaching
+      // the older portal preserves its React state and saved scroll offsets.
+      const previous = parkedSlot.current;
+      if (previous) {
+        previous.parentElement?.removeAttribute("data-parked");
+        previous.hidden = true;
+        previous.remove();
+      }
+      parkedSlot.current = content;
+    } else if (!parked && parkedSlot.current === content) {
+      parkedSlot.current = null;
+    }
+    root.current?.toggleAttribute("data-parked", parked);
+    content.hidden = !active && !parked;
     content.toggleAttribute("inert", !active);
     if (active) {
       // Moving the same DOM node again resets Chromium's nested scroll offsets.
       if (content.parentNode !== root.current)
         root.current?.appendChild(content);
-    } else content.remove();
+    } else if (!parked) content.remove();
   };
-  // Detaching the portal keeps React/editor state but removes inactive IDs,
-  // labels and focus targets from the document. Attach before layout effects
-  // on reactivation so native surfaces measure their real geometry.
+  // Default to a detached portal. Reattach before layout effects on return
+  // so editors and native surfaces measure their actual geometry.
   useInsertionEffect(attach, [active, content]);
   useLayoutEffect(attach, [active, content]);
+  useLayoutEffect(
+    () => () => {
+      if (parkedSlot.current === content) parkedSlot.current = null;
+    },
+    [parkedSlot, content],
+  );
   const position = useRef({ top: 0, left: 0 });
   useLayoutEffect(() => {
     if (!active) return;
@@ -99,6 +133,7 @@ function RetainedEntry({
         className="retained-view"
         ref={root}
         hidden={!active}
+        aria-hidden={!active || undefined}
         inert={!active}
       />
       {createPortal(

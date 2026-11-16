@@ -15,7 +15,18 @@ import "./ProjectContent.css";
 import { useReadScope } from "./read-request";
 import { LoadingBoundary } from "./LoadingBoundary";
 import { ActionReason } from "./ActionReason";
-import { Fragment, useCallback, useEffect, useId, useState } from "react";
+import {
+  Fragment,
+  memo,
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useId,
+  useMemo,
+  useLayoutEffect,
+  useRef,
+  useState,
+} from "react";
 import type { Project } from "../shared/types";
 import type { TopicContextIdentity, WorktreeRecord } from "../shared/worktrees";
 import { contextRunActivity, type RunWithContext } from "./topic-context";
@@ -29,6 +40,7 @@ import {
   defaultTopicFilters,
   filterTopicRows,
   topicRowActivity,
+  indexTopicTableOwners,
   type TopicCreateDraft,
   type TopicFilters,
   type TopicsStore,
@@ -41,6 +53,10 @@ import {
   topicError,
   useTopicOperation,
 } from "./TopicsCommon";
+const emptyRuns: RunWithContext[] = [];
+const emptyOwners: WorktreeRecord[] = [];
+const LARGE_TABLE_ROWS = 200;
+
 export function TopicsWorkspace({
   project,
   store,
@@ -48,8 +64,8 @@ export function TopicsWorkspace({
   onChanged,
   onBusy,
   revision = "",
-  runs = [],
-  knownContexts = [],
+  runs = emptyRuns,
+  knownContexts = emptyOwners,
   onOpenRun,
   selectedContext = null,
   onSelectTopic,
@@ -153,57 +169,126 @@ export function TopicsWorkspace({
     setFilters(next);
     store.filters.set(project.id, next);
   }
-  const current = (r: TopicTarget) =>
-    !!selectedContext &&
-    !r.remote &&
-    selectedContext.projectId === project.id &&
-    selectedContext.year === year &&
-    selectedContext.topic === r.topic &&
-    selectedContext.branch === r.branch;
-  const rows = board
-    ? filterTopicRows(
-        board,
-        { ...filters, onlyActive: false },
-        runs,
-        knownContexts,
-      )
-        .filter(
-          (row) =>
-            !filters.onlyActive ||
-            topicRowActivity(board, row, runs, knownContexts, true)
-              .activeCount > 0,
-        )
-        .sort((a, b) => Number(current(b)) - Number(current(a)))
-    : [];
+  const current = useCallback(
+    (r: TopicTarget) =>
+      !!selectedContext &&
+      !r.remote &&
+      selectedContext.projectId === project.id &&
+      selectedContext.year === year &&
+      selectedContext.topic === r.topic &&
+      selectedContext.branch === r.branch,
+    [selectedContext, project.id, year],
+  );
+  const exactRow = useMemo(
+    () => indexTopicTableOwners(board, runs, knownContexts),
+    [board, runs, knownContexts],
+  );
+  const rows = useMemo(
+    () =>
+      board
+        ? filterTopicRows(board, { ...filters, onlyActive: false })
+            .filter(
+              (row) =>
+                !filters.onlyActive || exactRow(row).activity.activeCount > 0,
+            )
+            .sort((a, b) => Number(current(b)) - Number(current(a)))
+        : [],
+    [board, filters, current, exactRow],
+  );
   const boardUI = useTopicsBoard(project.id, year, board);
-  const actionsFor = (r: TopicBoardRecord) => {
-    const activity = topicRowActivity(board!, r, runs, knownContexts, true);
-    const matchingOwners = knownContexts.filter(
-      (owner) =>
-        owner.projectId === project.id &&
-        owner.year === year &&
-        owner.topic === r.topic &&
-        owner.branch === r.branch,
-    );
-    const target = { topic: r.topic, branch: r.branch, remote: r.remote };
-    return (
-      <div className="topic-row-actions">
-        {current(r) ? (
-          <span className="topic-selected-label">Текущий</span>
-        ) : (
+  // Reuse a bounded, already displayed native table for live text filtering.
+  // No extra rows are mounted on first paint (including a restored filter).
+  // Hidden text/controls leave find, Tab order and the accessibility tree.
+  const fullTable = useRef<{
+    board: TopicBoardSnapshot;
+    rows: TopicBoardRecord[];
+    current: typeof current;
+  } | null>(null);
+  const retainable =
+    boardUI.preferences.view === "table" &&
+    !!board &&
+    board.entries.length >= LARGE_TABLE_ROWS &&
+    board.entries.length <= 2000;
+  useLayoutEffect(() => {
+    if (
+      !retainable ||
+      fullTable.current?.board !== board ||
+      fullTable.current.current !== current
+    )
+      fullTable.current = null;
+    if (retainable && board && rows.length === board.entries.length)
+      fullTable.current = { board, rows, current };
+  }, [retainable, rows, board, current]);
+  const tableRows =
+    retainable &&
+    fullTable.current?.board === board &&
+    fullTable.current.current === current
+      ? fullTable.current.rows
+      : rows;
+  const visibleRows = useMemo(
+    () => (tableRows === rows ? null : new Set(rows)),
+    [rows, tableRows],
+  );
+  const actionsFor = useCallback(
+    (r: TopicBoardRecord, hidden = false) => {
+      const { activity, owners: matchingOwners } = exactRow(r);
+      const target = { topic: r.topic, branch: r.branch, remote: r.remote };
+      return (
+        <div className="topic-row-actions">
+          {current(r) ? (
+            <span className="topic-selected-label">Текущий</span>
+          ) : (
+            <TooltipButton
+              tooltipEnabled={!hidden}
+              disabled={disabled || !onSelectTopic || r.remote}
+              label={`Переключиться на топик ${r.topic}`}
+              tooltipLabel="Переключиться"
+              busy={false}
+              description="Открыть контекст топика"
+              onClick={() =>
+                onSelectTopic?.({
+                  projectId: project.id,
+                  year,
+                  topic: r.topic,
+                  branch: r.branch,
+                })
+              }
+            >
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.8"
+                aria-hidden="true"
+              >
+                <path d="M4 12h12m-5-5 5 5-5 5M20 4v16" />
+              </svg>
+            </TooltipButton>
+          )}
           <TooltipButton
-            disabled={disabled || !onSelectTopic || r.remote}
-            label={`Переключиться на топик ${r.topic}`}
-            tooltipLabel="Переключиться"
+            tooltipEnabled={!hidden}
+            disabled={
+              disabled ||
+              matchingOwners.length > 1 ||
+              (!matchingOwners.length && current(r)) ||
+              activity.activeCount > 0 ||
+              ownerReadState !== "confirmed"
+            }
+            label={`Удалить топик ${r.topic}`}
+            tooltipLabel="Удалить топик"
             busy={false}
-            description="Открыть контекст топика"
+            description={
+              matchingOwners.length > 1
+                ? "Выберите нужный рабочий контекст в селекторе топиков"
+                : ownerReadState !== "confirmed"
+                  ? ownerReadError || "Проверяем контексты топиков"
+                  : activity.activeCount
+                    ? "Сначала завершите запуски топика"
+                    : "Удаление после подтверждения"
+            }
+            buttonClassName="repository-action-button topic-delete-icon"
             onClick={() =>
-              onSelectTopic?.({
-                projectId: project.id,
-                year,
-                topic: r.topic,
-                branch: r.branch,
-              })
+              setRemoving({ action: "delete", topics: [target.topic] })
             }
           >
             <svg
@@ -213,83 +298,81 @@ export function TopicsWorkspace({
               strokeWidth="1.8"
               aria-hidden="true"
             >
-              <path d="M4 12h12m-5-5 5 5-5 5M20 4v16" />
+              <path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" />
             </svg>
           </TooltipButton>
-        )}
-        <TooltipButton
-          disabled={
-            disabled ||
-            matchingOwners.length > 1 ||
-            (!matchingOwners.length && current(r)) ||
-            activity.activeCount > 0 ||
-            ownerReadState !== "confirmed"
-          }
-          label={`Удалить топик ${r.topic}`}
-          tooltipLabel="Удалить топик"
-          busy={false}
-          description={
-            matchingOwners.length > 1
-              ? "Выберите нужный рабочий контекст в селекторе топиков"
-              : ownerReadState !== "confirmed"
-                ? ownerReadError || "Проверяем контексты топиков"
-                : activity.activeCount
-                  ? "Сначала завершите запуски топика"
-                  : "Удаление после подтверждения"
-          }
-          buttonClassName="repository-action-button topic-delete-icon"
-          onClick={() =>
-            setRemoving({ action: "delete", topics: [target.topic] })
-          }
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="1.8"
-            aria-hidden="true"
-          >
-            <path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7m4-7v7" />
-          </svg>
-        </TooltipButton>
-      </div>
-    );
-  };
-  const activityFor = (r: TopicBoardRecord) => {
-    const activity = topicRowActivity(board!, r, runs, knownContexts, true);
-    return (
-      <>
-        {activity.activeCount === 1 ? (
-          <TopicRunActivity
-            run={activity.activeRuns[0]!}
-            unverified={activity.unverifiedRunIds.includes(
-              activity.activeRuns[0]!.id,
-            )}
-            onOpenRun={onOpenRun}
-          />
-        ) : activity.activeCount > 1 ? (
-          <details className="topic-activity-choices">
-            <summary>Активных: {activity.activeCount} · выбрать запуск</summary>
-            {activity.activeRuns.map((run) => (
-              <TopicRunActivity
-                key={run.id}
-                run={run}
-                unverified={activity.unverifiedRunIds.includes(run.id)}
-                onOpenRun={onOpenRun}
-              />
-            ))}
-          </details>
-        ) : (
-          <span className="hint">Нет активного</span>
-        )}
-      </>
-    );
-  };
-  const visibleKeys = rows.map((r) =>
-    topicSelectionKey(project.id, year, r.topic),
+        </div>
+      );
+    },
+    [
+      exactRow,
+      current,
+      project.id,
+      year,
+      onSelectTopic,
+      disabled,
+      ownerReadState,
+      ownerReadError,
+    ],
   );
+  const activityFor = useCallback(
+    (r: TopicBoardRecord) => {
+      const { activity } = exactRow(r);
+      return (
+        <>
+          {activity.activeCount === 1 ? (
+            <TopicRunActivity
+              run={activity.activeRuns[0]!}
+              unverified={activity.unverifiedRunIds.includes(
+                activity.activeRuns[0]!.id,
+              )}
+              onOpenRun={onOpenRun}
+            />
+          ) : activity.activeCount > 1 ? (
+            <details className="topic-activity-choices">
+              <summary>
+                Активных: {activity.activeCount} · выбрать запуск
+              </summary>
+              {activity.activeRuns.map((run) => (
+                <TopicRunActivity
+                  key={run.id}
+                  run={run}
+                  unverified={activity.unverifiedRunIds.includes(run.id)}
+                  onOpenRun={onOpenRun}
+                />
+              ))}
+            </details>
+          ) : (
+            <span className="hint">Нет активного</span>
+          )}
+        </>
+      );
+    },
+    [exactRow, onOpenRun],
+  );
+  const openRow = useCallback(
+    (r: TopicBoardRecord) => {
+      if (board)
+        onOpenTopic(
+          { topic: r.topic, branch: r.branch, remote: r.remote },
+          year,
+          board,
+          r,
+        );
+    },
+    [board, year, onOpenTopic],
+  );
+  const visibleKeys = useMemo(
+    () => rows.map((r) => topicSelectionKey(project.id, year, r.topic)),
+    [rows, project.id, year],
+  );
+  const tableKeys = useMemo(
+    () => tableRows.map((r) => topicSelectionKey(project.id, year, r.topic)),
+    [tableRows, project.id, year],
+  );
+  const visibleSet = useMemo(() => new Set(visibleKeys), [visibleKeys]);
   const hiddenSelection = [...boardUI.selected].filter(
-    (key) => !visibleKeys.includes(key),
+    (key) => !visibleSet.has(key),
   ).length;
   const pending = loading || settled !== key;
   const pendingDeletions = knownContexts.filter(
@@ -309,8 +392,9 @@ export function TopicsWorkspace({
         ...(!error && board?.active ? ["В проекте работает запуск"] : []),
         ...(createBusy ? ["Выполняется операция с топиками"] : []),
       ];
-  const options =
-    picker === "topics"
+  const options = !picker
+    ? []
+    : picker === "topics"
       ? (board?.entries.map((r) => r.topic) ?? [])
       : picker === "hosts"
         ? (board?.entries.flatMap((r) => r.hosts) ?? [])
@@ -318,6 +402,18 @@ export function TopicsWorkspace({
   return (
     <section
       className="topics-workspace project-content"
+      data-retain-layout={
+        boardUI.preferences.view === "table" &&
+        tableRows.length >= LARGE_TABLE_ROWS &&
+        !pending &&
+        !error &&
+        !picker &&
+        !create &&
+        !deleting &&
+        !removing
+          ? ""
+          : undefined
+      }
       aria-label="Топики проекта"
       aria-busy={pending}
     >
@@ -516,29 +612,14 @@ export function TopicsWorkspace({
             onPreferences={boardUI.onPreferences}
             selected={boardUI.selected}
             onSelection={boardUI.onSelection}
-            onOpen={(r) =>
-              onOpenTopic(
-                { topic: r.topic, branch: r.branch, remote: r.remote },
-                year,
-                board!,
-                r,
-              )
-            }
+            onOpen={openRow}
             renderActions={actionsFor}
             renderMeta={(r) =>
-              topicRowActivity(board!, r, runs, knownContexts, true)
-                .activeCount ? (
+              exactRow(r).activity.activeCount ? (
                 activityFor(r)
               ) : (
                 <span>
-                  {knownContexts.some(
-                    (o) =>
-                      o.projectId === project.id &&
-                      o.year === year &&
-                      o.topic === r.topic &&
-                      o.branch === r.branch &&
-                      !o.deletedAt,
-                  )
+                  {exactRow(r).owners.some((owner) => !owner.deletedAt)
                     ? "Рабочая копия"
                     : "Исходный проект"}
                 </span>
@@ -574,84 +655,20 @@ export function TopicsWorkspace({
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => {
-                  const activity = topicRowActivity(
-                    board!,
-                    r,
-                    runs,
-                    knownContexts,
-                    true,
-                  );
-                  const matchingOwners = knownContexts.filter(
-                    (owner) =>
-                      owner.projectId === project.id &&
-                      owner.year === year &&
-                      owner.topic === r.topic &&
-                      owner.branch === r.branch,
-                  );
-                  const target = {
-                    topic: r.topic,
-                    branch: r.branch,
-                    remote: r.remote,
-                  };
-                  return (
-                    <tr
-                      key={JSON.stringify([r.topic, r.branch, r.remote])}
-                      className={current(r) ? "topic-current-row" : ""}
-                      aria-current={current(r) ? "true" : undefined}
-                    >
-                      <td className="topic-table-checkbox">
-                        <input
-                          type="checkbox"
-                          aria-label={`Выбрать топик ${r.topic}`}
-                          checked={boardUI.selected.has(
-                            topicSelectionKey(project.id, year, r.topic),
-                          )}
-                          onChange={() =>
-                            boardUI.onSelection(
-                              toggleColumn(
-                                [topicSelectionKey(project.id, year, r.topic)],
-                                boardUI.selected,
-                              ),
-                            )
-                          }
-                        />
-                      </td>
-                      <td>
-                        <button
-                          className="topic-link"
-                          aria-label={`Открыть топик ${r.topic}`}
-                          onClick={() => onOpenTopic(target, year, board!, r)}
-                        >
-                          {r.topic}
-                        </button>
-                      </td>
-                      <td className="topic-branch">
-                        <code>{r.branch}</code>
-                      </td>
-                      <td>
-                        <TopicDivergence divergence={r.divergence} />
-                      </td>
-                      <td>
-                        <div className="topic-statuses">
-                          {r.statuses.length ? (
-                            r.statuses.map((s) => (
-                              <span className="topic-status" key={s}>
-                                {s}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="hint" title={r.statusError}>
-                              —
-                            </span>
-                          )}
-                        </div>
-                      </td>
-                      <td>{activityFor(r)}</td>
-                      <td>{actionsFor(r)}</td>
-                    </tr>
-                  );
-                })}
+                {tableRows.map((r, i) => (
+                  <TopicTableRow
+                    key={JSON.stringify([r.topic, r.branch, r.remote])}
+                    r={r}
+                    current={current(r)}
+                    hidden={visibleRows !== null && !visibleRows.has(r)}
+                    selectionKey={tableKeys[i]!}
+                    checked={boardUI.selected.has(tableKeys[i]!)}
+                    openRow={openRow}
+                    toggleOne={boardUI.toggleOne}
+                    activityFor={activityFor}
+                    actionsFor={actionsFor}
+                  />
+                ))}
               </tbody>
             </table>
           </div>
@@ -760,6 +777,77 @@ export function TopicsWorkspace({
     </section>
   );
 }
+
+const TopicTableRow = memo(function TopicTableRow({
+  r,
+  hidden,
+  current,
+  selectionKey,
+  checked,
+  openRow,
+  toggleOne,
+  activityFor,
+  actionsFor,
+}: {
+  r: TopicBoardRecord;
+  hidden: boolean;
+  current: boolean;
+  selectionKey: string;
+  checked: boolean;
+  openRow: (r: TopicBoardRecord) => void;
+  toggleOne: (key: string) => void;
+  activityFor: (r: TopicBoardRecord) => ReactNode;
+  actionsFor: (r: TopicBoardRecord, hidden: boolean) => ReactNode;
+}) {
+  return (
+    <tr
+      hidden={hidden}
+      className={current ? "topic-current-row" : ""}
+      aria-current={current ? "true" : undefined}
+    >
+      <td className="topic-table-checkbox">
+        <input
+          type="checkbox"
+          aria-label={`Выбрать топик ${r.topic}`}
+          checked={checked}
+          onChange={() => toggleOne(selectionKey)}
+        />
+      </td>
+      <td>
+        <button
+          className="topic-link"
+          aria-label={`Открыть топик ${r.topic}`}
+          onClick={() => openRow(r)}
+        >
+          {r.topic}
+        </button>
+      </td>
+      <td className="topic-branch">
+        <code>{r.branch}</code>
+      </td>
+      <td>
+        <TopicDivergence divergence={r.divergence} />
+      </td>
+      <td>
+        <div className="topic-statuses">
+          {r.statuses.length ? (
+            r.statuses.map((s) => (
+              <span className="topic-status" key={s}>
+                {s}
+              </span>
+            ))
+          ) : (
+            <span className="hint" title={r.statusError}>
+              —
+            </span>
+          )}
+        </div>
+      </td>
+      <td>{!hidden && activityFor(r)}</td>
+      <td>{actionsFor(r, hidden)}</td>
+    </tr>
+  );
+});
 
 function TopicCreateLoader(props: {
   project: Project;

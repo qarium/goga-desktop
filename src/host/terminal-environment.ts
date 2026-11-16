@@ -1,3 +1,4 @@
+import { parseTerminalPresetEnv } from "../shared/terminal-presets";
 import { prepareTopicPrompt } from "./terminal-prompt";
 import {
   terminalContextSchema,
@@ -8,6 +9,7 @@ import { constants } from "node:fs";
 import { access, lstat, realpath, stat } from "node:fs/promises";
 import { userInfo } from "node:os";
 import path from "node:path";
+import { isBlockedTerminalChildEnvKey } from "../shared/terminal-environment-policy";
 import { childEnvironment } from "./process-environment";
 import type { ProjectEnvironmentEntry } from "./desktop-state";
 export interface TerminalRoot {
@@ -16,6 +18,7 @@ export interface TerminalRoot {
   env: ProjectEnvironmentEntry[];
 }
 export interface TerminalSystem {
+  presetEnv?: import("../shared/terminal-presets").TerminalPresetEnv;
   inherited?: NodeJS.ProcessEnv;
   accountShell?: () => string | null;
 }
@@ -27,6 +30,8 @@ export interface TerminalLaunch {
   env: Record<string, string>;
   verifyRoot: () => Promise<void>;
   dispose?: () => void;
+  /** Host-created private shim, never a project- or renderer-supplied file. */
+  presetShellHooks?: { addZshHook(script: string): Promise<void> };
   /** Private shell integration; absence is unknown, never proof of idle. */
   activity?: { idle(shellPid: number): boolean; input(data: string): void };
 }
@@ -76,12 +81,17 @@ export async function prepareTerminalEnvironment(
   delete inherited.NO_COLOR;
   const merged = childEnvironment(
     inherited,
-    {},
     Object.fromEntries(initial.env.map((row) => [row.key, row.value])),
+    Object.fromEntries(
+      parseTerminalPresetEnv(system.presetEnv ?? []).map((row) => [
+        row.key,
+        row.value,
+      ]),
+    ),
   );
   const env: Record<string, string> = {};
   for (const [name, value] of Object.entries(merged)) {
-    if (value === undefined || blocked(name)) continue;
+    if (value === undefined || isBlockedTerminalChildEnvKey(name)) continue;
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || value.includes("\0"))
       throw Error("Недопустимое окружение терминала. Значения скрыты.");
     Object.defineProperty(env, name, {
@@ -120,30 +130,16 @@ export async function prepareTerminalEnvironment(
     args: ["-l", "-i"],
     env,
     verifyRoot,
-    ...(prompt ? { dispose: prompt.dispose, activity: prompt.activity } : {}),
+    ...(prompt
+      ? {
+          dispose: prompt.dispose,
+          activity: prompt.activity,
+          presetShellHooks: prompt.presetShellHooks,
+        }
+      : {}),
   };
 }
 
-// Sanitize only the child copy. Shell startup files remain the user's responsibility.
-function blocked(key: string) {
-  return (
-    /^(?:ELECTRON_|DYLD_|BASH_FUNC_|GIT_CONFIG(?:_|$))/.test(key) ||
-    [
-      "NODE_OPTIONS",
-      "NODE_PATH",
-      "NODE_REPL_EXTERNAL_MODULE",
-      "NODE_CHANNEL_FD",
-      "NODE_CHANNEL_SERIALIZATION_MODE",
-      "NODE_UNIQUE_ID",
-      "LD_PRELOAD",
-      "LD_LIBRARY_PATH",
-      "BASH_ENV",
-      "ENV",
-      "PWD",
-      "OLDPWD",
-    ].includes(key)
-  );
-}
 async function directoryIdentity(root: string): Promise<string> {
   try {
     if (

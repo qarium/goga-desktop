@@ -1,3 +1,5 @@
+import { projectRemovalRequestSchema } from "../shared/project-registration";
+import { projectCreationRequestSchema, projectCreationIdSchema } from "../shared/project-creation";
 import { specificationPathSchema } from "../shared/project-specifications";
 import { PIPELINE_DISPLAY_LIMITS } from "../shared/pipeline-display";
 import { topicRemovalRequestSchema, topicRemovalTokenSchema, topicCloneCleanupRequestSchema } from "../shared/topic-removal";
@@ -69,6 +71,7 @@ import {
 } from "../shared/topic-popup";
 import { IPC_SCOPES } from "../shared/operation-scopes";
 import { repositoryActionRequestSchema } from "../shared/repository-actions";
+import type {WindowDashboards} from "./dashboard-window";
 import { scopeRefSchema } from "../shared/context";
 import {
   topicContextIdentitySchema,
@@ -223,6 +226,9 @@ interface Dependencies {
   window: BrowserWindow;
   shellURL: string;
   choose: () => Promise<string | null>;
+  chooseProjectLocation?: () => Promise<string | null>;
+  panels?:WindowDashboards;
+  refreshDashboard?:(id:string)=>Promise<void>;
   restoreDashboard?: (id:string)=>Promise<void>;
   select: (id: string | null) => void;
   viewport?: (bounds: DashboardViewport) => void;
@@ -265,9 +271,21 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
     d.service.prepareBuildRepeat(id.parse(runId)),
   );
   handle("repeat-pipeline", (runId) => d.service.repeatPipeline(id.parse(runId)));
+  const panels=()=>{if(!d.panels)throw Error("Подключение панелей недоступно.");return d.panels};
+  handle("attached-dashboards",()=>panels().list());
+  handle("attach-dashboard",(scope,url,key)=>panels().connect(scopeRefSchema.parse(scope),z.string().trim().min(1).max(256).parse(url),z.string().uuid().parse(key)));
+  handle("cancel-dashboard-attach",key=>panels().cancel(z.string().uuid().parse(key)));
+  handle("detach-dashboard",(scope,key)=>panels().detach(scopeRefSchema.parse(scope),id.parse(key)));
+  handle("select-attached-dashboard",(scope,key)=>panels().select(scopeRefSchema.parse(scope),id.parse(key)));
+  handle("refresh-dashboard",(key,scope,recover)=>{
+    const value=id.parse(key);
+    if(scope!==undefined)return panels().refresh(scopeRefSchema.parse(scope),value,z.boolean().optional().parse(recover)??false);
+    if(!d.service.hasRun(value)||!d.refreshDashboard)throw Error("Панель запуска недоступна.");
+    return d.refreshDashboard(value);
+  });
   handle("restore-dashboard", (runId) => {
     const value=id.parse(runId);
-    if(!d.service.runs().some(run=>run.id===value)||!d.restoreDashboard)throw Error("Панель запуска недоступна.");
+    if(!d.service.hasRun(value)||!d.restoreDashboard)throw Error("Панель запуска недоступна.");
     return d.restoreDashboard(value);
   });
   handle("reconcile-run", (runId) => d.service.reconcileRun(id.parse(runId)));
@@ -633,6 +651,10 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
     d.service.deleteDocument(z.string().refine(isDeletionToken).parse(token)),
   );
   handle("list-projects", () => d.service.listProjects());
+  handle("remove-project", project=>{
+    const target=projectRemovalRequestSchema.parse(project);
+    return d.service.removeProject(target).then(remaining=>{d.panels?.forgetProject(target.id);return remaining});
+  });
   handle("list-project-profiles", (projectId) =>
     d.service.listProjectProfiles(scopeRefSchema.parse(projectId)),
   );
@@ -761,6 +783,12 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
     const folder = await d.choose();
     return folder ? d.service.addProject(folder) : null;
   });
+  handle("choose-project-location", () => {
+    if (!d.chooseProjectLocation) throw Error("Выбор расположения недоступен.");
+    return d.chooseProjectLocation();
+  });
+  handle("create-project", (request) => d.service.createProject(projectCreationRequestSchema.parse(request)));
+  handle("cancel-project-creation", (id) => d.service.cancelProjectCreation(projectCreationIdSchema.parse(id)));
   handle("checkout-branch", (value) =>
     d.service.checkoutBranch(scopeRefSchema.parse(value)),
   );
@@ -805,13 +833,16 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   );
   handle("preview", (value) => d.service.preview(pipeline.parse(value)));
   handle("launch", (value) => d.service.launch(launch.parse(value)));
-  handle("runs", () => d.service.runs());
+  handle("runs", () => d.service.runCatalog());
+  handle("run-journal", (value, after) =>
+    d.service.readRunJournal(id.parse(value), z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER).optional().parse(after)),
+  );
   handle("set-dashboard-viewport", (value) => {
     d.viewport?.(dashboardViewportSchema.parse(value));
   });
   handle("select-run", (value) => {
     const runId = id.nullable().parse(value);
-    if (runId !== null && !d.service.runs().some((r) => r.id === runId))
+    if (runId !== null && !d.service.hasRun(runId))
       throw new Error("Неизвестный запуск");
     d.select(runId);
   });

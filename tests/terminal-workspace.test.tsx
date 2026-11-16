@@ -132,6 +132,37 @@ it("lazily opens only the selected tab and exposes its common area", async () =>
     1,
   );
 });
+it("uses shared workspace tab styling while retaining the terminal catalog state", async () => {
+  const { readFileSync } = await import("node:fs");
+  const style = document.createElement("style");
+  style.textContent = readFileSync("src/renderer/WorkspaceTabs.css", "utf8");
+  document.head.append(style);
+  const f = fixture();
+  try {
+    render(<TerminalWorkspace api={f.api} scope="p" />);
+    const tab = await screen.findByRole("tab", { name: /console — Общий/ });
+    const item = tab.closest<HTMLElement>(".workspace-tab")!;
+    const close = screen.getByRole("button", {
+      name: "Закрыть терминал console",
+    });
+    const create = screen.getByRole("button", { name: "Добавить терминал" });
+    expect(tab.classList.contains("workspace-tab-select")).toBe(true);
+    expect(item.getAttribute("data-selected")).toBe("true");
+    expect(close.classList.contains("workspace-tab-close")).toBe(true);
+    expect(create.classList.contains("workspace-tab-create")).toBe(true);
+    const selectedStyle = getComputedStyle(item);
+    expect(selectedStyle.borderRadius).toBe("0");
+    expect(selectedStyle.borderBottomWidth).toBe("2px");
+    expect(selectedStyle.borderBottomColor).toBe("rgb(25, 202, 187)");
+    expect(selectedStyle.color).toBe("rgb(25, 202, 187)");
+    expect(getComputedStyle(tab).paddingLeft).toBe("12px");
+    expect(getComputedStyle(close).width).toBe("26px");
+    expect(getComputedStyle(create).width).toBe("34px");
+  } finally {
+    style.remove();
+  }
+});
+
 it("offers distinct common and primary-bound creation, then rename without changing scope", async () => {
   const f = fixture();
   render(<TerminalWorkspace api={f.api} scope="p" />);

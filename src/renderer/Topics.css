@@ -96,8 +96,20 @@
   margin-right: auto;
 }
 .topic-selection button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  max-width: 100%;
   font-size: 11px;
+  line-height: 1.4;
   padding: 5px 9px;
+}
+.topic-selection button svg {
+  display: block;
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
 }
 .topic-table-wrap {
   overflow-x: auto;

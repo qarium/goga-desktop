@@ -16,6 +16,7 @@ import type {
 } from "../shared/terminal-control";
 import { TerminalSurface } from "./TerminalSurface";
 import "./TerminalWorkspace.css";
+import { preparationErrorMessage } from "./preparation-error";
 import { TerminalTabs, terminalArea } from "./TerminalTabs";
 import "./ProjectContent.css";
 // Presentation-only cache. Every native show and background open remains host-authorized.
@@ -39,10 +40,13 @@ interface Props {
   blocked?: string;
   obscured?: boolean;
   suspendOpen?: boolean;
+  onPresetSettings?: () => void;
 }
 type PendingConfirmation = TerminalConfirmation & { closingTabId?: string };
 const errorText = (error: unknown) =>
-  error instanceof Error ? error.message : "Операция терминала не выполнена.";
+  error instanceof Error
+    ? preparationErrorMessage(error)
+    : "Операция терминала не выполнена.";
 export function TerminalWorkspace(props: Props) {
   const scope = useMemo(() => props.scope, [JSON.stringify(props.scope)]);
   if (props.blocked)
@@ -53,7 +57,13 @@ export function TerminalWorkspace(props: Props) {
     );
   return <Workspace key={ownerKey(scope)} {...props} scope={scope} />;
 }
-function Workspace({ api, scope, obscured, suspendOpen }: Props) {
+function Workspace({
+  api,
+  scope,
+  obscured,
+  suspendOpen,
+  onPresetSettings,
+}: Props) {
   const viewActive = useViewActive();
   const activeRef = useRef(viewActive);
   activeRef.current = viewActive;
@@ -80,6 +90,7 @@ function Workspace({ api, scope, obscured, suspendOpen }: Props) {
   const [restarting, setRestarting] = useState(false);
   const [closingTabId, setClosingTabId] = useState<string>();
   const closingTarget = useRef<string | undefined>(undefined);
+  const [presetCreating, setPresetCreating] = useState(false);
   const [opening, setOpening] = useState(false);
   const [confirmation, setConfirmation] = useState<PendingConfirmation>();
   const live = useRef(true),
@@ -350,14 +361,20 @@ function Workspace({ api, scope, obscured, suspendOpen }: Props) {
     const capturedRevision = snapshot.current?.revision;
     const pendingSelection = selectionTask.current || metadataRead.current;
     return action(async () => {
-      // Rebase only the selection we deliberately waited for. Never rebase an
-      // already stale menu/editor capture or bypass the host's revision check.
-      await api.request(
-        pendingSelection && value.revision === capturedRevision
-          ? { ...value, revision: snapshot.current!.revision }
-          : value,
-      );
-      if (live.current) await reload.current();
+      if (value.kind === "create-from-preset") setPresetCreating(true);
+      try {
+        // Rebase only the selection we deliberately waited for. Never rebase an
+        // already stale menu/editor capture or bypass the host's revision check.
+        await api.request(
+          pendingSelection && value.revision === capturedRevision
+            ? { ...value, revision: snapshot.current!.revision }
+            : value,
+        );
+        if (live.current) await reload.current();
+      } finally {
+        if (value.kind === "create-from-preset" && live.current)
+          setPresetCreating(false);
+      }
     });
   }
   async function complete(preview: PendingConfirmation) {
@@ -443,6 +460,7 @@ function Workspace({ api, scope, obscured, suspendOpen }: Props) {
     });
   }
   const usable = session && selected && session.tabId === selected.id;
+  const startupMessage = usable ? session.startupMessage : undefined;
   const hidden =
     restarting ||
     closingSelected ||
@@ -463,10 +481,37 @@ function Workspace({ api, scope, obscured, suspendOpen }: Props) {
         locked={!!confirmation}
         refreshDisabled={!usable}
         onChange={change}
+        onPresetSettings={onPresetSettings}
         onClose={(id) => void prepare(id)}
         onRefresh={() => void prepare()}
         onError={setError}
       />
+      {presetCreating && (
+        <p className="terminal-preset-progress" role="status">
+          Открываем вкладку по пресету…
+        </p>
+      )}
+      {startupMessage && (
+        <p className="terminal-error" role="alert">
+          {startupMessage}
+        </p>
+      )}
+      {!startupMessage && session?.presetStatus === "pending" && (
+        <p className="terminal-preset-progress" role="status">
+          Ожидаем готовности оболочки для команды пресета…
+        </p>
+      )}
+      {!startupMessage && session?.presetStatus === "unconfirmed" && (
+        <p className="terminal-preset-progress" role="alert">
+          Не удалось подтвердить выполнение команды пресета. Проверьте вывод
+          терминала. Автоматического повтора не будет.
+        </p>
+      )}
+      {!startupMessage && session?.presetStatus === "cancelled" && (
+        <p className="terminal-preset-progress" role="status">
+          Автозапуск команды пресета отменён.
+        </p>
+      )}
       {error && (
         <div role="alert" className="terminal-error">
           {error}
@@ -511,6 +556,7 @@ function Workspace({ api, scope, obscured, suspendOpen }: Props) {
           </div>
         )}
       {usable &&
+        !startupMessage &&
         !hidden &&
         session.screen !== "lost" &&
         (session.state === "running" || session.state === "exited") && (
@@ -590,17 +636,19 @@ function Workspace({ api, scope, obscured, suspendOpen }: Props) {
           <>
             {" "}
             <span className="terminal-status" role="status">
-              {error
-                ? "Сессия недоступна"
-                : !usable
-                  ? "Открываем терминал…"
-                  : session.screen === "lost"
-                    ? "Экран недоступен — обновите сессию"
-                    : session.state === "exited"
-                      ? `Сессия завершена${session.exitCode === undefined ? "" : ` · код ${session.exitCode}`}`
-                      : session.state === "running"
-                        ? "Сессия открыта"
-                        : "Подождите…"}
+              {startupMessage
+                ? "Оболочка не запущена"
+                : error
+                  ? "Сессия недоступна"
+                  : !usable
+                    ? "Открываем терминал…"
+                    : session.screen === "lost"
+                      ? "Экран недоступен — обновите сессию"
+                      : session.state === "exited"
+                        ? `Сессия завершена${session.exitCode === undefined ? "" : ` · код ${session.exitCode}`}`
+                        : session.state === "running"
+                          ? "Сессия открыта"
+                          : "Подождите…"}
             </span>
           </>
         )}

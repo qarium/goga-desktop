@@ -14,6 +14,9 @@ import {
 } from "./TopicPickerPopup";
 import { TerminalActionIcon } from "./TerminalActionIcon";
 
+import { TerminalPresetMenu } from "./TerminalPresetMenu";
+import "./WorkspaceTabs.css";
+
 export const terminalArea = (tab: TerminalTab) =>
   tab.scope.kind === "common"
     ? "Общий терминал"
@@ -30,6 +33,7 @@ type Props = {
   onChange(value: TerminalCatalogChange): Promise<boolean>;
   onClose(tabId: string): void;
   onRefresh(): void;
+  onPresetSettings?: () => void;
   onError(message: string): void;
 };
 
@@ -43,6 +47,7 @@ export function TerminalTabs({
   onChange,
   onClose,
   onRefresh,
+  onPresetSettings,
   onError,
 }: Props) {
   const active = useViewActive();
@@ -205,7 +210,7 @@ export function TerminalTabs({
       >
         {state?.tabs.map((tab) => (
           <div
-            className="terminal-tab"
+            className="workspace-tab terminal-tab"
             key={tab.id}
             data-terminal-id={tab.id}
             data-selected={selected === tab.id}
@@ -297,7 +302,7 @@ export function TerminalTabs({
               </form>
             ) : (
               <TooltipButton
-                buttonClassName="terminal-tab-label"
+                buttonClassName="workspace-tab-select terminal-tab-label"
                 busy={busy}
                 disabled={locked || !state}
                 tooltipEnabled={!adding && !menu}
@@ -399,6 +404,7 @@ export function TerminalTabs({
             )}
             <button
               type="button"
+              className="workspace-tab-close"
               aria-label={`Закрыть терминал ${tab.name}`}
               disabled={unavailable}
               onClick={() => {
@@ -413,7 +419,7 @@ export function TerminalTabs({
       </div>
       <div className="terminal-add-split">
         <TooltipButton
-          buttonClassName="terminal-add-button"
+          buttonClassName="workspace-tab-create terminal-add-button"
           disabled={unavailable}
           busy={busy}
           label="Добавить терминал"
@@ -461,6 +467,7 @@ export function TerminalTabs({
           anchor={addAnchor}
           width={286}
           label="Добавить терминал"
+          domPortal
           onClose={() => setAdding(false)}
         >
           <div
@@ -509,6 +516,27 @@ export function TerminalTabs({
                 </small>
               </span>
             </button>
+            {onPresetSettings && (
+              <TerminalPresetMenu
+                disabled={unavailable}
+                onSettings={() => {
+                  closeMenus();
+                  onPresetSettings();
+                }}
+                onLaunch={(preset) => {
+                  if (unavailable) return;
+                  closeMenus();
+                  void onChange({
+                    kind: "create-from-preset",
+                    scope,
+                    revision: state.revision,
+                    presetId: preset.id,
+                    presetRevision: preset.revision,
+                    actionId: crypto.randomUUID(),
+                  });
+                }}
+              />
+            )}
           </div>
         </TopicPickerPopup>
       )}

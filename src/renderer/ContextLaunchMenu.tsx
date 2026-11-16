@@ -15,6 +15,7 @@ export interface ContextLaunchMenuProps {
   disabled?: boolean;
   blockedReason?: string;
   prepareWithoutContext?: boolean;
+  demoItem?: (close:()=>void)=>import("react").ReactNode;
   primaryProjectId?: string;
 }
 
@@ -26,6 +27,7 @@ export function ContextLaunchMenu({
   disabled = false,
   blockedReason,
   prepareWithoutContext = false,
+  demoItem,
   primaryProjectId,
 }: ContextLaunchMenuProps) {
   const [open, setOpen] = useState(false);
@@ -197,6 +199,7 @@ export function ContextLaunchMenu({
               Сборка<small>Выбрать план и настроить запуск</small>
             </button>
           )}
+          {demoItem?.(()=>close(true))}
         </div>
       )}
     </div>

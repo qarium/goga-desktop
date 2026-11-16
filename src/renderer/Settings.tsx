@@ -7,12 +7,19 @@ import {
   createSettingsDocuments,
   type SettingsDocuments,
 } from "./settings-documents";
+import { DemoSettings } from "./DemoSettings";
+import { TerminalPresetSettings } from "./TerminalPresetSettings";
+
 export function Settings({
   documents,
   onBack,
+  selectedTab,
+  onTabChange,
 }: {
   documents?: SettingsDocuments;
   onBack?: () => void;
+  selectedTab?: string;
+  onTabChange?: (tab: string) => void;
 }) {
   const [ownStore] = useState(createSettingsDocuments);
   const store = documents ?? ownStore;
@@ -21,12 +28,15 @@ export function Settings({
   const seenRemovals = useRef(removals);
   const initialized = useRef(false);
   const busy = useSyncExternalStore(store.subscribe, store.busy);
-  const [tab, setTab] = useState("config"),
+  const [ownTab, setOwnTab] = useState("config"),
     [profiles, setProfiles] = useState<string[]>(() => store.profiles()),
     [profile, setProfile] = useState(""),
     [creating, setCreating] = useState(false),
     [newName, setNewName] = useState(""),
     [error, setError] = useState("");
+  const tab = selectedTab ?? ownTab,
+    setTab = onTabChange ?? setOwnTab;
+  const standalone = tab === "terminal" || tab === "demonstrations";
   const viewActive = useViewActive();
   const read = useReadScope("settings");
   useEffect(() => {
@@ -54,7 +64,7 @@ export function Settings({
   const loadKey = JSON.stringify([revision, attempt]);
   const [settled, setSettled] = useState("");
   useEffect(() => {
-    if (!viewActive) return;
+    if (!viewActive || standalone) return;
     let alive = true;
     const catalogRemovalRevision = store.removalRevision();
     setError("");
@@ -86,7 +96,7 @@ export function Settings({
     return () => {
       alive = false;
     };
-  }, [store, revision, attempt, viewActive]);
+  }, [store, revision, attempt, viewActive, standalone]);
   function create() {
     const name = newName.trim();
     if (
@@ -124,12 +134,18 @@ export function Settings({
         tabs={[
           ["config", "Конфигурация"],
           ["profiles", "Профили"],
+          ...(typeof window.goga?.demoState === "function" ? [["demonstrations", "Демонстрации"] as const] : []),
+          ...(window.goga?.terminalPresets
+            ? [["terminal", "Терминал"] as const]
+            : []),
         ]}
         current={tab}
         onChange={setTab}
       />
       <RetainedViews activeKey={tab}>
-        {tab === "config" ? (
+        {tab === "demonstrations" ? <DemoSettings/> : tab === "terminal" ? (
+          <TerminalPresetSettings />
+        ) : tab === "config" ? (
           <SettingsDocument
             store={store}
             source={{ scope: "home", kind: "config" }}
@@ -222,11 +238,13 @@ export function Settings({
           Повторить загрузку
         </button>
       )}
-      <p className="memory-note">
-        Черновики сохраняются при переходах в этом окне до его закрытия или
-        перезагрузки. На диск записывается только выбранный файл по кнопке
-        «Сохранить».
-      </p>
+      {!standalone && (
+        <p className="memory-note">
+          Черновики сохраняются при переходах в этом окне до его закрытия или
+          перезагрузки. На диск записывается только выбранный файл по кнопке
+          «Сохранить».
+        </p>
+      )}
     </section>
   );
 }

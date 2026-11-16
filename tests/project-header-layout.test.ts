@@ -58,3 +58,13 @@ it("keeps compact desktop labels and caret readable without stacking controls", 
     rule(".project-bar > .project-actions .context-select-chevron", compact),
   ).toMatch(/right: 10px/);
 });
+it("separates branch search and its fixed-size refresh icon with a 14px gap", () => {
+  const branches = readFileSync(
+    new URL("../src/renderer/GitBranchPicker.css", import.meta.url),
+    "utf8",
+  );
+  expect(rule(".git-branch-searchbar", branches)).toMatch(/gap: 14px/);
+  expect(rule(".git-branch-searchbar .git-branch-refresh", branches)).toMatch(
+    /width: 36px/,
+  );
+});

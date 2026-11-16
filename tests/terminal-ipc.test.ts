@@ -18,7 +18,7 @@ const session = {
   context: { kind: "primary", projectId: "p" },
   state: "running",
 };
-function fixture() {
+function fixture(presetStore?: any) {
   const handlers = new Map<string, Function>();
   const ipc = {
     handle: (name: string, fn: Function) => handlers.set(name, fn),
@@ -76,6 +76,7 @@ function fixture() {
     catalog: catalog as any,
     sessions: sessions as any,
     surface,
+    presetStore,
     now: () => time,
   });
   const event = { sender: wc, senderFrame: wc.mainFrame };
@@ -585,4 +586,54 @@ it("topic presentation identity ignores metadata revision but not clone identity
       scope: { ...scope, contextId: `ctx-${"b".repeat(64)}` },
     }),
   ).resolves.toBe(false);
+});
+it("handles explicit preset clicks once per document and never accepts inline commands or env", async () => {
+  const f = fixture(),
+    r = {
+      kind: "create-from-preset",
+      scope: "p",
+      revision,
+      presetId: crypto.randomUUID(),
+      presetRevision: revision,
+      actionId: crypto.randomUUID(),
+    };
+  await expect(
+    f.call({ ...r, command: "forbidden", env: [] }),
+  ).rejects.toThrow();
+  await Promise.all([f.call(r), f.call(r)]);
+  expect(f.catalog.change).toHaveBeenCalledTimes(1);
+  await expect(f.call({ ...r, scope: "other" })).rejects.toThrow();
+  expect(f.catalog.change).toHaveBeenCalledTimes(1);
+});
+it("protects private preset editing with the trusted document, not a project or a terminal session", async () => {
+  const presetStore = {
+    menu: vi.fn(async () => []),
+    list: vi.fn(),
+    read: vi.fn(async () => ({ secret: "redacted" })),
+    save: vi.fn(),
+    remove: vi.fn(),
+  };
+  const f = fixture(presetStore),
+    doc = await f.handlers.get("goga:terminal-connect")!(f.event);
+  const handler = f.handlers.get("goga:terminal-presets")!;
+  const run = (request: unknown, event = f.event, documentId = doc) =>
+    handler(event, { documentId, request });
+  await expect(run({ kind: "menu" })).resolves.toEqual([]);
+  expect(presetStore.read).not.toHaveBeenCalled();
+  await expect(
+    run(
+      { kind: "read", id: crypto.randomUUID() },
+      { ...f.event, senderFrame: { ...f.wc.mainFrame, parent: {} } },
+    ),
+  ).rejects.toThrow();
+  await expect(
+    run({
+      kind: "save",
+      draft: { name: "Dev", command: "anything", env: [] },
+      id: crypto.randomUUID(),
+    }),
+  ).rejects.toThrow();
+  f.navigate();
+  await expect(run({ kind: "menu" })).rejects.toThrow();
+  expect(f.sessions.open).not.toHaveBeenCalled();
 });

@@ -105,6 +105,14 @@ export interface RunOutput {
   text: string;
   truncated: boolean;
 }
+/** Offsets are UTF-16 positions in the already masked stream, not raw pipe bytes. */
+export interface RunJournalSlice extends RunOutput {
+  id: string;
+  sequence: number;
+  start: number; // first position still retained by the host
+  from: number; // first position returned in text (can exceed start on a continuation)
+  end: number;
+}
 export interface Run {
   /** Private host journal only; stripped from all renderer responses. */
   process?: {

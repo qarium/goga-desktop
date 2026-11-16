@@ -12,6 +12,7 @@ import {
   within,
 } from "@testing-library/react";
 import { BuildForm } from "../src/renderer/BuildForm";
+import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
 let api: any;
 let emitRuns: (runs: any[]) => void;
@@ -245,6 +246,7 @@ async function mountContexts(
     },
   ]);
   render(<App />);
+  await openFirstProject();
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   await screen.findByLabelText("Исполняемый файл");
   await screen.findByRole("button", { name: "Выбрать другой топик" });
