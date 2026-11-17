@@ -543,10 +543,58 @@ export function createOverviewStore(
         updateFile(path, runtime, { text, dirtyOrigin });
       }
     },
-    save(path: string): Promise<boolean> {
+    /** Read-only confirmation before a multi-file write; no refresh/discard.
+     * When another editor has just saved the identical buffer, adopt that
+     * verified baseline instead of issuing a second write with a stale token. */
+    async verifyDiskForLeave(path: string, adopt = false): Promise<boolean> {
+      const result = await withFile<boolean | null>(
+        path,
+        null,
+        async (runtime) => {
+          if (!runtime.available || !state.files[path].document.exists)
+            throw Error("Файл недоступен. Правки остались в редакторе.");
+          const checked = state.files[path],
+            edits = runtime.edits;
+          const disk = await api.readOverviewFile(owner, path);
+          if (!current(path, runtime) || runtime.edits !== edits)
+            throw Error(
+              "Файл изменился во время проверки. Правки остались в редакторе.",
+            );
+          const identical = disk.exists && disk.text === checked.text;
+          if (
+            (!identical &&
+              (adopt || disk.version !== checked.document.version)) ||
+            !disk.exists
+          )
+            throw Error(
+              "Конфликт сохранения: файл изменился на диске. Файл не перезаписан.",
+            );
+          if (adopt)
+            updateFile(path, runtime, {
+              document: disk,
+              dirtyOrigin: undefined,
+              error: undefined,
+              changedExternally: false,
+            });
+          return identical;
+        },
+      );
+      if (result === null)
+        throw Error(
+          "Файл или его рабочий контекст изменился. Правки не сохранены.",
+        );
+      return result;
+    },
+    save(path: string, confirmedText?: string): Promise<boolean> {
       return withFile(path, false, async (runtime) => {
         const requestEpoch = epoch;
         const file = state.files[path];
+        if (confirmedText !== undefined && file.text !== confirmedText) {
+          updateFile(path, runtime, {
+            error: "Появились новые правки. Проверьте их перед сохранением.",
+          });
+          return false;
+        }
         if (!runtime.available || !file.document.exists) {
           updateFile(path, runtime, {
             error:

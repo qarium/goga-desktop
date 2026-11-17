@@ -256,6 +256,7 @@ function BranchOwner({
         type="button"
         className="git-workspace-trigger git-branch-trigger"
         aria-label={`Ветка: ${branch}`}
+        title={branch}
         aria-expanded={open}
         aria-haspopup="dialog"
         disabled={disabled || !!pending}

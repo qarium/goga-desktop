@@ -4,6 +4,7 @@ import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { render, cleanup, screen, act } from "@testing-library/react";
 import { SettingsDocument } from "../src/renderer/SettingsDocument";
+import { createSettingsDocuments } from "../src/renderer/settings-documents";
 import { RetainedViews } from "../src/renderer/RetainedViews";
 vi.mock("../src/renderer/YamlEditor", () => ({
   YamlEditor: () => <div className="yaml-code-editor">Editor</div>,
@@ -19,6 +20,7 @@ const draft = {
   busy: false,
 };
 const store = {
+  ...createSettingsDocuments(),
   get: () => draft,
   subscribe: () => () => {},
   cancelDeletion: vi.fn(),

@@ -1,0 +1,95 @@
+.workspace-leave-dialog {
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+}
+.workspace-leave-content {
+  display: grid;
+  gap: 13px;
+}
+.workspace-leave-content :is(h2, p, ul) {
+  margin: 0;
+}
+.workspace-leave-files {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+.workspace-leave-files ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  max-height: 130px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.workspace-leave-files li {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 2px 0;
+  line-height: 1.55;
+}
+.workspace-leave-files svg {
+  flex: none;
+  align-self: center;
+  color: var(--muted);
+}
+.workspace-leave-files li > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.workspace-leave-files li > span > span {
+  color: var(--muted);
+}
+.workspace-leave-files strong {
+  font-weight: 550;
+}
+.workspace-leave-more {
+  justify-self: start;
+  padding: 2px 0;
+  color: var(--teal);
+  background: none;
+  border: none;
+}
+.workspace-leave-remember {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-self: start;
+  color: var(--text);
+  cursor: pointer;
+}
+.workspace-leave-remember input {
+  flex: none;
+}
+.workspace-leave-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+.workspace-leave-actions .quiet {
+  margin-right: auto;
+}
+.workspace-leave-settings {
+  display: grid;
+  align-content: start;
+  justify-items: start;
+  gap: 14px;
+}
+.workspace-leave-settings :is(p, h3) {
+  margin: 0;
+}
+@media (max-width: 475px) {
+  .workspace-leave-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+  }
+  .workspace-leave-actions .quiet {
+    margin: 0;
+  }
+  .workspace-leave-actions .primary {
+    grid-column: 1/-1;
+  }
+}

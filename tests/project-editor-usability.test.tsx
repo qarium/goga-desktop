@@ -10,6 +10,8 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
+import { ProjectFlatDocuments } from "../src/renderer/ProjectFlatDocuments";
+import { ProjectDocuments } from "../src/renderer/ProjectDocuments";
 import { SettingsDocument } from "../src/renderer/SettingsDocument";
 import { RetainedViews } from "../src/renderer/RetainedViews";
 import {
@@ -92,7 +94,7 @@ beforeEach(() => {
     this.open = false;
   };
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); Reflect.deleteProperty(document, "execCommand"); });
 it.each(targets)(
   "automatically opens selected Project $kind exactly once without saving",
   async (target) => {
@@ -302,7 +304,12 @@ it.each(targets.slice(1, 5))(
     const cancel = screen.getByRole("button", { name: "Отменить изменения" });
     expect(deletion.closest(".savebar")).toBe(cancel.closest(".savebar"));
     expect(deletion.parentElement).not.toBe(cancel.parentElement);
-    expect(document.querySelector(".editor-heading button")).toBeNull();
+    expect(deletion.closest(".editor-heading")).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: "Обновить с диска" })
+        .closest(".editor-heading"),
+    ).not.toBeNull();
     fireEvent.click(deletion);
     await screen.findByRole("dialog");
     fireEvent.click(
@@ -444,3 +451,164 @@ it("local reset does not create an unread source and cannot race an in-flight sa
   await saving;
   expect(api.readProjectDocument).toHaveBeenCalledTimes(1);
 });
+
+it("renames a selected workflow in its topic without saving its unsaved text; save follows the new path/version", async () => {
+  const source: DocumentSource = {
+    scope: "project",
+    projectId: "p",
+    context: owner,
+    target: { kind: "workflow", name: "sample" },
+  };
+  const dest = {
+    ...source,
+    target: { kind: "workflow" as const, name: "next" },
+  };
+  api.renameProjectDocument = vi.fn(async () => ({
+    ...documentValue,
+    relativePath: ".goga/workflows/next.yml",
+    version: "renamed-version",
+  }));
+  store.updateWorkflow(owner, { selected: "sample" });
+  const ui = render(pane(source));
+  await ready();
+  edit();
+  fireEvent.click(screen.getByRole("button", { name: "Переименовать файл" }));
+  const input = screen.getByRole("textbox", { name: "Новое имя" });
+  expect(input).toHaveProperty("value", "sample");
+  fireEvent.change(input, { target: { value: "next" } });
+  fireEvent.click(screen.getByRole("button", { name: "Переименовать" }));
+  await waitFor(() => expect(store.workflowState(owner).selected).toBe("next"));
+  expect(api.renameProjectDocument).toHaveBeenCalledExactlyOnceWith(
+    owner,
+    source.target,
+    "next",
+    documentValue.version,
+  );
+  expect(store.workflowState(owner).drafts).toEqual(["next"]);
+  expect(store.get(source).document).toBeUndefined();
+  expect(store.get(dest)).toMatchObject({
+    text: "# dirty\r\n" + text,
+    document: { text, version: "renamed-version" },
+  });
+  expect(api.saveProjectDocument).not.toHaveBeenCalled();
+  ui.rerender(pane(dest));
+  await ready();
+  expect(screen.queryByRole("dialog")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() =>
+    expect(api.saveProjectDocument).toHaveBeenCalledExactlyOnceWith(
+      owner,
+      dest.target,
+      "# dirty\r\n" + text,
+      "renamed-version",
+    ),
+  );
+});
+it("keeps a dirty nested tool file and its selection on a rejected rename; retry on a new basename succeeds", async () => {
+  const source = project(targets[1]);
+  api.renameProjectDocument = vi
+    .fn()
+    .mockRejectedValueOnce(Error("Имя уже занято."))
+    .mockResolvedValueOnce({
+      ...documentValue,
+      relativePath: ".goga/tools/review/env/stage.yaml",
+    });
+  store.updateTool("p", "review", { selected: "env/local.yml" });
+  render(pane(source));
+  await ready();
+  edit();
+  fireEvent.click(screen.getByRole("button", { name: "Переименовать файл" }));
+  const input = screen.getByRole("textbox", { name: "Новое имя" });
+  expect(input).toHaveProperty("value", "local.yml");
+  fireEvent.change(input, { target: { value: "occupied.yml" } });
+  fireEvent.click(screen.getByRole("button", { name: "Переименовать" }));
+  expect(await screen.findByRole("alert")).toHaveProperty(
+    "textContent",
+    "Имя уже занято.",
+  );
+  expect(store.toolState("p", "review").selected).toBe("env/local.yml");
+  expect(store.get(source).text).toBe("# dirty\r\n" + text);
+  fireEvent.change(input, { target: { value: "stage.yaml" } });
+  fireEvent.click(screen.getByRole("button", { name: "Переименовать" }));
+  await waitFor(() =>
+    expect(store.toolState("p", "review").selected).toBe("env/stage.yaml"),
+  );
+  expect(store.loadedToolFiles("p")).toEqual([
+    { tool: "review", path: "env/stage.yaml" },
+  ]);
+});
+it.each([targets[0], targets[5]])(
+  "disallows renaming fixed $kind files",
+  async (target) => {
+    render(pane(project(target)));
+    await ready();
+    expect(
+      screen.queryByRole("button", { name: "Переименовать файл" }),
+    ).toBeNull();
+  },
+);
+
+it.each(["workflow", "tool"] as const)(
+  "keeps the live %s editor and removes the old row before catalog reconciliation",
+  async (kind) => {
+    document.execCommand = () => false; // CodeMirror selection shim for jsdom.
+    const isTool = kind === "tool";
+    const catalog = isTool ? "listProjectTools" : "listProjectWorkflows";
+    const row = (name: string) =>
+      isTool
+        ? "Файл " + name + ".yml"
+        : "Файл .goga/workflows/" + name + ".yml";
+    const item = (name: string) =>
+      isTool
+        ? [
+            {
+              name: "review",
+              entries: [{ path: name + ".yml", kind: "file", editable: true }],
+            },
+          ]
+        : [{ name, path: ".goga/workflows/" + name + ".yml", editable: true }];
+    const delayed = deferred<ReturnType<typeof item>>();
+    api[catalog] = vi
+      .fn()
+      .mockResolvedValueOnce(item("old"))
+      .mockReturnValue(delayed.promise);
+    api.renameProjectDocument = vi.fn(async () => ({
+      ...documentValue,
+      relativePath:
+        (isTool ? ".goga/tools/review/" : ".goga/workflows/") + "new.yml",
+    }));
+    const p = { id: "p", name: "synthetic", path: "/synthetic" };
+    render(
+      isTool ? (
+        <ProjectDocuments project={p} tab="tools" store={store} />
+      ) : (
+        <ProjectFlatDocuments kind="workflow" project={p} store={store} />
+      ),
+    );
+    fireEvent.click(await screen.findByRole("button", { name: row("old") }));
+    const original = await ready();
+    edit();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Развернуть документ" }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Переименовать файл" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "Новое имя" }), {
+      target: { value: isTool ? "new.yml" : "new" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Переименовать" }));
+    await screen.findByRole("heading", { name: "new.yml" });
+    expect(
+      screen.getByRole("button", { name: "Свернуть документ" }),
+    ).toBeTruthy();
+    expect(editor()).toBe(original);
+    expect(screen.queryByRole("button", { name: row("old") })).toBeNull();
+    expect(
+      screen
+        .getByRole("button", { name: row("new") })
+        .getAttribute("aria-pressed"),
+    ).toBe("true");
+    await act(async () => delayed.resolve(item("new")));
+    expect(editor()!.state.doc.toString()).toBe("# dirty\r\n" + text);
+    expect(api.readProjectDocument).toHaveBeenCalledTimes(1);
+  },
+);

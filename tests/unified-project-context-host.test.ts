@@ -407,6 +407,65 @@ describe(
         );
       }
     });
+    it("renames only the selected topic's workflow and returns a version usable for the next save", async () => {
+      const f = await fixture();
+      const target = { kind: "workflow", name: "review" } as const;
+      const next = { ...target, name: "verify" };
+      for (const owner of f.owners) {
+        await fs.writeFile(
+          path.join(owner.path, ".goga/workflows/review.yml"),
+          owner.label,
+        );
+      }
+      const [primary, alpha, beta] = f.owners;
+      const before = await f.service.readProjectDocument(alpha.scope, target);
+      if (typeof alpha.scope === "string")
+        throw Error("Expected a topic owner");
+      const stale = {
+        ...alpha.scope,
+        revision: "00000000-0000-4000-8000-ffffffffffff",
+      };
+      await expect(
+        f.service.renameProjectDocument(
+          stale,
+          target,
+          next.name,
+          before.version,
+        ),
+      ).rejects.toThrow();
+      expect(await f.service.readProjectDocument(alpha.scope, target)).toEqual(
+        before,
+      );
+      const moved = await f.service.renameProjectDocument(
+        alpha.scope,
+        target,
+        next.name,
+        before.version,
+      );
+      expect(moved).toMatchObject({
+        text: alpha.label,
+        relativePath: ".goga/workflows/verify.yml",
+        exists: true,
+      });
+      expect(
+        (await f.service.readProjectDocument(alpha.scope, target)).exists,
+      ).toBe(false);
+      await f.service.saveProjectDocument(
+        alpha.scope,
+        next,
+        "# edited after rename\n",
+        moved.version,
+      );
+      for (const other of [primary, beta]) {
+        expect(
+          (await f.service.readProjectDocument(other.scope, target)).text,
+        ).toBe(other.label);
+        expect(
+          (await f.service.readProjectDocument(other.scope, next)).exists,
+        ).toBe(false);
+      }
+      expect(f.starts).toHaveLength(0);
+    });
     it("characterizes shared registry save and rejects profiles absent from the requested owner", async () => {
       const f = await fixture();
       const a = await f.service.readProjectSettings(f.owners[1].scope);

@@ -107,22 +107,6 @@
   margin-top: 17px;
   font-size: 12px;
 }
-button.run-state.run-output-toggle {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 3px 7px;
-  min-height: 28px;
-  color: var(--teal);
-  background: transparent;
-  border-color: transparent;
-  font-size: 11px;
-}
-button.run-output-toggle:hover:not(:disabled),
-button.run-output-toggle[aria-pressed="true"] {
-  border-color: var(--line);
-  background: var(--raised);
-}
 .run-output-spinner {
   animation: run-output-spin 1.2s linear infinite;
 }

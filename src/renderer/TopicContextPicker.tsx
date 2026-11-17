@@ -1,3 +1,4 @@
+import { TopicRepositoryNotice, type TopicRepositoryState } from "./topic-repository";
 import type { DisplayCatalog } from "./topic-display-cache";
 import {
   useEffect,
@@ -72,17 +73,23 @@ export function TopicCreationFeedback({
 export interface TopicContextPickerProps {
   project: Project;
   board: DisplayCatalog | null;
+  repository?: TopicRepositoryState;
   catalogError?: string;
   onRetryCatalog?: () => void;
   selected: WorktreeRecord | null;
   knownContexts?: WorktreeRecord[];
   runs?: RunWithContext[];
   disabled?: boolean;
-  onSelect: (record: WorktreeRecord) => void;
+  onSelect: (record: WorktreeRecord, approved?: () => boolean) => void;
   requestedSelection?: { identity: TopicContextIdentity; nonce: number } | null;
   onSelectionRequestHandled?: () => void;
   onTransitionIntent?: () => void;
   onCreated?: (record: WorktreeRecord) => void;
+  /** Creating a topic or ensuring a missing clone mutates disk before selection. */
+  beforePrepare?: (
+    start: (approved: () => boolean) => void,
+    creating: boolean,
+  ) => void;
   onCreationStarted?: (identity: TopicContextIdentity) => void;
   onCreationProgress?: (progress: TopicCreationProgress | null) => void;
   onShowCreation?: (identity: TopicContextIdentity) => void;
@@ -152,6 +159,7 @@ const timeoutMessage =
 export function TopicContextPicker({
   project,
   board,
+  repository = "available",
   catalogError,
   onRetryCatalog,
   selected,
@@ -161,6 +169,7 @@ export function TopicContextPicker({
   onSelect,
   onTransitionIntent,
   onCreated,
+  beforePrepare,
   onCreationStarted,
   onCreationProgress,
   onShowCreation,
@@ -251,7 +260,7 @@ export function TopicContextPicker({
     };
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
-  }, [expanded]);
+  }, [expanded, repository]);
 
   useEffect(() => {
     if (
@@ -259,6 +268,10 @@ export function TopicContextPicker({
       requestedSelection.identity.projectId !== project.id
     )
       return;
+    if (repository !== "available") {
+      if (repository === "missing") onSelectionRequestHandled?.();
+      return;
+    }
     const identity = requestedSelection.identity;
     const owners = knownContexts.filter(
       (record) =>
@@ -269,7 +282,7 @@ export function TopicContextPicker({
       setOpen(true);
     } else prepare(identity, false, owners[0]);
     onSelectionRequestHandled?.();
-  }, [requestedSelection]);
+  }, [requestedSelection, repository]);
 
   const topics = useMemo(() => {
     const logical = new Map<string, TopicContextIdentity>();
@@ -389,10 +402,24 @@ export function TopicContextPicker({
     identity: TopicContextIdentity,
     create = false,
     owner?: WorktreeRecord,
-    notifyIntent = true,
+  ) {
+    if ((create || !owner) && beforePrepare) {
+      const ticket = epoch.current;
+      beforePrepare((approved) => {
+        if (mounted.current && epoch.current === ticket)
+          startPreparation(identity, create, owner, approved);
+      }, create);
+    } else startPreparation(identity, create, owner);
+  }
+  function startPreparation(
+    identity: TopicContextIdentity,
+    create: boolean,
+    owner: WorktreeRecord | undefined,
+    approved?: () => boolean,
   ) {
     if (disabled || trigger.current?.matches(":disabled")) return;
-    if (notifyIntent) onTransitionIntent?.();
+    if (repository !== "available") return;
+    onTransitionIntent?.();
     const key = JSON.stringify([
       scopeKey,
       identityKey(identity),
@@ -543,6 +570,7 @@ export function TopicContextPicker({
           setPreparation(null);
           close(true);
           if (create) onCreated?.(record);
+          else if (approved) onSelect(record, approved);
           else onSelect(record);
         }
       },
@@ -576,7 +604,6 @@ export function TopicContextPicker({
     }
     const topic = topics[index - 1];
     if (!topic) return;
-    onTransitionIntent?.();
     if (
       current &&
       topic.key === selectedKey &&
@@ -587,6 +614,7 @@ export function TopicContextPicker({
       !current.preparation &&
       !current.deletedAt
     ) {
+      onTransitionIntent?.();
       invalidate();
       setPreparation(null);
       close(true);
@@ -598,11 +626,12 @@ export function TopicContextPicker({
     ) {
       // The host-issued record remains unavailable/legacy: this only opens its
       // history and migration UI. Never ensure/recreate or promote it to ready.
+      onTransitionIntent?.();
       invalidate();
       setPreparation(null);
       close(true);
       onSelect(topic.record);
-    } else prepare(topic.identity, false, topic.record, false);
+    } else prepare(topic.identity, false, topic.record);
   }
   function keyDown(event: KeyboardEvent<HTMLDivElement>) {
     if (event.key === "Escape") {
@@ -726,9 +755,9 @@ export function TopicContextPicker({
           className="topic-context-trigger"
           ref={trigger}
           aria-label="Выбрать другой топик"
-          aria-haspopup="grid"
+          aria-haspopup={repository === "available" ? "grid" : "dialog"}
           aria-expanded={expanded}
-          aria-controls={expanded ? listId : undefined}
+          aria-controls={expanded ? (repository === "available" ? listId : id) : undefined}
           disabled={disabled}
           onClick={() => (expanded ? close() : show())}
           onKeyDown={(event) => {
@@ -763,6 +792,14 @@ export function TopicContextPicker({
             aria-label="Выбор топика"
             onKeyDown={keyDown}
           >
+            {repository !== "available" ? (
+              <div id={id} role="dialog" aria-label="Доступность топиков">
+                {repository === "checking"
+                  ? <p role="status">Проверяем Git в проекте…</p>
+                  : <TopicRepositoryNotice popup />}
+                {current && <button type="button" onClick={() => choose(primaryIndex)}>Перейти в исходную папку</button>}
+              </div>
+            ) : <>
             {catalogError && (
               <div className="context-board-error">
                 <p role="alert">{catalogError}</p>
@@ -948,6 +985,7 @@ export function TopicContextPicker({
                 </small>
               </div>
             )}
+            </>}
           </div>
         </TopicPickerPopup>
       )}

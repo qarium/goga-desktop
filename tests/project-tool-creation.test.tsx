@@ -13,6 +13,7 @@ import {
   within,
 } from "@testing-library/react";
 import { EditorView } from "@codemirror/view";
+import { ProjectStatusShell } from "./helpers/project-status-shell";
 import { ProjectDocuments } from "../src/renderer/ProjectDocuments";
 import { RetainedViews } from "../src/renderer/RetainedViews";
 import {
@@ -81,6 +82,7 @@ async function mount(context?: TopicContextRef) {
       tab="tools"
       store={store}
     />,
+    { wrapper: ProjectStatusShell },
   );
   await screen.findByRole("combobox", { name: "Инструмент" });
   return view;
@@ -810,10 +812,12 @@ it("removes only the duplicated tools overview when a source is selected, retain
     ),
   ).toBeTruthy();
   expect(
-    screen.getByText(/Файл отсутствует и будет создан только после/),
+    screen.getByRole("status", {
+      description: /Файл отсутствует и будет создан при сохранении/,
+    }),
   ).toBeTruthy();
   expect(
-    screen.getByText(/Исходный YAML сохраняет комментарии и неизвестные поля/),
+    screen.getByTitle(/Исходный YAML сохраняет комментарии и неизвестные поля/),
   ).toBeTruthy();
   for (const name of ["Удалить черновик", "Отменить изменения", "Сохранить"])
     expect(screen.getByRole("button", { name })).toBeTruthy();

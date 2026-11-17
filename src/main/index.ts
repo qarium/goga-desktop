@@ -30,6 +30,7 @@ import { WindowDashboards } from "./dashboard-window";
 import { DashboardViews } from "./views";
 import { registerIPC } from "./ipc";
 import { loadShell } from "./load-shell";
+import { prepareRendererAssets } from "./renderer-assets";
 import { handleDesktopStartupFailure } from "./desktop-state-startup";
 import { installApplicationIcon } from "./app-icon";
 import { NotificationCenter } from "../host/notifications/store";
@@ -52,6 +53,7 @@ if (process.env.GOGA_DESKTOP_DATA_DIR) {
   app.setPath("userData", process.env.GOGA_DESKTOP_DATA_DIR);
 }
 let exiting = false;
+let rendererAssets: Awaited<ReturnType<typeof prepareRendererAssets>> | undefined;
 if (!app.requestSingleInstanceLock()) {
   app.quit();
 } else {
@@ -60,6 +62,13 @@ if (!app.requestSingleInstanceLock()) {
     .then(async () => {
       nativeTheme.themeSource = "dark";
       const icon = installApplicationIcon(app, __dirname);
+      // Keep the shell's entire lazy-import graph stable for this window's
+      // lifetime. Local rebuilds may replace dist without replacing this app.
+      rendererAssets = await prepareRendererAssets(
+        path.join(__dirname, "../dist"),
+        app.isPackaged,
+      );
+      const { html } = rendererAssets;
       const win = new BrowserWindow({
         width: 1320,
         height: 900,
@@ -77,6 +86,9 @@ if (!app.requestSingleInstanceLock()) {
           webSecurity: true,
           devTools: !app.isPackaged,
         },
+      });
+      win.once("closed", () => {
+        void rendererAssets?.dispose().catch(() => {});
       });
       Menu.setApplicationMenu(
         Menu.buildFromTemplate([
@@ -139,8 +151,7 @@ if (!app.requestSingleInstanceLock()) {
         id=>send("dashboard-refresh",id),
       );
       panels=new WindowDashboards(service,views,rows=>send("attached-dashboards",rows));
-      const html = path.join(__dirname, "../dist/index.html"),
-        shellURL = pathToFileURL(html).href;
+      const shellURL = pathToFileURL(html).href;
       const notificationNavigation = new NotificationNavigation({
         center: notifications,
         runs: () => service.runCatalog(),
@@ -331,6 +342,7 @@ if (!app.requestSingleInstanceLock()) {
           unsubscribeNotifications();
           disposeNotificationViewing();
           delivery.dispose();
+          await rendererAssets?.dispose().catch(() => {});
           exiting = true;
           app.quit();
         },
@@ -365,21 +377,24 @@ if (!app.requestSingleInstanceLock()) {
         win.focus();
       });
     })
-    .catch((error) => handleDesktopStartupFailure(error, {
-      confirmRecovery: async () => {
-        const answer = await dialog.showMessageBox({
-          type: "warning",
-          title: "Goga Desktop",
-          message: "Нужно восстановить блокировку настроек Desktop",
-          detail: "Предыдущая версия оставила блокировку без данных владельца. Закройте другие экземпляры Goga Desktop. После подтверждения приложение проверит, что файл не используется, сохранит его резервную копию и перезапустится. Настройки, проекты и данные запусков не сбрасываются.",
-          buttons: ["Закрыть", "Проверить и восстановить"],
-          defaultId: 0,
-          cancelId: 0,
-        });
-        return answer.response === 1;
-      },
-      showError: (message) => dialog.showErrorBox("Goga Desktop", message),
-      relaunch: () => app.relaunch(),
-      exit: (code) => app.exit(code),
-    }));
+    .catch(async (error) => {
+      await rendererAssets?.dispose().catch(() => {});
+      return handleDesktopStartupFailure(error, {
+        confirmRecovery: async () => {
+          const answer = await dialog.showMessageBox({
+            type: "warning",
+            title: "Goga Desktop",
+            message: "Нужно восстановить блокировку настроек Desktop",
+            detail: "Предыдущая версия оставила блокировку без данных владельца. Закройте другие экземпляры Goga Desktop. После подтверждения приложение проверит, что файл не используется, сохранит его резервную копию и перезапустится. Настройки, проекты и данные запусков не сбрасываются.",
+            buttons: ["Закрыть", "Проверить и восстановить"],
+            defaultId: 0,
+            cancelId: 0,
+          });
+          return answer.response === 1;
+        },
+        showError: (message) => dialog.showErrorBox("Goga Desktop", message),
+        relaunch: () => app.relaunch(),
+        exit: (code) => app.exit(code),
+      });
+    });
 }

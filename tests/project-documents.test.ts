@@ -15,7 +15,7 @@ import {
 } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
 import path from "node:path";
-import { saveProjectDocument } from "../src/host/project-documents";
+import { renameProjectDocument, saveProjectDocument } from "../src/host/project-documents";
 import { HostService } from "../src/host/service";
 import { DesktopStateStore } from "../src/host/desktop-state";
 import type { ProjectDocumentTarget } from "../src/shared/project-documents";
@@ -758,3 +758,150 @@ it.each(["bad: [", "bad: \0", "bad: \ud800", "#".repeat(1024 * 1024 + 1)])(
     );
   },
 );
+
+it.each([
+  ["workflow", "review", "audit"],
+  ["pipeline", "build", "verify"],
+  ["profile", "local", "ci"],
+  ["tool", "checks/review.yaml", "audit.yml"],
+] as const)(
+  "renames an existing %s in place and returns its new editor version",
+  async (kind, oldName, newName) => {
+    const { host, id, file, root } = await setup();
+    const target: ProjectDocumentTarget =
+      kind === "tool" ? tool(oldName) : { kind, name: oldName };
+    const renamed: ProjectDocumentTarget =
+      kind === "tool" ? tool("checks/" + newName) : { kind, name: newName };
+    const dir =
+      kind === "tool" ? ".goga/tools/sample-tool" : ".goga/" + kind + "s";
+    const old = await file(
+      dir + "/" + oldName + (kind === "tool" ? "" : ".yml"),
+      "\ufeff# примечание\r\nvalue: true\r\n",
+    );
+    const before = await host.readProjectDocument(id, target);
+    const ino = (await lstat(old)).ino;
+    const moved = await host.renameProjectDocument(
+      id,
+      target,
+      newName,
+      before.version,
+    );
+    expect(moved).toEqual(await host.readProjectDocument(id, renamed));
+    expect(moved.text).toBe(before.text);
+    expect((await lstat(path.join(root, moved.relativePath))).ino).toBe(ino);
+    await expect(lstat(old)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(
+      (
+        await host.saveProjectDocument(
+          id,
+          renamed,
+          "value: false\n",
+          moved.version,
+        )
+      ).text,
+    ).toBe("value: false\n");
+  },
+);
+
+it("refuses changed sources, Unicode/case aliases, dangling links and crossing tool directories", async () => {
+  const { host, id, file, root } = await setup();
+  const old = await file(".goga/tools/sample-tool/checks/a.yml");
+  const before = await host.readProjectDocument(id, tool("checks/a.yml"));
+  const move = (name: string) =>
+    host.renameProjectDocument(id, tool("checks/a.yml"), name, before.version);
+  await file(".goga/tools/sample-tool/checks/É.yml", "protected");
+  await symlink(
+    path.join(root, "absent"),
+    path.join(path.dirname(old), "link.yml"),
+  );
+  for (const name of [
+    "../escape.yml",
+    "nested/x.yml",
+    "../.git/config.yml",
+    "e\u0301.yml",
+    "\ud800.yml",
+    "link.yml",
+    "a.yml",
+    "x.md",
+  ]) {
+    await expect(move(name)).rejects.toThrow();
+  }
+  await writeFile(old, "external: true");
+  await expect(move("fresh.yml")).rejects.toThrow(/изменил/);
+  expect(await readFile(old, "utf8")).toBe("external: true");
+  await expect(
+    lstat(path.join(path.dirname(old), "fresh.yml")),
+  ).rejects.toMatchObject({ code: "ENOENT" });
+  expect(await readFile(path.join(path.dirname(old), "É.yml"), "utf8")).toBe(
+    "protected",
+  );
+});
+
+it("never clobbers a destination that races a rename", async () => {
+  const { host, id, file } = await setup();
+  const old = await file(".goga/tools/sample-tool/a.yml");
+  const doc = await host.readProjectDocument(id, tool("a.yml"));
+  const real =
+    await vi.importActual<typeof import("node:fs/promises")>(
+      "node:fs/promises",
+    );
+  vi.mocked(link).mockImplementationOnce(async (a, b) => {
+    await writeFile(b, "external");
+    return real.link(a, b);
+  });
+  await expect(
+    host.renameProjectDocument(id, tool("a.yml"), "new.yml", doc.version),
+  ).rejects.toThrow(/существует|занято/);
+  expect(await readFile(old, "utf8")).toBe(doc.text);
+  expect(await readFile(path.join(path.dirname(old), "new.yml"), "utf8")).toBe(
+    "external",
+  );
+});
+
+it("retains external edits to the old name if a writer races between link and unlink", async () => {
+  const { root, host, id, file } = await setup();
+  const old = await file(".goga/tools/sample-tool/a.yml");
+  const current = await host.readProjectDocument(id, tool("a.yml"));
+  let guards = 0;
+  await expect(
+    renameProjectDocument(
+      root,
+      tool("a.yml"),
+      "b.yml",
+      current.version,
+      async () => {
+        if (++guards === 2) await writeFile(old, "external contents");
+      },
+    ),
+  ).rejects.toThrow(/изменил/);
+  expect(await readFile(old, "utf8")).toBe("external contents");
+  expect((await lstat(old)).nlink).toBe(1);
+  await expect(
+    lstat(path.join(path.dirname(old), "b.yml")),
+  ).rejects.toMatchObject({ code: "ENOENT" });
+});
+
+it("does not remove either file if the source was replaced after exclusive publication", async () => {
+  const { root, host, id, file } = await setup();
+  const old = await file(".goga/tools/sample-tool/a.yml", "original");
+  const current = await host.readProjectDocument(id, tool("a.yml"));
+  let guards = 0;
+  await expect(
+    renameProjectDocument(
+      root,
+      tool("a.yml"),
+      "b.yml",
+      current.version,
+      async () => {
+        if (++guards === 2) {
+          await unlink(old);
+          await writeFile(old, "replacement");
+        }
+      },
+    ),
+  ).rejects.toThrow(/подтвердить результат/);
+  expect(await readFile(old, "utf8")).toBe("replacement");
+  expect(await readFile(path.join(path.dirname(old), "b.yml"), "utf8")).toBe(
+    "original",
+  );
+});

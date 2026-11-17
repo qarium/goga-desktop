@@ -3,13 +3,43 @@
   flex: 0 0 auto;
   min-width: 0;
 }
-.run-actions + .git-workspace-controls-host {
+:is(.run-actions, .document-status-outlet:not(:empty)) + .git-workspace-controls-host {
   margin-left: 0;
+  position: relative;
+}
+:is(.run-actions, .document-status-outlet:not(:empty)) + .git-workspace-controls-host::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: -11px;
+  transform: translateY(-50%);
+  width: 1px;
+  height: 20px;
+  background: var(--line);
+  pointer-events: none;
 }
 .git-workspace-controls {
   display: flex;
   align-items: center;
   gap: 12px;
+}
+/* Measure the project editor's strip, not the window: the sidebar can take
+   nearly a quarter of it. Keep Git geometry identical for clean and dirty files. */
+.run-context[data-document-section] {
+  container: document-strip / inline-size;
+}
+@container document-strip (max-width: 700px) {
+  .git-workspace-controls :is(.git-branch-trigger, .git-workspace-branch) {
+    max-width: min(140px, 24cqi);
+  }
+}
+@container document-strip (max-width: 620px) {
+  .git-workspace-controls {
+    gap: 6px;
+  }
+  .git-control-label {
+    display: none;
+  }
 }
 .git-workspace-branch {
   max-width: 200px;

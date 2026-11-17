@@ -394,3 +394,111 @@ it("automatically reopens a clean Dockerfile when configuration changes but keep
   expect(api.saveProjectDocument).not.toHaveBeenCalled();
   expect(screen.queryByRole("alert")).toBeNull();
 });
+
+it("retains the image editor through metadata refresh after save without enabling stale writes", async () => {
+  const store = createSettingsDocuments();
+  render(<ProjectDocuments project={project} tab="image" store={store} />);
+  await waitFor(() => expect(view()).not.toBeNull());
+  const initial = view()!;
+  let resolve!: (metadata: any) => void;
+  api.resolveProjectDockerfile.mockImplementationOnce(
+    () =>
+      new Promise((ok) => {
+        resolve = ok;
+      }),
+  );
+  act(() => initial.dispatch({ changes: { from: 0, insert: "FROM saved\n" } }));
+  fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  await waitFor(() =>
+    expect(api.resolveProjectDockerfile).toHaveBeenCalledTimes(2),
+  );
+  const save = screen.getByRole("button", {
+    name: "Сохранить",
+  }) as HTMLButtonElement;
+  expect(save.hasAttribute("data-post-save-refresh")).toBe(true);
+  expect(save.disabled).toBe(true);
+  expect(document.querySelector(".loading-state")).toBeNull();
+  expect(view()).toBe(initial);
+  act(() =>
+    initial.dispatch({ changes: { from: 0, insert: "# new draft\n" } }),
+  );
+  await act(async () =>
+    resolve({ relativePath: "new/Dockerfile", configured: true }),
+  );
+  await screen.findByText(/Конфигурация Dockerfile изменилась/);
+  expect(save.hasAttribute("data-post-save-refresh")).toBe(false);
+  expect(view()).toBe(initial);
+  expect(initial.state.doc.toString()).toContain("# new draft");
+  expect(
+    (screen.getByRole("button", { name: "Сохранить" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+});
+
+it("never discards a dirty Dockerfile through retained metadata after a failed recheck", async () => {
+  const store = createSettingsDocuments();
+  const rendered = render(
+    <ProjectDocuments project={project} tab="image" store={store} />,
+  );
+  await waitFor(() => expect(view()).not.toBeNull());
+  const initial = view()!;
+  act(() => initial.dispatch({ changes: { from: 0, insert: "FROM dirty\n" } }));
+  rendered.rerender(
+    <ProjectDocuments project={project} tab="launch" store={store} />,
+  );
+  api.resolveProjectDockerfile.mockResolvedValueOnce({
+    relativePath: "new/Dockerfile",
+    configured: true,
+  });
+  rendered.rerender(
+    <ProjectDocuments project={project} tab="image" store={store} />,
+  );
+  await screen.findByText(/Конфигурация Dockerfile изменилась/);
+  expect(
+    (
+      screen.getByRole("button", {
+        name: "Отбросить черновик и открыть актуальный файл",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(false);
+  api.resolveProjectDockerfile.mockRejectedValueOnce(
+    Error("Metadata unavailable"),
+  );
+  await act(async () => store.refreshProject("p"));
+  await screen.findByText("Metadata unavailable");
+  const discard = screen.getByRole("button", {
+    name: "Отбросить черновик и открыть актуальный файл",
+  }) as HTMLButtonElement;
+  expect(discard.disabled).toBe(true);
+  fireEvent.click(discard);
+  expect(view()!.state.doc.toString()).toBe("FROM dirty\n");
+  expect(api.readProjectDocument).not.toHaveBeenCalledWith("p", {
+    kind: "dockerfile",
+    path: "new/Dockerfile",
+  });
+  expect(
+    screen.getByRole("button", { name: "Повторить загрузку" }),
+  ).toBeTruthy();
+});
+
+it("only grants quiet metadata feedback to an uninterrupted series of saves in the same owner", async () => {
+  const store = createSettingsDocuments();
+  const source = {
+    projectId: project.id,
+    scope: "project",
+    target: { kind: "dockerfile", path: ".goga/Dockerfile" },
+  } as const;
+  await store.open(source);
+  await store.save(source);
+  await store.save(source);
+  expect(store.onlyDocumentSavesSince(project.id, 0)).toBe(true);
+  expect(store.onlyDocumentSavesSince("other-project", 0)).toBe(false);
+  await store.refreshProject(project.id);
+  const afterCheckout = store.projectRevision(project.id);
+  await store.save(source);
+  expect(store.onlyDocumentSavesSince(project.id, 0)).toBe(false);
+  expect(store.onlyDocumentSavesSince(project.id, afterCheckout)).toBe(true);
+  expect(
+    store.onlyDocumentSavesSince(project.id, store.projectRevision(project.id)),
+  ).toBe(false);
+});

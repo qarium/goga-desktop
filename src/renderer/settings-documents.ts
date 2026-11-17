@@ -1,4 +1,7 @@
-import { documentSaveErrorMessage } from "./preparation-error";
+import {
+  documentSaveErrorMessage,
+  preparationErrorMessage,
+} from "./preparation-error";
 import type { SettingsConflict } from "./project-settings-save";
 import type { ProjectSettings, ProjectSettingsView } from "../shared/types";
 import type { TopicContextRef } from "../shared/worktrees";
@@ -11,6 +14,7 @@ import {
 } from "../shared/document-deletion";
 import type { SettingsFile, SettingsKind } from "../shared/bridge";
 import {
+  renamedProjectDocumentTarget,
   isProjectWorkflowName,
   isProjectProfileName,
   projectWorkflowAliasKey,
@@ -85,14 +89,19 @@ export interface DocumentDeletion {
   memoryOnly: boolean;
 }
 export interface DocumentDraft {
+  /** Actual successful project write time; UI confirmation must not replay on reveal. */
+  savedAt?: number;
   memoryOnly?: boolean;
   preparing?: boolean;
   deleting?: boolean;
+  renaming?: boolean;
   deletion?: DocumentDeletion;
   document?: SettingsFile & Partial<ProjectDocument>;
   text: string;
   busy: boolean;
   saving?: boolean;
+  reloading?: boolean;
+  reloadError?: string;
   error: string;
   notice: string;
 }
@@ -117,12 +126,14 @@ export function createSettingsDocuments() {
   const sources = new Map<string, DocumentSource>();
   // Opaque, session-only buffer identity. Closing/reopening a source with the
   // same filename must not redirect a stale Home shortcut to its replacement.
-  const instances = new Map<string, object>();
+  let sequence = 0;
+  const instances = new Map<string, { serial: number }>();
   const selectedTools = new Map<string, string>();
   function trackSource(source: DocumentSource) {
     const key = documentKey(source);
     sources.set(key, source);
-    if (source.scope === "project" && !instances.has(key)) instances.set(key, {});
+    if (source.scope === "project" && !instances.has(key))
+      instances.set(key, { serial: ++sequence });
   }
   const loads = new Map<string, Promise<SettingsFile>>();
   const dockerfiles = new Map<
@@ -130,9 +141,29 @@ export function createSettingsDocuments() {
     import("../shared/project-documents").ProjectDockerfile
   >();
   const registryDrafts = new Map<string, RegistrySettingsDraft>();
+  function writeActivity(): "idle" | "project-save" | "other" {
+    let activity: "idle" | "project-save" = "idle";
+    for (const [key, draft] of entries) {
+      if (draft.deleting || draft.renaming) return "other";
+      if (!draft.saving) continue;
+      if (sources.get(key)?.scope !== "project") return "other";
+      activity = "project-save";
+    }
+    for (const draft of registryDrafts.values())
+      if (draft.saving) return "other";
+    return activity;
+  }
   const listeners = new Set<() => void>();
   const selections = new Map<string, WorkflowSelection>();
-  const revisions = new Map<string, number>();
+  const revisions = new Map<string, { value: number; lastNonSave: number }>();
+  function advanceRevision(id: string, reason: "save" | "other") {
+    const previous = revisions.get(id);
+    const value = (previous?.value ?? 0) + 1;
+    revisions.set(id, {
+      value,
+      lastNonSave: reason === "other" ? value : (previous?.lastNonSave ?? 0),
+    });
+  }
   const toolSelections = new Map<string, WorkflowSelection>();
   const toolSelectionKey = (scope: ScopeRef, tool: string) =>
     JSON.stringify([documentScopeId(scope), tool]);
@@ -152,13 +183,15 @@ export function createSettingsDocuments() {
   let homeRevision = 0;
   let removalRevision = 0;
   const removed = new Map<string, number>();
-  function invalidate(source: DocumentSource) {
+  function invalidate(
+    source: DocumentSource,
+    reason: "save" | "other" = "other",
+  ) {
     if (source.scope === "home") homeRevision++;
     else
-      revisions.set(
+      advanceRevision(
         documentScopeId(source.context ?? source.projectId),
-        (revisions.get(documentScopeId(source.context ?? source.projectId)) ??
-          0) + 1,
+        reason,
       );
   }
   function remove(source: DocumentSource) {
@@ -258,6 +291,66 @@ export function createSettingsDocuments() {
     }
     listeners.forEach((fn) => fn());
   }
+  // Initial open and explicit reload use the same scoped read. Only the exact
+  // pending entry can adopt its result; a new edit or a checkout supersedes it.
+  async function readIntoEditor(source: DocumentSource, before: DocumentDraft) {
+    const key = documentKey(source);
+    const reloading = !!before.document;
+    const pending = {
+      ...before,
+      busy: true,
+      reloading,
+      deletion: undefined,
+      error: "",
+      reloadError: undefined,
+      notice: "",
+    };
+    put(source, pending);
+    let loading: Promise<NonNullable<DocumentDraft["document"]>> | undefined;
+    try {
+      loading =
+        source.scope === "home"
+          ? readRequest("readSettings", source.kind, source.name)
+          : readRequest(
+              "readProjectDocument",
+              source.context ? contextRef(source.context) : source.projectId,
+              source.target,
+            );
+      loads.set(key, loading);
+      const document = await loading;
+      if (get(source) !== pending) return;
+      if (
+        reloading &&
+        before.document?.exists !== false &&
+        document.exists === false
+      )
+        throw new Error("Файла больше нет на диске.");
+      put(source, {
+        document,
+        text: document.text,
+        busy: false,
+        error: "",
+        notice: "",
+      });
+    } catch (e) {
+      if (get(source) === pending) {
+        const reason = preparationErrorMessage(e);
+        put(source, {
+          ...before,
+          busy: false,
+          reloading: false,
+          deletion: undefined,
+          ...(reloading
+            ? {
+                reloadError: `Не удалось обновить файл. ${reason} Текст в редакторе не изменён.`,
+              }
+            : { error: reason }),
+        });
+      }
+    } finally {
+      if (loads.get(key) === loading) loads.delete(key);
+    }
+  }
   function createFlat(
     kind: FlatKind,
     projectId: ScopeRef,
@@ -333,46 +426,91 @@ export function createSettingsDocuments() {
       };
     },
     get,
-    selectedTool: (scope: ScopeRef) => selectedTools.get(documentScopeId(scope)) ?? "",
+    // An editor belongs to its buffer, not the filename. Retain undo, cursor and
+    // expanded state when a rename transfers the same buffer to another key.
+    editorIdentity(source: DocumentSource) {
+      const key = documentKey(source);
+      const instance = instances.get(key);
+      return instance ? `buffer:${instance.serial}` : key;
+    },
+    selectedTool: (scope: ScopeRef) =>
+      selectedTools.get(documentScopeId(scope)) ?? "",
     selectTool(scope: ScopeRef, tool: string) {
       const key = documentScopeId(scope);
       if (selectedTools.get(key) === tool) return;
       selectedTools.set(key, tool);
-      listeners.forEach(fn => fn());
+      listeners.forEach((fn) => fn());
     },
     /** Only addresses of dirty project files; never personal settings, raw text,
      * paths inferred from a string key, or registry configuration fields. */
     dirtyProjectDocuments() {
-      const result: { source: Extract<DocumentSource,{scope:"project"}>; instance: object; relativePath:string; busy:boolean }[] = [];
-      for (const [key,source] of sources) {
+      const result: {
+        source: Extract<DocumentSource, { scope: "project" }>;
+        instance: object;
+        relativePath: string;
+        busy: boolean;
+      }[] = [];
+      for (const [key, source] of sources) {
         if (source.scope !== "project") continue;
-        const draft=entries.get(key), instance=instances.get(key);
-        if (!instance || !draft?.document || draft.text===draft.document.text) continue;
-        const target=source.target;
-        const relativePath = draft.document.relativePath || (target.kind==="tool" ? `.goga/tools/${target.tool}/${target.path}` :
-          target.kind==="config" ? ".goga/config.yml" : target.kind==="dockerfile" ? target.path : `.goga/${target.kind}s/${target.name}.yml`);
-        result.push({source,instance,relativePath,busy:draft.busy});
+        const draft = entries.get(key),
+          instance = instances.get(key);
+        if (!instance || !draft?.document || draft.text === draft.document.text)
+          continue;
+        const target = source.target;
+        const relativePath =
+          draft.document.relativePath ||
+          (target.kind === "tool"
+            ? `.goga/tools/${target.tool}/${target.path}`
+            : target.kind === "config"
+              ? ".goga/config.yml"
+              : target.kind === "dockerfile"
+                ? target.path
+                : `.goga/${target.kind}s/${target.name}.yml`);
+        result.push({ source, instance, relativePath, busy: draft.busy });
       }
       return result;
     },
-    readSessionBuffer(source: Extract<DocumentSource,{scope:"project"}>, instance:object) {
-      if (instances.get(documentKey(source))!==instance) return null;
+    readSessionBuffer(
+      source: Extract<DocumentSource, { scope: "project" }>,
+      instance: object,
+    ) {
+      if (instances.get(documentKey(source)) !== instance) return null;
       const draft = get(source);
-      return draft.document && draft.text!==draft.document.text ? draft.text:null;
+      return draft.document && draft.text !== draft.document.text
+        ? draft.text
+        : null;
     },
-    revealSessionDocument(source: Extract<DocumentSource,{scope:"project"}>, instance:object) {
-      if (instances.get(documentKey(source))!==instance || !get(source).document) return null;
-      const target = source.target, scope = source.context ?? source.projectId;
-      if (target.kind==="tool"){
-        selectedTools.set(documentScopeId(scope),target.tool);
-        updateTool(scope,target.tool,{selected:target.path,creating:false});return "tools";
+    revealSessionDocument(
+      source: Extract<DocumentSource, { scope: "project" }>,
+      instance: object,
+    ) {
+      if (
+        instances.get(documentKey(source)) !== instance ||
+        !get(source).document
+      )
+        return null;
+      const target = source.target,
+        scope = source.context ?? source.projectId;
+      if (target.kind === "tool") {
+        selectedTools.set(documentScopeId(scope), target.tool);
+        updateTool(scope, target.tool, {
+          selected: target.path,
+          creating: false,
+        });
+        return "tools";
       }
-      if (target.kind==="config") return "config";
-      if (target.kind==="dockerfile"){
-        return dockerfiles.get(documentScopeId(scope))?.relativePath === target.path ? "image" : null;
+      if (target.kind === "config") return "config";
+      if (target.kind === "dockerfile") {
+        return dockerfiles.get(documentScopeId(scope))?.relativePath ===
+          target.path
+          ? "image"
+          : null;
       }
-      updateFlat(scope,target.kind,{selected:target.name,creating:false});
-      return target.kind+"s";
+      updateFlat(scope, target.kind, {
+        selected: target.name,
+        creating: false,
+      });
+      return target.kind + "s";
     },
     toolState,
     /** Real in-memory sources only: stale empty form/selection state is not a tool. */
@@ -510,7 +648,7 @@ export function createSettingsDocuments() {
     /** A checkout invalidates disk snapshots, never editor drafts or hidden files. */
     async refreshProject(scope: ScopeRef): Promise<void> {
       const id = documentScopeId(scope);
-      revisions.set(id, (revisions.get(id) ?? 0) + 1);
+      advanceRevision(id, "other");
       const reloads: Promise<void>[] = [];
       for (const [key, source] of sources) {
         if (
@@ -519,7 +657,13 @@ export function createSettingsDocuments() {
         )
           continue;
         const value = entries.get(key);
-        if (!value || value.memoryOnly || value.saving || value.deleting)
+        if (
+          !value ||
+          value.memoryOnly ||
+          value.saving ||
+          value.deleting ||
+          value.renaming
+        )
           continue;
         if (value.document && value.text !== value.document.text) {
           entries.set(key, {
@@ -527,6 +671,7 @@ export function createSettingsDocuments() {
             // Replacing the entry invalidates a pending deletion preview. Its
             // late reply cannot clear these flags; keep the retained draft editable.
             busy: false,
+            reloading: false,
             preparing: false,
             deletion: undefined,
             notice:
@@ -552,7 +697,16 @@ export function createSettingsDocuments() {
       await Promise.all(reloads);
     },
     projectRevision: (projectId: ScopeRef) =>
-      projectId ? (revisions.get(documentScopeId(projectId)) ?? 0) : 0,
+      projectId ? (revisions.get(documentScopeId(projectId))?.value ?? 0) : 0,
+    // Only cosmetic: never relax action freshness while a saved document refreshes
+    // its lists. A checkout or deletion anywhere since the last successful result
+    // keeps the normal disabled appearance even if a later save overlaps it.
+    onlyDocumentSavesSince(scope: ScopeRef, revision: number) {
+      const latest = revisions.get(documentScopeId(scope));
+      return (
+        !!latest && latest.value > revision && latest.lastNonSave <= revision
+      );
+    },
     pipelineState,
     updatePipeline,
     createWorkflow: (
@@ -565,9 +719,8 @@ export function createSettingsDocuments() {
       name: string,
       catalog: ProjectWorkflow[],
     ) => createFlat("pipeline", projectId, name, catalog),
-    busy: () =>
-      [...entries.values()].some((entry) => entry.saving || entry.deleting) ||
-      [...registryDrafts.values()].some((entry) => entry.saving),
+    writeActivity,
+    busy: () => writeActivity() !== "idle",
     homeRevision: () => homeRevision,
     removalRevision: () => removalRevision,
     wasRemovedSince: (source: DocumentSource, revision: number) =>
@@ -695,12 +848,16 @@ export function createSettingsDocuments() {
     },
     edit(source: DocumentSource, text: string) {
       const entry = get(source);
-      if (!entry.busy)
+      if (!entry.busy || entry.reloading)
         put(source, {
           ...entry,
+          busy: false,
+          reloading: false,
+          reloadError: undefined,
           text,
           deletion: undefined,
           notice: "",
+          savedAt: undefined,
           error: "",
         });
     },
@@ -710,9 +867,11 @@ export function createSettingsDocuments() {
       put(source, {
         ...entry,
         text: entry.document.text,
+        reloadError: undefined,
         deletion: undefined,
         error: "",
         notice: "",
+        savedAt: undefined,
       });
     },
     discard(source: DocumentSource) {
@@ -737,44 +896,114 @@ export function createSettingsDocuments() {
         });
         return;
       }
-      const pending = {
-        ...before,
-        busy: true,
-        deletion: undefined,
-        error: "",
-        notice: "",
+      await readIntoEditor(source, before);
+    },
+    async rename(source: DocumentSource, newName: string) {
+      const before = get(source);
+      if (
+        source.scope !== "project" ||
+        !isDeletableDocument(source) ||
+        !before.document?.exists ||
+        before.memoryOnly ||
+        before.busy ||
+        before.deletion
+      )
+        throw Error("Файл сейчас недоступен для переименования.");
+      const target = renamedProjectDocumentTarget(source.target, newName);
+      const dest = { ...source, target };
+      const key = documentKey(source),
+        destKey = documentKey(dest);
+      const scope = source.context ?? source.projectId;
+      // The host checks the disk, but cannot see another unsaved editor.
+      // Reserve the exact destination so a concurrent open/create cannot adopt this result.
+      const identity = (k: string) => {
+        const [space, owner, kind, name, path] = JSON.parse(k) as string[];
+        return JSON.stringify([
+          space,
+          owner,
+          kind,
+          kind === "tool" ? name : "",
+          projectWorkflowAliasKey(path ?? ""),
+        ]);
       };
+      const alias = identity(destKey);
+      if (
+        key === destKey ||
+        [...entries.keys()].some((k) => k !== key && identity(k) === alias)
+      )
+        throw Error("Имя уже используется открытым файлом или черновиком.");
+      const reserved: DocumentDraft = { ...empty, busy: true };
+      const pending = { ...before, busy: true, renaming: true };
+      entries.set(destKey, reserved);
       put(source, pending);
       try {
-        const loading =
-          source.scope === "home"
-            ? readRequest("readSettings", source.kind, source.name)
-            : readRequest(
-                "readProjectDocument",
-                source.context ? contextRef(source.context) : source.projectId,
-                source.target,
-              );
-        loads.set(documentKey(source), loading);
-        const document = await loading;
-        if (loads.get(documentKey(source)) === loading)
-          loads.delete(documentKey(source));
-        if (get(source) !== pending) return;
-        put(source, {
-          document,
-          text: document.text,
-          busy: false,
-          error: "",
-          notice: "",
+        const document = await window.goga.renameProjectDocument(
+          scope,
+          source.target,
+          newName,
+          before.document.version,
+        );
+        if (get(source) !== pending || get(dest) !== reserved)
+          throw Error(
+            "Документ в редакторе уже изменился. Проверьте имена файлов в каталоге.",
+          );
+        const oldName =
+          source.target.kind === "tool"
+            ? source.target.path
+            : source.target.name;
+        const nextName = target.kind === "tool" ? target.path : target.name;
+        const moveSelection = (s: WorkflowSelection): WorkflowSelection => ({
+          ...s,
+          selected: s.selected === oldName ? nextName : s.selected,
+          drafts: [
+            ...new Set([...s.drafts.filter((n) => n !== oldName), nextName]),
+          ],
         });
-      } catch (e) {
-        if (get(source) === pending)
-          put(source, {
-            ...before,
-            busy: false,
-            deletion: undefined,
-            error: message(e),
-          });
+        // remove retires shortcuts to the old filename. Publish selection and the
+        // new baseline together, leaving a dirty buffer dirty under its new key.
+        const selected = moveSelection(
+          target.kind === "tool"
+            ? toolState(scope, target.tool)
+            : flatState(scope, target.kind),
+        );
+        const instance = instances.get(key);
+        remove(source);
+        if (instance) instances.set(destKey, instance);
+        if (target.kind === "tool")
+          toolSelections.set(toolSelectionKey(scope, target.tool), selected);
+        else
+          selections.set(
+            JSON.stringify([documentScopeId(scope), target.kind]),
+            selected,
+          );
+        put(dest, {
+          ...empty,
+          document,
+          text:
+            before.text === before.document.text ? document.text : before.text,
+        });
+      } catch (error) {
+        if (get(source) === pending) put(source, before);
+        throw Error(preparationErrorMessage(error));
+      } finally {
+        if (entries.get(destKey) === reserved) entries.delete(destKey);
+        invalidate(source);
+        listeners.forEach((fn) => fn());
       }
+    },
+    async reload(source: DocumentSource, confirmed?: DocumentDraft) {
+      const before = get(source);
+      if (
+        source.scope !== "project" ||
+        !before.document ||
+        before.memoryOnly ||
+        before.busy ||
+        before.deletion ||
+        (confirmed !== undefined && confirmed !== before) ||
+        (before.text !== before.document.text && confirmed !== before)
+      )
+        return;
+      await readIntoEditor(source, before);
     },
     async save(source: DocumentSource) {
       const before = get(source);
@@ -786,6 +1015,7 @@ export function createSettingsDocuments() {
         saving: true,
         error: "",
         notice: "",
+        savedAt: undefined,
       };
       put(source, pending);
       try {
@@ -804,13 +1034,17 @@ export function createSettingsDocuments() {
                 before.document.version,
               );
         if (get(source) !== pending) return false;
-        if (source.scope === "project") invalidate(source);
+        if (source.scope === "project") invalidate(source, "save");
         put(source, {
           document,
           text: document.text,
           busy: false,
           error: "",
-          notice: "Сохранено. Изменения применятся к следующим запускам.",
+          notice:
+            source.scope === "project"
+              ? "Сохранено"
+              : "Сохранено. Изменения применятся к следующим запускам.",
+          ...(source.scope === "project" ? { savedAt: Date.now() } : {}),
         });
         return true;
       } catch (e) {
@@ -819,8 +1053,10 @@ export function createSettingsDocuments() {
             ...before,
             deletion: undefined,
             busy: false,
+            reloadError: undefined,
             error: documentSaveErrorMessage(e),
             notice: "",
+            savedAt: undefined,
           });
         return false;
       }

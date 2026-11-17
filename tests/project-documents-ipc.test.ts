@@ -10,6 +10,7 @@ function fixture() {
     listProjectPipelines: vi.fn(async () => []),
     listProjectProfiles: vi.fn(async () => []),
     readProjectDocument: vi.fn(async () => ({})),
+    renameProjectDocument: vi.fn(async () => ({})),
     saveProjectDocument: vi.fn(async () => ({})),
   };
   registerIPC(
@@ -37,6 +38,7 @@ it("exposes project document channels only to the exact shell main frame", async
     "list-project-profiles",
     "read-project-document",
     "save-project-document",
+    "rename-project-document",
   ]) {
     expect(handlers.has("goga:" + name)).toBe(true);
     for (const bad of [
@@ -328,4 +330,31 @@ it("validates Dockerfile IPC paths and bounded metadata reads", async () => {
  }
  await save(event,"p",{kind:"dockerfile",path:"build/Dockerfile"},"RUN [raw","v");
  expect(service.saveProjectDocument).toHaveBeenCalledWith("p",{kind:"dockerfile",path:"build/Dockerfile"},"RUN [raw","v");
+});
+
+it("accepts only same-directory named project sources and a real opened version for rename", async () => {
+  const { service, handlers, event } = fixture();
+  const rename = handlers.get("goga:rename-project-document")!,
+    version = "a".repeat(64);
+  const src = { kind: "tool", tool: "example", path: "nested/check.yml" };
+  for (const [target, name, v] of [
+    [{ kind: "config" }, "other", version],
+    [{ kind: "dockerfile", path: "Dockerfile" }, "other", version],
+    [{ ...src, path: ".git/hidden.yml" }, "x.yml", version],
+    [{ ...src, root: "/tmp" }, "x.yml", version],
+    [src, "sub/x.yml", version],
+    [src, ".tmp", version],
+    [src, "x.yml", "missing"],
+    [src, "\ud800.yml", version],
+    [{ ...src, path: "\ud800.yml" }, "x.yml", version],
+  ])
+    expect(() => rename(event, "p", target, name, v)).toThrow();
+  expect(service.renameProjectDocument).not.toHaveBeenCalled();
+  await rename(event, "p", src, "new.yaml", version);
+  expect(service.renameProjectDocument).toHaveBeenCalledWith(
+    "p",
+    src,
+    "new.yaml",
+    version,
+  );
 });

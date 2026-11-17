@@ -237,6 +237,55 @@ esac
   await tab.waitFor();
   await ready(0);
   assert(probes >= 2, "confirm the pin again after load");
+  phase = "launch menu above a real native dashboard";
+  const menuChecks=[];
+  for(const [width,height] of [[920,700],[1320,900],[1600,1000]]){
+    await app.evaluate(({BrowserWindow},[w,h])=>BrowserWindow.getAllWindows()[0].setSize(w,h),[width,height]);
+    const previousLoads=loads;
+    const popupReady=shell.waitForEvent("popup",{timeout:5000});
+    await button("Запустить").click();
+    const popup=await popupReady;
+    const menu=popup.getByRole("menu",{name:"Подготовить новый запуск"});
+    await menu.waitFor();
+    await popup.getByRole("menuitem",{name:/^Сборка/}).waitFor();
+    await until(async()=>{
+      const v=await app.evaluate(({BrowserWindow},origin)=>{
+        const children=BrowserWindow.getAllWindows()[0].contentView.children;
+        const dashboard=children.findIndex(v=>v.webContents?.getURL()===origin+"/");
+        const overlay=children.findIndex(v=>v.webContents?.getTitle()==="Подготовить новый запуск");
+        return {above:overlay>dashboard&&dashboard>=0,shown:overlay>=0&&children[overlay].getVisible()};
+      },origin);
+      return v.above&&v.shown;
+    });
+    const bounds=await menu.evaluate(node=>{
+      const rect=node.getBoundingClientRect();
+      return {top:rect.top,bottom:rect.bottom,height:rect.height,viewport:innerHeight,scroll:node.scrollHeight,client:node.clientHeight};
+    });
+    assert(bounds.top>=0&&bounds.bottom<=bounds.viewport,"entire launch menu must fit the native overlay");
+    assert(bounds.height>0);
+    assert.equal(loads,previousLoads,"opening launch menu must not reload the dashboard");
+    const closed=popup.waitForEvent("close");
+    await popup.keyboard.press("Escape").catch(error=>{if(!popup.isClosed())throw error});await closed;
+    await until(async()=>await button("Запустить").evaluate(node=>node===node.ownerDocument.activeElement));
+    assert((await state())?.visible,"dashboard remains selected after closing launch menu");
+    menuChecks.push({width,height,panelVisible:true,menuAboveDashboard:true});
+  }
+  phase = "launch menu native keyboard and outside dismissal";
+  const keyboardReady=shell.waitForEvent("popup",{timeout:5000});
+  await button("Запустить").focus();await button("Запустить").press("ArrowUp");
+  const keyboardPopup=await keyboardReady;
+  await keyboardPopup.getByRole("menu",{name:"Подготовить новый запуск"}).waitFor();
+  await until(async()=>await keyboardPopup.evaluate(()=>{
+    const items=[...document.querySelectorAll('[role="menu"] button:not(:disabled)')];
+    return items.length>0&&document.activeElement===items.at(-1);
+  }));
+  await keyboardPopup.keyboard.press("Home");
+  assert(await keyboardPopup.evaluate(()=>document.activeElement===document.querySelector('[role="menu"] button:not(:disabled)')));
+  const keyClosed=keyboardPopup.waitForEvent("close");
+  await keyboardPopup.keyboard.press("Escape").catch(error=>{if(!keyboardPopup.isClosed())throw error});await keyClosed;
+  const outsideReady=shell.waitForEvent("popup",{timeout:5000});await button("Запустить").click();const outsidePopup=await outsideReady;
+  await outsidePopup.getByRole("menu",{name:"Подготовить новый запуск"}).waitFor();
+  const outsideClosed=outsidePopup.waitForEvent("close");await shell.getByRole("heading",{name:project.name,exact:true}).click();await outsideClosed;
   phase = "refresh button";
   const first = loads,
     firstProbes = probes;
@@ -301,6 +350,7 @@ esac
   console.log(
     JSON.stringify({
       result: "passed",
+      launchMenuChecks:menuChecks,
       editorExpanded: [before.height,after.height],
       documentLoads: loads,
       statusChecks: probes,

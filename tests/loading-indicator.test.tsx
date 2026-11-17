@@ -100,7 +100,7 @@ it.each(["workflow", "pipeline", "profile"] as const)(
     ).toBeTruthy();
   },
 );
-it("project catalog uses the same blocking spinner on first open and return", async () => {
+it("blocks only the first catalog read and silently refreshes a loaded empty catalog on return", async () => {
   const { ProjectFlatDocuments } =
     await import("../src/renderer/ProjectFlatDocuments");
   const { RetainedViews } = await import("../src/renderer/RetainedViews");
@@ -124,7 +124,9 @@ it("project catalog uses the same blocking spinner on first open and return", as
   const view = render(
     <RetainedViews activeKey="pipeline">{section}</RetainedViews>,
   );
-  const firstClass = screen.getByRole("status").className;
+  expect(
+    screen.getByRole("status").querySelector(".loading-spinner"),
+  ).toBeTruthy();
   await act(async () => resolve([]));
   view.rerender(
     <RetainedViews activeKey="other">
@@ -132,11 +134,29 @@ it("project catalog uses the same blocking spinner on first open and return", as
     </RetainedViews>,
   );
   view.rerender(<RetainedViews activeKey="pipeline">{section}</RetainedViews>);
-  expect(screen.getByRole("status").className).toBe(firstClass);
+  expect(window.goga.listProjectPipelines).toHaveBeenCalledTimes(2);
+  expect(screen.queryByRole("status")).toBeNull();
   expect(document.querySelector(".loading-background")).toBeNull();
   expect(
     document.querySelector(".workflow-controls")?.closest("[hidden]"),
+  ).toBeNull();
+  expect(
+    screen.getByRole("heading", { name: "В проекте пока нет конвейеров" }),
   ).toBeTruthy();
+  expect(
+    (
+      screen.getByRole("button", {
+        name: "Создать конвейер",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(true);
   await act(async () => resolve([]));
   expect(screen.queryByRole("status")).toBeNull();
+  expect(
+    (
+      screen.getByRole("button", {
+        name: "Создать конвейер",
+      }) as HTMLButtonElement
+    ).disabled,
+  ).toBe(false);
 });

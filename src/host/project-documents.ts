@@ -15,6 +15,7 @@ import {
 import { createHash, randomUUID } from "node:crypto";
 import { isMap, parseAllDocuments } from "yaml";
 import {
+  renamedProjectDocumentTarget,
   isProjectDockerfilePath,
   isProjectWorkflowName,
   projectWorkflowAliasKey,
@@ -758,12 +759,22 @@ const uncertainTrash = (): DeletionResult => ({
 });
 
 /** Check the exact spelling and Unicode/case aliases of every component under the trusted root. */
-async function assertSourceSpelling(root: string, relative: string) {
+async function assertSourceSpelling(
+  root: string,
+  relative: string,
+  newSibling?: string,
+  temporarySibling?: string,
+) {
   let cursor = root;
   for (const part of relative.split("/")) {
     const names: string[] = [];
     const directory = await opendir(cursor, { bufferSize: 32 });
     for await (const entry of directory) {
+      if (
+        entry.name === temporarySibling &&
+        cursor === path.join(root, path.dirname(relative))
+      )
+        continue;
       if (names.length >= MAX_ENTRIES) throw changed();
       names.push(entry.name);
     }
@@ -776,8 +787,136 @@ async function assertSourceSpelling(root: string, relative: string) {
       )
     )
       throw changed();
+    if (
+      newSibling !== undefined &&
+      cursor === path.join(root, path.dirname(relative)) &&
+      names.some(
+        (name) =>
+          projectWorkflowAliasKey(name) === projectWorkflowAliasKey(newSibling),
+      )
+    )
+      throw Error("Файл или папка с таким именем уже существует.");
     cursor = path.join(cursor, part);
   }
+}
+
+/**
+ * Keep the inode, bytes and mode. link is an exclusive publication (even if a
+ * destination races the last check). Node has no dirfd/conditional unlink; the
+ * source and both ancestor chains are rechecked before retiring the old name.
+ */
+export async function renameProjectDocument(
+  root: string,
+  target: ProjectDocumentTarget,
+  newName: string,
+  expectedVersion: string,
+  guard?: () => Promise<void>,
+): Promise<ProjectDocument> {
+  const dest = renamedProjectDocumentTarget(target, newName);
+  const relative = relativePath(target),
+    next = relativePath(dest);
+  const file = path.join(root, relative),
+    destination = path.join(root, next);
+  const conflict = () =>
+    Error(
+      "Файл изменился после открытия. Обновите его с диска перед переименованием.",
+    );
+  const uncertain = () =>
+    Error(
+      "Не удалось подтвердить результат переименования. Проверьте оба имени в папке. Автоматического повтора не будет.",
+    );
+  if (!/^[0-9a-f]{64}$/.test(expectedVersion)) throw conflict();
+
+  // Match the mutex used by save and deletion (flat sources serialize on root).
+  const queued = await directories(
+    root,
+    isFlatDocument(target) ? "" : path.dirname(relative),
+  );
+  const { dev, ino } = queued.identities.at(-1)!.info;
+  return serialize(`${dev}:${ino}`, async () => {
+    await verifyDirectories(queued.identities);
+    const parents = (await directories(root, path.dirname(relative)))
+      .identities;
+    const assertNames = async () => {
+      await verifyDirectories(parents);
+      await assertSourceSpelling(root, relative, path.basename(next));
+      await verifyDirectories(parents);
+    };
+    await assertNames();
+    const initial = await read(root, relative, false, isFlatDocument(target));
+    if (initial.document.version !== expectedVersion || !initial.info)
+      throw conflict();
+    const original = initial.info;
+    await guard?.();
+    await assertNames();
+    const current = await lstat(file);
+    if (!sameFile(original, current)) throw conflict();
+    try {
+      await link(file, destination);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST")
+        throw Error("Файл или папка с таким именем уже существует.");
+      throw error;
+    }
+    // ctime/nlink necessarily change after linking, not contents or mtime.
+    const linkedFile = (s: Stats) =>
+      sameIdentity(s, original) &&
+      s.mode === original.mode &&
+      s.mtimeMs === original.mtimeMs &&
+      s.size === original.size &&
+      s.nlink === 2;
+    let removed = false;
+    try {
+      await guard?.();
+      await verifyDirectories(parents);
+      await assertSourceSpelling(root, next, undefined, path.basename(file));
+      await verifyDirectories(parents);
+      const linked = await lstat(destination);
+      if (!linkedFile(linked) || !sameFile(linked, await lstat(file)))
+        throw conflict();
+      await unlink(file);
+      removed = true;
+      await guard?.();
+      await verifyDirectories(parents);
+      try {
+        await lstat(file);
+        throw uncertain();
+      } catch (error) {
+        if (!absent(error)) throw error;
+      }
+      const saved = await read(root, next, false, isFlatDocument(target));
+      if (
+        !saved.info ||
+        !sameIdentity(original, saved.info) ||
+        saved.document.text !== initial.document.text
+      )
+        throw uncertain();
+      return saved.document;
+    } catch (error) {
+      if (!removed) {
+        // Undo only our link if the original still names the same regular inode.
+        // If an external writer took either name, keep all data for inspection.
+        let undone = false;
+        try {
+          await verifyDirectories(parents);
+          const src = await lstat(file),
+            dst = await lstat(destination);
+          if (
+            sameIdentity(original, src) &&
+            sameFile(src, dst) &&
+            src.nlink === 2
+          ) {
+            await unlink(destination);
+            undone = true;
+          }
+        } catch {
+          /* cannot prove rollback */
+        }
+        if (undone) throw error;
+      }
+      throw uncertain();
+    }
+  });
 }
 
 /** No directory creation, no parsing or renderer exposure of hidden contents. */

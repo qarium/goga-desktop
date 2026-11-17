@@ -42,8 +42,185 @@
 .project-document-expanded :is(.editor-heading, .document-editor-footer) {
   flex: none;
 }
-.document-size-toggle {
+/* Scoped to project documents: personal settings retain their reveal/privacy flow. */
+.project-document-pane {
+  container-type: inline-size;
+}
+/* If the window cannot fit a full editor, scroll the document normally rather
+   than pinning its actions across the header or the editable text. */
+.project-document-pane:not(.project-document-expanded) .document-editor-footer {
+  position: static;
+}
+.editor-heading.project-document-heading {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px 12px;
+}
+.project-document-heading .document-heading-details {
+  min-width: 0;
+}
+.project-document-heading h3 {
+  margin: 0 0 5px;
+  line-height: 22px;
+}
+.project-document-heading :is(h3, .context-path) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.project-document-heading .context-path {
+  margin: 0;
+}
+.document-heading-tools {
+  display: flex;
+  align-items: center;
+  justify-self: end;
+  justify-content: flex-end;
+  gap: 10px;
+  max-width: 100%;
+}
+.project-document-heading .format {
+  flex: none;
+  padding: 0;
+  white-space: nowrap;
+}
+.project-document-heading .document-heading-icon {
   display: inline-grid;
   place-items: center;
-  padding: 8px;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 4px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: #93aac1;
+  border-radius: 5px;
+}
+.project-document-heading .document-heading-icon:hover:enabled {
+  color: #61e0cb;
+  background: #203449;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .document-heading-icon[aria-busy="true"] svg {
+    animation: loading-spin 0.9s linear infinite;
+  }
+}
+
+/* Keep the status and its divider in place through clean/edit/save transitions.
+   Right-align the icon and label next to the divider, not a trailing blank slot.
+   The badge appears before Git or, when expanded, before the file format.
+   Detailed conflict and external-change notices remain in the footer. */
+.document-save-feedback {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  flex: 0 0 174px;
+  width: 174px;
+  min-width: 0;
+  height: 20px;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 20px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.document-heading-tools > .document-save-feedback {
+  padding-right: 10px;
+  border-right: 1px solid var(--line);
+}
+.document-save-feedback > svg {
+  flex: none;
+  width: 13px;
+  height: 13px;
+}
+.document-save-feedback > :last-child {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.document-save-feedback[data-tone="success"] {
+  color: #46d8bd;
+}
+.document-save-feedback:is([data-tone="dirty"], [data-tone="warning"]) {
+  color: #edbd79;
+}
+.document-save-feedback[data-tone="error"] {
+  color: #ffb4bd;
+}
+.document-save-feedback .loading-spinner {
+  flex: none;
+  box-sizing: border-box;
+  width: 13px;
+  height: 13px;
+  border-width: 2px;
+}
+
+/* Only an expanded narrow header needs a second row for the active badge;
+   compact panes keep format and expand beside the ellipsized file path. */
+@container (max-width: 480px) {
+  .project-document-expanded .editor-heading.project-document-heading {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  /* A draft becoming a file must not collapse two action rows into one.
+     Keep deletion separate in all narrow deletable-document panes. */
+  .document-save-actions:has(> .danger) {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    row-gap: 12px;
+  }
+  .document-save-actions > .danger {
+    grid-row: 1;
+    justify-self: start;
+  }
+  .document-save-actions > .document-save-primary-actions {
+    grid-row: 2;
+    justify-self: end;
+  }
+}
+
+/* The suffix wraps the input, so the shared label > input margin cannot apply.
+   Own the gaps here, including space for the unchanged keyboard focus outline. */
+.document-rename-dialog > form {
+  display: grid;
+  gap: 16px;
+  min-width: 0;
+}
+.document-rename-dialog label {
+  display: grid;
+  gap: 8px;
+  min-width: 0;
+}
+.document-rename-dialog :is(.hint, .error) {
+  margin: 0;
+}
+.document-rename-dialog .form-actions {
+  margin-top: 0;
+}
+.document-rename-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 0;
+}
+.document-rename-heading h2 { margin: 0; }
+.document-rename-name {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.document-rename-name input { flex: 1; min-width: 0; }
+.document-rename-name code { color: var(--muted); flex: none; }
+
+
+@container (max-width: 360px) {
+  .project-document-pane .editor-heading.project-document-heading {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .project-document-heading .document-heading-tools {
+    flex-wrap: wrap;
+  }
 }

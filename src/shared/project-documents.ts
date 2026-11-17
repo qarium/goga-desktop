@@ -106,3 +106,45 @@ export function isProjectDockerfilePath(value: unknown): value is string {
     !/^\.goga\/config\.ya?ml(?:\/|$)/i.test(value)
   );
 }
+
+/** One leaf in the existing directory, never a free-form destination path. */
+export function renamedProjectDocumentTarget(
+  target: ProjectDocumentTarget,
+  newName: string,
+): Exclude<ProjectDocumentTarget, { kind: "config" | "dockerfile" }> {
+  if (target.kind === "config" || target.kind === "dockerfile")
+    throw Error("Этот файл имеет заданное имя и не может быть переименован.");
+  const sameName = (before: string) => {
+    if (before === newName) throw Error("Введите другое имя.");
+    if (projectWorkflowAliasKey(before) === projectWorkflowAliasKey(newName))
+      throw Error("Укажите имя, отличающееся не только регистром или формой Unicode.");
+  };
+  if (target.kind === "tool") {
+    // Node replaces lone UTF-16 surrogates with U+FFFD when encoding paths.
+    // Never let an invalid spelling operate on a different real filename.
+    try {
+      encodeURIComponent(target.path);
+      encodeURIComponent(newName);
+    } catch {
+      throw Error("Имя файла содержит некорректный символ.");
+    }
+    if (
+      !isProjectToolName(target.tool) || !isProjectToolPath(target.path) ||
+      target.path.split("/").some(part => part.toLowerCase() === ".git") ||
+      !/\.ya?ml$/.test(target.path) ||
+      !isProjectToolPath(newName) || newName.includes("/") ||
+      !/\.ya?ml$/.test(newName) || new TextEncoder().encode(newName).length > 255
+    ) throw Error("Введите имя файла .yaml или .yml без пути к папке.");
+    const parts = target.path.split("/");
+    sameName(parts.pop()!);
+    parts.push(newName);
+    const path = parts.join("/");
+    if (!isProjectToolPath(path)) throw Error("Недопустимый путь документа инструмента.");
+    return { kind: "tool", tool: target.tool, path };
+  }
+  const valid = target.kind === "profile" ? isProjectProfileName : isProjectWorkflowName;
+  if (!valid(target.name) || !valid(newName))
+    throw Error("Недопустимое имя документа.");
+  sameName(target.name);
+  return { kind: target.kind, name: newName };
+}

@@ -1,4 +1,5 @@
-import {Cable} from "lucide-react";
+import {RunActionButton} from "./RunActionButton";
+import {Activity, Cable, RotateCcw, Square} from "lucide-react";
 import {AttachPanelDialog,PanelRefreshButton,useAttachedPanels} from "./AttachedPanels";
 import {sameDashboardOwner,type AttachedDashboard} from "../shared/attached-dashboard";
 import {demoScopeKey, DEMO_EMBEDDED_START_ERROR} from "../shared/demonstrations";
@@ -16,6 +17,7 @@ import { useHomeSessions } from "./home/session-summary";
 import { SessionBuffer } from "./home/SessionBuffer";
 import type { HomeSection, HomeTarget, SessionEntry, WorkspaceAddress } from "./home/types";
 import { gitSummaryCacheFor } from "./git-summary-cache";
+import { TopicRepositoryNotice, useTopicRepository } from "./topic-repository";
 import { ProjectAddMenu, type ProjectAddTarget } from "./ProjectAddMenu";
 import { ProjectCreationDialog } from "./ProjectCreation";
 import { createSpecificationsState } from "./project-specifications-state";
@@ -40,7 +42,13 @@ import {
   useContextDeletionController,
 } from "./ContextDeletionController";
 import { TopicOverview } from "./TopicOverview";
+import { ProjectDocumentStatusOutlet } from "./ProjectDocumentStatus";
 import { RetainedViews } from "./RetainedViews";
+import { ProjectSaveGuardShell } from "./ProjectSaveGuardShell";
+import { useWorkspaceLeave } from "./workspace-leave";
+import { WorkspaceLeaveDialog } from "./WorkspaceLeaveDialog";
+import { getOverviewLeaveFiles } from "./overview-leave-drafts";
+import { getProjectLeaveFiles } from "./project-leave-drafts";
 import { TerminalWorkspace } from "./TerminalWorkspace";
 import {
   readCatalogCache,
@@ -87,7 +95,7 @@ import {
 } from "./BuildForm";
 import { LaunchForm } from "./LaunchForm";
 import { LoadingBoundary, LoadingState } from "./LoadingBoundary";
-import { RunOutput, TerminalIcon, dashboardReady } from "./RunOutput";
+import { RunOutput, dashboardReady } from "./RunOutput";
 import { Settings } from "./Settings";
 import { createSettingsDocuments, documentScopeId } from "./settings-documents";
 import {
@@ -139,6 +147,7 @@ const labels: Record<string, string> = {
   stopped: "Остановлен",
 };
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
+type FileTransition = "section" | "workspace" | "pipeline" | "build" | "stay";
 
 /** History is viewable without claiming that its recorded working copy is ready. */
 function recordedRunOwner(
@@ -289,9 +298,9 @@ export function App() {
   const [settingsDocuments] = useState(createSettingsDocuments);
   const [specificationsState] = useState(createSpecificationsState);
   const [projectSettingsTabs, setProjectSettingsTabs] = useState<Record<string, string>>({});
-  const documentsBusy = useSyncExternalStore(
+  const documentActivity = useSyncExternalStore(
     settingsDocuments.subscribe,
-    settingsDocuments.busy,
+    settingsDocuments.writeActivity,
   );
   const [projects, setProjects] = useState<Project[]>([]),
     [projectId, setProjectId] = useState(""),
@@ -332,6 +341,7 @@ export function App() {
     [],
   );
   const dashboardViewport = useDashboardViewport(viewportError);
+  const [documentStatusOutlet, setDocumentStatusOutlet] = useState<HTMLDivElement | null>(null);
   const [gitStage, setGitStage] = useState<HTMLDivElement | null>(null);
   const gitReturnPages = useRef(new Map<string, typeof page>());
   const contextsEnabled = typeof window.goga.ensureTopicContext === "function";
@@ -459,8 +469,8 @@ export function App() {
   const settingsGuard = useRef<ProjectSettingsGuard | null>(null);
   const [launchSettingsBusy, setSettingsBusy] = useState(false);
   const [topicsBusy, setTopicsBusy] = useState(false);
-  const settingsBusy =
-    launchSettingsBusy || documentsBusy || topicsBusy || repeatBusy || !!projectRemoval?.busy;
+  const otherSettingsBusy = launchSettingsBusy || topicsBusy || repeatBusy || !!projectRemoval?.busy;
+  const settingsBusy = otherSettingsBusy || documentActivity !== "idle";
   const topicsStore = useRef(createTopicsStore());
   const [topicsRevision, setTopicsRevision] = useState(0);
   const [currentTopics, setCurrentTopics] = useState<DisplayCatalog | null>(
@@ -553,7 +563,7 @@ export function App() {
       if (pageRef.current === "launch") setPage("project-settings");
       // Keep the existing memory task/form drafts on explicit close, as before.
       // Closing a preparation is never consent to discard an unsaved task.
-    });
+    },false,"stay");
   }
   const [openBuilds, setOpenBuilds] = useState(() => new Set<string>());
   const [buildBusy, setBuildBusy] = useState<Record<string, boolean>>({});
@@ -589,14 +599,12 @@ export function App() {
     else showLaunch(owner.projectId, owner);
   }
   function showTopicCreation(identity: TopicContextIdentity) {
-    navigateContext(() => {
-      const nonce = ++initialPreparationNonce.current;
-      setCreatedTopic(null);
-      setInitialPreparation({ identity, kind: "pipeline", nonce, creation: true });
-      setSelected(null);
-      setPage("context-preparation");
-      setError("");
-    });
+    const nonce = ++initialPreparationNonce.current;
+    setCreatedTopic(null);
+    setInitialPreparation({ identity, kind: "pipeline", nonce, creation: true });
+    setSelected(null);
+    setPage("context-preparation");
+    setError("");
   }
   function returnToDraft(id: string, kind: RunKind) {
     const owner = draftOwners[id];
@@ -638,7 +646,7 @@ export function App() {
         return next;
       });
       if (pageRef.current === "build") setPage("project-settings");
-    });
+    },false,"stay");
   }
   function topicsChanged() {
     setTopicsRevision((n) => n + 1);
@@ -658,7 +666,8 @@ export function App() {
   const [pendingNavigation, setPendingNavigation] = useState<
     (() => void) | null
   >(null);
-  const navigateRef = useRef<(action: () => void, preserveProjectDraft?: boolean) => void>(() => {});
+  const leave = useWorkspaceLeave();
+  const navigateRef = useRef<(action: () => void, preserveProjectDraft?: boolean, transition?: FileTransition) => void>(() => {});
   function navigationBlocked() {
     return Boolean(
       topicsBusy ||
@@ -669,15 +678,100 @@ export function App() {
       topicCard ||
       settingsDocuments.busy() ||
       settingsGuard.current?.busy ||
+      leave.blocked() ||
       pendingNavigation || projectRemoval || projectCreationOpen || organizationModal || sessionBuffer || demoCloseOpen,
     );
   }
-  function navigate(action: () => void, preserveProjectDraft = false) {
-    notificationIntent.current++;
+  const outgoingOwner = () =>
+    selectedContextRef.current
+      ? contextRef(selectedContextRef.current)
+      : projectIdRef.current;
+  function fileIntent(transition: FileTransition) {
+    const from = pageRef.current,
+      id = projectIdRef.current,
+      scope = outgoingOwner(),
+      all = transition !== "section";
+    const current = () =>
+      pageRef.current === from &&
+      projectIdRef.current === id &&
+      documentScopeId(scope) === documentScopeId(outgoingOwner());
+    return {
+      current,
+      collect: () => [
+        ...(all || from === "project-settings"
+          ? getProjectLeaveFiles(settingsDocuments, scope, (tab) => {
+              setProjectSettingsTabs((t) => ({ ...t, [id]: tab }));
+              setPage("project-settings");
+            })
+          : []),
+        ...(all || from === "overview"
+          ? getOverviewLeaveFiles(sessionStore, scope).map((file) => ({
+              ...file,
+              reveal: () => {
+                file.reveal?.();
+                setPage("overview");
+              },
+            }))
+          : []),
+      ],
+    };
+  }
+  function guardFileTransition(action: () => void, transition: FileTransition) {
+    const from = pageRef.current;
+    if (
+      transition === "stay" ||
+      from === "home" ||
+      from === "settings" ||
+      !projectIdRef.current
+    ) {
+      action();
+      return;
+    }
+    leave.request({
+      ...fileIntent(transition),
+      launching: transition === "pipeline",
+      go: action,
+    });
+  }
+  // Preparing a clone can take time. A previous choice is valid only for the
+  // same editor contents and owner, not for new edits made while Git was busy.
+  function beforeTopicPrepare(
+    start: (approved: () => boolean) => void,
+    creating: boolean,
+  ) {
+    navigateContext(
+      () => {
+        const { current, collect } = fileIntent("workspace");
+        const snapshot = () =>
+          collect().map((f) => [f.path, f.readText?.()] as const);
+        const accepted = snapshot();
+        start(() => {
+          if (!current()) return false;
+          const now = snapshot();
+          return (
+            now.length === accepted.length &&
+            now.every(
+              ([path, text], i) =>
+                path === accepted[i][0] && text === accepted[i][1],
+            )
+          );
+        });
+      },
+      creating ? "pipeline" : "workspace",
+    );
+  }
+  function navigate(
+    action: () => void,
+    preserveProjectDraft = false,
+    transition: FileTransition = "section",
+  ) {
     if (navigationBlocked()) return;
-    if (settingsGuard.current?.dirty && !preserveProjectDraft)
-      setPendingNavigation(() => action);
-    else action();
+    notificationIntent.current++;
+    guardFileTransition(() => {
+      if (settingsGuard.current?.dirty && !preserveProjectDraft)
+        setPendingNavigation(() => action);
+      else action();
+    }, transition);
   }
   navigateRef.current = navigate;
   useEffect(() => {
@@ -687,10 +781,10 @@ export function App() {
       setCreatedProject(null);
       navigateRef.current(() => {
         setProjectId(created.id); setSelected(null); setPage("overview"); setActiveDraft("");
-      });
+      },false,"workspace");
     } else if (openAfterCreation) {
       setOpenAfterCreation(false);
-      navigateRef.current(() => void add());
+      navigateRef.current(() => void add(),false,"stay");
     }
   });
   useEffect(() => {
@@ -721,7 +815,7 @@ export function App() {
       setShowLogs(previous=>({...previous,[target.run.id]:false}));
       if (!openRunRef.current(target.run)) return;
       setNotificationOpen({ticket:target.ticket,runId:target.run.id,nonce});
-    });
+    },false,"workspace");
   }
   const openNotificationRef=useRef(openNotification);
   openNotificationRef.current=openNotification;
@@ -942,7 +1036,7 @@ export function App() {
           const target = runsRef.current.find((r) => r.id === id);
           if (!target) return;
           openRunRef.current(target);
-        });
+        },false,"workspace");
       }),
       failed = window.goga.onViewError(({ id, error }) => {
         if (id.startsWith("attached:") || runsRef.current.some((r) => r.id === id))
@@ -1018,7 +1112,7 @@ export function App() {
     !handoff.candidate && !dialogVisible &&
     !projectRemoval &&
     !demoCloseOpen && !projectCreationOpen && !organizationModal &&
-    !pendingNavigation &&
+    !pendingNavigation && !leave.view &&
     !gitModals.size &&
     !error &&
     !topicCard &&
@@ -1034,7 +1128,7 @@ export function App() {
     !topicCard &&
     !gitModals.size &&
     !handoff.candidate && !demoCloseOpen &&
-    !pendingNavigation &&
+    !pendingNavigation && !leave.view &&
     !notifications.open &&
     !notificationOpen &&
     !projectRemoval &&
@@ -1162,7 +1256,7 @@ export function App() {
         setSelected(saved?.selected ?? null);
         setPage(saved?.page ?? "overview");
         setActiveDraft(saved?.activeDraft ?? "");
-      });
+      },false,"workspace");
     } catch (e) {
       setError(preparationErrorMessage(e));
     }
@@ -1188,7 +1282,7 @@ export function App() {
   function requestProjectRemoval(target: Project) {
     const open = () =>
       setProjectRemoval({ project: target, busy: false, error: "" });
-    if (target.id === projectIdRef.current) navigateRef.current(open);
+    if (target.id === projectIdRef.current) navigateRef.current(open,false,"stay");
     else if (!navigationBlocked()) open();
   }
   async function removeSelectedProject() {
@@ -1384,6 +1478,7 @@ export function App() {
       r.projectId === projectId &&
       (r.status === "starting" || r.status === "running"),
   );
+  const topicRepository = useTopicRepository(projectPageVisible && project ? project.id : null);
   const topicScope = JSON.stringify([
     projectId,
     settingsRevision[projectId],
@@ -1396,9 +1491,9 @@ export function App() {
     let alive = true;
     if (!projectPageVisible) return;
     const year = String(new Date().getFullYear());
-    setCurrentTopics(project ? readCatalogCache(project, year) : null);
+    setCurrentTopics(project && topicRepository === "available" ? readCatalogCache(project, year) : null);
     setCurrentTopicsError("");
-    if (!project) return;
+    if (!project || topicRepository !== "available") return;
     const request =
       typeof window.goga.readTopicCatalog === "function"
         ? read("readTopicCatalog", project.id, year)
@@ -1425,14 +1520,17 @@ export function App() {
     return () => {
       alive = false;
     };
-  }, [topicScope,projectPageVisible]);
+  }, [topicScope, projectPageVisible, topicRepository]);
+  // A contextual history/run still needs its exact owners if the primary repository disappears.
+  const readTopicInventory = topicRepository === "available" || !!selectedContext;
+  const waitForTopicInventory = topicRepository === "checking" && !readTopicInventory;
   useEffect(() => {
     let alive = true;
     if(!projectPageVisible)return;
     setKnownContexts([]);
     setContextsError("");
-    setContextsLoading(contextsEnabled && Boolean(projectId));
-    if (contextsEnabled && projectId)
+    setContextsLoading(contextsEnabled && Boolean(projectId) && (readTopicInventory || waitForTopicInventory));
+    if (contextsEnabled && projectId && readTopicInventory)
       read("listTopicContexts", projectId).then(
         (records) => {
           if (alive) {
@@ -1450,7 +1548,7 @@ export function App() {
     return () => {
       alive = false;
     };
-  }, [read, projectId, topicsRevision, contextsEnabled, projectPageVisible]);
+  }, [read, projectId, topicsRevision, contextsEnabled, projectPageVisible, readTopicInventory, waitForTopicInventory]);
   // Only an explicit selection owns clone actions. Null is the original folder.
   const displayOwner = selectedContext;
 
@@ -1537,10 +1635,8 @@ export function App() {
     else showLaunch(projectId);
     setError("");
   }
-  // Owner-local drafts are App-owned. Switching scope preserves them rather
-  // than forcing a discard/save dialog for an unrelated context.
-  function navigateContext(action: () => void) {
-    notificationIntent.current++;
+  // Changing owner considers both editors of the outgoing workspace only.
+  function navigateContext(action: () => void, transition:FileTransition = "workspace") {
     if (
       settingsBusy ||
       deletion.busy ||
@@ -1549,10 +1645,11 @@ export function App() {
       topicCard ||
       projectRemoval ||
       projectCreationOpen || organizationModal || sessionBuffer ||
-      pendingNavigation
+      pendingNavigation || leave.blocked()
     )
       return;
-    action();
+    notificationIntent.current++;
+    guardFileTransition(action, transition);
   }
   // Native Dashboard bounds are fixed. Keep errors outside its column while
   // it is visible; once the run ends the message can use normal main flow.
@@ -1682,15 +1779,16 @@ export function App() {
       )
         setPage("context-runs");
       else showContextPreparation("pipeline", createdTopic);
-    });
+    },"stay");
   }, [
     createdTopic, initialPreparation, page, projectId, topicCard,
-    pendingNavigation, settingsBusy, deletion.busy, topicRemoval.busy,
+    pendingNavigation, leave.view, settingsBusy, deletion.busy, topicRemoval.busy,
   ]);
   function openAddMenu(trigger: HTMLElement) {
     const box = trigger.getBoundingClientRect();
     navigate(() =>
       setProjectAddMenu({ trigger, x: box.left, y: box.bottom + 6 }),
+      false,"stay"
     );
   }
   function address(
@@ -1992,7 +2090,10 @@ export function App() {
     }, true);
   }
   const content = (
-    <div className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}>
+    <ProjectSaveGuardShell
+      projectSaveOnly={documentActivity === "project-save" && !otherSettingsBusy}
+      className={`app-shell${sidebarCollapsed ? " sidebar-collapsed" : ""}`}
+    >
       <header className="titlebar">
         <div className="wordmark">
           <b>Go</b>ga <small>DESKTOP</small>
@@ -2011,12 +2112,12 @@ export function App() {
         </div>
         <ProjectSidebar projects={projects} controller={organization} activeProjectId={projectPageVisible?projectId:null}
           collapsed={sidebarCollapsed} disabled={settingsBusy} homeActive={page==="home"}
-          onHome={()=>navigate(()=>{setPage("home");setError("");},true)}
-          onOpen={p=>navigate(()=>{
+          onHome={()=>navigate(()=>{setPage("home");setError("");},true,"workspace")}
+          onOpen={p=>{ if (p.id===projectId && projectPageVisible) return; navigate(()=>{
             const saved=projectNavigation.current.get(p.id);
             setProjectId(p.id); setPage(saved?.page??"overview");setActiveDraft(saved?.activeDraft??"");setSelected(saved?.selected??null);
             setError(saved?.page==="project" && saved.selected ? launchOwnerErrors.current.get(saved.selected)??"" : "");
-          })}
+          },false,"workspace");}}
           onAdd={openAddMenu} addMenuOpen={!!projectAddMenu}
           onRemove={requestProjectRemoval} canOpenMenu={()=>!settingsBusy && !navigationBlocked()}
           unreadByProject={notifications.snapshot.byProject} onNotifications={()=>notifications.setOpen(true)}
@@ -2033,7 +2134,7 @@ export function App() {
               }
               setPage("settings");
               setError("");
-            })
+            },false,"workspace")
           }
         >
           ⚙ <span>Настройки</span>
@@ -2080,6 +2181,7 @@ export function App() {
                 requestedSelection={tableTopicSelection}
                 onSelectionRequestHandled={() => setTableTopicSelection(null)}
                 board={currentTopics}
+                repository={topicRepository}
                 catalogError={currentTopicsError}
                 onRetryCatalog={() => setTopicsRevision((value) => value + 1)}
                 selected={selectedContext}
@@ -2100,9 +2202,10 @@ export function App() {
                   setInitialPreparation(null);
                   setPage("context-runs");
                 }}
+                beforePrepare={beforeTopicPrepare}
                 onCreationStarted={showTopicCreation}
                 onCreationProgress={setTopicCreation}
-                onShowCreation={showTopicCreation}
+                onShowCreation={identity=>navigateContext(()=>showTopicCreation(identity),"pipeline")}
                 showCreationFeedback={false}
                 onCreated={(record) => {
                   if (projectIdRef.current !== record.projectId) return;
@@ -2118,7 +2221,7 @@ export function App() {
                   // the form without creating/ensuring the copy again.
                   setCreatedTopic(record);
                 }}
-                onSelect={(record) =>
+                onSelect={(record,approved) =>
                   navigateContext(() => {
                     setContextSelections((values) => ({
                       ...values,
@@ -2145,7 +2248,7 @@ export function App() {
                           : "context-runs",
                     );
                     setError("");
-                  })
+                  },approved?.()?"stay":"workspace")
                 }
                 onClear={() =>
                   navigateContext(() => {
@@ -2167,7 +2270,7 @@ export function App() {
                           ? "terminal"
                           : "project-settings",
                     );
-                  })
+                  },selectedContext?"workspace":"stay")
                 }
                 onOpenCard={(target, year) =>
                   navigate(() =>
@@ -2178,7 +2281,7 @@ export function App() {
                       board: null,
                       context: { kind: "topic" },
                       showArtifacts: true,
-                    }),
+                    }),false,"stay"
                   )
                 }
               />
@@ -2235,7 +2338,7 @@ export function App() {
                 blockedReason={launchUnavailable}
                 prepareWithoutContext={!selectedContext}
                 primaryProjectId={projectId}
-                onPrepare={(kind) => navigate(() => prepareFromHeader(kind))}
+                onPrepare={(kind) => navigate(() => prepareFromHeader(kind),false,kind)}
                 demoItem={demonstrations.available&&demoScope&&demoKey ? closeMenu=><DemoLaunchItem key={demoKey}
                   store={demonstrations} scopeKey={demoKey} enter={start=>{
                     closeMenu();
@@ -2303,7 +2406,7 @@ export function App() {
                 className="topics-nav"
                 aria-pressed={page === "overview"}
                 disabled={settingsBusy}
-                onClick={() => navigate(() => setPage("overview"))}
+                onClick={() => {if (page!=="overview") navigate(() => setPage("overview"));}}
               >
                 <Boxes size={16} aria-hidden="true" />
                 Обзор
@@ -2315,7 +2418,7 @@ export function App() {
                 className="topics-nav"
                 aria-pressed={page === "project-settings"}
                 disabled={settingsBusy}
-                onClick={() => navigate(() => setPage("project-settings"))}
+                onClick={() => {if (page!=="project-settings") navigate(() => setPage("project-settings"));}}
               >
                 <FolderOpen size={16} aria-hidden="true" />
                 Проект
@@ -2388,7 +2491,7 @@ export function App() {
                         aria-selected={visible}
                         className={`run-tab ${visible ? "active" : ""}`}
                         disabled={settingsBusy}
-                        onClick={() => navigate(() => returnToDraft(id, kind))}
+                        onClick={() => { if(!visible) navigate(() => returnToDraft(id, kind),false,kind); }}
                         onKeyDown={(event) => {
                           if (
                             ![
@@ -2446,7 +2549,7 @@ export function App() {
               <button role="tab" aria-selected={page==="project"&&selected===row.id} className={`run-tab ${page==="project"&&selected===row.id?"active":""}`}
                 onClick={()=>navigate(()=>openAttachedPanel(row.id))}><Cable size={15}/><span>{row.name}<small>Подключён по URL</small></span></button>
               <button className="close-tab" title="Отключить панель, не останавливая процесс" aria-label={`Отключить панель ${row.name}`}
-                onClick={()=>navigate(()=>void detachPanel(row))}>×</button>
+                onClick={()=>navigate(()=>void detachPanel(row),false,"stay")}>×</button>
             </div>)}
             {runs
               .filter(
@@ -2514,14 +2617,14 @@ export function App() {
                     aria-label={`Закрыть вкладку ${r.kind === "build" ? "Сборка" : r.pipeline} · ${r.topic || "Без топика"}`}
                     title="Закрыть вкладку"
                     disabled={closingIds.includes(r.id) || repeatingPipelines.has(r.id)}
-                    onClick={() => navigate(() => void closeTab(r.id))}
+                    onClick={() => navigate(() => void closeTab(r.id),false,"stay")}
                   >
                     ×
                   </button>
                 </div>
               ))}
           </div>
-          <div className="run-context">
+          <div className="run-context" data-document-section={page === "project-settings" || undefined}>
             <span
               className="workspace-path"
               aria-label="Путь выбранного контекста"
@@ -2529,20 +2632,21 @@ export function App() {
             >
               {displayedPath.display}
             </span>
+            <div className="document-status-outlet" ref={setDocumentStatusOutlet} />
             {attached&&page==="project"?<div className="run-actions"><span className="run-state">{viewErrors[attached.id]?"Панель недоступна":"Подключено · только просмотр"}</span>
               <PanelRefreshButton busy={refreshingIds.includes(attached.id)} onClick={()=>refreshAction.current(attached.id)}/></div>:run && page === "project" ? (
               <>
                 {run.kind === "build" && (
-                  <span>
+                  <span className="run-build-plan" title={run.build?.planPath}>
                     Сборка <strong>{run.build?.planPath}</strong>
                   </span>
                 )}
                 <div className="run-actions">
-                  {canShowDashboard ? (
-                    <button
-                      type="button"
-                      className="run-state run-output-toggle"
-                      aria-label="Работает — показ журнала вывода"
+                  {canShowDashboard ? (<>
+                    <span className="run-state run-state-live" title="Работает">Работает</span>
+                    <RunActionButton
+                      className="run-output-toggle"
+                      label="Работает — показ журнала вывода"
                       aria-pressed={!!showLogs[run.id]}
                       aria-controls={
                         showLogs[run.id] ? "run-output-journal" : undefined
@@ -2559,11 +2663,10 @@ export function App() {
                         }))
                       }
                     >
-                      <TerminalIcon />
-                      <span>Работает</span>
-                    </button>
-                  ) : (
-                    <span className="run-state">
+                      <SquareTerminal size={15} aria-hidden="true" />
+                    </RunActionButton>
+                  </>) : (
+                    <span className={`run-state ${run.recovery === "unverified" ? "" : run.status === "running" ? "run-state-live" : ["exited", "failed", "stopped"].includes(run.status) ? "run-state-ended" : ""}`} title={run.recovery === "unverified" ? "Состояние процесса не подтверждено после перезапуска" : labels[run.status]}>
                       {run.recovery === "unverified"
                         ? "Состояние процесса не подтверждено после перезапуска"
                         : labels[run.status]}
@@ -2571,35 +2674,33 @@ export function App() {
                   )}
                   {visibleRun===run.id&&window.goga.refreshDashboard&&<PanelRefreshButton busy={refreshingIds.includes(run.id)} onClick={()=>refreshAction.current(run.id)}/>}
                   {run.recovery && (
-                    <button
-                      type="button"
+                    <RunActionButton
+                      label={reconcilingRun === run.id ? "Проверяем состояние процесса…" : "Проверить состояние процесса"}
+                      aria-busy={reconcilingRun === run.id}
                       disabled={
                         !!reconcilingRun ||
                         typeof window.goga.reconcileRun !== "function"
                       }
                       onClick={() => void reconcileRun(run)}
                     >
-                      {reconcilingRun === run.id
-                        ? "Проверяем состояние процесса…"
-                        : "Проверить состояние процесса"}
-                    </button>
+                      <Activity size={15} aria-hidden="true" />
+                    </RunActionButton>
                   )}
                   {run.kind !== "build" && run.pipelineRepeat &&
                     ["exited", "failed", "stopped"].includes(run.status) &&
                     run.recovery !== "unverified" &&
                     typeof window.goga.repeatPipeline === "function" && (
-                      <button
-                        type="button"
+                      <RunActionButton label="Повторить запуск"
                         disabled={repeatingPipelines.has(run.id) || !!contextUnavailable || !!workspaceLaunchBlockReason(runs, run.projectId, run.context ?? null, "pipeline")}
                         title={`Повторить с прежними параметрами${run.pipelineRepeat.clean ? ", с очисткой состояния" : ""}${run.pipelineRepeat.update ? ", с пересборкой" : ""}`}
                         onClick={() => void repeatPipeline(run)}
-                      >Повторить запуск</button>
+                      ><RotateCcw size={15} aria-hidden="true" /></RunActionButton>
                     )}
                   {run.kind === "build" &&
                     !(
                       run.status === "starting" || run.status === "running"
                     ) && (
-                      <button
+                      <RunActionButton label="Повторить сборку"
                         disabled={
                           repeatBusy ||
                           !!contextUnavailable ||
@@ -2612,11 +2713,11 @@ export function App() {
                         }
                         onClick={() => void repeatBuild(run)}
                       >
-                        Повторить сборку
-                      </button>
+                        <RotateCcw size={15} aria-hidden="true" />
+                      </RunActionButton>
                     )}
                   {(run.status === "starting" || run.status === "running") && (
-                    <button
+                    <RunActionButton label="Остановить"
                       onClick={stop}
                       className="stop-button"
                       disabled={
@@ -2629,8 +2730,8 @@ export function App() {
                           : undefined
                       }
                     >
-                      Остановить
-                    </button>
+                      <Square size={15} aria-hidden="true" />
+                    </RunActionButton>
                   )}
                 </div>
               </>
@@ -2777,7 +2878,7 @@ export function App() {
                 if(match)navigate(()=>openContextRun(match));else setError("Запуск уже закрыт.");}
                 else navigate(()=>openAttachedPanel(r.panel.id))}}/>}
             {page==="demonstration"&&demoShowId&&<DemoPanel key={demoShowId} store={demonstrations} showId={demoShowId}
-              onSettings={()=>navigate(()=>{settingsBack.current="demonstration";setGlobalSettingsTab("demonstrations");setPage("settings");})}/>}
+              onSettings={()=>navigate(()=>{settingsBack.current="demonstration";setGlobalSettingsTab("demonstrations");setPage("settings");},false,"workspace")}/>}
             <RetainedViews
               activeKey={page === "overview" ? sectionKey("overview") : null}
               retain={retainProjectView}
@@ -2995,40 +3096,42 @@ export function App() {
                 <p role="status">{contextUnavailable}</p>
               </section>
             )}
-            <RetainedViews
-              activeKey={
-                page === "project-settings" && !contextUnavailable
-                  ? sectionKey("settings")
-                  : null
-              }
-              retain={retainProjectView}
-            >
-              {project && (
-                <ProjectSettings
-                  embedded
-                  documents={settingsDocuments}
-                  specificationsState={specificationsState}
-                  selectedTab={projectSettingsTabs[project.id]}
-                  onTabChange={(tab) => setProjectSettingsTabs(values => ({ ...values, [project.id]: tab }))}
-                  key={documentScopeId(
-                    selectedContext ? contextRef(selectedContext) : project.id,
-                  )}
-                  project={project}
-                  owner={
-                    selectedContext ? contextRef(selectedContext) : undefined
-                  }
-                  guard={settingsGuard}
-                  onBusy={setSettingsBusy}
-                  onBack={() => navigate(() => setPage("project-settings"))}
-                  onSaved={(revision) =>
-                    setSettingsRevision((values) => ({
-                      ...values,
-                      [project.id]: revision,
-                    }))
-                  }
-                />
-              )}
-            </RetainedViews>
+            <ProjectDocumentStatusOutlet.Provider value={documentStatusOutlet}>
+              <RetainedViews
+                activeKey={
+                  page === "project-settings" && !contextUnavailable
+                    ? sectionKey("settings")
+                    : null
+                }
+                retain={retainProjectView}
+              >
+                {project && (
+                  <ProjectSettings
+                    embedded
+                    documents={settingsDocuments}
+                    specificationsState={specificationsState}
+                    selectedTab={projectSettingsTabs[project.id]}
+                    onTabChange={(tab) => setProjectSettingsTabs(values => ({ ...values, [project.id]: tab }))}
+                    key={documentScopeId(
+                      selectedContext ? contextRef(selectedContext) : project.id,
+                    )}
+                    project={project}
+                    owner={
+                      selectedContext ? contextRef(selectedContext) : undefined
+                    }
+                    guard={settingsGuard}
+                    onBusy={setSettingsBusy}
+                    onBack={() => navigate(() => setPage("project-settings"))}
+                    onSaved={(revision) =>
+                      setSettingsRevision((values) => ({
+                        ...values,
+                        [project.id]: revision,
+                      }))
+                    }
+                  />
+                )}
+              </RetainedViews>
+            </ProjectDocumentStatusOutlet.Provider>
             {preparationEntries(openBuilds).map(
               ({ id, owner, project: buildProject }) => (
                 <div
@@ -3297,7 +3400,7 @@ export function App() {
                     setGlobalSettingsTab("terminal");
                     setPage("settings");
                     setError("");
-                  })}
+                  },false,"workspace")}
                   scope={displayOwner ? contextRef(displayOwner) : project.id}
                   blocked={contextUnavailable || undefined}
                   obscured={Boolean(
@@ -3306,7 +3409,7 @@ export function App() {
                     topicCard ||
                     projectRemoval ||
                     projectCreationOpen || organizationModal ||
-                    pendingNavigation ||
+                    pendingNavigation || leave.view ||
                     repeatPending ||
                     repositoryActions.failures.length ||
                     gitModals.size || demoCloseOpen ||
@@ -3324,7 +3427,13 @@ export function App() {
               }
               retain={retainProjectView}
             >
-              {project && (
+              {project && (topicRepository === "checking" ?
+                <LoadingState label="Проверяем Git в проекте" /> :
+                topicRepository === "missing" ?
+                <section className="topics-workspace project-content" aria-label="Топики проекта">
+                  <div className="topics-heading"><h2>Топики</h2></div>
+                  <TopicRepositoryNotice />
+                </section> :
                 <TopicsWorkspace
                   key={project.id}
                   project={project}
@@ -3347,6 +3456,7 @@ export function App() {
                   onSelectTopic={(identity) =>
                     navigateContext(() =>
                       setTableTopicSelection({ identity, nonce: Date.now() }),
+                      "stay"
                     )
                   }
                   onOpenRun={(id) => {
@@ -3403,7 +3513,7 @@ export function App() {
                 <button
                   className="primary"
                   disabled={!!launchUnavailable || settingsBusy}
-                  onClick={() => navigate(() => prepareFromHeader("pipeline"))}
+                  onClick={() => navigate(() => prepareFromHeader("pipeline"),false,"pipeline")}
                 >
                   Создать запуск
                 </button>
@@ -3470,37 +3580,38 @@ export function App() {
           onPrepare={(target, year, text) => {
             if (year !== String(new Date().getFullYear()) || target.remote)
               return;
-            setPreparedTopic({
-              projectId: topicCard.project.id,
-              target,
-              text,
-              nonce: Date.now(),
-            });
-            if (
-              !contextsEnabled ||
-              typeof window.goga.listTopicContexts !== "function" ||
-              typeof window.goga.resolveTopicContext !== "function"
-            ) {
-              setError(
-                "API рабочих копий недоступен. Подготовка запуска из основной папки проекта не выполняется.",
-              );
-              setTopicCard(null);
-              return;
-            }
-            setProjectId(topicCard.project.id);
-            setInitialPreparation({
-              identity: {
-                projectId: topicCard.project.id,
-                year,
-                topic: target.topic,
-                branch: target.branch,
-              },
-              kind: "pipeline",
-              nonce: ++initialPreparationNonce.current,
-            });
-            setSelected(null);
-            setPage("context-preparation");
             setTopicCard(null);
+            guardFileTransition(() => {
+              setPreparedTopic({
+                projectId: topicCard.project.id,
+                target,
+                text,
+                nonce: Date.now(),
+              });
+              if (
+                !contextsEnabled ||
+                typeof window.goga.listTopicContexts !== "function" ||
+                typeof window.goga.resolveTopicContext !== "function"
+              ) {
+                setError(
+                  "API рабочих копий недоступен. Подготовка запуска из основной папки проекта не выполняется.",
+                );
+                return;
+              }
+              setProjectId(topicCard.project.id);
+              setInitialPreparation({
+                identity: {
+                  projectId: topicCard.project.id,
+                  year,
+                  topic: target.topic,
+                  branch: target.branch,
+                },
+                kind: "pipeline",
+                nonce: ++initialPreparationNonce.current,
+              });
+              setSelected(null);
+              setPage("context-preparation");
+            },"pipeline");
           }}
         />
       )}
@@ -3513,7 +3624,7 @@ export function App() {
       )}
       {projectAddMenu && <ProjectAddMenu target={projectAddMenu}
         onClose={restoreFocus => { if (restoreFocus) projectAddMenu.trigger.focus(); setProjectAddMenu(null); }}
-        onAction={action => navigateRef.current(() => action === "open" ? void add() : setProjectCreationOpen(true))}
+        onAction={action => navigateRef.current(() => action === "open" ? void add() : setProjectCreationOpen(true),false,"stay")}
         onError={error => setError(preparationErrorMessage(error))} />}
       {projectCreationOpen && <ProjectCreationDialog onClose={() => setProjectCreationOpen(false)}
         onOpenExisting={() => {setProjectCreationOpen(false);setOpenAfterCreation(true);}}
@@ -3554,9 +3665,15 @@ export function App() {
           }}
         />
       )}
+      {leave.view && !leave.view.silent && (
+        <WorkspaceLeaveDialog files={[...new Set(leave.view.intent.files.map(file=>file.path))]}
+          launching={leave.view.intent.launching} busy={leave.view.busy} failure={leave.view.failure}
+          onStay={leave.stay} onSave={leave.save} onKeep={leave.keep}
+          onReveal={leave.view.failure?.reveal ? leave.reveal : undefined}/>
+      )}
       <ContextDeletionPopup controller={deletion} />
       <TopicRemovalPopup controller={topicRemoval} />
-    </div>
+    </ProjectSaveGuardShell>
   );
   return (
     <ContextDeletionProvider value={deletion.execute}>

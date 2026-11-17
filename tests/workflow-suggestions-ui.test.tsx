@@ -341,23 +341,42 @@ describe("workflow name suggestions", () => {
         expect(f.store.workflowState("p").drafts).toEqual([]);
         return;
       }
-      fireEvent.click(
-        await screen.findByRole("button", { name: "Создать рабочий процесс" }),
+      expect((await screen.findByRole("alert")).textContent).toContain(
+        "files unavailable",
       );
-      fireEvent.focus(input());
-      await screen.findAllByRole("option");
-      change("manual");
+      const openForm = screen.getByRole<HTMLButtonElement>("button", {
+        name: "Создать рабочий процесс",
+      });
+      expect(openForm.disabled).toBe(true);
+      fireEvent.click(openForm);
       expect(
-        (
-          screen.getByRole("button", {
-            name: "Создать черновик",
-          }) as HTMLButtonElement
-        ).disabled,
-      ).toBe(true);
-      fireEvent.submit(input().closest("form")!);
+        screen.queryByRole("combobox", { name: "Имя рабочего процесса" }),
+      ).toBeNull();
+      expect(f.suggestions).not.toHaveBeenCalled();
       expect(f.store.workflowState("p").drafts).toEqual([]);
+      expect(f.save).not.toHaveBeenCalled();
     },
   );
+  it("rejects a direct submit when refreshing the file list fails with the creation form already open", async () => {
+    const f = setup();
+    f.show();
+    await open();
+    change("manual");
+    f.list.mockRejectedValueOnce(Error("files unavailable"));
+    await act(() => f.store.refreshProject("p"));
+    expect((await screen.findByRole("alert")).textContent).toContain(
+      "files unavailable",
+    );
+    expect(input().value).toBe("manual");
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Создать черновик",
+      }).disabled,
+    ).toBe(true);
+    fireEvent.submit(input().closest("form")!);
+    expect(f.store.workflowState("p").drafts).toEqual([]);
+    expect(f.save).not.toHaveBeenCalled();
+  });
   it.each(["success", "failure"])(
     "ignores stale %s after project changes",
     async (outcome) => {

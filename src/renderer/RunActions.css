@@ -1,0 +1,48 @@
+/* Match the compact demonstration tools and adjacent 28px Git controls. */
+.run-context .run-action-button {
+  box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 28px;
+  width: 28px;
+  min-width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 5px;
+  color: var(--muted);
+  border-color: transparent;
+  background: transparent;
+  line-height: 1;
+}
+.run-context .run-action-button svg {
+  display: block;
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+}
+.run-context .run-action-button:hover:not(:disabled),
+.run-context .run-action-button[aria-pressed="true"] {
+  background: var(--raised);
+  border-color: var(--line);
+  color: var(--text);
+}
+
+.run-actions .run-state,
+.run-context .run-build-plan {
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.run-actions .run-state {
+  max-width: 220px;
+}
+
+.run-actions .run-state-live {
+  flex: 0 0 auto;
+  color: var(--teal);
+}
+.run-actions .run-state-ended {
+  color: #ef856d;
+}

@@ -4,6 +4,8 @@ import type { Project } from "../../shared/types";
 import { contextKey, contextRef, contextRequestKey } from "../topic-context";
 import { documentScopeId, type SettingsDocuments } from "../settings-documents";
 import type { OverviewStore } from "../overview/store";
+import { overviewLeaveFile } from "../overview-leave-drafts";
+import type { WorkspaceLeaveFile } from "../workspace-leave";
 import type { HomeTarget, SessionEntry, WorkspaceAddress } from "./types";
 
 export type DocumentTarget = Extract<HomeTarget, { kind: "document" }>;
@@ -14,6 +16,7 @@ type Handle = {
   busy: boolean;
   read: () => string | null;
   reveal: () => Destination | null;
+  leaveFile?: (scope: ScopeRef) => WorkspaceLeaveFile;
 };
 const address = (scope: ScopeRef): WorkspaceAddress =>
   typeof scope === "string"
@@ -108,10 +111,11 @@ export function createHomeSessions() {
   function attach(
     key: string,
     listen: (fn: () => void) => () => void,
-    collect: () => Handle[],
+    collect: (attached: () => boolean) => Handle[],
     fileMetadata?: () => object,
   ) {
     const ticket = Symbol(key);
+    const attached = () => sources.get(key)?.ticket === ticket;
     let previousMetadata: object | undefined;
     const publish = () => {
       if (sources.get(key)?.ticket !== ticket) return;
@@ -125,7 +129,7 @@ export function createHomeSessions() {
         }
         previousMetadata = metadata;
       }
-      sources.set(key, { ticket, handles: collect() });
+      sources.set(key, { ticket, handles: collect(attached) });
       refresh();
     };
     sources.set(key, { ticket, handles: [] });
@@ -145,12 +149,25 @@ export function createHomeSessions() {
     has: (t: DocumentTarget) => handles.has(idOf(t)),
     readBuffer: (t: DocumentTarget) => handles.get(idOf(t))?.read() ?? null,
     reveal: (t: DocumentTarget) => handles.get(idOf(t))?.reveal() ?? null,
+    overviewLeaveFiles(scope: ScopeRef): WorkspaceLeaveFile[] {
+      const owner = address(scope);
+      return [...handles.values()].flatMap((h) => {
+        const other = h.target.owner;
+        const same =
+          owner.kind === "primary" && other.kind === "primary"
+            ? owner.projectId === other.projectId
+            : owner.kind === "topic" &&
+              other.kind === "topic" &&
+              contextKey(owner.ref) === contextKey(other.ref);
+        return same && h.leaveFile ? [h.leaveFile(scope)] : [];
+      });
+    },
     attachOverview(
       store: OverviewStore,
       retainedViewKey: string,
       onReveal: (path: string) => void,
     ) {
-      return attach("overview:" + retainedViewKey, store.subscribe, () => {
+      return attach("overview:" + retainedViewKey, store.subscribe, (attached) => {
         const state = store.getPresentation();
         const result: Handle[] = [];
         for (const path of state.order) {
@@ -168,6 +185,7 @@ export function createHomeSessions() {
               relativePath: path,
             },
             busy: !!file.busy,
+            leaveFile: (owner) => overviewLeaveFile(store, path, owner, memory, attached, onReveal),
             read: () => {
               const current = store.getSnapshot().files[path];
               return current?.memory === memory ? current.text : null;

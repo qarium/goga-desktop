@@ -434,3 +434,37 @@ it("ignores an old read after hiding and opening again, preserves final output a
   act(()=>publish([ready({status:"exited",output:undefined})]));
   expect(await screen.findByText("done")).toBeTruthy();
 });
+
+it("keeps the live status as text and all run toolbar actions as compact labeled icons",async()=>{
+  api.refreshDashboard=vi.fn(async()=>{});
+  await open([ready()]);
+  const toolbar=statusButton().closest(".run-actions")!;
+  expect(toolbar.querySelector(".run-state")?.tagName).toBe("SPAN");
+  expect(toolbar.querySelector(".run-state")?.textContent).toBe("Работает");
+  for(const action of toolbar.querySelectorAll("button")){
+    expect(action.classList.contains("run-action-button")).toBe(true);
+    expect(action.textContent).toBe("");
+    expect(action.getAttribute("aria-label")).toBeTruthy();
+    expect(action.title).toBeTruthy();
+    expect(action.querySelector("svg")).toBeTruthy();
+  }
+  fireEvent.click(screen.getByRole("button",{name:"Обновить страницу панели"}));
+  await screen.findByRole("button",{name:"Остановить"});
+  expect(api.refreshDashboard).toHaveBeenCalledExactlyOnceWith("a",undefined,undefined);
+  expect(api.stopRun).not.toHaveBeenCalled();
+});
+
+it.each(["exited","failed","stopped"] as const)("uses the finished tone for %s status text without coloring the action",async(status)=>{
+  await open([ready({status})]);
+  const text=document.querySelector(".run-actions .run-state")!;
+  expect(text.classList.contains("run-state-ended")).toBe(true);
+  expect(text.classList.contains("run-state-live")).toBe(false);
+});
+it("keeps the working tone even when only its journal is available, but leaves unverified status neutral",async()=>{
+  await open([makeRun({status:"running",dashboardOpened:false})]);
+  expect(document.querySelector(".run-actions .run-state-live")?.textContent).toBe("Работает");
+  act(()=>publish([makeRun({status:"running",recovery:"unverified"})]));
+  const status=document.querySelector(".run-actions .run-state")!;
+  expect(status.classList.contains("run-state-live")).toBe(false);
+  expect(status.classList.contains("run-state-ended")).toBe(false);
+});

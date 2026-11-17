@@ -181,6 +181,8 @@ const api: DesktopAPI = {
     invoke("read-project-document", id, target),
   saveProjectDocument: (id, target, text, version) =>
     invoke("save-project-document", id, target, text, version),
+  renameProjectDocument: (id, target, newName, version) =>
+    invoke("rename-project-document", id, target, newName, version),
   chooseProject: () => invoke("choose-project"),
   chooseProjectLocation: () => invoke("choose-project-location"),
   createProject: (request) => invoke("create-project", request),

@@ -78,9 +78,8 @@
   accent-color: var(--teal);
   flex-shrink: 0;
 }
-/* Native inputs keep their semantics/Space handling; only the board's paint
- * is customized. The table and other application forms are unchanged. */
-.topics-board-workspace input[type="checkbox"] {
+/* Shared opt-in paint for native inputs. Keep semantics and Space handling. */
+:is(.topics-board-workspace input[type="checkbox"], input.desktop-compact-checkbox) {
   appearance: none;
   display: inline-grid;
   place-content: center;
@@ -95,7 +94,7 @@
   vertical-align: middle;
   cursor: pointer;
 }
-.topics-board-workspace input[type="checkbox"]::before {
+:is(.topics-board-workspace input[type="checkbox"], input.desktop-compact-checkbox)::before {
   content: "";
   width: 8px;
   height: 5px;
@@ -105,31 +104,31 @@
   opacity: 0;
   pointer-events: none;
 }
-.topics-board-workspace input[type="checkbox"]:checked {
+:is(.topics-board-workspace input[type="checkbox"], input.desktop-compact-checkbox):checked {
   border-color: var(--teal);
   background: var(--teal);
 }
-.topics-board-workspace input[type="checkbox"]:checked::before {
+:is(.topics-board-workspace input[type="checkbox"], input.desktop-compact-checkbox):checked::before {
   opacity: 1;
 }
-.topics-board-workspace input[type="checkbox"]:hover:not(:disabled) {
+:is(.topics-board-workspace input[type="checkbox"], input.desktop-compact-checkbox):hover:not(:disabled) {
   border-color: var(--teal);
 }
-.topics-board-workspace input[type="checkbox"]:focus-visible {
+:is(.topics-board-workspace input[type="checkbox"], input.desktop-compact-checkbox):focus-visible {
   outline: 2px solid var(--teal);
   outline-offset: 2px;
 }
-.topics-board-workspace input[type="checkbox"]:disabled {
+:is(.topics-board-workspace input[type="checkbox"], input.desktop-compact-checkbox):disabled {
   opacity: 0.45;
   cursor: default;
 }
 @media (forced-colors: active) {
-  .topics-board-workspace input[type="checkbox"] {
+  :is(.topics-board-workspace input[type="checkbox"], input.desktop-compact-checkbox) {
     appearance: auto;
     forced-color-adjust: auto;
     opacity: 1;
   }
-  .topics-board-workspace input[type="checkbox"]::before {
+  :is(.topics-board-workspace input[type="checkbox"], input.desktop-compact-checkbox)::before {
     display: none;
   }
 }

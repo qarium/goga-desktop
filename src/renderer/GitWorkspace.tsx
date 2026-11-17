@@ -630,7 +630,7 @@ function GitWorkspaceOwner({
           >
             <path d="M6 3H3v12a2 2 0 0 0 2 2h1M16 3H9v18h12V8zM16 3v5h5" />
           </svg>
-          <span>
+          <span className="git-control-label">
             {!summarySupported && conflicts ? "Конфликты" : "Изменения"}
           </span>
           <span
@@ -678,7 +678,7 @@ function GitWorkspaceOwner({
             >
               <path d="M3 12a9 9 0 1 0 3-6.7M3 3v6h6M12 7v5l3 2" />
             </svg>
-            <span>Коммиты</span>
+            <span className="git-control-label">Коммиты</span>
           </TooltipButton>
         )}
       </div>

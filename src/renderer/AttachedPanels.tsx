@@ -1,3 +1,4 @@
+import { RunActionButton } from "./RunActionButton";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { Cable, RefreshCw, X } from "lucide-react";
 import type { AttachedDashboard } from "../shared/attached-dashboard";
@@ -213,16 +214,15 @@ export function PanelRefreshButton({
   onClick: () => void;
 }) {
   return (
-    <button
-      type="button"
+    <RunActionButton
       className="dashboard-refresh-button"
       aria-busy={busy}
       disabled={busy}
-      aria-label="Обновить страницу панели"
+      label="Обновить страницу панели"
       title="Обновить страницу панели (F5 / ⌘R / Ctrl+R), не перезапуская конвейер"
       onClick={onClick}
     >
-      <RefreshCw size={15} />
-    </button>
+      <RefreshCw size={15} aria-hidden="true" />
+    </RunActionButton>
   );
 }

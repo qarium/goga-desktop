@@ -9,9 +9,11 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
+import { useTopicRepository } from "../src/renderer/topic-repository";
 import { documentScopeId } from "../src/renderer/settings-documents";
 import type { ScopeRef } from "../src/shared/context";
 
@@ -324,4 +326,128 @@ it("keeps missing-Git indicators scoped to their exact owner", async () => {
   expect(repositoryDisabled()).toBe(true);
   act(() => fixture.props.get("p").onRepositoryStateChange("p", "ready"));
   expect(repositoryDisabled()).toBe(false);
+});
+
+it("shows the same explanation in the picker and Topics for a plain folder, without loading topics", async () => {
+  fixture.realWorkspace = true;
+  let initialized = false;
+  api.readGitSummary = vi.fn(async (scope: string) => ({
+    scope,
+    branch: scope === "p" && !initialized ? null : "main",
+    changedFiles: 0,
+    conflicts: 0,
+    ...(scope === "p" && !initialized ? { repository: "missing" } : {}),
+  }));
+  api.readTopicCatalog = vi.fn(async (id: string, year: string) => ({
+    projectId: id,
+    year,
+    entries: [],
+    currentTopic: null,
+  }));
+  api.ensureTopicContext = vi.fn();
+  api.listTopicContexts = vi.fn(async () => []);
+  api.readTopicTable = vi
+    .fn()
+    .mockRejectedValue(Error("Настоящая ошибка каталога"));
+  await open();
+  await screen.findByText("Git не инициализирован");
+  fireEvent.click(screen.getByRole("button", { name: "Топики" }));
+  const page = await screen.findByRole("region", { name: "Топики проекта" });
+  const title = "Топики доступны только в Git-репозитории";
+  expect(await within(page).findByText(title)).toBeTruthy();
+  expect(within(page).queryByRole("alert")).toBeNull();
+  expect(within(page).queryByRole("button")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Выбрать другой топик" }));
+  const picker = screen.getByRole("region", { name: "Выбор топика" });
+  expect(within(picker).getByText(title)).toBeTruthy();
+  expect(within(picker).queryByRole("combobox")).toBeNull();
+  expect(within(picker).queryByRole("alert")).toBeNull();
+  expect(within(picker).queryByText(/текущая ветка|Повторить/)).toBeNull();
+  expect(api.readTopicCatalog).not.toHaveBeenCalled();
+  expect(api.readTopicTable).not.toHaveBeenCalled();
+  expect(api.listTopicContexts).not.toHaveBeenCalled();
+  fireEvent.keyDown(picker, { key: "Escape" });
+  expect(screen.queryByRole("region", { name: "Выбор топика" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+  await waitFor(() =>
+    expect(api.readTopicCatalog).toHaveBeenCalledWith("q", expect.any(String)),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Топики" }));
+  expect(await screen.findByText("Настоящая ошибка каталога")).toBeTruthy();
+  expect(screen.queryByText(title)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+  await screen.findByText(title);
+  initialized = true;
+  await act(async () => {
+    window.dispatchEvent(new Event("focus"));
+  });
+  await waitFor(() =>
+    expect(api.readTopicCatalog).toHaveBeenCalledWith("p", expect.any(String)),
+  );
+  expect(await screen.findByText("Настоящая ошибка каталога")).toBeTruthy();
+  expect(screen.queryByText(title)).toBeNull();
+});
+
+it.each(["unborn", "failed"] as const)(
+  "waits for the primary Git check; %s is not a missing repository",
+  async (kind) => {
+    fixture.realWorkspace = true;
+    let resolve!: (value: unknown) => void, reject!: (reason: Error) => void;
+    api.readGitSummary = vi.fn(
+      () =>
+        new Promise((ok, no) => {
+          resolve = ok;
+          reject = no;
+        }),
+    );
+    api.readTopicCatalog = vi
+      .fn()
+      .mockRejectedValue(Error("Не удалось загрузить каталог"));
+    api.readTopicTable = vi
+      .fn()
+      .mockRejectedValue(Error("Не удалось загрузить таблицу"));
+    await open();
+    fireEvent.click(screen.getByRole("button", { name: "Топики" }));
+    await screen.findByRole("status", { name: "Проверяем Git в проекте" });
+    expect(api.readTopicCatalog).not.toHaveBeenCalled();
+    expect(api.readTopicTable).not.toHaveBeenCalled();
+    await act(async () => {
+      if (kind === "unborn")
+        resolve({ scope: "p", branch: null, changedFiles: 0, conflicts: 0 });
+      else reject(Error("Нет доступа"));
+    });
+    await screen.findByText("Не удалось загрузить таблицу");
+    fireEvent.click(
+      screen.getByRole("button", { name: "Выбрать другой топик" }),
+    );
+    await screen.findByText("Не удалось загрузить каталог");
+    expect(
+      screen.queryByText("Топики доступны только в Git-репозитории"),
+    ).toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Повторить загрузку топиков" }),
+    ).toBeTruthy();
+  },
+);
+
+it("checks the original project even if its Git bar has no subscriber (a clone is visible)", async () => {
+  let missing = true;
+  api.readGitSummary = vi.fn(async (scope: string) => ({
+    scope,
+    branch: null,
+    changedFiles: 0,
+    conflicts: 0,
+    ...(missing ? { repository: "missing" } : {}),
+  }));
+  function Probe() {
+    return <span>{useTopicRepository("p")}</span>;
+  }
+  render(<Probe />);
+  await screen.findByText("missing");
+  expect(api.readGitSummary).toHaveBeenCalledExactlyOnceWith("p");
+  missing = false;
+  await act(async () => {
+    window.dispatchEvent(new Event("focus"));
+  });
+  await screen.findByText("available");
 });

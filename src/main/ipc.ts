@@ -101,6 +101,7 @@ import {
   type DeletableDocument,
 } from "../shared/document-deletion";
 import {
+  renamedProjectDocumentTarget,
   isProjectToolName,
   isProjectWorkflowName,
   isProjectPipelineName,
@@ -779,6 +780,20 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
       id.parse(version),
     ),
   );
+  handle("rename-project-document", (scope, source, name, version) => {
+    const target = documentTarget.parse(source);
+    const newName = z.string().min(1).max(255).parse(name);
+    renamedProjectDocumentTarget(target, newName);
+    return d.service.renameProjectDocument(
+      scopeRefSchema.parse(scope),
+      target,
+      newName,
+      z
+        .string()
+        .regex(/^[0-9a-f]{64}$/)
+        .parse(version),
+    );
+  });
   handle("choose-project", async () => {
     const folder = await d.choose();
     return folder ? d.service.addProject(folder) : null;

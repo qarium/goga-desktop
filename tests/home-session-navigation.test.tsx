@@ -45,6 +45,22 @@ function setup(withBetaRun = false) {
       truncated: false,
     })),
     readOverviewSchema: vi.fn(async () => []),
+    searchOverviewFiles: vi.fn(async () => ({
+      entries: ["one.txt", "two.txt"].map((name) => ({
+        name,
+        path: name,
+        kind: "file",
+      })),
+      truncated: false,
+    })),
+    readOverviewFile: vi.fn(async (_scope: unknown, path: string) => ({
+      text: "file: " + path,
+      version: "a".repeat(64),
+      relativePath: path,
+      exists: true,
+    })),
+    saveOverviewFile: vi.fn(),
+    listSettings: vi.fn(async () => ({ profiles: [] })),
     readProjectDocument: vi.fn(async () => ({
       text: "disk: true\n",
       exists: true,
@@ -52,6 +68,7 @@ function setup(withBetaRun = false) {
       relativePath: ".goga/config.yml",
     })),
     saveProjectDocument: vi.fn(),
+    readGitWorkspace: vi.fn(),
     readGitSummary: vi.fn(async (scope) => ({
       scope,
       branch: "main",
@@ -134,8 +151,19 @@ async function openProject(name: string) {
   fireEvent.click(await side().findByRole("button", { name }));
   await screen.findByRole("heading", { name });
 }
-async function home() {
+const leaveDialog = () =>
+  screen.findByRole("dialog", { name: "Сохранить правки?" });
+async function home(keepFileDraft = false) {
   fireEvent.click(screen.getByRole("button", { name: "Главная" }));
+  if (keepFileDraft) {
+    const dialog = await leaveDialog();
+    expect(within(dialog).getByRole("listitem").textContent).toBe(
+      ".goga/config.yml",
+    );
+    fireEvent.click(
+      within(dialog).getByRole("button", { name: "Без сохранения" }),
+    );
+  }
   await screen.findByRole("heading", { name: "Главная" });
 }
 function editor() {
@@ -162,9 +190,18 @@ async function dirtyConfig() {
       changes: { from: 0, to: view.state.doc.length, insert: text },
     }),
   );
-  await screen.findByText("Есть несохранённый черновик");
+  const status = await screen.findByText("Файл: есть изменения");
+  const slot = status.closest(".document-status-outlet");
+  expect(slot?.parentElement?.className).toBe("run-context");
+  expect(slot?.nextElementSibling?.className).toBe(
+    "git-workspace-controls-host",
+  );
+  expect(
+    document.querySelector(".document-heading-tools .document-save-feedback"),
+  ).toBeNull();
 }
 beforeEach(() => {
+  localStorage.clear();
   HTMLDialogElement.prototype.showModal = function () {
     this.open = true;
   };
@@ -176,7 +213,10 @@ afterEach(cleanup);
 it("returns from Beta through Home to the original Alpha project editor and original dirty text", async () => {
   const { api, owner } = setup();
   await dirtyConfig();
-  await home();
+  await home(true);
+  expect(
+    document.querySelector(".run-context .document-save-feedback"),
+  ).toBeNull();
   await openProject("Beta");
   await selectPrototypeOwner();
   await home();
@@ -188,6 +228,9 @@ it("returns from Beta through Home to the original Alpha project editor and orig
   api.resolveTopicContext.mockClear();
   fireEvent.click(dirty);
   await waitFor(() => expect(editor()?.state.doc.toString()).toBe(text));
+  expect(
+    document.querySelector(".run-context .document-save-feedback")?.textContent,
+  ).toBe("Файл: есть изменения");
   expect(api.resolveTopicContext).toHaveBeenCalledWith(owner("alpha"));
   expect(api.readProjectDocument).not.toHaveBeenCalled();
   expect(api.saveProjectDocument).not.toHaveBeenCalled();
@@ -199,7 +242,7 @@ it.each(["changed", "missing"] as const)(
   async (mode) => {
     const { api, records, owner } = setup();
     await dirtyConfig();
-    await home();
+    await home(true);
     await openProject("Beta");
     await home();
     const old = owner("alpha"),
@@ -242,7 +285,7 @@ it.each(["changed", "missing"] as const)(
 it("does not steal focus if a document target resolves after another project has been opened", async () => {
   const { api, records } = setup();
   await dirtyConfig();
-  await home();
+  await home(true);
   let deliver!: (result: (typeof records)[number]) => void;
   api.resolveTopicContext.mockImplementationOnce(
     () =>
@@ -354,3 +397,210 @@ it.each(["pipeline", "build"] as const)(
     expect(submit).toHaveBeenCalledTimes(1);
   },
 );
+
+it("remembers only a successful Project save, autosaves the next edits, and can return to asking in general settings", async () => {
+  const { api, owner } = setup();
+  let disk = {
+    text: "disk: true\n",
+    exists: true,
+    version: "before",
+    relativePath: ".goga/config.yml",
+  };
+  api.readProjectDocument.mockImplementation(async () => ({ ...disk }));
+  let finish!: () => void;
+  api.saveProjectDocument
+    .mockImplementationOnce(async (_scope, _target, contents) => {
+      await new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      return (disk = { ...disk, text: contents, version: "after-one" });
+    })
+    .mockImplementation(
+      async (_scope, _target, contents) =>
+        (disk = { ...disk, text: contents, version: "after-two" }),
+    );
+  await dirtyConfig();
+  const toOverview = () =>
+    fireEvent.click(screen.getByRole("button", { name: "Обзор" }));
+  toOverview();
+  const first = await leaveDialog();
+  expect(
+    within(first).getByRole<HTMLInputElement>("checkbox", {
+      name: /Больше не спрашивать/,
+    }).checked,
+  ).toBe(false);
+  fireEvent.click(
+    within(first).getByRole("checkbox", { name: /Больше не спрашивать/ }),
+  );
+  fireEvent.click(within(first).getByRole("button", { name: "Остаться" }));
+  expect(editor()?.state.doc.toString()).toBe(text);
+  expect(api.saveProjectDocument).not.toHaveBeenCalled();
+  toOverview();
+  const again = await leaveDialog();
+  const opt = within(again).getByRole<HTMLInputElement>("checkbox", {
+    name: /Больше не спрашивать/,
+  });
+  expect(opt.checked).toBe(false);
+  fireEvent.click(opt);
+  fireEvent.click(
+    within(again).getByRole("button", { name: "Сохранить и продолжить" }),
+  );
+  await waitFor(() =>
+    expect(api.saveProjectDocument).toHaveBeenCalledWith(
+      owner("alpha"),
+      { kind: "config" },
+      text,
+      "before",
+    ),
+  );
+  expect(screen.getByRole("dialog")).toBeTruthy();
+  expect(localStorage.getItem("goga.desktop.autoSaveOnLeave.v1")).not.toBe(
+    "true",
+  );
+  await act(async () => finish());
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(localStorage.getItem("goga.desktop.autoSaveOnLeave.v1")).toBe("true");
+  async function editConfig(next: string) {
+    fireEvent.click(screen.getByRole("button", { name: "Проект" }));
+    await screen.findByRole("navigation", { name: "Разделы настроек проекта" });
+    const view = await waitFor(() => {
+      const v = editor();
+      if (!v) throw Error("waiting for project config");
+      return v;
+    });
+    act(() =>
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: next },
+      }),
+    );
+    await screen.findByText("Файл: есть изменения");
+  }
+  await editConfig("saved: again\n");
+  toOverview();
+  await waitFor(() =>
+    expect(api.saveProjectDocument).toHaveBeenCalledWith(
+      owner("alpha"),
+      { kind: "config" },
+      "saved: again\n",
+      "after-one",
+    ),
+  );
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  fireEvent.click(screen.getByRole("button", { name: "Настройки" }));
+  fireEvent.click(
+    await within(
+      await screen.findByRole("navigation", { name: "Разделы общих настроек" }),
+    ).findByRole("button", { name: "Рабочая область" }),
+  );
+  const toggle = await screen.findByRole("switch", {
+    name: "Автосохранение при переходе",
+  });
+  expect(toggle.getAttribute("aria-checked")).toBe("true");
+  fireEvent.click(toggle);
+  expect(localStorage.getItem("goga.desktop.autoSaveOnLeave.v1")).toBe("false");
+  fireEvent.click(screen.getByRole("button", { name: /Назад/ }));
+  await editConfig("ask: again\n");
+  toOverview();
+  expect(
+    within(await leaveDialog()).getByRole<HTMLInputElement>("checkbox", {
+      name: /Больше не спрашивать/,
+    }).checked,
+  ).toBe(false);
+  expect(api.saveProjectDocument).toHaveBeenCalledTimes(2);
+});
+
+it("blocks a Home transition on a concurrent file change without enabling autosave or losing the editor", async () => {
+  const { api } = setup();
+  await dirtyConfig();
+  fireEvent.click(screen.getByRole("button", { name: "Главная" }));
+  const prompt = await leaveDialog();
+  fireEvent.click(
+    within(prompt).getByRole("checkbox", { name: /Больше не спрашивать/ }),
+  );
+  api.readProjectDocument.mockResolvedValue({
+    text: "other: editor",
+    version: "external",
+    exists: true,
+    relativePath: ".goga/config.yml",
+  });
+  fireEvent.click(
+    within(prompt).getByRole("button", { name: "Сохранить и продолжить" }),
+  );
+  const failed = await screen.findByRole("dialog", {
+    name: "Переход приостановлен",
+  });
+  expect(within(failed).getByRole("alert").textContent).toMatch(/изменился/);
+  expect(api.saveProjectDocument).not.toHaveBeenCalled();
+  expect(localStorage.getItem("goga.desktop.autoSaveOnLeave.v1")).not.toBe(
+    "true",
+  );
+  fireEvent.click(within(failed).getByRole("button", { name: "К файлу" }));
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+  expect(editor()?.state.doc.toString()).toBe(text);
+  expect(screen.getByRole("heading", { name: "Alpha" })).toBeTruthy();
+});
+
+it("keeps multiple Overview file drafts on file selection and skip, then includes hidden Overview files before a pipeline launch", async () => {
+  const { api } = setup();
+  await openProject("Alpha");
+  const search = await screen.findByRole("textbox", { name: "Поиск файлов" });
+  fireEvent.change(search, { target: { value: ".txt" } });
+  for (const name of ["one.txt", "two.txt"]) {
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: new RegExp("^"+name),
+      }),
+    );
+    const view = await waitFor(() => {
+      const v = editor();
+      if (v?.state.doc.toString() !== "file: " + name)
+        throw Error("waiting for " + name);
+      return v;
+    });
+    expect(screen.queryByRole("dialog")).toBeNull();
+    act(() =>
+      view.dispatch({
+        changes: {
+          from: 0,
+          to: view.state.doc.length,
+          insert: "draft: " + name,
+        },
+      }),
+    );
+  }
+  fireEvent.click(screen.getByRole("button", { name: "Проект" }));
+  const dialog = await leaveDialog();
+  expect(
+    within(dialog)
+      .getAllByRole("listitem")
+      .map((li) => li.textContent)
+      .sort(),
+  ).toEqual(["one.txt", "two.txt"]);
+  fireEvent.click(
+    within(dialog).getByRole("button", { name: "Без сохранения" }),
+  );
+  await screen.findByRole("navigation", { name: "Разделы настроек проекта" });
+  fireEvent.click(
+    within(document.querySelector<HTMLElement>(".project-actions")!).getByRole(
+      "button",
+      { name: "Запустить" },
+    ),
+  );
+  const before = api.discover.mock.calls.length;
+  fireEvent.click(await screen.findByRole("menuitem", { name: /^Конвейер/ }));
+  const prompt = await leaveDialog();
+  expect(
+    within(prompt)
+      .getAllByRole("listitem")
+      .map((li) => li.textContent)
+      .sort(),
+  ).toEqual(["one.txt", "two.txt"]);
+  expect(api.discover).toHaveBeenCalledTimes(before);
+  fireEvent.click(within(prompt).getByRole("button", { name: "Остаться" }));
+  fireEvent.click(screen.getByRole("button", { name: "Обзор" }));
+  await waitFor(() =>
+    expect(editor()?.state.doc.toString()).toBe("draft: two.txt"),
+  );
+  expect(api.saveOverviewFile).not.toHaveBeenCalled();
+  expect(api.launch).not.toHaveBeenCalled();
+});

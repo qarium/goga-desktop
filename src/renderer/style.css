@@ -33,11 +33,15 @@ button {
   padding: 9px 13px;
   transition: background 0.12s;
 }
-button:hover:not(:disabled) {
+button:hover:is(:enabled, [data-project-save-guard], [data-post-save-refresh]) {
   background: #22334f;
 }
 button:disabled {
   cursor: default;
+}
+/* Keep native interlocks stable through a project save and its metadata check.
+   Independent unavailable actions retain their normal muted appearance. */
+button:disabled:where(:not([data-project-save-guard], [data-post-save-refresh])) {
   opacity: 0.45;
 }
 button:focus-visible,
@@ -53,7 +57,7 @@ button.primary {
   color: #06251f;
   font-weight: 600;
 }
-button.primary:hover:not(:disabled) {
+button.primary:hover:is(:enabled, [data-project-save-guard], [data-post-save-refresh]) {
   background: #65e2d1;
 }
 /* Shared destructive action: distinct from neutral cancel and teal save. */
@@ -63,7 +67,7 @@ button.danger {
   color: #ffffff;
   font-weight: 600;
 }
-button.danger:hover:not(:disabled) {
+button.danger:hover:is(:enabled, [data-project-save-guard], [data-post-save-refresh]) {
   background: #ce2b3c;
   border-color: #ff9aa4;
 }
@@ -71,7 +75,7 @@ button.danger:focus-visible {
   outline: 3px solid #ffb4bd;
   outline-offset: 3px;
 }
-button.danger:disabled {
+button.danger:disabled:where(:not([data-project-save-guard], [data-post-save-refresh])) {
   background: #442a31;
   border-color: #78535a;
   color: #d9bfc4;
@@ -418,7 +422,8 @@ small {
   display: flex;
   align-items: center;
   justify-content: flex-end;
-  flex: 0 0 auto;
+  min-width: 0;
+  flex: 0 1 auto;
   margin-left: auto;
   gap: 8px;
 }
@@ -1637,6 +1642,19 @@ code {
 }
 .run-context > .workspace-path:not(:last-child) {
   max-width: 40%;
+}
+/* Document feedback consumes path space, not the right-anchored Git controls. */
+.run-context:has(> .document-status-outlet:not(:empty)) > .workspace-path {
+  flex: 1 1 0px;
+}
+.document-status-outlet {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  margin-left: auto;
+}
+.document-status-outlet:empty {
+  display: none;
 }
 .run-context > button {
   flex-shrink: 0;

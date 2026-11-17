@@ -208,7 +208,7 @@ it("lists real pipeline files, protects unsupported files and automatically open
   expect(screen.getByText(".goga/pipelines/existing.yml")).toBeTruthy();
   expect(screen.getByText("YAML")).toBeTruthy();
   expect(
-    screen.getByText(/Сохранение не гарантирует возможность запуска/),
+    screen.getByTitle(/Сохранение не гарантирует возможность запуска/),
   ).toBeTruthy();
   await screen.findByRole("button", { name: "Сохранить" });
   click("Сохранить");
@@ -255,17 +255,21 @@ it("retains named drafts and unfinished name across tabs, Back, and project swit
   expect(
     (screen.getByLabelText("Имя конвейера") as HTMLInputElement).value,
   ).toBe("unfinished");
-  await openPrototypeLaunch();
+  const opening = openPrototypeLaunch();
+  fireEvent.click(await screen.findByRole("button", { name: "Без сохранения" }));
+  await opening;
   await openSettings(true);
   expect(editor()!.state.doc.toString()).toBe(raw);
   expect(
     (screen.getByLabelText("Имя конвейера") as HTMLInputElement).value,
   ).toBe("unfinished");
   fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Без сохранения" }));
   await openSettings(true);
   await create("draft");
   replace("# beta");
   fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Без сохранения" }));
   await openSettings(true);
   expect(editor()!.state.doc.toString()).toBe(raw);
   expect(
@@ -889,7 +893,7 @@ it("keeps raw map-body syntax and invalid structure without parsing or Jinja cla
   expect(editor()!.state.doc.toString()).toBe(source);
   expect(screen.queryByText(/Jinja/)).toBeNull();
   expect(
-    screen.getByText(/Сохранение не гарантирует возможность запуска/),
+    screen.getByTitle(/Сохранение не гарантирует возможность запуска/),
   ).toBeTruthy();
   await screen.findByRole("button", { name: "Сохранить" });
   click("Сохранить");

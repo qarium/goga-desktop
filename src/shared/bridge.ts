@@ -413,6 +413,12 @@ export interface DesktopAPI {
     text: string,
     version: string,
   ): Promise<ProjectDocument>;
+  renameProjectDocument(
+    projectId: ScopeRef,
+    target: ProjectDocumentTarget,
+    newName: string,
+    expectedVersion: string,
+  ): Promise<ProjectDocument>;
   chooseProject(): Promise<Project | null>;
   chooseProjectLocation(): Promise<string | null>;
   createProject(request: ProjectCreationRequest): Promise<ProjectCreationResult>;

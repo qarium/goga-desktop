@@ -48,7 +48,33 @@ export function ProjectFlatDocuments({
   const revision = useSyncExternalStore(store.subscribe, () =>
     store.projectRevision(scope),
   );
-  const [catalog, setCatalog] = useState<ProjectWorkflow[]>([]);
+  // A refreshed catalog may update in place, but never reuse another owner or kind.
+  const identity = JSON.stringify([scopeKey, kind]);
+  const [catalogState, setCatalog] = useState<{
+    revision: number;
+    loadKey: string;
+    identity: string;
+    items: ProjectWorkflow[];
+    removalRevision: number;
+  }>();
+  const catalogLoaded = catalogState?.identity === identity;
+  const catalog = !catalogLoaded
+    ? []
+    : catalogState.revision === revision
+      ? catalogState.items
+      : catalogState.items.filter(
+          (file) =>
+            file.path !== `${folder}/${file.name}.yml` ||
+            !store.wasRemovedSince(
+              {
+                scope: "project",
+                projectId: project.id,
+                ...(owner ? { context: contextRef(owner) } : {}),
+                target: { kind, name: file.name },
+              },
+              catalogState.removalRevision,
+            ),
+        );
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [nameError, setNameError] = useState("");
@@ -61,6 +87,7 @@ export function ProjectFlatDocuments({
   useEffect(() => {
     if (!viewActive) return;
     let current = true;
+    const removalRevision = store.removalRevision();
     setLoading(true);
     setError("");
     (profile
@@ -71,7 +98,7 @@ export function ProjectFlatDocuments({
     ).then(
       (items) => {
         if (!current) return;
-        setCatalog(items);
+        setCatalog({ loadKey, revision, identity, items, removalRevision });
         setLoading(false);
         setSettled(loadKey);
       },
@@ -86,6 +113,14 @@ export function ProjectFlatDocuments({
       current = false;
     };
   }, [scopeKey, kind, revision, attempt, viewActive]);
+  const refreshing = loading || settled !== loadKey;
+  const postSaveRefresh =
+    viewActive &&
+    refreshing &&
+    !error &&
+    catalogLoaded &&
+    catalogState.loadKey === settled &&
+    store.onlyDocumentSavesSince(scope, catalogState.revision);
   const files: ProjectWorkflow[] = [
     ...catalog,
     ...state.drafts
@@ -125,7 +160,7 @@ export function ProjectFlatDocuments({
     );
   }
   function create() {
-    if (loading || error) return;
+    if (refreshing || error) return;
     try {
       createDraft(scope, state.name, catalog);
       setNameError("");
@@ -135,13 +170,16 @@ export function ProjectFlatDocuments({
   }
   return (
     <LoadingBoundary
-      pending={loading || settled !== loadKey}
+      pending={refreshing && !catalogLoaded}
       label="Загружаем каталог проекта…"
     >
       <div className="tool-controls workflow-controls">
         <button
           type="button"
+          data-post-save-refresh={postSaveRefresh || undefined}
+          disabled={refreshing || !!error}
           onClick={() => {
+            if (refreshing || error) return;
             update(scope, { creating: true });
             setNameError("");
           }}
@@ -198,7 +236,11 @@ export function ProjectFlatDocuments({
               }}
             />
           )}
-          <button type="submit" disabled={loading || !!error}>
+          <button
+            type="submit"
+            data-post-save-refresh={postSaveRefresh || undefined}
+            disabled={refreshing || !!error}
+          >
             Создать черновик
           </button>
           <p className="hint">
@@ -222,7 +264,7 @@ export function ProjectFlatDocuments({
           </button>
         </div>
       )}
-      {!loading && !error && !hasDocuments && (
+      {catalogLoaded && !error && !hasDocuments && (
         <div className="empty-file">
           <h3>
             {profile

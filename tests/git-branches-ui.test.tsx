@@ -92,6 +92,11 @@ async function open() {
   fireEvent.click(screen.getByRole("button", { name: "Ветка: main" }));
   await screen.findByRole("button", { name: "feature" });
 }
+it("exposes the full branch name when the project bar abbreviates it", () => {
+  const name = "feature/review-editor-status-in-the-project-toolbar";
+  render(view({ branch: name }));
+  expect(screen.getByRole("button", { name: `Ветка: ${name}` }).title).toBe(name);
+});
 it("separates local/remote and filters substring without remote IO on open", async () => {
   render(view());
   await open();

@@ -1,5 +1,48 @@
 import { expect, it } from "vitest";
 import {
+  saveLeaveFiles,
+  type WorkspaceLeaveFile,
+} from "../src/renderer/workspace-leave";
+
+it("checks the whole group before writing, including the last file and overlapping editors", async () => {
+  const writes: string[] = [];
+  const entry = (path: string, text: string): WorkspaceLeaveFile => ({
+    path,
+    readText: () => text,
+    save: async () => {
+      writes.push(path);
+    },
+  });
+  const a = entry("a", "one"),
+    b = entry("b", "two");
+  await expect(
+    saveLeaveFiles([
+      a,
+      {
+        ...b,
+        preflight: async () => {
+          throw Error("changed");
+        },
+      },
+    ]),
+  ).rejects.toMatchObject({ file: b, message: "changed" });
+  await expect(
+    saveLeaveFiles([b, a, entry("a", "other")]),
+  ).rejects.toMatchObject({ file: { path: "a" } });
+  expect(writes).toEqual([]);
+  await saveLeaveFiles([
+    a,
+    {
+      ...a,
+      acceptSavedText: async () => {
+        writes.push("accepted");
+      },
+    },
+    b,
+  ]);
+  expect(writes).toEqual(["a", "accepted", "b"]);
+});
+import {
   matchesWorkspace,
   runMatchesWorkspace,
   workspacePath,

@@ -688,3 +688,46 @@ it.each(["save", "delete"] as const)(
     expect(api.launch).not.toHaveBeenCalled();
   },
 );
+
+it("keeps tool editor visible while save refreshes discovery and permits inline retry", async () => {
+  const view = await tools();
+  api.saveProjectDocument = vi.fn(async (_scope, _target, text) => ({
+    text,
+    exists: true,
+    version: "saved",
+    relativePath: ".goga/tools/review/env/local.yml",
+  }));
+  let reject!: (error: Error) => void;
+  api.listProjectTools.mockImplementationOnce(
+    () =>
+      new Promise((_ok, no) => {
+        reject = no;
+      }),
+  );
+  act(() => view.dispatch({ changes: { from: 0, insert: "# saving\n" } }));
+  click("Сохранить");
+  await waitFor(() => expect(api.listProjectTools).toHaveBeenCalledTimes(2));
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Файл env/local.yml" }),
+  ).toBeTruthy();
+  expect(document.querySelector(".loading-state")).toBeNull();
+  expect(editor()).toBe(view);
+  expect(
+    (screen.getByRole("button", { name: "Создать файл" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+  const create = screen.getByRole("button", { name: "Создать файл" });
+  expect(create.hasAttribute("data-post-save-refresh")).toBe(true);
+  await act(async () => reject(Error("Discovery unavailable")));
+  await screen.findByText("Discovery unavailable");
+  expect(create.hasAttribute("data-post-save-refresh")).toBe(false);
+  expect(screen.getByRole("button", { name: "Сохранить" })).toBeTruthy();
+  click("Повторить загрузку");
+  await waitFor(() => expect(api.listProjectTools).toHaveBeenCalledTimes(3));
+  expect(
+    (screen.getByRole("button", { name: "Создать файл" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(false);
+  expect(editor()).toBe(view);
+});

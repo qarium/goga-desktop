@@ -30,10 +30,21 @@ export function ProjectDockerfile({
   const revision = useSyncExternalStore(store.subscribe, () =>
     store.projectRevision(scope),
   );
-  const [latest, setLatest] = useState<Metadata>();
+  // Retain the visible source during rechecks; settled/loadKey still gates writes.
+  const [metadataState, setLatest] = useState<{
+    revision: number;
+    loadKey: string;
+    key: string;
+    value: Metadata;
+  }>();
+  const metadataLoaded = metadataState?.key === key;
+  const latest = metadataLoaded ? metadataState.value : undefined;
+  const [attempt, setAttempt] = useState(0);
+  const loadKey = JSON.stringify([key, revision, attempt]);
+  const [settled, setSettled] = useState("");
   const [error, setError] = useState(""),
     [pending, setPending] = useState(true);
-  const read = useReadScope(JSON.stringify([key, revision]));
+  const read = useReadScope(loadKey);
   const sourceFor = (metadata: Metadata): DocumentSource => ({
     scope: "project",
     projectId: project.id,
@@ -45,11 +56,11 @@ export function ProjectDockerfile({
     let current = true;
     setPending(true);
     setError("");
-    setLatest(undefined);
     read("resolveProjectDockerfile", scope).then(
       (metadata) => {
         if (!current) return;
-        setLatest(metadata);
+        setLatest({ loadKey, revision, key, value: metadata });
+        setSettled(loadKey);
         setPending(false);
         const old = store.dockerfile(scope),
           draft = old ? store.get(sourceFor(old)) : undefined;
@@ -74,6 +85,7 @@ export function ProjectDockerfile({
       (error) => {
         if (current) {
           setPending(false);
+          setSettled(loadKey);
           setError(error instanceof Error ? error.message : String(error));
         }
       },
@@ -81,7 +93,15 @@ export function ProjectDockerfile({
     return () => {
       current = false;
     };
-  }, [key, revision, viewActive]);
+  }, [key, revision, attempt, viewActive]);
+  const refreshing = pending || settled !== loadKey;
+  const postSaveRefresh =
+    viewActive &&
+    refreshing &&
+    !error &&
+    metadataLoaded &&
+    metadataState.loadKey === settled &&
+    store.onlyDocumentSavesSince(scope, metadataState.revision);
   const stale =
     !!active &&
     !!latest &&
@@ -92,11 +112,17 @@ export function ProjectDockerfile({
   );
   return (
     <LoadingBoundary
-      pending={pending}
-
+      pending={refreshing && !metadataLoaded}
       label="Проверяем путь Dockerfile…"
     >
-      {error && <p role="alert">{error}</p>}
+      {error && (
+        <>
+          <p role="alert">{error}</p>
+          <button onClick={() => setAttempt((value) => value + 1)}>
+            Повторить загрузку
+          </button>
+        </>
+      )}
       {stale && (
         <div role="alert">
           <p>
@@ -104,9 +130,11 @@ export function ProjectDockerfile({
             будет перенаправлен в другой файл.
           </p>
           <button
-            disabled={draft?.busy}
+            disabled={draft?.busy || refreshing || !!error}
             onClick={() => {
-              store.discard(sourceFor(active!));
+              if (draft?.busy || refreshing || error || !active || !latest)
+                return;
+              store.discard(sourceFor(active));
               store.selectDockerfile(scope, latest!);
               void store.open(sourceFor(latest!));
             }}
@@ -121,7 +149,8 @@ export function ProjectDockerfile({
           source={sourceFor(active)}
           path={active.relativePath}
           title="Образ"
-          saveDisabled={pending || stale || !!error}
+          saveDisabled={refreshing || stale || !!error}
+          postSaveRefresh={postSaveRefresh && !stale}
           description={
             active.configured
               ? "Dockerfile выбранного контекста. Отсутствующий файл можно создать сохранением. Docker и сборка не запускаются."

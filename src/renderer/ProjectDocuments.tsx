@@ -35,8 +35,18 @@ export function ProjectDocuments({
   const viewActive = useViewActive();
   const scope = owner ? contextRef(owner) : project.id;
   const scopeKey = documentScopeId(scope);
-  const [tools, setTools] = useState<ProjectTool[]>([]),
-    [expanded, setExpanded] = useState<Record<string, boolean>>({}),
+  // Keep a completed catalog visible during refresh, scoped to this exact section.
+  const identity = JSON.stringify([scopeKey, tab]);
+  const [toolCatalog, setTools] = useState<{
+    revision: number;
+    loadKey: string;
+    identity: string;
+    items: ProjectTool[];
+    removalRevision: number;
+  }>();
+  const catalogLoaded = toolCatalog?.identity === identity;
+  const tools = catalogLoaded ? toolCatalog.items : [];
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({}),
     [error, setError] = useState(""),
     [nameErrors, setNameErrors] = useState<Record<string, string>>({}),
     [loading, setLoading] = useState(true),
@@ -44,7 +54,9 @@ export function ProjectDocuments({
   const revision = useSyncExternalStore(store.subscribe, () =>
     store.projectRevision(scope),
   );
-  const tool = useSyncExternalStore(store.subscribe, () => store.selectedTool(scope));
+  const tool = useSyncExternalStore(store.subscribe, () =>
+    store.selectedTool(scope),
+  );
   const state = useSyncExternalStore(store.subscribe, () =>
     store.toolState(scope, tool),
   );
@@ -76,11 +88,13 @@ export function ProjectDocuments({
     let current = true;
     setLoading(true);
     setError("");
+    const removalRevision = store.removalRevision();
     read("listProjectTools", scope).then(
       (items) => {
         if (!current) return;
-        setTools(items);
-        if (!store.selectedTool(scope) && items[0]) store.selectTool(scope, items[0].name);
+        setTools({ loadKey, revision, identity, items, removalRevision });
+        if (!store.selectedTool(scope) && items[0])
+          store.selectTool(scope, items[0].name);
         setLoading(false);
         setSettled(loadKey);
       },
@@ -98,7 +112,14 @@ export function ProjectDocuments({
   }, [scopeKey, tab, attempt, revision, viewActive]);
   if (tab === "launch") return null;
   if (tab === "specifications")
-    return <ProjectSpecifications project={project} owner={owner} refreshRevision={revision} stateStore={specificationsState}/>;
+    return (
+      <ProjectSpecifications
+        project={project}
+        owner={owner}
+        refreshRevision={revision}
+        stateStore={specificationsState}
+      />
+    );
   if (tab === "history")
     return (
       <ProjectHistory
@@ -164,7 +185,21 @@ export function ProjectDocuments({
   const selected = tools.find((item) => item.name === tool),
     file = state.selected;
   const entries: ProjectToolEntry[] = [
-    ...(selected?.entries ?? []),
+    ...(selected?.entries ?? []).filter(
+      (e) =>
+        !toolCatalog ||
+        toolCatalog.revision === revision ||
+        e.kind !== "file" ||
+        !store.wasRemovedSince(
+          {
+            scope: "project",
+            projectId: project.id,
+            ...(owner ? { context: contextRef(owner) } : {}),
+            target: { kind: "tool", tool, path: e.path },
+          },
+          toolCatalog.removalRevision,
+        ),
+    ),
     ...[...new Set([...state.drafts, ...loadedPaths])]
       .filter((path) => !selected?.entries.some((entry) => entry.path === path))
       .map((path) => ({ path, kind: "file" as const, editable: true })),
@@ -179,7 +214,15 @@ export function ProjectDocuments({
         entries.push({ path: parent, kind: "directory", editable: false });
     }
   }
-  const catalogReady = !loading && settled === loadKey && !error && !!selected;
+  const refreshing = loading || settled !== loadKey;
+  const postSaveRefresh =
+    viewActive &&
+    refreshing &&
+    !error &&
+    catalogLoaded &&
+    toolCatalog.loadKey === settled &&
+    store.onlyDocumentSavesSince(scope, toolCatalog.revision);
+  const catalogReady = !refreshing && !error && !!selected;
   function create() {
     if (!catalogReady) return;
     try {
@@ -313,7 +356,7 @@ export function ProjectDocuments({
   }
   return (
     <LoadingBoundary
-      pending={loading || settled !== loadKey}
+      pending={refreshing && !catalogLoaded}
       label="Загружаем инструменты…"
     >
       {error && (
@@ -326,7 +369,7 @@ export function ProjectDocuments({
           </button>
         </>
       )}
-      {!loading && !error && !tools.length && !retained && (
+      {catalogLoaded && !error && !tools.length && !retained && (
         <div className="empty-file">
           <h3>В проекте пока нет инструментов</h3>
           <p>
@@ -342,7 +385,7 @@ export function ProjectDocuments({
               Инструмент
               <select
                 value={availableTools.includes(tool) ? tool : ""}
-                onChange={e => store.selectTool(scope, e.target.value)}
+                onChange={(e) => store.selectTool(scope, e.target.value)}
               >
                 {!availableTools.includes(tool) && (
                   <option value="" disabled>
@@ -358,6 +401,9 @@ export function ProjectDocuments({
             </label>
             <button
               type="button"
+              data-post-save-refresh={
+                (postSaveRefresh && !!selected) || undefined
+              }
               disabled={!catalogReady}
               onClick={() => {
                 store.updateTool(scope, tool, { creating: true });
@@ -393,7 +439,13 @@ export function ProjectDocuments({
                   spellCheck={false}
                 />
               </label>
-              <button type="submit" disabled={!catalogReady}>
+              <button
+                type="submit"
+                data-post-save-refresh={
+                  (postSaveRefresh && !!selected) || undefined
+                }
+                disabled={!catalogReady}
+              >
                 Создать черновик
               </button>
               <p className="hint">

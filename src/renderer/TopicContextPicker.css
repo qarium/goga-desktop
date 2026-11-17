@@ -319,3 +319,26 @@
     display: none;
   }
 }
+
+.topic-repository-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  line-height: 1.5;
+}
+.topic-repository-notice > svg {
+  flex: none;
+  margin-top: 2px;
+  color: var(--muted);
+}
+.topic-repository-notice p {
+  color: var(--muted);
+  margin: 5px 0 0;
+}
+.topics-workspace > .topic-repository-notice {
+  max-width: 540px;
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}

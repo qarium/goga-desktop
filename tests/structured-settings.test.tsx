@@ -20,6 +20,8 @@ import { EditorView } from "@codemirror/view";
 import { Settings } from "../src/renderer/Settings";
 import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
+import { createSettingsDocuments } from "../src/renderer/settings-documents";
+import { ProjectSaveGuardShell } from "../src/renderer/ProjectSaveGuardShell";
 const project = { id: "p", name: "Alpha", path: "/synthetic/alpha" };
 let api: any;
 const editor = () => {
@@ -185,6 +187,7 @@ it("lists actual tools with all folders collapsed and retains full-path drafts a
     editor()!.dispatch({ changes: { from: 0, insert: "# across Back\n" } }),
   );
   fireEvent.click(screen.getByRole("button", { name: "Настройки" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Без сохранения" }));
   fireEvent.click(screen.getByRole("button", { name: "← Назад" }));
   fireEvent.click(screen.getByRole("button", { name: "Проект" }));
   fireEvent.click(screen.getByRole("button", { name: "Инструменты" }));
@@ -212,7 +215,9 @@ it("shows empty tools and missing config with explicit save only", async () => {
   expect(screen.getByText(/пока нет конфигурационных файлов/)).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
   await projectEditor();
-  expect(screen.getByText(/будет создан/)).toBeTruthy();
+  expect(
+    screen.getByRole("status", { description: /будет создан/ }),
+  ).toBeTruthy();
   expect(api.saveProjectDocument).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
   await waitFor(() =>
@@ -332,6 +337,63 @@ it("keeps late tool reads under their original full-path identity", async () => 
   );
   expect(editor()!.state.doc.toString()).toBe("# late local\r\n");
 });
+it("restores normal disabled presentation for overlapping non-document writes without unlocking actions", async () => {
+  const documents = createSettingsDocuments();
+  function Fixture() {
+    const activity = React.useSyncExternalStore(
+      documents.subscribe,
+      documents.writeActivity,
+    );
+    return (
+      <ProjectSaveGuardShell
+        projectSaveOnly={activity === "project-save"}
+        className="app-shell"
+      >
+        <button disabled={activity !== "idle"}>Действие</button>
+      </ProjectSaveGuardShell>
+    );
+  }
+  const source = {
+    scope: "project",
+    projectId: "p",
+    target: { kind: "config" },
+  } as const;
+  await documents.open(source);
+  let finish!: () => void;
+  api.saveProjectDocument.mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = () => resolve({ text: "ok", exists: true, version: "saved" });
+      }),
+  );
+  render(<Fixture />);
+  const button = screen.getByRole("button", {
+    name: "Действие",
+  }) as HTMLButtonElement;
+  let saving!: Promise<boolean>;
+  act(() => {
+    saving = documents.save(source);
+  });
+  expect(button.hasAttribute("data-project-save-guard")).toBe(true);
+  act(() =>
+    documents.updateRegistryDraft("p", (draft) => ({ ...draft, saving: true })),
+  );
+  expect(button.disabled).toBe(true);
+  expect(button.hasAttribute("data-project-save-guard")).toBe(false);
+  await act(async () => {
+    finish();
+    await saving;
+  });
+  expect(button.disabled).toBe(true);
+  expect(button.hasAttribute("data-project-save-guard")).toBe(false);
+  act(() =>
+    documents.updateRegistryDraft("p", (draft) => ({
+      ...draft,
+      saving: false,
+    })),
+  );
+  expect(button.disabled).toBe(false);
+});
 it("retains failed save A and its version while selecting B, blocking App navigation until the write settles", async () => {
   let fail!: (error: Error) => void;
   api.saveProjectDocument.mockImplementationOnce(
@@ -349,7 +411,18 @@ it("retains failed save A and its version while selecting B, blocking App naviga
   const view = await projectEditor();
   act(() => view.dispatch({ changes: { from: 0, insert: "# unsaved A\r\n" } }));
   const textA = view.state.doc.toString();
+  const launch = screen.getByRole("button", { name: "Запустить" });
+  const alreadyUnavailable = [
+    ...document.querySelectorAll<HTMLButtonElement>("button:disabled"),
+  ];
+  expect(alreadyUnavailable.length).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+  expect(launch.hasAttribute("data-project-save-guard")).toBe(true);
+  expect(
+    alreadyUnavailable.every(
+      (button) => !button.hasAttribute("data-project-save-guard"),
+    ),
+  ).toBe(true);
   expect(view.state.readOnly).toBe(true);
   expect(
     (screen.getByRole("button", { name: "Запустить" }) as HTMLButtonElement)
@@ -369,6 +442,7 @@ it("retains failed save A and its version while selecting B, blocking App naviga
   act(() => b.dispatch({ changes: { from: 0, insert: "# draft B\n" } }));
   const textB = b.state.doc.toString();
   await act(async () => fail(Error("Файл изменился вне приложения")));
+  expect(document.querySelector("[data-project-save-guard]")).toBeNull();
   expect(editor()).toBe(b);
   expect(b.state.doc.toString()).toBe(textB);
   expect(screen.queryByRole("alert")).toBeNull();
@@ -543,4 +617,116 @@ it("places configuration and personal profiles inside the constrained retained s
   expect(
     screen.getByRole("region", { name: "personal" }).closest(".scroll-area"),
   ).toBe(viewport);
+});
+
+it("shares the opt-in between workspace reminders and general settings; defaults to asking", async () => {
+  const { readAutoSaveOnLeave, setAutoSaveOnLeave } =
+    await import("../src/renderer/workspace-leave-preferences");
+  const key = "goga.desktop.autoSaveOnLeave.v1";
+  const old = localStorage.getItem(key);
+  try {
+    localStorage.setItem(key, "malformed");
+    expect(readAutoSaveOnLeave()).toBe(false);
+    const ui = render(<Settings selectedTab="workspace" />);
+    expect(api.listSettings).not.toHaveBeenCalled();
+    const toggle = screen.getByRole("switch", {
+      name: "Автосохранение при переходе",
+    });
+    expect(toggle.getAttribute("aria-checked")).toBe("false");
+    act(() => setAutoSaveOnLeave(true)); // Opted in from a successful save in the dialog.
+    expect(toggle.getAttribute("aria-checked")).toBe("true");
+    expect(localStorage.getItem(key)).toBe("true");
+    fireEvent.click(toggle);
+    expect(readAutoSaveOnLeave()).toBe(false);
+    ui.unmount();
+    render(<Settings selectedTab="workspace" />);
+    expect(screen.getByRole("switch").getAttribute("aria-checked")).toBe(
+      "false",
+    );
+  } finally {
+    if (old === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, old);
+  }
+});
+
+it("lists paths as text, expands without losing the opt-in, and only requests remembering on save", async () => {
+  const { WorkspaceLeaveDialog } =
+    await import("../src/renderer/WorkspaceLeaveDialog");
+  const props = {
+    files: [
+      "one.yml",
+      "two.yml",
+      "sub/three.yml",
+      "four.yml",
+      "five.yml",
+      "six.yml",
+      "seven.yml",
+    ],
+    launching: true,
+    onStay: vi.fn(),
+    onKeep: vi.fn(),
+    onSave: vi.fn(),
+    onReveal: vi.fn(),
+  };
+  {
+    const ui = render(<WorkspaceLeaveDialog {...props} />);
+    const modal = screen.getByRole("dialog", { name: "Сохранить правки?" });
+    expect(document.activeElement).toBe(
+      screen.getByRole("button", { name: "Остаться" }),
+    );
+    expect(modal.querySelectorAll("li")).toHaveLength(3);
+    const check = screen.getByRole("checkbox", {
+      name: /Больше не спрашивать/,
+    }) as HTMLInputElement;
+    expect(check.checked).toBe(false);
+    fireEvent.click(check);
+    fireEvent.click(screen.getByRole("button", { name: "Ещё 4 файла" }));
+    expect(modal.querySelectorAll("li")).toHaveLength(7);
+    expect(modal.querySelectorAll("code, input[type=text]")).toHaveLength(0);
+    expect(check.checked).toBe(true);
+    const backgroundEscape = vi.fn();
+    window.addEventListener("keydown", backgroundEscape);
+    try {
+      fireEvent.keyDown(check, { key: "Escape" });
+      expect(backgroundEscape).not.toHaveBeenCalled();
+    } finally { window.removeEventListener("keydown", backgroundEscape); }
+    fireEvent(modal, new Event("cancel", { cancelable: true }));
+    expect(props.onStay).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole("button", { name: "Без сохранения" }));
+    expect(props.onKeep).toHaveBeenCalledOnce();
+    expect(props.onSave).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole("button", { name: "Сохранить и продолжить" }),
+    );
+    expect(props.onSave).toHaveBeenCalledWith(true);
+    ui.rerender(<WorkspaceLeaveDialog {...props} busy />);
+    fireEvent(modal, new Event("cancel", { cancelable: true }));
+    expect(props.onStay).toHaveBeenCalledOnce();
+    expect(check.disabled).toBe(true);
+    ui.rerender(
+      <WorkspaceLeaveDialog
+        {...props}
+        failure={{ path: "sub/three.yml", message: "Файл изменился на диске." }}
+      />,
+    );
+    expect(screen.queryByRole("checkbox")).toBeNull();
+    expect(screen.getByRole("alert").textContent).toContain(
+      "Файл изменился на диске",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "К файлу" }));
+    expect(props.onReveal).toHaveBeenCalledOnce();
+    ui.rerender(
+      <WorkspaceLeaveDialog
+        {...props}
+        failure={{ path: "", message: "Не удалось сохранить настройку." }}
+      />,
+    );
+    expect(screen.getByRole("alert").textContent).toBe(
+      "Не удалось сохранить настройку.",
+    );
+    expect(screen.queryByRole("button", { name: "К файлу" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Остаться" }));
+    expect(props.onStay).toHaveBeenCalledTimes(2);
+    ui.unmount();
+  }
 });

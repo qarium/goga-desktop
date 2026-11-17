@@ -10,6 +10,53 @@ import {
 import { DemoSettings } from "./DemoSettings";
 import { TerminalPresetSettings } from "./TerminalPresetSettings";
 
+import {
+  readAutoSaveOnLeave,
+  setAutoSaveOnLeave,
+  subscribeAutoSaveOnLeave,
+} from "./workspace-leave-preferences";
+import { TopicSwitch } from "./TopicsCommon";
+import "./WorkspaceLeaveDialog.css";
+
+function WorkspaceSaveSettings() {
+  const enabled = useSyncExternalStore(
+    subscribeAutoSaveOnLeave,
+    readAutoSaveOnLeave,
+  );
+  const [error, setError] = useState("");
+  return (
+    <section className="workspace-leave-settings">
+      <h3>Сохранение файлов</h3>
+      <TopicSwitch
+        checked={enabled}
+        onChange={() => {
+          try {
+            setAutoSaveOnLeave(!enabled);
+            setError("");
+          } catch (e) {
+            setError(e instanceof Error ? e.message : String(e));
+          }
+        }}
+      >
+        Автосохранение при переходе
+      </TopicSwitch>
+      <p>
+        Сохранять правки без напоминания при выходе из «Обзора» или «Проекта»,
+        смене проекта или топика и перед запуском.
+      </p>
+      <p className="hint">
+        Если файл изменился на диске, переход остановится. Ваши правки останутся
+        в редакторе.
+      </p>
+      {error && (
+        <p className="error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
 export function Settings({
   documents,
   onBack,
@@ -36,7 +83,8 @@ export function Settings({
     [error, setError] = useState("");
   const tab = selectedTab ?? ownTab,
     setTab = onTabChange ?? setOwnTab;
-  const standalone = tab === "terminal" || tab === "demonstrations";
+  const standalone =
+    tab === "workspace" || tab === "terminal" || tab === "demonstrations";
   const viewActive = useViewActive();
   const read = useReadScope("settings");
   useEffect(() => {
@@ -134,7 +182,10 @@ export function Settings({
         tabs={[
           ["config", "Конфигурация"],
           ["profiles", "Профили"],
-          ...(typeof window.goga?.demoState === "function" ? [["demonstrations", "Демонстрации"] as const] : []),
+          ["workspace", "Рабочая область"],
+          ...(typeof window.goga?.demoState === "function"
+            ? [["demonstrations", "Демонстрации"] as const]
+            : []),
           ...(window.goga?.terminalPresets
             ? [["terminal", "Терминал"] as const]
             : []),
@@ -143,7 +194,11 @@ export function Settings({
         onChange={setTab}
       />
       <RetainedViews activeKey={tab}>
-        {tab === "demonstrations" ? <DemoSettings/> : tab === "terminal" ? (
+        {tab === "workspace" ? (
+          <WorkspaceSaveSettings />
+        ) : tab === "demonstrations" ? (
+          <DemoSettings />
+        ) : tab === "terminal" ? (
           <TerminalPresetSettings />
         ) : tab === "config" ? (
           <SettingsDocument

@@ -2,10 +2,12 @@
 import React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
   screen,
+  waitFor,
   within,
 } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -16,7 +18,14 @@ import type {
   TopicContextIdentity,
 } from "../src/renderer/topic-context";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  document
+    .querySelectorAll("iframe[data-launch-popup]")
+    .forEach((frame) => frame.remove());
+});
 const a: TopicContextIdentity = {
   projectId: "p",
   repositoryKey: "repo",
@@ -370,5 +379,299 @@ describe("unified preparation menu", () => {
       <ContextLaunchMenu runs={[]} context={b} onPrepare={() => {}} />,
     );
     expect(screen.queryByRole("menu")).toBeNull();
+  });
+});
+
+/** Mock only Electron's native window boundary: the real popup still owns its
+ * same-origin portal, ready/focus handshake and exact-id cleanup. */
+function nativeLaunchPopup() {
+  const frame = document.createElement("iframe");
+  frame.dataset.launchPopup = "";
+  document.body.append(frame);
+  const child = frame.contentWindow!;
+  let closed = (_id: string) => {};
+  const api = {
+    setTopicPopupBounds: vi.fn(async (_id: string) => {}),
+    closeTopicPopup: vi.fn(async (_id: string) => {}),
+    onTopicPopupClosed: vi.fn((callback: typeof closed) => {
+      closed = callback;
+      return vi.fn();
+    }),
+    selectRun: vi.fn(),
+  };
+  vi.stubGlobal("goga", api);
+  vi.spyOn(window, "open").mockReturnValue(child);
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      observe() {}
+      disconnect() {}
+    },
+  );
+  return {
+    child,
+    local: within(child.document.body),
+    api,
+    close: (id: string) => closed(id),
+  };
+}
+
+describe("native preparation menu above attached panels", () => {
+  it("portals Pipeline, Build and Demo into the existing native layer without selecting a run", async () => {
+    const popup = nativeLaunchPopup();
+    const onPrepare = vi.fn(),
+      demo = vi.fn();
+    render(
+      <ContextLaunchMenu
+        runs={[]}
+        context={a}
+        onPrepare={onPrepare}
+        demoItem={(close) => (
+          <button
+            role="menuitem"
+            onClick={() => {
+              close();
+              demo();
+            }}
+          >
+            Демо
+          </button>
+        )}
+      />,
+    );
+    const trigger = screen.getByRole("button", { name: "Запустить" });
+    trigger.focus();
+    fireEvent.click(trigger);
+    const menu = await popup.local.findByRole("menu");
+    await waitFor(() =>
+      expect(popup.api.setTopicPopupBounds).toHaveBeenCalled(),
+    );
+    expect(screen.queryByRole("menu")).toBeNull();
+    expect(menu.ownerDocument).toBe(popup.child.document);
+    expect(popup.child.document.title).toBe("Подготовить новый запуск");
+    expect(popup.local.getAllByRole("menuitem")).toHaveLength(3);
+    expect(popup.api.selectRun).not.toHaveBeenCalled();
+    expect(onPrepare).not.toHaveBeenCalled();
+    fireEvent.blur(trigger, { relatedTarget: null });
+    expect(popup.local.getByRole("menu")).toBe(menu);
+    fireEvent.pointerDown(
+      popup.local.getByRole("menuitem", { name: /^Сборка/ }),
+    );
+    fireEvent.click(popup.local.getByRole("menuitem", { name: /^Сборка/ }));
+    expect(onPrepare).toHaveBeenCalledExactlyOnceWith("build");
+    expect(popup.local.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(popup.api.closeTopicPopup).toHaveBeenCalledWith(
+      popup.api.setTopicPopupBounds.mock.calls[0][0],
+    );
+    fireEvent.click(trigger);
+    fireEvent.click(await popup.local.findByRole("menuitem", { name: "Демо" }));
+    expect(demo).toHaveBeenCalledTimes(1);
+    expect(onPrepare).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["ArrowDown", "ArrowUp"])(
+    "honors %s after native ready focus and navigates in the menu document",
+    async (key) => {
+      const popup = nativeLaunchPopup();
+      render(<ContextLaunchMenu runs={[]} context={a} onPrepare={() => {}} />);
+      const trigger = screen.getByRole("button", { name: "Запустить" });
+      trigger.focus();
+      fireEvent.keyDown(trigger, { key });
+      const first = await popup.local.findByRole("menuitem", {
+        name: /^Конвейер/,
+      });
+      const last = popup.local.getByRole("menuitem", { name: /^Сборка/ });
+      await waitFor(() =>
+        expect(popup.api.setTopicPopupBounds).toHaveBeenCalled(),
+      );
+      expect(popup.child.document.activeElement).toBe(
+        key === "ArrowUp" ? last : first,
+      );
+      fireEvent.keyDown(popup.child.document.activeElement!, {
+        key: "ArrowDown",
+      });
+      expect(popup.child.document.activeElement).toBe(
+        key === "ArrowUp" ? first : last,
+      );
+      fireEvent.keyDown(popup.child.document.activeElement!, { key: "End" });
+      expect(popup.child.document.activeElement).toBe(last);
+      fireEvent.keyDown(last, { key: "ArrowUp" });
+      expect(popup.child.document.activeElement).toBe(first);
+      fireEvent.keyDown(first, { key: "Escape" });
+      expect(popup.local.queryByRole("menu")).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+    },
+  );
+
+  it.each([false, true])(
+    "dismisses on Tab (shift=%s) and restores the shell tab-order anchor",
+    async (shiftKey) => {
+      const popup = nativeLaunchPopup();
+      render(<ContextLaunchMenu runs={[]} context={a} onPrepare={() => {}} />);
+      const trigger = screen.getByRole("button", { name: "Запустить" });
+      fireEvent.click(trigger);
+      const item = await popup.local.findByRole("menuitem", {
+        name: /^Конвейер/,
+      });
+      fireEvent.keyDown(item, { key: "Tab", shiftKey });
+      expect(popup.local.queryByRole("menu")).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+    },
+  );
+
+  it.each(["shell", "popup"])(
+    "handles outside pointers in the %s document without preparing",
+    async (target) => {
+      const popup = nativeLaunchPopup(),
+        onPrepare = vi.fn();
+      render(
+        <>
+          <ContextLaunchMenu runs={[]} context={a} onPrepare={onPrepare} />
+          <button>Снаружи</button>
+        </>,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+      await popup.local.findByRole("menu");
+      const outside =
+        target === "shell"
+          ? screen.getByRole("button", { name: "Снаружи" })
+          : popup.child.document.body;
+      fireEvent.pointerDown(outside);
+      expect(popup.local.queryByRole("menu")).toBeNull();
+      expect(onPrepare).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps an outside shell control focused when the host dismisses the exact popup", async () => {
+    const popup = nativeLaunchPopup();
+    render(
+      <>
+        <ContextLaunchMenu runs={[]} context={a} onPrepare={() => {}} />
+        <button>Снаружи</button>
+      </>,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+    await popup.local.findByRole("menu");
+    await waitFor(() =>
+      expect(popup.api.setTopicPopupBounds).toHaveBeenCalled(),
+    );
+    act(() => popup.close("unrelated-popup"));
+    expect(popup.local.queryByRole("menu")).not.toBeNull();
+    const outside = screen.getByRole("button", { name: "Снаружи" });
+    outside.focus();
+    act(() => popup.close(popup.api.setTopicPopupBounds.mock.calls[0][0]));
+    expect(popup.local.queryByRole("menu")).toBeNull();
+    expect(document.activeElement).toBe(outside);
+  });
+
+  it.each(["projectId", "year", "topic", "branch", "contextId"] as const)(
+    "cancels the native menu when exact owner field %s changes",
+    async (field) => {
+      const popup = nativeLaunchPopup(),
+        onPrepare = vi.fn();
+      const view = render(
+        <ContextLaunchMenu runs={[]} context={a} onPrepare={onPrepare} />,
+      );
+      fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+      await popup.local.findByRole("menu");
+      view.rerender(
+        <ContextLaunchMenu
+          runs={[]}
+          context={{ ...a, [field]: `${a[field]}-changed` }}
+          onPrepare={onPrepare}
+        />,
+      );
+      expect(popup.local.queryByRole("menu")).toBeNull();
+      expect(popup.api.closeTopicPopup).toHaveBeenCalled();
+      expect(onPrepare).not.toHaveBeenCalled();
+    },
+  );
+
+  it("cancels primary-project preparation when its project changes without a topic", async () => {
+    const popup = nativeLaunchPopup(),
+      onPrepare = vi.fn();
+    const view = render(
+      <ContextLaunchMenu
+        runs={[]}
+        context={null}
+        primaryProjectId="p"
+        prepareWithoutContext
+        onPrepare={onPrepare}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+    await popup.local.findByRole("menu");
+    view.rerender(
+      <ContextLaunchMenu
+        runs={[]}
+        context={null}
+        primaryProjectId="other"
+        prepareWithoutContext
+        onPrepare={onPrepare}
+      />,
+    );
+    expect(popup.local.queryByRole("menu") === null).toBe(true);
+    expect(popup.api.closeTopicPopup).toHaveBeenCalled();
+    expect(onPrepare).not.toHaveBeenCalled();
+  });
+
+  it.each(["Escape", "Tab"])(
+    "dismisses a fully blocked native menu on %s even when the popup body has focus",
+    async (key) => {
+      const popup = nativeLaunchPopup(),
+        onPrepare = vi.fn();
+      render(
+        <ContextLaunchMenu
+          runs={[]}
+          context={a}
+          blockedReason="Запуск запрещён"
+          onPrepare={onPrepare}
+        />,
+      );
+      const trigger = screen.getByRole("button", { name: "Запустить" });
+      fireEvent.click(trigger);
+      await popup.local.findByRole("menu");
+      await waitFor(() =>
+        expect(popup.api.setTopicPopupBounds).toHaveBeenCalled(),
+      );
+      expect(
+        popup.child.document.activeElement === popup.child.document.body,
+      ).toBe(true);
+      fireEvent.keyDown(popup.child.document.body, { key });
+      expect(popup.local.queryByRole("menu") === null).toBe(true);
+      expect(document.activeElement).toBe(trigger);
+      expect(onPrepare).not.toHaveBeenCalled();
+    },
+  );
+
+  it("retains external launch guards and closes when the trigger becomes disabled", async () => {
+    const popup = nativeLaunchPopup(),
+      onPrepare = vi.fn();
+    const view = render(
+      <ContextLaunchMenu
+        runs={[]}
+        context={a}
+        blockedReason="Запуск запрещён"
+        onPrepare={onPrepare}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+    await popup.local.findByRole("menu");
+    for (const item of popup.local.getAllByRole("menuitem")) {
+      expect(item.hasAttribute("disabled")).toBe(true);
+      fireEvent.click(item);
+    }
+    expect(onPrepare).not.toHaveBeenCalled();
+    view.rerender(
+      <ContextLaunchMenu
+        runs={[]}
+        context={a}
+        disabled
+        onPrepare={onPrepare}
+      />,
+    );
+    expect(popup.local.queryByRole("menu")).toBeNull();
+    expect(popup.api.closeTopicPopup).toHaveBeenCalled();
   });
 });

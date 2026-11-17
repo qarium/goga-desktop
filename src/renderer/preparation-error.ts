@@ -2,7 +2,7 @@
 export function preparationErrorMessage(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
   return text.replace(
-    /^Error invoking remote method 'goga:(?:attach-dashboard|attached-dashboards|cancel-dashboard-attach|select-attached-dashboard|detach-dashboard|refresh-dashboard|restore-dashboard|terminal-presets|terminal-request|create-project|cancel-project-creation|choose-project-location|remove-project|choose-project|repeat-pipeline|launch|save-project-settings|save-project-document|save-overview-file|save-settings|read-request|read-overview-schema|read-overview-contract|ensure-topic-context|resolve-topic-context|check-topic-context-readiness|create-topic-context|copy-overview-entries|paste-overview-entries|copy-overview-paths|prepare-overview-paste|execute-overview-paste)': (?:Error: )?/,
+    /^Error invoking remote method 'goga:(?:attach-dashboard|attached-dashboards|cancel-dashboard-attach|select-attached-dashboard|detach-dashboard|refresh-dashboard|restore-dashboard|terminal-presets|terminal-request|create-project|cancel-project-creation|choose-project-location|remove-project|choose-project|repeat-pipeline|launch|save-project-settings|save-project-document|rename-project-document|save-overview-file|save-settings|read-request|read-overview-schema|read-overview-contract|ensure-topic-context|resolve-topic-context|check-topic-context-readiness|create-topic-context|copy-overview-entries|paste-overview-entries|copy-overview-paths|prepare-overview-paste|execute-overview-paste)': (?:Error: )?/,
     "",
   );
 }

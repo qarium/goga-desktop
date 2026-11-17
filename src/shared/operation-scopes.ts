@@ -133,6 +133,7 @@ export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
   "read-overview-schema": "topic-or-primary-admin",
   "read-overview-contract": "topic-or-primary-admin",
   "read-project-document": "topic-or-primary-admin",
+  "rename-project-document": "topic-or-primary-admin",
   "save-project-document": "topic-or-primary-admin",
   "checkout-branch": "topic-or-primary-admin",
   "read-project-settings": "desktop-project",

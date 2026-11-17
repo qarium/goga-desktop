@@ -283,6 +283,7 @@
     "tests/document-deletion-ipc.test.ts",
     "tests/document-deletion-ui.test.tsx",
     "tests/document-editor-viewport.test.tsx",
+    "tests/document-save-status.test.tsx",
     "tests/file-clipboard.test.ts",
     "tests/flat-documents-empty.test.tsx",
     "tests/form-reset.test.tsx",

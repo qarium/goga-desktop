@@ -169,6 +169,71 @@ describe.each(["pipeline", "workflow", "profile"] as const)(
       expect(container.querySelector(".editor-pane")).not.toBeNull();
       expect(screen.queryByRole("heading", { name: emptyHeading })).toBeNull();
     });
+    it("keeps the editor and catalog visible while a successful save refreshes the catalog", async () => {
+      const f = setup();
+      f.list.mockResolvedValue([file]);
+      const rendered = f.show();
+      fireEvent.click(
+        await screen.findByRole("button", { name: `Файл ${file.path}` }),
+      );
+      await waitFor(() =>
+        expect(
+          rendered.container.querySelector(".yaml-code-editor"),
+        ).not.toBeNull(),
+      );
+      const editor = rendered.container.querySelector(".yaml-code-editor");
+      let resolve!: (value: (typeof file)[]) => void;
+      f.list.mockImplementationOnce(
+        () =>
+          new Promise((ok) => {
+            resolve = ok;
+          }),
+      );
+      act(() => f.store.edit(source, "# saved without hiding\n"));
+      fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
+      await waitFor(() => expect(f.list).toHaveBeenCalledTimes(2));
+      expect(screen.getByRole("button", { name: "Сохранить" })).toBeTruthy();
+      expect(
+        screen.getByRole("button", { name: `Файл ${file.path}` }),
+      ).toBeTruthy();
+      expect(rendered.container.querySelector(".loading-state")).toBeNull();
+      expect(rendered.container.querySelector(".yaml-code-editor")).toBe(
+        editor,
+      );
+      expect(
+        (
+          screen.getByRole("button", {
+            name: `Создать ${label}`,
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(true);
+      const create = screen.getByRole("button", { name: `Создать ${label}` });
+      expect(create.hasAttribute("data-post-save-refresh")).toBe(true);
+      await act(async () => resolve([file]));
+      expect(create.hasAttribute("data-post-save-refresh")).toBe(false);
+      expect(
+        (
+          screen.getByRole("button", {
+            name: `Создать ${label}`,
+          }) as HTMLButtonElement
+        ).disabled,
+      ).toBe(false);
+    });
+    it("retains a successfully loaded empty catalog during a silent refresh", async () => {
+      const f = setup();
+      const rendered = f.show();
+      await screen.findByRole("heading", { name: emptyHeading });
+      f.list.mockImplementationOnce(() => new Promise(() => {}));
+      await act(async () => f.store.refreshProject("p"));
+      await waitFor(() => expect(f.list).toHaveBeenCalledTimes(2));
+      expect(screen.getByRole("heading", { name: emptyHeading })).toBeTruthy();
+      expect(
+        screen
+          .getByRole("button", { name: `Создать ${label}` })
+          .hasAttribute("data-post-save-refresh"),
+      ).toBe(false);
+      expect(rendered.container.querySelector(".loading-state")).toBeNull();
+    });
     it.each(["empty", "failure", "loading"])(
       "retains a loaded edited source when its file disappears and catalog is %s",
       async (state) => {

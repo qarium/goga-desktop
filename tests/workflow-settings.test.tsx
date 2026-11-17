@@ -186,6 +186,90 @@ beforeEach(() => {
   window.goga = api;
 });
 afterEach(cleanup);
+it("renames the on-disk workflow from its editor without saving the dirty buffer until Save", async () => {
+  const fs = await import("node:fs/promises");
+  const { tmpdir } = await import("node:os");
+  const path = await import("node:path");
+  const host = await import("../src/host/project-documents");
+  const root = await fs.realpath(
+    await fs.mkdtemp(path.join(tmpdir(), "goga-editor-rename-")),
+  );
+  const directory = path.join(root, ".goga/workflows");
+  const previous = path.join(directory, "existing.yml");
+  const next = path.join(directory, "review.yml");
+  const original = "# original\r\nname: existing\r\n";
+  const modified = "# still a draft\nname: review\n";
+  const dialogs = HTMLDialogElement.prototype;
+  const methods = { showModal: dialogs.showModal, close: dialogs.close };
+  try {
+    dialogs.showModal ??= function () {
+      this.open = true;
+    };
+    dialogs.close ??= function () {
+      this.open = false;
+    };
+    await fs.mkdir(directory, { recursive: true });
+    await fs.writeFile(previous, original);
+    api.listProjectWorkflows.mockImplementation(() =>
+      host.listProjectWorkflows(root),
+    );
+    api.readProjectDocument.mockImplementation(
+      (_scope: string, target: { kind: "workflow"; name: string }) =>
+        host.readProjectDocument(root, target),
+    );
+    api.renameProjectDocument = vi.fn(
+      (
+        _scope: string,
+        target: { kind: "workflow"; name: string },
+        name: string,
+        version: string,
+      ) => host.renameProjectDocument(root, target, name, version),
+    );
+    api.saveProjectDocument.mockImplementation(
+      (
+        _scope: string,
+        target: { kind: "workflow"; name: string },
+        text: string,
+        version: string,
+      ) => host.saveProjectDocument(root, target, text, version),
+    );
+    await setup();
+    await screen.findByRole("button", {
+      name: "Файл .goga/workflows/existing.yml",
+    });
+    await reveal("existing");
+    replace(modified);
+    click("Переименовать файл");
+    fireEvent.change(screen.getByRole("textbox", { name: "Новое имя" }), {
+      target: { value: "review" },
+    });
+    click("Переименовать");
+    await screen.findByRole("button", {
+      name: "Файл .goga/workflows/review.yml",
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", {
+          name: "Файл .goga/workflows/existing.yml",
+        }),
+      ).toBeNull(),
+    );
+    expect(await fs.readFile(next, "utf8")).toBe(original);
+    await expect(fs.lstat(previous)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(editor()!.state.doc.toString()).toBe(modified);
+    expect(api.saveProjectDocument).not.toHaveBeenCalled();
+    click("Сохранить");
+    await waitFor(async () =>
+      expect(await fs.readFile(next, "utf8")).toBe(modified),
+    );
+  } finally {
+    cleanup();
+    for (const key of ["showModal", "close"] as const) {
+      if (!methods[key]) Reflect.deleteProperty(dialogs, key);
+    }
+    await fs.rm(root, { recursive: true, force: true });
+  }
+});
 it("lists real workflow files, protects unsupported files and automatically opens selected exact raw source", async () => {
   await setup();
   expect(api.readProjectDocument).not.toHaveBeenCalled();
@@ -202,7 +286,7 @@ it("lists real workflow files, protects unsupported files and automatically open
   expect(screen.getByText(".goga/workflows/existing.yml")).toBeTruthy();
   expect(screen.getByText("YAML / Jinja")).toBeTruthy();
   expect(
-    screen.getByText(/Goga проверяет рабочий процесс после рендеринга/),
+    screen.getByTitle(/Goga проверяет рабочий процесс после рендеринга/),
   ).toBeTruthy();
   await screen.findByRole("button", { name: "Сохранить" });
   click("Сохранить");
@@ -249,17 +333,21 @@ it("retains named drafts and unfinished name across tabs, Back, and project swit
   expect(
     (screen.getByLabelText("Имя рабочего процесса") as HTMLInputElement).value,
   ).toBe("unfinished");
-  await openPrototypeLaunch();
+  const opening = openPrototypeLaunch();
+  fireEvent.click(await screen.findByRole("button", { name: "Без сохранения" }));
+  await opening;
   await openSettings(true);
   expect(editor()!.state.doc.toString()).toBe(raw);
   expect(
     (screen.getByLabelText("Имя рабочего процесса") as HTMLInputElement).value,
   ).toBe("unfinished");
   fireEvent.click(screen.getByRole("button", { name: "Beta" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Без сохранения" }));
   await openSettings(true);
   await create("draft");
   replace("# beta");
   fireEvent.click(screen.getByRole("button", { name: "Alpha" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Без сохранения" }));
   await openSettings(true);
   expect(editor()!.state.doc.toString()).toBe(raw);
   expect(

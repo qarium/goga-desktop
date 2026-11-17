@@ -282,6 +282,7 @@ import {
   listProjectWorkflows,
   prepareSourceDeletion,
   readProjectDocument,
+  renameProjectDocument,
   saveProjectDocument,
 } from "./project-documents";
 import { assertReadActive, withOfflineGitReadScope } from "./read-scope";
@@ -1429,6 +1430,34 @@ export class HostService extends EventEmitter {
         (this.documentSaveRevisions.get(scopeProjectId(id)) ?? 0) + 1,
       );
       return document;
+    });
+  }
+
+  async renameProjectDocument(
+    scope: ScopeRef,
+    target: ProjectDocumentTarget,
+    newName: string,
+    expectedVersion: string,
+  ) {
+    this.check();
+    const projectId = scopeProjectId(scope);
+    return this.exclusive(projectId, async () => {
+      const project = await this.project(scope);
+      try {
+        return await renameProjectDocument(
+          this.root(project),
+          target,
+          newName,
+          expectedVersion,
+          () => this.validateBinding(project),
+        );
+      } finally {
+        // Even an uncertain result invalidates prior catalog reads.
+        this.documentSaveRevisions.set(
+          projectId,
+          (this.documentSaveRevisions.get(projectId) ?? 0) + 1,
+        );
+      }
     });
   }
 

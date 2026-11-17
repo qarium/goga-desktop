@@ -132,6 +132,16 @@
   background: var(--surface);
   box-shadow: 0 12px 32px #0006;
 }
+/* Native stacking belongs to TopicPickerPopup, not the shell's z-index. */
+.topic-context-native-root .context-launch-menu {
+  position: relative;
+  top: auto;
+  right: auto;
+  width: 100%;
+  max-width: none;
+  max-height: var(--topic-popup-max-height);
+  overflow-y: auto;
+}
 .context-launch-menu button {
   display: block;
   width: 100%;
