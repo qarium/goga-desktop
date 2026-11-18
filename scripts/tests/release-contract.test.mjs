@@ -421,12 +421,13 @@ test("expensive domains start before short domains without skipping checks on a 
     priority,
     remaining,
     w.jobs["workspace-tests"],
-    w.jobs["git-compatibility"],
     w.jobs.check,
   ]) {
     assert.equal(job["timeout-minutes"], 15);
     assert.notEqual(job["continue-on-error"], true);
   }
+  assert.equal(w.jobs["git-compatibility"]["timeout-minutes"], 18);
+  assert.notEqual(w.jobs["git-compatibility"]["continue-on-error"], true);
 });
 
 

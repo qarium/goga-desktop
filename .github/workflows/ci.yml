@@ -84,7 +84,9 @@ jobs:
     name: ${{ matrix.domain }} (${{ matrix.shard }}/${{ matrix.count }})
   git-compatibility:
     runs-on: macos-15
-    timeout-minutes: 15
+    # All eight files passed in run 44222313401; the 15-minute limit
+    # cancelled the runner during post-job cleanup. Keep the full suite.
+    timeout-minutes: 18
     env:
       GOGA_TOPIC_READONLY_CLI: /nonexistent/disabled
       CSC_IDENTITY_AUTO_DISCOVERY: "false"

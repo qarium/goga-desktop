@@ -242,7 +242,7 @@ it("navigates board/card back to launch without losing task or pipeline or runni
     (screen.getByRole("combobox", { name: "Конвейер" }) as HTMLButtonElement)
       .value,
   ).toBe("two");
-  expect(api.discover).toHaveBeenLastCalledWith(worktreeContextRef(ownerA));
+  expect(api.discover).toHaveBeenLastCalledWith(worktreeContextRef(ownerA), { forLaunchForm: true });
   expect(api.launch).not.toHaveBeenCalled();
   expect(api.checkoutBranch).not.toHaveBeenCalled();
 });
@@ -377,7 +377,7 @@ it("retains a manually selected owner and its independent draft across project n
   expect(
     screen.getByRole("button", { name: "Открыть карточку топика feature-b" }),
   ).toBeTruthy();
-  expect(api.discover).toHaveBeenLastCalledWith(worktreeContextRef(ownerB));
+  expect(api.discover).toHaveBeenLastCalledWith(worktreeContextRef(ownerB), { forLaunchForm: true });
   expect(api.resolveTopicContext).toHaveBeenCalledWith(
     worktreeContextRef(ownerB),
   );
