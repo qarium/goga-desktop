@@ -40,14 +40,17 @@ export async function topicRemovalFixture(
   await git(["add", "."]);
   await git(["commit", "-m", "fixture"]);
   await git(["branch", "alpha"]);
+  const reads: { exe: string; args: string[]; cwd: string }[] = [];
   const calls: string[][] = [],
     order: string[] = [];
   let fail = false;
+  let nativeMutation: ((args: string[]) => Promise<void>) | undefined;
   let onMutation: (() => Promise<unknown>) | undefined;
   const runner: Runner = {
     start: node.start.bind(node),
     kill: node.kill.bind(node),
     command: async (exe, args, cwd, overrides, stdin) => {
+      reads.push({ exe, args, cwd });
       if (exe === "git")
         return node.command(exe, args, cwd, { ...env, ...overrides }, stdin);
       if (args.includes("board")) {
@@ -77,7 +80,8 @@ export async function topicRemovalFixture(
       order.push("goga");
       await onMutation?.();
       if (fail) throw Error("fixture command failure");
-      if (args.includes("clear") || args.includes("delete"))
+      if (nativeMutation) await nativeMutation(args);
+      else if (args.includes("clear") || args.includes("delete"))
         for (const branch of args.includes("clear")
           ? ["alpha"]
           : args.slice(4).filter((x) => x !== "--yes")) {
@@ -108,9 +112,13 @@ export async function topicRemovalFixture(
     project,
     manager,
     calls,
+    reads,
     order,
     fail: () => {
       fail = true;
+    },
+    mockNativeMutation: (fn: (args: string[]) => Promise<void>) => {
+      nativeMutation = fn;
     },
     onMutation: (fn: () => Promise<unknown>) => {
       onMutation = fn;

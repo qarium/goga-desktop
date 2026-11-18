@@ -11,6 +11,7 @@ import {
 } from "@testing-library/react";
 import { TopicsWorkspace } from "../src/renderer/TopicsWorkspace";
 import { createTopicsStore } from "../src/renderer/topics-model";
+import type { TopicRemovalPreview } from "../src/shared/topic-removal";
 import type { TopicBoardSnapshot } from "../src/shared/topics";
 const project = { id: "p", name: "Project", path: "/fixture" };
 const row = (topic: string, branch: string, statuses: string[]) => ({
@@ -43,6 +44,16 @@ const board: TopicBoardSnapshot = {
   remoteEntries: [],
   remoteRecords: [],
 };
+const removalPreview = (
+  request: Pick<TopicRemovalPreview, "projectId" | "year" | "action">,
+): TopicRemovalPreview => ({
+  token: "removal",
+  projectId: request.projectId,
+  year: request.year,
+  action: request.action,
+  details: ["Exact removal preview"],
+  expiresAt: Date.now() + 60000,
+});
 let api: any;
 beforeEach(() => {
   // These regression scenarios explicitly exercise the retained table view.
@@ -73,14 +84,7 @@ beforeEach(() => {
       version: "task-v",
       editable: true,
     })),
-    prepareTopicRemoval: vi.fn(async (req: any) => ({
-      token: "removal",
-      projectId: req.projectId,
-      year: req.year,
-      action: req.action,
-      details: ["Exact removal preview"],
-      expiresAt: Date.now() + 60000,
-    })),
+    prepareTopicRemoval: vi.fn(async (request) => removalPreview(request)),
     executeTopicRemoval: vi.fn(),
     prepareTopicOperation: vi.fn(async (req) => ({
       token: "token",
@@ -342,23 +346,42 @@ it("failed refresh blocks creation until a successful fresh catalog", async () =
   assertReason(["не удалось загрузить список топиков"]);
 });
 it.each([false, true])(
-  "busy operation is explained with existing dirty=%s and removed on settlement",
+  "only confirmed removal explains a busy operation with existing dirty=%s",
   async (dirty) => {
     api.readTopicBoard.mockResolvedValue({ ...board, dirty });
     mount();
     await settled();
-    const d = deferred();
-    api.prepareTopicRemoval.mockReturnValueOnce(d.promise);
+    const preview = deferred(),
+      operation = deferred();
+    api.prepareTopicRemoval.mockReturnValueOnce(preview.promise);
+    api.executeTopicRemoval.mockReturnValueOnce(operation.promise);
     fireEvent.click(
       screen.getByRole("button", { name: "Удалить топик feature-b" }),
     );
     await waitFor(() => expect(api.prepareTopicRemoval).toHaveBeenCalled());
-    assertReason(["выполняется операция с топиками"]);
-    expect(api.executeTopicOperation).not.toHaveBeenCalled();
-    await act(async () => d.reject(Error("controlled failure")));
     noReason();
     expect(button().disabled).toBe(false);
-    expect(api.executeTopicOperation).not.toHaveBeenCalled();
+    expect(api.executeTopicRemoval).not.toHaveBeenCalled();
+    await act(async () =>
+      preview.resolve(
+        removalPreview({
+          projectId: project.id,
+          year: board.year,
+          action: "delete",
+        }),
+      ),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Удалить топики" }));
+    expect(api.executeTopicRemoval).toHaveBeenCalledExactlyOnceWith({
+      projectId: project.id,
+      token: "removal",
+    });
+    assertReason(["выполняется операция с топиками"]);
+    await act(async () => operation.reject(Error("controlled failure")));
+    await settled();
+    noReason();
+    expect(button().disabled).toBe(false);
+    expect(api.executeTopicRemoval).toHaveBeenCalledTimes(1);
   },
 );
 
@@ -389,12 +412,15 @@ it("keeps active and in-flight reasons without a dirty prohibition after the nex
   const view = render(ui(store));
   await settled();
   const operation = deferred();
-  api.prepareTopicRemoval.mockReturnValueOnce(operation.promise);
+  api.executeTopicRemoval.mockReturnValueOnce(operation.promise);
   fireEvent.click(
     screen.getByRole("button", { name: "Удалить топик feature-b" }),
   );
-  await waitFor(() => expect(api.prepareTopicRemoval).toHaveBeenCalled());
-  api.readTopicBoard.mockResolvedValueOnce({
+  await screen.findByText("Exact removal preview");
+  expect(api.executeTopicRemoval).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Удалить топики" }));
+  assertReason(["выполняется операция с топиками"]);
+  api.readTopicBoard.mockResolvedValue({
     ...board,
     active: true,
     dirty: true,
@@ -407,8 +433,12 @@ it("keeps active and in-flight reasons without a dirty prohibition after the nex
     "выполняется операция с топиками",
   ]);
   await act(async () => operation.reject(Error("controlled failure")));
+  await settled();
   assertReason(["в проекте работает запуск"]);
-  expect(api.executeTopicOperation).not.toHaveBeenCalled();
+  expect(api.executeTopicRemoval).toHaveBeenCalledExactlyOnceWith({
+    projectId: project.id,
+    token: "removal",
+  });
 });
 
 it("allows creation from a dirty board without a dirty prohibition", async () => {

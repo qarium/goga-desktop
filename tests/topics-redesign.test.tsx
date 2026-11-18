@@ -131,7 +131,6 @@ it("pins selected context, not primary Git branch; compact table has direct acti
     expect(api.prepareTopicRemoval).toHaveBeenCalledWith(
       expect.objectContaining({
         action: "delete",
-        expectedRevision: "fresh",
         topics: ["alpha"],
       }),
     ),
@@ -397,7 +396,7 @@ it("retains the Host-issued deletion confirmation, never chooses an owner from a
       knownContexts={[{ ...owner, contextId: "two", path: "/two" }, owner]}
     />,
   );
-  expect(api.prepareTopicRemoval.mock.calls[0][0]).toMatchObject({ projectId: "p", year: "2026", topics: ["beta"], expectedRevision: "fresh" });
+  expect(api.prepareTopicRemoval.mock.calls[0][0]).toMatchObject({ projectId: "p", year: "2026", topics: ["beta"] });
   expect(api.prepareContextDeletion).not.toHaveBeenCalled();
   expect(api.prepareTopicRemoval).toHaveBeenCalledTimes(1);
 });

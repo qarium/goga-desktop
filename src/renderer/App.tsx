@@ -18,6 +18,7 @@ import { SessionBuffer } from "./home/SessionBuffer";
 import type { HomeSection, HomeTarget, SessionEntry, WorkspaceAddress } from "./home/types";
 import { gitSummaryCacheFor } from "./git-summary-cache";
 import { TopicRepositoryNotice, useTopicRepository } from "./topic-repository";
+import { useActiveProjectTopicTable } from "./use-topic-table-cache";
 import { ProjectAddMenu, type ProjectAddTarget } from "./ProjectAddMenu";
 import { ProjectCreationDialog } from "./ProjectCreation";
 import { createSpecificationsState } from "./project-specifications-state";
@@ -473,6 +474,9 @@ export function App() {
   const settingsBusy = otherSettingsBusy || documentActivity !== "idle";
   const topicsStore = useRef(createTopicsStore());
   const [topicsRevision, setTopicsRevision] = useState(0);
+  // A manual refresh also renews the selector and the clone registry. It isn't
+  // a mutation: the table already joined/started its own read via the button.
+  const [topicInventoryRefresh, setTopicInventoryRefresh] = useState(0);
   const [currentTopics, setCurrentTopics] = useState<DisplayCatalog | null>(
     null,
   );
@@ -1487,6 +1491,9 @@ export function App() {
     topicsRevision,
     active,
   ]);
+  const topicTableCache = useActiveProjectTopicTable(
+    topicsStore.current, project, projectPageVisible && topicRepository === "available", topicScope,
+  );
   useEffect(() => {
     let alive = true;
     if (!projectPageVisible) return;
@@ -1520,7 +1527,7 @@ export function App() {
     return () => {
       alive = false;
     };
-  }, [topicScope, projectPageVisible, topicRepository]);
+  }, [topicScope, topicInventoryRefresh, projectPageVisible, topicRepository]);
   // A contextual history/run still needs its exact owners if the primary repository disappears.
   const readTopicInventory = topicRepository === "available" || !!selectedContext;
   const waitForTopicInventory = topicRepository === "checking" && !readTopicInventory;
@@ -1548,7 +1555,7 @@ export function App() {
     return () => {
       alive = false;
     };
-  }, [read, projectId, topicsRevision, contextsEnabled, projectPageVisible, readTopicInventory, waitForTopicInventory]);
+  }, [read, projectId, topicsRevision, topicInventoryRefresh, contextsEnabled, projectPageVisible, readTopicInventory, waitForTopicInventory]);
   // Only an explicit selection owns clone actions. Null is the original folder.
   const displayOwner = selectedContext;
 
@@ -2561,68 +2568,80 @@ export function App() {
                       ? contextOpenRuns.has(r.id)
                       : !selectedContext),
               )
-              .map((r, index) => (
-                <div className="run-tab-group" role="presentation" key={r.id}>
-                  <button
-                    role="tab"
-                    aria-label={`${r.kind === "build" ? "Сборка" : r.pipeline} · ${r.topic || "Без топика"} · ${r.branch}`}
-                    aria-selected={selected === r.id && page === "project"}
-                    tabIndex={
-                      selected === r.id || (!selected && index === 0) ? 0 : -1
-                    }
-                    onKeyDown={(event) => {
-                      const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
-                      if (!keys.includes(event.key)) return;
-                      event.preventDefault();
-                      const tabs = Array.from(
-                        event.currentTarget
-                          .closest('[role="tablist"]')!
-                          .querySelectorAll<HTMLButtonElement>('[role="tab"]'),
-                      );
-                      const currentIndex = tabs.indexOf(event.currentTarget);
-                      const next =
-                        event.key === "Home"
-                          ? 0
-                          : event.key === "End"
-                            ? tabs.length - 1
-                            : (currentIndex +
-                                (event.key === "ArrowRight" ? 1 : -1) +
-                                tabs.length) %
-                              tabs.length;
-                      tabs[next]?.focus();
-                      tabs[next]?.click();
-                    }}
-                    onClick={() =>
-                      navigate(() => {
-                        openContextRun(r);
-                      })
-                    }
-                    className={`run-tab ${selected === r.id && page === "project" ? "active" : ""}`}
-                  >
-                    <i className={`status-dot ${r.status}`} />
-                    {notifications.snapshot.unreadRunIds.includes(r.id)&&<i className="run-unread-marker" aria-label="Есть непрочитанные уведомления"/>}
-                    <span>
-                      {r.kind === "build" ? "Сборка" : r.pipeline}
-                      <small>
-                        {r.kind === "build"
-                          ? r.build?.planPath.split("/").at(-1)
-                          : r.topic || "Без топика"}{" "}
-                        · {r.branch}
-                      </small>
-                    </span>
-                  </button>
-                  <button
-                    className="close-tab"
-                    data-close-run={r.id}
-                    aria-label={`Закрыть вкладку ${r.kind === "build" ? "Сборка" : r.pipeline} · ${r.topic || "Без топика"}`}
-                    title="Закрыть вкладку"
-                    disabled={closingIds.includes(r.id) || repeatingPipelines.has(r.id)}
-                    onClick={() => navigate(() => void closeTab(r.id),false,"stay")}
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
+              .map((r, index) => {
+                const unread = notifications.snapshot.byRun[r.id] ?? 0;
+                const unreadId = `run-unread-${encodeURIComponent(r.id)}`;
+                return (
+                  <div className="run-tab-group" role="presentation" key={r.id}>
+                    <button
+                      role="tab"
+                      aria-label={`${r.kind === "build" ? "Сборка" : r.pipeline} · ${r.topic || "Без топика"} · ${r.branch}`}
+                      aria-describedby={unread > 0 ? unreadId : undefined}
+                      title={`${r.kind === "build" ? "Сборка" : r.pipeline} · ${r.topic || "Без топика"} · ${r.branch}`}
+                      aria-selected={selected === r.id && page === "project"}
+                      tabIndex={selected === r.id || (!selected && index === 0) ? 0 : -1}
+                      onKeyDown={(event) => {
+                        const keys = ["ArrowLeft", "ArrowRight", "Home", "End"];
+                        if (!keys.includes(event.key)) return;
+                        event.preventDefault();
+                        const tabs = Array.from(
+                          event.currentTarget
+                            .closest('[role="tablist"]')!
+                            .querySelectorAll<HTMLButtonElement>('[role="tab"]'),
+                        );
+                        const currentIndex = tabs.indexOf(event.currentTarget);
+                        const next =
+                          event.key === "Home"
+                            ? 0
+                            : event.key === "End"
+                              ? tabs.length - 1
+                              : (currentIndex +
+                                  (event.key === "ArrowRight" ? 1 : -1) +
+                                  tabs.length) %
+                                tabs.length;
+                        tabs[next]?.focus();
+                        tabs[next]?.click();
+                      }}
+                      onClick={() =>
+                        navigate(() => {
+                          openContextRun(r);
+                        })
+                      }
+                      className={`run-tab ${selected === r.id && page === "project" ? "active" : ""}`}
+                    >
+                      <i className={`status-dot ${r.status}`} />
+                      <span>
+                        {r.kind === "build" ? "Сборка" : r.pipeline}
+                        <small>
+                          {r.kind === "build"
+                            ? r.build?.planPath.split("/").at(-1)
+                            : r.topic || "Без топика"}
+                        </small>
+                      </span>
+                      {unread > 0 && (
+                        <span
+                          id={unreadId}
+                          className="notification-count run-notification-count"
+                          aria-label={`Непрочитанных уведомлений: ${unread}`}
+                          title={`Непрочитанных уведомлений: ${unread}`}
+                        >
+                          {unread > 99 ? "99+" : unread}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      className="close-tab"
+                      data-close-run={r.id}
+                      aria-label={`Закрыть вкладку ${r.kind === "build" ? "Сборка" : r.pipeline} · ${r.topic || "Без топика"}`}
+                      title="Закрыть вкладку"
+                      disabled={closingIds.includes(r.id) || repeatingPipelines.has(r.id)}
+                      onClick={() => navigate(() => void closeTab(r.id), false, "stay")}
+                    >
+                      ×
+                    </button>
+                  </div>
+                );
+              })}
           </div>
           <div className="run-context" data-document-section={page === "project-settings" || undefined}>
             <span
@@ -2972,6 +2991,12 @@ export function App() {
                   panels={workspacePanels}
                   viewErrors={viewErrors}
                   onAttach={window.goga.attachDashboard&&!contextUnavailable?()=>setAttachDialog(attachmentKey):undefined}
+                  onClearHistory={window.goga.clearRunHistory ? async request => {
+                    const result = await window.goga.clearRunHistory(request);
+                    const removed = new Set(result.removedRunIds);
+                    applyRuns(runsRef.current.filter(row => !removed.has(row.id)));
+                    return result;
+                  } : undefined}
                   onOpenPanel={id=>navigate(()=>openAttachedPanel(id))}
                   contextLabel={headerTopic}
                   primaryProjectId={selectedContext ? undefined : projectId}
@@ -3438,6 +3463,8 @@ export function App() {
                   key={project.id}
                   project={project}
                   store={topicsStore.current}
+                  tableCache={topicTableCache}
+                  onRefreshRelated={() => setTopicInventoryRefresh((n) => n + 1)}
                   revision={topicScope}
                   onChanged={topicsChanged}
                   onBusy={setTopicsBusy}

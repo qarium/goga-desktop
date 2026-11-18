@@ -208,3 +208,24 @@ it("uses the same app-styled native checkboxes for cards, columns and disabled e
     style.remove();
   }
 });
+
+it("keeps the draggable grip out of the column title editor and restores it on cancel", () => {
+  render(<Fixture />);
+  const col = within(screen.getByRole("region", { name: "Запланировано" }));
+  fireEvent.click(
+    col.getByRole("button", { name: "Переименовать колонку Запланировано" }),
+  );
+  expect(col.getByRole("textbox", { name: "Название колонки" })).toBeTruthy();
+  expect(
+    col.queryByRole("button", { name: "Переместить колонку Запланировано" }),
+  ).toBeNull();
+  expect(
+    screen.getByRole("button", { name: "Переместить колонку В работе" }),
+  ).toBeTruthy();
+  fireEvent.click(
+    col.getByRole("button", { name: "Отменить редактирование колонки" }),
+  );
+  expect(
+    col.getByRole("button", { name: "Переместить колонку Запланировано" }),
+  ).toBeTruthy();
+});

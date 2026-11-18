@@ -10,7 +10,11 @@ import { NativeGitUpdateHandoff } from "../src/host/git-native-update-handoff";
 import { installGitFixtureScope } from "./helpers/git-test-scope";
 import { gitIntegrationBudget } from "./helpers/git-integration";
 const fixtureScope = installGitFixtureScope();
-async function fixture(kind: "primary" | "managed", strategy = "merge") {
+async function fixture(
+  kind: "primary" | "managed",
+  strategy = "merge",
+  nativeEmptyTopic = false,
+) {
   const base = await fs.mkdtemp("/private/tmp/goga-handoff-host-"),
     home = path.join(base, "home"),
     source = path.join(base, "source");
@@ -91,7 +95,13 @@ async function fixture(kind: "primary" | "managed", strategy = "merge") {
       if (args.includes("board"))
         return {
           stdout: JSON.stringify(
-            args.includes("--remote")
+            args.includes("--remote") ||
+              (nativeEmptyTopic &&
+                !(
+                  await fs
+                    .lstat(path.join(cwd, ".goga/history/2026/feature"))
+                    .catch(() => null)
+                )?.isDirectory())
               ? []
               : [
                   {
@@ -144,7 +154,7 @@ async function fixture(kind: "primary" | "managed", strategy = "merge") {
   await git(root, ["commit", "-am", "local"]);
   // Materialize settings so synchronous publication pins refer to a durable owner.
   await host.readProjectSettings(scope);
-  const update = async () => {
+  const prepareUpdate = async () => {
     const board = await host.readTopicBoard(scope, "2026");
     const plan = await host.prepareTopicOperation({
       projectId: project.id,
@@ -155,8 +165,10 @@ async function fixture(kind: "primary" | "managed", strategy = "merge") {
       target: { topic: "feature", branch: "feature", remote: false },
       baseRef: "main",
     });
-    return host.executeTopicOperation(plan.token);
+    return plan;
   };
+  const update = async () =>
+    host.executeTopicOperation((await prepareUpdate()).token);
   return {
     host,
     project,
@@ -165,6 +177,7 @@ async function fixture(kind: "primary" | "managed", strategy = "merge") {
     source,
     git,
     update,
+    prepareUpdate,
     setUpdate: (fn: typeof onUpdate) => (onUpdate = fn),
     setRefusal: (e: Error) => (refusal = e),
     updates: () => updates,
@@ -227,6 +240,28 @@ it.each([
     await expect(
       f.host.executeGitUpdateHandoff(preview.token),
     ).rejects.toThrow();
+  }),
+  gitIntegrationBudget(60000),
+);
+it(
+  "the topic card can address a legacy empty clone before resolving the native update target",
+  fixtureScope.run(async () => {
+    const f = await fixture("managed", "merge", true);
+    const relative = ".goga/history/2026/feature";
+    await expect(fs.lstat(path.join(f.root, relative))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    f.setRefusal(Error("fixture reached native update"));
+    const plan = await f.prepareUpdate();
+    await expect(fs.lstat(path.join(f.root, relative))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    await f.host.executeTopicOperation(plan.token);
+    expect(f.updates()).toBe(1);
+    expect(await fs.readdir(path.join(f.root, relative))).toEqual([]);
+    await expect(fs.lstat(path.join(f.source, relative))).rejects.toMatchObject(
+      { code: "ENOENT" },
+    );
   }),
   gitIntegrationBudget(60000),
 );

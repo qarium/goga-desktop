@@ -954,7 +954,12 @@ export class RepositoryActions {
           throw changed();
         await this.updateCloneTracking(base.branch, base.oid);
         await this.verify();
-        await assertLocalOrigin(this.owner, (args, cwd) => this.git(args, cwd));
+        if (
+          !(await assertLocalOrigin(this.owner, (args, cwd) =>
+            this.git(args, cwd),
+          ))
+        )
+          throw changed();
         this.lines.push(
           "Обновление топика: goga topics update (клон, без публикации)…",
         );

@@ -1,4 +1,5 @@
 import type { DemoCommand, DemoState, DemoStreamFrame } from "./demonstrations";
+import type { ClearRunHistoryRequest, ClearRunHistoryResult } from "./run-history";
 import type { ProjectRemovalRequest } from "./project-registration";
 import type { ProjectCreationRequest, ProjectCreationResult, ProjectCreationProgress } from "./project-creation";
 import type { SpecificationCatalog, SpecificationDocument } from "./project-specifications";
@@ -440,6 +441,7 @@ export interface DesktopAPI {
   readRunJournal?(id: string, after?: number): Promise<RunJournalSlice>;
   onRunOutputChanged?(callback: (change: { id: string; sequence: number }) => void): () => void;
   closeRun(id: string): Promise<boolean>;
+  clearRunHistory(request: ClearRunHistoryRequest): Promise<ClearRunHistoryResult>;
   stopRun(id: string): Promise<void>;
   listAttachedDashboards?():Promise<AttachedDashboard[]>;
   attachDashboard?(scope:ScopeRef,url:string,requestId:string):Promise<{kind:"managed";id:string}|{kind:"attached";panel:AttachedDashboard}>;

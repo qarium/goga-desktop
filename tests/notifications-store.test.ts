@@ -147,6 +147,7 @@ describe("NotificationCenter", () => {
       hasMore: false,
       unreadCount: 0,
       byProject: {},
+      byRun: {},
       unreadRunIds: [],
       systemEnabled: false,
     });
@@ -212,6 +213,7 @@ describe("NotificationCenter", () => {
       throughSequence: 55,
       unreadCount: 54,
       byProject: { odd: 27, even: 27 },
+      byRun: { "run-0": 18, "run-1": 18, "run-2": 18 },
     });
     expect(new Set(newest.unreadRunIds)).toEqual(
       new Set(["run-0", "run-1", "run-2"]),
@@ -225,10 +227,59 @@ describe("NotificationCenter", () => {
       throughSequence: 55,
       unreadCount: 54,
       byProject: newest.byProject,
+      byRun: newest.byRun,
     });
     expect(center.snapshot(500).records).toHaveLength(50);
     expect(() => center.snapshot(0)).toThrow();
     expect(() => center.snapshot(1, NaN)).toThrow();
+  });
+
+  it("reports per-run counts through individual reads, viewed backlog, and restart without persisting aggregates", async () => {
+    const { center, dataDir, file } = await setup();
+    await center.add(input("first"));
+    await center.add(input("second"));
+    await center.add(input("other", { runId: "other-run" }));
+    expect(center.snapshot().byRun).toEqual({ "run-1": 2, "other-run": 1 });
+    await center.markRead("first");
+    expect(center.snapshot().byRun).toEqual({ "run-1": 1, "other-run": 1 });
+    await center.markMatchingRead(
+      center.snapshot().throughSequence,
+      (record) => record.runId === "run-1",
+    );
+    expect(center.snapshot().byRun).toEqual({ "other-run": 1 });
+    await center.add(input("viewed", { runId: "viewed-run" }), () => true);
+    expect(center.snapshot().byRun).toEqual({ "other-run": 1 });
+    const reloaded = new NotificationCenter(dataDir);
+    await reloaded.initialize();
+    expect(reloaded.snapshot().byRun).toEqual({ "other-run": 1 });
+    expect(JSON.parse(await fs.readFile(file, "utf8"))).not.toHaveProperty(
+      "byRun",
+    );
+    await center.markAllRead(center.snapshot().throughSequence);
+    expect(center.snapshot().byRun).toEqual({});
+  });
+
+  it("requires bounded per-run counts in every notification snapshot", async () => {
+    const { center } = await setup();
+    const snapshot = center.snapshot();
+    expect(
+      NotificationSnapshotSchema.safeParse({ ...snapshot, byRun: { run: 3 } })
+        .success,
+    ).toBe(true);
+    for (const byRun of [
+      { run: -1 },
+      { run: 1.5 },
+      { run: Number.MAX_SAFE_INTEGER + 1 },
+      { run: "3" },
+      { "": 3 },
+    ])
+      expect(
+        NotificationSnapshotSchema.safeParse({ ...snapshot, byRun }).success,
+      ).toBe(false);
+    const { byRun, ...missingCounts } = snapshot;
+    expect(NotificationSnapshotSchema.safeParse(missingCounts).success).toBe(
+      false,
+    );
   });
 
   it("markAllRead never reads later arrivals and is idempotent", async () => {
@@ -671,6 +722,7 @@ it("persists a currently viewed arrival as read before publishing any counter", 
     unreadCount: 0,
     unreadRunIds: [],
     byProject: {},
+    byRun: {},
   });
   const restored = new NotificationCenter(dataDir);
   await restored.initialize();
@@ -701,6 +753,7 @@ it("reads the matching owner's full backlog in one publication, not just the vis
   expect(center.snapshot()).toMatchObject({
     unreadCount: 1,
     unreadRunIds: ["other"],
+    byRun: { other: 1 },
   });
   expect(center.find("mine-0")?.readAt).not.toBeNull();
   expect(center.find("other")?.readAt).toBeNull();

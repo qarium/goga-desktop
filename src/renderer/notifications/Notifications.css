@@ -276,14 +276,9 @@
   min-width: 20px;
   min-height: 20px;
 }
-.run-unread-marker {
-  display: inline-block;
+.run-notification-count {
   flex-shrink: 0;
-  width: 6px;
-  height: 6px;
-  margin-left: 5px;
-  border-radius: 50%;
-  background: var(--teal);
+  margin-left: auto;
 }
 @media (pointer: coarse) {
   .notification-icon {

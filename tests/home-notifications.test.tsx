@@ -26,6 +26,7 @@ it("revokes the viewed run before a delayed native detach; receiving an event on
     hasMore: false,
     unreadCount: count,
     byProject: { p: count },
+    byRun: count ? { r: count } : {},
     unreadRunIds: count ? ["r"] : [],
     systemEnabled: false,
   });

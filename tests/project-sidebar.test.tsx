@@ -63,6 +63,37 @@ beforeEach(() => {
   };
 });
 afterEach(cleanup);
+it("keeps the group count inset from the toggle edge without shrinking it", () => {
+  localStorage.setItem(
+    organizationKey,
+    JSON.stringify({
+      schemaVersion: 1,
+      groups: [
+        { id: "g", name: "Работа", collapsed: false, projectIds: ["b"] },
+      ],
+      ungroupedProjectIds: ["a"],
+    }),
+  );
+  const style = document.createElement("style");
+  style.textContent = readFileSync("src/renderer/ProjectSidebar.css", "utf8");
+  document.head.appendChild(style);
+  try {
+    render(<Sidebar />);
+    const toggle = screen.getByRole("button", { name: "Группа Работа" });
+    const count = toggle.querySelector("small")!;
+    for (const collapsed of [false, true]) {
+      if (collapsed) fireEvent.click(toggle);
+      expect(
+        parseFloat(getComputedStyle(toggle).paddingRight),
+      ).toBeGreaterThanOrEqual(9);
+      expect(getComputedStyle(toggle).paddingLeft).toBe("0px");
+      expect(getComputedStyle(count).flexShrink).toBe("0");
+      expect(count.textContent).toBe("1");
+    }
+  } finally {
+    style.remove();
+  }
+});
 it("insets project and group menus without moving drag handles or compact icons", () => {
   localStorage.setItem(
     organizationKey,

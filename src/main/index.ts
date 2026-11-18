@@ -311,10 +311,10 @@ if (!app.requestSingleInstanceLock()) {
       const demonstrations = createWindowDemonstrations(ipcMain,{window:win,shellURL,runtime:demos,service,openExternal:url=>shell.openExternal(url)});
       const shutdown = new ShutdownCoordinator({
         participants: [
-          { prepare: () => service.prepareProjectCreationShutdown() },
-          { prepare: () => service.prepareShutdown() },
-          { prepare: () => terminal.sessions.prepareShutdown() },
-          demonstrations,
+          { kind: "project-creation", prepare: () => service.prepareProjectCreationShutdown() },
+          { kind: "runs", prepare: () => service.prepareShutdown() },
+          { kind: "terminals", prepare: () => terminal.sessions.prepareShutdown() },
+          { kind: "demonstrations", prepare: () => demonstrations.prepare() },
         ],
         confirm: async (items) => {
           const answer = await dialog.showMessageBox(win, {
@@ -360,7 +360,7 @@ if (!app.requestSingleInstanceLock()) {
             detail:
               (result.message ?? "Приложение остаётся открытым.") +
               (result.inventoryComplete === false
-                ? "\nНе удалось проверить полный список процессов. Отсутствие процессов не подтверждено."
+                ? "\nНе все компоненты подтвердили готовность к выходу. Приложение осталось открытым."
                 : `\nЗавершено: ${result.completed.length}. Осталось: ${result.remaining.length}.` + (result.retained?.length ? `\nОставлены работать: ${result.retained.length}.` : "")),
             buttons: ["Закрыть"],
           });

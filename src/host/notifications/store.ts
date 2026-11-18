@@ -112,12 +112,14 @@ export class NotificationCenter {
         ? sorted
         : sorted.filter((row) => row.sequence < page.beforeSequence!);
     const byProject: Record<string, number> = Object.create(null);
+    const byRun: Record<string, number> = Object.create(null);
     const unreadRunIds = new Set<string>();
     let unreadCount = 0;
     for (const record of this.state.records)
       if (record.readAt === null) {
         unreadCount++;
         byProject[record.projectId] = (byProject[record.projectId] ?? 0) + 1;
+        byRun[record.runId] = (byRun[record.runId] ?? 0) + 1;
         unreadRunIds.add(record.runId);
       }
     return {
@@ -127,6 +129,7 @@ export class NotificationCenter {
       hasMore: rows.length > page.limit,
       unreadCount,
       byProject,
+      byRun,
       unreadRunIds: [...unreadRunIds].sort(),
       systemEnabled: this.state.systemEnabled,
       ...(this.error ? { error: this.error } : {}),

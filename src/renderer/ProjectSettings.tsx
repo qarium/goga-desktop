@@ -880,7 +880,7 @@ export function ProjectSettingsConfirmation({
   return (
     <dialog
       ref={dialog}
-      className="task-reload-dialog"
+      className="task-reload-dialog project-settings-confirmation"
       aria-label="Несохранённые настройки проекта"
       onCancel={(e) => {
         e.preventDefault();

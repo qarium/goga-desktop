@@ -854,6 +854,87 @@ code {
 .task-reload-dialog .form-actions {
   flex-wrap: wrap;
 }
+/* Dialogs have explicit widths. Query their available content, not the window:
+   a compact popup can need stacked actions even on a large display. Keep the
+   intentional split footers of ordinary forms/editors outside this contract. */
+:is(.task-reload-dialog, .topic-dialog, .ov-modal[role="dialog"]) {
+  container-name: goga-dialog;
+  container-type: inline-size;
+}
+.task-reload-dialog.project-settings-confirmation {
+  width: min(600px, calc(100vw - 32px));
+}
+.ov-modal:has(> footer > button:nth-of-type(3)) {
+  width: 600px;
+}
+:is(.task-reload-dialog, .topic-dialog) .form-actions {
+  flex-wrap: wrap;
+  align-items: stretch;
+}
+:is(.task-reload-dialog, .topic-dialog) .form-actions:has(> button:nth-of-type(3)) {
+  justify-content: flex-end;
+  gap: 8px;
+}
+@container goga-dialog (max-width: 520px) {
+  :is(.task-reload-dialog, .topic-dialog) .form-actions:has(> button:nth-of-type(3)),
+  .ov-modal > footer:has(> button:nth-of-type(3)),
+  .ov-paste-dialog > footer {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  :is(.task-reload-dialog, .topic-dialog) .form-actions:has(> button:nth-of-type(3)) > button,
+  .ov-modal > footer:has(> button:nth-of-type(3)) > button,
+  .ov-paste-dialog > footer > button {
+    width: 100%;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  /* Preserve the approved two-secondary-actions + full-width-save pattern. */
+  .workspace-leave-dialog .workspace-leave-actions {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    align-items: stretch;
+  }
+  .workspace-leave-dialog .workspace-leave-actions > button {
+    margin: 0;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .workspace-leave-dialog .workspace-leave-actions .primary {
+    grid-column: 1/-1;
+  }
+}
+@container goga-dialog (max-width: 320px) {
+  :is(.task-reload-dialog, .topic-dialog) .form-actions,
+  .topic-dialog .git-branch-dialog-actions,
+  .topic-dialog .git-discard-confirm-actions,
+  .topic-dialog .topic-removal-actions,
+  .ov-modal > footer,
+  .project-creation-dialog .creation-actions {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  :is(.task-reload-dialog, .topic-dialog) .form-actions > button,
+  .topic-dialog .git-branch-dialog-actions > button,
+  .topic-dialog .git-discard-confirm-actions > button,
+  .topic-dialog .topic-removal-actions > button,
+  .ov-modal > footer > button,
+  .project-creation-dialog .creation-actions > button {
+    width: 100%;
+    min-width: 0;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .project-creation-dialog .creation-actions {
+    width: 100%;
+    flex: 1 1 100%;
+    margin-left: 0;
+  }
+}
 @media (max-width: 1000px) {
   .topic-new-row {
     grid-template-columns: minmax(0, 1fr);

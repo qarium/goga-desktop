@@ -243,9 +243,22 @@ export interface TopicCreateDraft {
   commit: string;
 }
 export function createTopicsStore() {
+  const years = new Map<string, string>();
+  const yearListeners = new Set<() => void>();
   return {
     filters: new Map<string, TopicFilters>(),
-    years: new Map<string, string>(),
+    years,
+    setYear(projectId: string, year: string) {
+      if (years.get(projectId) === year) return;
+      years.set(projectId, year);
+      yearListeners.forEach((notify) => notify());
+    },
+    subscribeYears(notify: () => void) {
+      yearListeners.add(notify);
+      return () => {
+        yearListeners.delete(notify);
+      };
+    },
     tasks: new Map<string, TopicTextDraft>(),
     creates: new Map<string, TopicCreateDraft>(),
   };

@@ -201,124 +201,138 @@ export function useTopicRemovalController(
 }
 export function TopicRemovalPopup({
   controller,
+  onClosed,
 }: {
   controller: ReturnType<typeof useTopicRemovalController>;
+  onClosed?: () => void;
 }) {
   const o = controller.operation;
   const [acks, setAcks] = useState<Record<string, boolean>>({});
   if (!o) return null;
+  const close = () => {
+    if (controller.busy) return;
+    controller.close();
+    onClosed?.();
+  };
   return (
     <TopicModal
       title={`Удаление топиков · ${o.projectName} · ${o.plan.year}`}
       busy={controller.busy}
-      onClose={controller.close}
+      onClose={close}
+      className="topic-removal-dialog"
       closeLabel="Закрыть результат удаления"
     >
-      {controller.busy && (
-        <p role="status">
-          {o.result
-            ? "Проверяем и очищаем рабочие копии…"
-            : "Выполняем команду Goga…"}
-        </p>
-      )}
-      {o.error && (
-        <p role="alert" className="error">
-          {o.error} Результат требует проверки; команда автоматически не
-          повторяется.
-        </p>
-      )}
-      {o.result && (
-        <>
-          <section
-            className="topic-removal-result"
-            aria-label="Удаление топиков"
-          >
-            <h3>Удаление топиков</h3>
-            <p role={o.result.topics.status === "success" ? "status" : "alert"}>
-              {o.result.topics.message}
-            </p>
-          </section>
-          <section className="topic-removal-result" aria-label="Рабочие копии">
-            <h3>Рабочие копии</h3>
-            {!o.result.copies.length && !controller.busy && (
-              <p className="hint">Нет копий, требующих очистки.</p>
-            )}
-            {o.result.copies.map((copy) => {
-              const pending = o.result!.cleanup.find(
-                (c) => c.owner.contextId === copy.contextId,
-              );
-              const needsAck = !!pending?.plan.requiresAheadConfirmation;
-              const ackKey = JSON.stringify([
-                o.plan.token,
-                copy.contextId,
-                pending?.plan.token,
-              ]);
-              return (
-                <div className="topic-removal-copy" key={copy.contextId}>
-                  <strong>{copy.topic}</strong>
-                  <span
-                    className={
-                      copy.status === "removed" ? "topic-success" : "hint"
-                    }
-                  >
-                    {copy.status === "removed"
-                      ? "Копия в Корзине"
-                      : "Копия сохранена / требует проверки"}
-                  </span>
-                  <p className="hint">{copy.reason}</p>
-                  {copy.status === "needs-confirmation" && pending && (
-                    <>
-                      {needsAck && (
-                        <label className="topic-confirm-check">
-                          <input
-                            type="checkbox"
-                            checked={!!acks[ackKey]}
-                            onChange={(e) =>
-                              setAcks({ ...acks, [ackKey]: e.target.checked })
-                            }
-                          />
-                          Подтверждаю удаление непереданных коммитов{" "}
-                          {copy.topic}
-                        </label>
-                      )}
-                      <button
-                        type="button"
-                        disabled={
-                          controller.busy || (needsAck && !acks[ackKey])
-                        }
-                        onClick={() =>
-                          void controller.cleanup(
-                            copy.contextId,
-                            !!acks[ackKey],
-                          )
-                        }
-                      >
-                        Удалить копию {copy.topic}
-                      </button>
-                    </>
-                  )}
-                  {copy.status !== "removed" &&
-                    copy.status !== "needs-confirmation" && (
-                      <button
-                        type="button"
-                        disabled={controller.busy}
-                        onClick={() => void controller.check(copy.contextId)}
-                      >
-                        Проверить копию {copy.topic}
-                      </button>
+      <div className="topic-removal-body">
+        {controller.busy && (
+          <p role="status" className="topic-removal-progress">
+            <span className="loading-spinner" aria-hidden="true" />
+            {o.result
+              ? "Проверяем и очищаем рабочие копии…"
+              : "Выполняем команду Goga…"}
+          </p>
+        )}
+        {o.error && (
+          <p role="alert" className="error">
+            {o.error} Результат требует проверки; команда автоматически не
+            повторяется.
+          </p>
+        )}
+        {o.result && (
+          <>
+            <section
+              className="topic-removal-result"
+              aria-label="Удаление топиков"
+            >
+              <h3>Удаление топиков</h3>
+              <p
+                role={o.result.topics.status === "success" ? "status" : "alert"}
+              >
+                {o.result.topics.message}
+              </p>
+            </section>
+            <section
+              className="topic-removal-result"
+              aria-label="Рабочие копии"
+            >
+              <h3>Рабочие копии</h3>
+              {!o.result.copies.length && !controller.busy && (
+                <p className="hint">Нет копий, требующих очистки.</p>
+              )}
+              {o.result.copies.map((copy) => {
+                const pending = o.result!.cleanup.find(
+                  (c) => c.owner.contextId === copy.contextId,
+                );
+                const needsAck = !!pending?.plan.requiresAheadConfirmation;
+                const ackKey = JSON.stringify([
+                  o.plan.token,
+                  copy.contextId,
+                  pending?.plan.token,
+                ]);
+                return (
+                  <div className="topic-removal-copy" key={copy.contextId}>
+                    <strong>{copy.topic}</strong>
+                    <span
+                      className={
+                        copy.status === "removed" ? "topic-success" : "hint"
+                      }
+                    >
+                      {copy.status === "removed"
+                        ? "Копия в Корзине"
+                        : copy.status === "uncertain"
+                          ? "Состояние копии требует проверки"
+                          : "Копия осталась на диске"}
+                    </span>
+                    <p className="hint">{copy.reason}</p>
+                    {copy.status === "needs-confirmation" && pending && (
+                      <>
+                        {needsAck && (
+                          <label className="topic-confirm-check">
+                            <input
+                              type="checkbox"
+                              checked={!!acks[ackKey]}
+                              onChange={(e) =>
+                                setAcks({ ...acks, [ackKey]: e.target.checked })
+                              }
+                            />
+                            Подтверждаю удаление непереданных коммитов{" "}
+                            {copy.topic}
+                          </label>
+                        )}
+                        <button
+                          type="button"
+                          disabled={
+                            controller.busy || (needsAck && !acks[ackKey])
+                          }
+                          onClick={() =>
+                            void controller.cleanup(
+                              copy.contextId,
+                              !!acks[ackKey],
+                            )
+                          }
+                        >
+                          Удалить копию {copy.topic}
+                        </button>
+                      </>
                     )}
-                </div>
-              );
-            })}
-          </section>
-        </>
-      )}
-      <footer>
-        <button
-          type="button"
-          disabled={controller.busy}
-          onClick={controller.close}
-        >
+                    {copy.status !== "removed" &&
+                      copy.status !== "needs-confirmation" && (
+                        <button
+                          type="button"
+                          disabled={controller.busy}
+                          onClick={() => void controller.check(copy.contextId)}
+                        >
+                          Проверить копию {copy.topic}
+                        </button>
+                      )}
+                  </div>
+                );
+              })}
+            </section>
+          </>
+        )}
+      </div>
+      <footer className="topic-removal-actions">
+        <button type="button" disabled={controller.busy} onClick={close}>
           К топикам
         </button>
       </footer>

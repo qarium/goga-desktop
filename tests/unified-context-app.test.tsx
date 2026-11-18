@@ -523,6 +523,37 @@ it("shows only the selected owner's open run tabs and restores them without clos
   expect(api.stopRun).not.toHaveBeenCalled();
   expect(api.closeRun).not.toHaveBeenCalled();
 });
+
+it("clears only confirmed history tabs without stopping runs or moving a later-selected workspace", async () => {
+  HTMLDialogElement.prototype.showModal = function () { this.open = true; };
+  HTMLDialogElement.prototype.close = function () { this.open = false; };
+  const rows = [
+    { ...ownedRun("done-a", ownerA), status: "exited" },
+    ownedRun("live-a", ownerA),
+    ownedRun("live-b", ownerB),
+  ];
+  api.runs.mockResolvedValue(rows);
+  let finish!: (value: { removedRunIds: string[]; retained: [] }) => void;
+  api.clearRunHistory = vi.fn(() => new Promise(resolve => { finish = resolve; }));
+  await mount(); await choose("alpha"); await openRun("done-a");
+  fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
+  fireEvent.click(screen.getByRole("button", { name: "Очистить историю…" }));
+  fireEvent.click(within(screen.getByRole("dialog", { name: "Очистить историю конвейеров?" })).getByRole("button", { name: "Очистить историю" }));
+  expect(api.clearRunHistory).toHaveBeenCalledWith({ scope: expect.objectContaining({ contextId: ownerA.contextId }), kind: "pipeline", runIds: ["done-a"] });
+  await choose("beta"); await openRun("live-b");
+  // A later catalogue delivery must survive the cleanup's delayed response.
+  act(() => emitRuns([...rows, ownedRun("new-b", ownerB)]));
+  await act(async () => finish({ removedRunIds: ["done-a"], retained: [] }));
+  expect(screen.getByRole("button", { name: "Открыть карточку топика beta" })).toBeTruthy();
+  expect(screen.getByRole("tab", { selected: true }).getAttribute("aria-label")).toMatch(/^live-b ·/);
+  expect(api.stopRun).not.toHaveBeenCalled(); expect(api.closeRun).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "Запуски" }));
+  expect(await screen.findByRole("button", { name: "Открыть запуск new-b" })).toBeTruthy();
+  await choose("alpha");
+  expect(screen.queryByRole("tab", { name: /^done-a ·/ })).toBeNull();
+  expect(screen.queryByRole("button", { name: "Открыть запуск done-a" })).toBeNull();
+  expect(screen.getByRole("button", { name: "Открыть запуск live-a" })).toBeTruthy();
+});
 it("filters draft tabs by owner while retaining their mounted drafts across A/B/primary switches", async () => {
   await mount();
   launch("Конвейер");
@@ -1093,8 +1124,7 @@ it("deletes a different topic without replacing the selected context", async () 
   fireEvent.click(
     await screen.findByRole("button", { name: "Удалить топик beta" }),
   );
-  fireEvent.click(await screen.findByRole("checkbox", { name: /Подтверждаю удаление/ }));
-  fireEvent.click(screen.getByRole("button", { name: "Удалить топики" }));
+  fireEvent.click(await screen.findByRole("button", { name: "Удалить топики" }));
   await waitFor(() =>
     expect(api.finishContextDeletion).toHaveBeenCalledTimes(1),
   );
@@ -1365,8 +1395,7 @@ it('deletes a selected topic first, then leaves its copy before finishing cleanu
   await mount();await choose('alpha');
   fireEvent.click(screen.getByRole('button',{name:'Открыть карточку топика alpha'}));
   fireEvent.click(await screen.findByRole('button',{name:'Удалить топик…'}));
-  fireEvent.click(await screen.findByRole('checkbox',{name:/Подтверждаю удаление/}));
-  fireEvent.click(screen.getByRole('button',{name:'Удалить топики'}));
+  fireEvent.click(await screen.findByRole('button',{name:'Удалить топики'}));
   await screen.findByText('Cleanup done without Goga');
   expect(api.finishContextDeletion).toHaveBeenCalledTimes(1);expect(api.prepareContextDeletion).not.toHaveBeenCalled();
 });
@@ -1436,10 +1465,13 @@ it.each(["pipeline", "no-topic", "build"] as const)(
       }),
     ).toBeTruthy();
     const tab = screen.getByRole("tab", { selected: true });
-    expect(tab.textContent).toContain(run.branch);
-    expect(tab.textContent).toContain(
-      kind === "build" ? "plan.md" : run.topic || "Без топика",
+    const visibleDetail = kind === "build" ? "plan.md" : run.topic || "Без топика";
+    expect(tab.querySelector("small")?.textContent).toBe(visibleDetail);
+    expect(tab.textContent).toBe(
+      `${kind === "build" ? "Сборка" : run.pipeline}${visibleDetail}`,
     );
+    expect(tab.getAttribute("title")).toContain(run.branch);
+    expect(tab.getAttribute("title")).toContain(run.topic || "Без топика");
     if (kind === "build")
       expect(within(bar).getByText(run.build!.planPath)).toBeTruthy();
     fireEvent.click(within(bar).getByRole("button", { name: "Остановить" }));

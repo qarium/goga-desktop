@@ -11,6 +11,7 @@ import path from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import { HostService } from "../src/host/service";
+import { ShutdownCoordinator } from "../src/main/shutdown-coordinator";
 import { NodeRunner, type Runner } from "../src/host/process";
 import type { BuildRequest } from "../src/shared/build";
 const roots: string[] = [];
@@ -799,3 +800,40 @@ it("final cleanup failure leaves the host usable and can be retried, without res
   expect(runner.dispose).toHaveBeenCalledTimes(2);
   await expect(f.service.launchBuild({} as any)).rejects.toThrow(/заверш/);
 });
+
+it.each(["runner", "later-finalizer"] as const)(
+  "retries the entire exit after a %s failure, including already disposed creation and host participants",
+  async (failure) => {
+    const f = await setup();
+    const runner = (f.service as any).runner;
+    runner.dispose = vi.fn(async () => {});
+    if (failure === "runner")
+      runner.dispose.mockRejectedValueOnce(Error("synthetic cleanup failure"));
+    let first = true;
+    const finalize = vi.fn(async () => {
+      await f.service.finalizeShutdown();
+      if (failure === "later-finalizer" && first) {
+        first = false;
+        throw Error("synthetic later finalizer failure");
+      }
+    });
+    const coordinator = new ShutdownCoordinator({
+      participants: [
+        { prepare: () => f.service.prepareProjectCreationShutdown() },
+        { prepare: () => f.service.prepareShutdown() },
+      ],
+      confirm: vi.fn(async () => true),
+      finalize,
+    });
+    expect((await coordinator.close()).status).toBe("failed");
+    expect(await coordinator.close()).toMatchObject({
+      status: "success",
+      inventoryComplete: true,
+      remaining: [],
+    });
+    expect(finalize).toHaveBeenCalledTimes(2);
+    expect(f.children).toHaveLength(0);
+    expect(f.kill).not.toHaveBeenCalled();
+    await expect(f.service.launchBuild({} as any)).rejects.toThrow(/заверш/);
+  },
+);

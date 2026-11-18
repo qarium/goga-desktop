@@ -3,6 +3,9 @@ import { TopicsRemovalDialog } from "./TopicsRemovalDialog";
 import { LayoutGrid, List } from "lucide-react";
 import { TopicsBoard } from "./TopicsBoard";
 import { useTopicsBoard } from "./useTopicsBoard";
+import { TopicTableCache } from "./topic-table-cache";
+import { useTopicTableYear } from "./use-topic-table-cache";
+import { useViewActive } from "./RetainedViews";
 import {
   topicSelectionKey,
   columnChecked,
@@ -26,6 +29,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  useSyncExternalStore,
 } from "react";
 import type { Project } from "../shared/types";
 import type { TopicContextIdentity, WorktreeRecord } from "../shared/worktrees";
@@ -60,6 +64,8 @@ const LARGE_TABLE_ROWS = 200;
 export function TopicsWorkspace({
   project,
   store,
+  tableCache,
+  onRefreshRelated,
   onOpenTopic,
   onChanged,
   onBusy,
@@ -75,6 +81,8 @@ export function TopicsWorkspace({
 }: {
   project: Project;
   store: TopicsStore;
+  tableCache?: TopicTableCache;
+  onRefreshRelated?: () => void;
   ownerReadState?: "loading" | "error" | "confirmed";
   ownerReadError?: string;
   disabled?: boolean;
@@ -93,9 +101,49 @@ export function TopicsWorkspace({
   selectedContext?: TopicContextIdentity | null;
   onSelectTopic?: (identity: TopicContextIdentity) => void;
 }) {
-  const [year, setYear] = useState(
-    store.years.get(project.id) ?? String(new Date().getFullYear()),
+  const year = useTopicTableYear(store, project.id);
+  const scope = useMemo(
+    () => ({ projectId: project.id, path: project.path, year }),
+    [project.id, project.path, year],
   );
+  const cache = useMemo(
+    () => tableCache ?? new TopicTableCache(),
+    [tableCache],
+  );
+  const visible = useViewActive();
+  const subscribe = useCallback(
+    (listener: () => void) =>
+      visible ? cache.subscribe(scope, listener) : () => {},
+    [cache, scope, visible],
+  );
+  const snapshot = useSyncExternalStore(subscribe, () =>
+    cache.getSnapshot(scope),
+  );
+  const { board, loading, polling } = snapshot;
+  const validYear = /^\d{4}$/.test(year);
+  const error = !validYear
+    ? "Укажите год из четырёх цифр."
+    : loading && !polling
+      ? ""
+      : snapshot.error;
+  const cold = !board && !error;
+  // Standalone consumers own their cache for as long as the view is visible;
+  // the application always supplies its own, already active project reader.
+  useEffect(() => {
+    if (tableCache || !visible) return;
+    cache.activate(scope);
+    return () => cache.activate(null);
+  }, [cache, scope, tableCache, visible]);
+  const previous = useRef({ scope, revision });
+  useEffect(() => {
+    if (
+      !tableCache &&
+      previous.current.scope === scope &&
+      previous.current.revision !== revision
+    )
+      cache.invalidate(scope);
+    previous.current = { scope, revision };
+  }, [cache, scope, tableCache, revision]);
   const [filters, setFilters] = useState(() => ({
     ...defaultTopicFilters(),
     ...store.filters.get(project.id),
@@ -103,10 +151,6 @@ export function TopicsWorkspace({
     perHost: false,
     remote: false,
   }));
-  const [board, setBoard] = useState<TopicBoardSnapshot | null>(null);
-  const [error, setError] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [refresh, setRefresh] = useState(0);
   const [picker, setPicker] = useState<"topics" | "hosts" | "statuses" | null>(
     null,
   );
@@ -127,43 +171,14 @@ export function TopicsWorkspace({
     target: TopicTarget;
     owner?: WorktreeRecord;
   } | null>(null);
-  const key = JSON.stringify([project.id, year, revision, refresh]);
-  const [settled, setSettled] = useState("");
-  const read = useReadScope(key);
+  const refreshTable = () => {
+    if (!loading) onRefreshRelated?.();
+    void cache.refresh(scope);
+  };
   const changed = () => {
-    setRefresh((n) => n + 1);
+    if (!tableCache) cache.invalidate(scope);
     onChanged();
   };
-  useEffect(() => {
-    let alive = true;
-    setLoading(true);
-    setError("");
-    if (!/^\d{4}$/.test(year)) {
-      setError("Укажите год из четырёх цифр.");
-      setLoading(false);
-      setSettled(key);
-      return;
-    }
-    read("readTopicTable", project.id, year)
-      .then((next) => {
-        if (!alive) return;
-        if (next.projectId !== project.id || next.year !== year)
-          throw Error("Ответ относится к другому проекту или году.");
-        setBoard(next);
-      })
-      .catch((e) => {
-        if (alive) setError(topicError(e));
-      })
-      .finally(() => {
-        if (alive) {
-          setLoading(false);
-          setSettled(key);
-        }
-      });
-    return () => {
-      alive = false;
-    };
-  }, [read, key, project.id, year]);
   function update(patch: Partial<TopicFilters>) {
     const next = { ...filters, ...patch };
     setFilters(next);
@@ -374,7 +389,7 @@ export function TopicsWorkspace({
   const hiddenSelection = [...boardUI.selected].filter(
     (key) => !visibleSet.has(key),
   ).length;
-  const pending = loading || settled !== key;
+  const pending = cold || (loading && !polling);
   const pendingDeletions = knownContexts.filter(
     (owner) => owner.projectId === project.id && owner.deletedAt,
   );
@@ -405,8 +420,7 @@ export function TopicsWorkspace({
       data-retain-layout={
         boardUI.preferences.view === "table" &&
         tableRows.length >= LARGE_TABLE_ROWS &&
-        !pending &&
-        !error &&
+        !cold &&
         !picker &&
         !create &&
         !deleting &&
@@ -465,10 +479,16 @@ export function TopicsWorkspace({
               className="topic-refresh-button"
               aria-label="Обновить список"
               title="Обновить список"
-              disabled={pending || createBusy}
-              onClick={changed}
+              disabled={!validYear || cold || loading || createBusy}
+              onClick={refreshTable}
             >
-              <span aria-hidden="true">↻</span>
+              {loading && board ? (
+                <span role="status" aria-label="Обновляем список топиков">
+                  <span className="loading-spinner" aria-hidden="true" />
+                </span>
+              ) : (
+                <span aria-hidden="true">↻</span>
+              )}
             </button>
             <button
               type="button"
@@ -490,10 +510,7 @@ export function TopicsWorkspace({
             inputMode="numeric"
             maxLength={4}
             value={year}
-            onChange={(e) => {
-              setYear(e.target.value);
-              store.years.set(project.id, e.target.value);
-            }}
+            onChange={(e) => store.setYear(project.id, e.target.value)}
           />
         </label>
         <label>
@@ -590,18 +607,22 @@ export function TopicsWorkspace({
         </div>
       )}
       <LoadingBoundary
-        pending={pending}
+        pending={cold}
+        background={!!board && !!error}
         label="Загружаем топики…"
-        error={error}
-        onRetry={() => setRefresh((n) => n + 1)}
+        error={
+          board && error
+            ? `Показан последний загруженный список. Не удалось обновить топики: ${error}`
+            : error
+        }
+        onRetry={validYear ? refreshTable : undefined}
       >
         {boardUI.preferences.view === "board" ? (
           <TopicsBoard
             key={JSON.stringify([
               project.id,
+              project.path,
               year,
-              revision,
-              refresh,
               boardUI.version,
             ])}
             projectId={project.id}

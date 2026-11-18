@@ -16,6 +16,7 @@ export const topicRemovalRequestSchema = z.discriminatedUnion("action", [
     .object({
       ...common,
       action: z.literal("delete"),
+      expectedRevision: common.expectedRevision.optional(),
       topics: z.array(topicSlugSchema).min(1).max(1000),
     })
     .strict(),

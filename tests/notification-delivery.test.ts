@@ -21,6 +21,7 @@ const snapshot: any = {
   hasMore: false,
   unreadCount: 1,
   byProject: { p: 1 },
+  byRun: { r: 1 },
   unreadRunIds: ["r"],
   systemEnabled: true,
 };

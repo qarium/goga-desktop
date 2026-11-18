@@ -58,5 +58,36 @@ it("shows year/base and explains filter scope without claiming a candidate previ
     baseRef: "main",
     expectedRevision: "a".repeat(64),
   });
+  const submit = screen.getByRole("button", {
+    name: "Очистить топики",
+  }) as HTMLButtonElement;
+  expect(submit.disabled).toBe(true);
+  fireEvent.click(
+    screen.getByRole("checkbox", { name: /Подтверждаю удаление/ }),
+  );
+  expect(submit.disabled).toBe(false);
+  expect(window.goga.readTopicBoard).toHaveBeenCalledTimes(1);
   expect(window.goga.executeTopicRemoval).not.toHaveBeenCalled();
+});
+
+it("retries a failed branch list load instead of preparing clear with an empty base", async () => {
+  vi.mocked(window.goga.readTopicBoard).mockRejectedValueOnce(
+    Error("Список не прочитан"),
+  );
+  render(
+    <TopicsRemovalDialog
+      project={{ id: "p", name: "Project", path: "/fixture" }}
+      year="2026"
+      action="clear"
+      topics={[]}
+      onClose={vi.fn()}
+      onChanged={vi.fn()}
+    />,
+  );
+  await screen.findByRole("alert");
+  fireEvent.click(screen.getByRole("button", { name: /Повторить/ }));
+  expect(
+    await screen.findByRole("combobox", { name: "Базовая ветка" }),
+  ).toBeTruthy();
+  expect(window.goga.prepareTopicRemoval).not.toHaveBeenCalled();
 });

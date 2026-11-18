@@ -78,6 +78,60 @@ describe("private context run journal", () => {
     await f.store.save([]);
     expect(await new ContextRunsStore(f.home).load()).toEqual([]);
   });
+  it("clears completed records once and never resurrects them from later stale saves", async () => {
+    const f = await setup();
+    const completed = run({ status: "exited" });
+    const active = run({ id: "active" });
+    await f.store.save([completed, active]);
+    expect(await f.store.clearCompleted([completed.id])).toEqual([
+      completed.id,
+    ]);
+    const newer = run({ id: "newer", status: "failed" });
+    await f.store.save([completed, active, newer]);
+    expect(
+      (await new ContextRunsStore(f.home).load()).map((r) => r.id),
+    ).toEqual(["active", "newer"]);
+    expect(await f.store.clearCompleted([completed.id])).toEqual([]);
+  });
+  it("refuses clearing active or pending reconciliation records without altering history", async () => {
+    const f = await setup();
+    await f.store.save([
+      run(),
+      run({ id: "pending", status: "exited", syncPending: true }),
+    ]);
+    const before = await fs.readFile(f.file, "utf8");
+    await expect(f.store.clearCompleted(["run-1"])).rejects.toThrow();
+    await expect(f.store.clearCompleted(["pending"])).rejects.toThrow();
+    expect(await fs.readFile(f.file, "utf8")).toBe(before);
+  });
+  it("retains a terminal tombstone when clearing an older journal without terminal binding metadata", async () => {
+    const f = await setup();
+    const completed = run({ status: "exited" });
+    await f.store.save([completed]);
+    const older = JSON.parse(await fs.readFile(f.file, "utf8"));
+    delete older.bindings[0].terminal;
+    await fs.writeFile(f.file, JSON.stringify(older), { mode: 0o600 });
+    const store = new ContextRunsStore(f.home);
+    await store.load();
+    await store.clearCompleted([completed.id]);
+    await store.save([completed]);
+    expect(await new ContextRunsStore(f.home).load()).toEqual([]);
+  });
+  it("checks the live inventory at the atomic clear boundary and leaves failed writes recoverable", async () => {
+    const f = await setup();
+    const completed = run({ status: "exited" });
+    await f.store.save([completed]);
+    const before = await fs.readFile(f.file, "utf8");
+    await expect(
+      f.store.clearCompleted([completed.id], () => {
+        throw Error("inventory changed");
+      }),
+    ).rejects.toThrow("inventory changed");
+    expect(await fs.readFile(f.file, "utf8")).toBe(before);
+    expect(await f.store.clearCompleted([completed.id])).toEqual([
+      completed.id,
+    ]);
+  });
   it("never serializes env, proxy, raw build request, argv, output, URLs or arbitrary error strings", async () => {
     const f = await setup();
     const unsafe = {

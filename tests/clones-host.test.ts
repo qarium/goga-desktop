@@ -170,6 +170,10 @@ describe("standalone owned clone lifecycle", { timeout: 30000 }, () => {
     });
     expect(row.topic).toBe("feature-new-topic");
     expect(
+      await fs.readdir(path.join(row.path, ".goga/history/2026", row.topic)),
+    ).toEqual([]);
+
+    expect(
       (await f.git(["branch", "--show-current"], row.path)).stdout.trim(),
     ).toBe("Feature/New-Topic");
     expect((await f.git(["show-ref"])).stdout).toBe(before);

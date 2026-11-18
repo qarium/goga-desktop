@@ -380,7 +380,6 @@ export class TerminalSessions {
   async prepareShutdown(): Promise<PreparedShutdown> {
     if (
       this.shutdown ||
-      this.closed ||
       this.closing.size ||
       this.deletionContexts.size
     )
@@ -389,6 +388,31 @@ export class TerminalSessions {
     let used = false,
       released = false;
     try {
+      if (this.closed) {
+        // A later app-wide finalizer may fail after terminals were sealed.
+        // Retry exit with a freshly verified empty inventory, never reopen or
+        // signal the sessions whose completion was already observed.
+        const validate = () => {
+          if (released || this.list().some((view) => view.state !== "exited"))
+            throw Error("Состояние завершённых сессий терминала изменилось.");
+        };
+        validate();
+        return {
+          items: [],
+          requiresConfirmation: false,
+          validate,
+          stop: async () => validate(),
+          remaining: () => {
+            validate();
+            return [];
+          },
+          release: () => {
+            if (released) return;
+            released = true;
+            this.shutdown = false;
+          },
+        };
+      }
       const preview = this.coordinator.prepare({
         kind: "exit",
         deferDisposal: true,
@@ -436,6 +460,7 @@ export class TerminalSessions {
   finalizeShutdown(): void {
     if (!this.shutdown || this.list().some((view) => view.state !== "exited"))
       throw Error("Сначала требуется безопасно завершить сессии терминала.");
+    if (this.closed) return;
     for (const entry of this.entries.values()) entry.screen?.dispose();
     this.closed = true;
   }

@@ -34,6 +34,7 @@ function fixture(action: "delete" | "clear" = "delete") {
       refs,
       owners,
     })),
+    diskOnlyRemaining: vi.fn(async () => new Set()),
     inspect: vi.fn(async () => ({
       head: "a".repeat(40),
       fingerprint: "b".repeat(64),
@@ -146,7 +147,7 @@ it("preserves copied data if post-state read fails after successful command", as
   });
   const p = await f.domain.prepare(f.access, f.request),
     r = await f.domain.execute(f.access, f.domain.take("p", p.token));
-  expect(r.topics.status).toBe("success");
+  expect(r.topics.status).toBe("partial");
   expect(r.cleanup).toEqual([]);
   expect(r.copies[0].status).toBe("kept");
 });
@@ -178,9 +179,12 @@ it("clear never cleans clone-only topics that were absent before it ran", async 
 });
 it("blocks explicitly selected copies that fail preflight until the user excludes them", async () => {
   const f = fixture();
-  f.access.inspect.mockRejectedValue(Error("dirty"));
+  f.access.inspect.mockRejectedValue(Error("В копии есть активная сессия."));
   const p = await f.domain.prepare(f.access, f.request);
-  expect(p.blocked?.[0].topic).toBe("alpha");
+  expect(p.blocked?.[0]).toEqual({
+    topic: "alpha",
+    reason: "В копии есть активная сессия.",
+  });
   await expect(
     f.domain.execute(f.access, f.domain.take("p", p.token)),
   ).rejects.toThrow();
@@ -204,4 +208,37 @@ it("a recreated own branch after success keeps its associated copy", async () =>
     r = await f.domain.execute(f.access, f.domain.take("p", p.token));
   expect(r.cleanup).toEqual([]);
   expect(f.access.prepareCleanup).not.toHaveBeenCalled();
+});
+
+it("never reports a confirmed deletion when the selected branch without a copy still exists", async () => {
+  const f = fixture();
+  f.setOwners([]);
+  f.access.executeNative.mockResolvedValue({
+    status: "success",
+    message: "ok",
+  });
+  const p = await f.domain.prepare(f.access, f.request);
+  const result = await f.domain.execute(f.access, f.domain.take("p", p.token));
+  expect(result.topics.status).toBe("partial");
+  expect(result.topics.message).toContain("alpha");
+  expect(result.cleanup).toEqual([]);
+});
+
+it("a branch on a remote other than origin is not a selected deletion target", async () => {
+  const f = fixture();
+  const upstream = {
+    ...ref,
+    remote: true,
+    name: "upstream/alpha",
+    full: "refs/remotes/upstream/alpha",
+  };
+  f.setRefs([ref, upstream]);
+  f.access.executeNative.mockImplementation(async () => {
+    f.setRefs([upstream]);
+    return { status: "success", message: "removed locally" };
+  });
+  const p = await f.domain.prepare(f.access, f.request);
+  const result = await f.domain.execute(f.access, f.domain.take("p", p.token));
+  expect(result.topics.status).toBe("success");
+  expect(result.cleanup).toHaveLength(1);
 });

@@ -334,6 +334,7 @@ export function TopicsBoard(props: Props) {
               key={column.id}
               column={column}
               index={index}
+              editing={editing === column.id}
               onMove={(direction) => {
                 const next = index + direction;
                 if (next >= 0 && next < prefs.columns.length)
@@ -447,17 +448,20 @@ function StatusSlot({ id, children }: { id: string; children: ReactNode }) {
 function SortableColumn({
   column,
   index,
+  editing,
   onMove,
   children,
 }: {
   column: TopicsBoardColumn;
   index: number;
+  editing: boolean;
   onMove: (direction: number) => void;
   children: ReactNode;
 }) {
   const { ref, handleRef, isDragging } = useSortable({
     id: `column:${column.id}`,
     index,
+    disabled: editing,
     group: "columns",
     type: "column",
     accept: "column",
@@ -470,21 +474,23 @@ function SortableColumn({
       aria-label={column.name}
       className={`topic-board-column${isDragging ? " dragging" : ""}`}
     >
-      <button
-        className="topic-board-column-handle"
-        ref={handleRef}
-        type="button"
-        aria-label={`Переместить колонку ${column.name}`}
-        onKeyDown={(e) => {
-          if (e.altKey && ["ArrowLeft", "ArrowRight"].includes(e.key)) {
-            e.preventDefault();
-            e.stopPropagation();
-            onMove(e.key === "ArrowLeft" ? -1 : 1);
-          }
-        }}
-      >
-        <GripVertical />
-      </button>
+      {!editing && (
+        <button
+          className="topic-board-column-handle"
+          ref={handleRef}
+          type="button"
+          aria-label={`Переместить колонку ${column.name}`}
+          onKeyDown={(e) => {
+            if (e.altKey && ["ArrowLeft", "ArrowRight"].includes(e.key)) {
+              e.preventDefault();
+              e.stopPropagation();
+              onMove(e.key === "ArrowLeft" ? -1 : 1);
+            }
+          }}
+        >
+          <GripVertical />
+        </button>
+      )}
       {children}
     </section>
   );

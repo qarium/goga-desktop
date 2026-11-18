@@ -79,6 +79,8 @@ async function fixture() {
     },
   ];
   const mutations: { args: string[]; input?: string }[] = [];
+  const treeReads: string[][] = [];
+  const worktreeReads: string[][] = [];
   let onBoardRead: (() => Promise<void>) | undefined;
   let onProjectionRead: ((args: string[]) => Promise<void>) | undefined;
   let failSwitch = false;
@@ -87,7 +89,11 @@ async function fixture() {
     start: node.start.bind(node),
     kill: node.kill.bind(node),
     command: async (exe, args, cwd, env, input?: string) => {
-      if (exe === "git") return node.command(exe, args, cwd, env);
+      if (exe === "git") {
+        if (args.includes("ls-tree")) treeReads.push(args);
+        if (args[0] === "worktree") worktreeReads.push(args);
+        return node.command(exe, args, cwd, env, input);
+      }
       if (args.includes("board")) {
         await onProjectionRead?.(args);
         if (!args.includes("--remote") && !args.includes("--per-host"))
@@ -139,6 +145,8 @@ async function fixture() {
     rows,
     remote,
     mutations,
+    treeReads,
+    worktreeReads,
     board,
     request,
     onBoardRead: (callback: () => Promise<void>) => {
@@ -405,6 +413,112 @@ it("delete preview lists exact local and origin refs and keeps survivor-carried 
     "feat-x",
     "--yes",
   ]);
+});
+it("addresses the exact selected slug even if its own branch also carries other topics", async () => {
+  const f = await fixture();
+  const dir = path.join(f.repo, ".goga/history/2025/feature");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, "todo.md"), "feature");
+  await f.git("add", ".");
+  await f.git("commit", "-m", "carried by main");
+  // 'feature' and its origin twin carry both 'main' and 'feature'.
+  await f.git("branch", "-f", "feature", "HEAD");
+  await f.git("update-ref", "refs/remotes/origin/feature", "HEAD");
+  const plan = await f.service.prepareTopicOperation(
+    await f.request({ action: "delete", topics: ["feature"] }),
+  );
+  expect(plan.details.join(" ")).toContain("origin/feature");
+  await f.service.executeTopicOperation(plan.token);
+  expect(f.mutations.map((m) => m.args)).toEqual([
+    ["topics", "--year", "2025", "delete", ":feature", "--yes"],
+  ]);
+});
+it("refuses losing the only copy of an unselected topic across a bulk delete", async () => {
+  const f = await fixture();
+  await f.git("switch", "-c", "chosen");
+  for (const topic of ["chosen", "alias", "not-selected"]) {
+    const dir = path.join(f.repo, ".goga/history/2025", topic);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "todo.md"), topic);
+  }
+  await f.git("add", ".");
+  await f.git("commit", "-m", "also carries an independent topic");
+  await f.git("branch", "alias");
+  await f.git("switch", "main");
+  await expect(
+    f.service.prepareTopicOperation(
+      await f.request({ action: "delete", topics: ["chosen", "alias"] }),
+    ),
+  ).rejects.toThrow(/not-selected/);
+  expect(f.mutations).toEqual([]);
+});
+it("never lets a branch or a topic prefix stand in for a missing exact slug", async () => {
+  const f = await fixture();
+  const dir = path.join(f.repo, ".goga/history/2025/feature-next");
+  await mkdir(dir, { recursive: true });
+  await writeFile(path.join(dir, "todo.md"), "not feature");
+  await f.git("add", ".");
+  await f.git("commit", "-m", "unrelated");
+  await f.git("branch", "-f", "feature", "HEAD");
+  await expect(
+    f.service.prepareTopicOperation(
+      await f.request({ action: "delete", topics: ["feature"] }),
+    ),
+  ).rejects.toThrow(/отсутствует/);
+  expect(f.mutations).toEqual([]);
+});
+it("uses the exact disk spelling of a slug, not a case-insensitive path alias", async () => {
+  const f = await fixture();
+  for (const topic of ["Feature", "feature-more"]) {
+    const dir = path.join(f.repo, ".goga/history/2025", topic);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "todo.md"), topic);
+  }
+  await expect(
+    f.service.prepareTopicOperation(
+      await f.request({ action: "delete", topics: ["feature"] }),
+    ),
+  ).rejects.toThrow(/отсутствует/);
+  expect(f.mutations).toEqual([]);
+});
+it("does not submit a prefix when only Git-quoted filenames make the requested slug visible to Desktop", async () => {
+  const f = await fixture();
+  await f.git("config", "core.quotePath", "true");
+  await f.git("switch", "feature");
+  const prefix = path.join(f.repo, ".goga/history/2025");
+  for (const [name, file] of [
+    ["feature", "задача.md"],
+    ["feature-other", "todo.md"],
+  ]) {
+    await mkdir(path.join(prefix, name!), { recursive: true });
+    await writeFile(path.join(prefix, name!, file!), "fixture");
+  }
+  await f.git("add", ".");
+  await f.git("commit", "-m", "quoted path");
+  await f.git("branch", "feature-other");
+  await f.git("switch", "main");
+  await expect(
+    f.service.prepareTopicOperation(
+      await f.request({ action: "delete", topics: ["feature"] }),
+    ),
+  ).rejects.toThrow(/точно.*топик|имена файлов/);
+  expect(f.mutations).toEqual([]);
+});
+it("does not repeatedly enumerate the history of refs pointing at the same commit", async () => {
+  const f = await fixture();
+  const topics = ["twin-1", "twin-2", "twin-3"];
+  for (const topic of topics) {
+    const dir = path.join(f.repo, ".goga/history/2025", topic);
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "todo.md"), topic);
+  }
+  for (let i = 0; i < 12; i++) await f.git("branch", "twin-" + i);
+  const req = await f.request({ action: "delete", topics });
+  f.treeReads.length = 0;
+  f.worktreeReads.length = 0;
+  await f.service.prepareTopicOperation(req);
+  expect(f.treeReads.length).toBeLessThanOrEqual(1);
+  expect(f.worktreeReads).toHaveLength(1);
 });
 it("active repo blocks preparation and execution, but permits board and details reads", async () => {
   const f = await fixture();

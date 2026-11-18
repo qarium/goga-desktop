@@ -8,7 +8,7 @@ html.topic-popup-document {
   padding: 8px;
   width: 100%;
 }
-.topic-context-native-root .topic-context-popup {
+:is(.topic-context-native-root, .topic-context-dom-root) .topic-context-popup {
   position: relative;
   top: auto;
   left: auto;
@@ -20,10 +20,10 @@ html.topic-popup-document {
   flex-direction: column;
   overflow-y: auto;
 }
-.topic-context-native-root .topic-context-popup > * {
+:is(.topic-context-native-root, .topic-context-dom-root) .topic-context-popup > * {
   flex-shrink: 0;
 }
-.topic-context-native-root .topic-context-options {
+:is(.topic-context-native-root, .topic-context-dom-root) .topic-context-options {
   flex-shrink: 1;
   min-height: 0;
 }

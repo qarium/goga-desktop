@@ -68,6 +68,7 @@ class Pty extends EventEmitter implements TerminalPty {
   }
 }
 function fixture() {
+  const disposeScreen = vi.fn();
   const ptys: Pty[] = [],
     controls: {
       controller: TerminalProcessController;
@@ -150,10 +151,10 @@ function fixture() {
       drainAfterHangup() {},
       finishClose() {},
       fail() {},
-      dispose() {},
+      dispose: disposeScreen,
     }),
   });
-  return { manager, acquire, spawn, ptys, controls, removeTab };
+  return { manager, acquire, spawn, ptys, controls, removeTab, disposeScreen };
 }
 it("closing a common tab includes its primary/A/B sessions, not another tab", async () => {
   const f = fixture();
@@ -484,6 +485,54 @@ it("final shutdown seals the manager only after observed exits and while the adm
   f.manager.finalizeShutdown();
   lease.release();
   await expect(f.manager.open(common, b)).rejects.toThrow();
+});
+it("retries app exit after the terminal manager was finalized without signaling or disposing it twice", async () => {
+  const { ShutdownCoordinator } =
+    await import("../src/main/shutdown-coordinator");
+  const f = fixture();
+  await f.manager.open(common, a);
+  let attempts = 0;
+  const finalize = vi.fn(async () => {
+    f.manager.finalizeShutdown();
+    if (++attempts === 1) throw Error("synthetic later cleanup failure");
+  });
+  const confirm = vi.fn(async () => true);
+  const shutdown = new ShutdownCoordinator({
+    participants: [{ prepare: () => f.manager.prepareShutdown() }],
+    confirm,
+    finalize,
+  });
+  expect((await shutdown.close()).status).toBe("partial");
+  const signals = f.controls[0].signal.mock.calls.length;
+  await expect(f.manager.open(common, b)).rejects.toThrow();
+  expect((await shutdown.close()).status).toBe("success");
+  expect(finalize).toHaveBeenCalledTimes(2);
+  expect(confirm).toHaveBeenCalledTimes(1);
+  expect(f.controls[0].signal).toHaveBeenCalledTimes(signals);
+  expect(f.disposeScreen).toHaveBeenCalledTimes(1);
+  expect(f.spawn).toHaveBeenCalledTimes(1);
+});
+it("does not let a closed manager hide a changed or unknown process inventory on retry", async () => {
+  const f = fixture();
+  const session = await f.manager.open(common, a);
+  const first = await f.manager.prepareShutdown();
+  await first.stop();
+  f.manager.finalizeShutdown();
+  first.release();
+  const list = vi
+    .spyOn(f.manager, "list")
+    .mockReturnValue([{ ...session, state: "running" }]);
+  await expect(f.manager.prepareShutdown()).rejects.toThrow();
+  list.mockRestore();
+  const retry = await f.manager.prepareShutdown();
+  const unknown = vi.spyOn(f.manager, "list").mockImplementation(() => {
+    throw Error("unknown");
+  });
+  expect(() => retry.validate()).toThrow();
+  await expect(retry.stop()).rejects.toThrow();
+  expect(() => retry.remaining()).toThrow();
+  unknown.mockRestore();
+  retry.release();
 });
 it("failed shutdown preparation releases its gate and does not signal an unverified process", async () => {
   const f = fixture();

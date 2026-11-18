@@ -552,6 +552,15 @@ button.topic-link:hover:not(:disabled) {
   font-size: 20px;
   line-height: 1;
 }
+.topic-refresh-button [role="status"] {
+  display: grid;
+  place-items: center;
+}
+.topic-refresh-button .loading-spinner {
+  width: 16px;
+  height: 16px;
+  border-width: 2px;
+}
 .topic-card-state {
   min-height: 240px;
   display: grid;
@@ -897,13 +906,83 @@ button.topic-link:hover:not(:disabled) {
   border-left: 1px solid var(--border);
   padding-left: 12px;
 }
+.topic-removal-dialog[open] {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  gap: 16px;
+  overflow: hidden;
+}
+.topic-removal-dialog > header,
+.topic-removal-body :is(h3, p, ul, .topic-confirm-check) {
+  margin: 0;
+}
+.topic-removal-body {
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  /* Keep keyboard focus outlines visible inside the scroll area. */
+  padding: 4px;
+  margin: -4px;
+}
+.topic-removal-body > button,
+.topic-removal-blockers > button {
+  justify-self: start;
+}
+.topic-removal-selected,
+.topic-removal-blockers {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+.topic-removal-selected ul,
+.topic-removal-details ul {
+  padding-left: 19px;
+  line-height: 1.5;
+}
 .topic-removal-selected ul {
+  max-height: 140px;
+  overflow-y: auto;
+}
+.topic-removal-details li + li {
+  margin-top: 6px;
+}
+.topic-removal-body .topic-confirm-check {
+  margin: 0;
+  line-height: 1.5;
+}
+.topic-removal-body .topic-confirm-check input {
+  margin-top: 2px;
+}
+.topic-removal-progress {
   display: flex;
-  gap: 8px 18px;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+}
+.topic-removal-progress .loading-spinner {
+  width: 14px;
+  height: 14px;
+  border-width: 2px;
+}
+.topic-removal-actions {
+  display: flex;
   flex-wrap: wrap;
-  max-height: 180px;
-  overflow: auto;
-  padding: 10px 20px;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 10px;
+  border-top: 1px solid var(--line);
+  padding-top: 14px;
+}
+@media (max-width: 480px) {
+  .topic-removal-dialog {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
+    padding: 16px;
+  }
 }
 .topic-confirm-check {
   display: flex !important;

@@ -75,7 +75,7 @@ function fixture() {
     if (["diff", "ls-files", "config", "check-ref-format"].includes(args[0]!))
       return "";
     if (args[0] === "rev-parse") return oid + "\n";
-    if (args[0] === "ls-tree") return ".goga/history/2026/feature/todo.md\0";
+    if (args[0] === "ls-tree") return ".goga/history/2026/feature/todo.md\n";
     throw Error(`Unexpected mock Git read: ${args.join(" ")}`);
   });
   const context: TopicsContext & {

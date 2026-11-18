@@ -182,6 +182,7 @@ export function TopicContextPicker({
   const nativePopup = useNativeTopicPopup();
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
+  const popup = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const list = useRef<HTMLDivElement>(null);
@@ -255,7 +256,7 @@ export function TopicContextPicker({
     if (!expanded) return;
     search.current?.focus();
     const outside = (event: PointerEvent) => {
-      if (event.target instanceof Node && !root.current?.contains(event.target))
+      if (event.target instanceof Node && !root.current?.contains(event.target) && !popup.current?.contains(event.target))
         setOpen(false);
     };
     document.addEventListener("pointerdown", outside);
@@ -634,6 +635,22 @@ export function TopicContextPicker({
     } else prepare(topic.identity, false, topic.record);
   }
   function keyDown(event: KeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Tab" && !nativePopup && popup.current) {
+      const selector = 'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]';
+      const controls = Array.from(popup.current.querySelectorAll<HTMLElement>(selector)).filter((node) => node.tabIndex >= 0);
+      const boundary = event.shiftKey ? controls[0] : controls.at(-1);
+      if (event.target === boundary) {
+        // A body portal must not change the selector's place in keyboard order.
+        const shell = Array.from(document.querySelectorAll<HTMLElement>(selector)).filter((node) => node.tabIndex >= 0 && !popup.current?.contains(node));
+        const anchorControls = shell.filter((node) => root.current?.contains(node));
+        const edge = anchorControls.at(-1);
+        const destination = event.shiftKey ? edge : edge ? shell[shell.indexOf(edge) + 1] : undefined;
+        event.preventDefault();
+        close();
+        (destination ?? trigger.current)?.focus();
+        return;
+      }
+    }
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
@@ -716,9 +733,7 @@ export function TopicContextPicker({
         // Only a tooltip explicitly described by this picker belongs to it.
         const ownedTooltip =
           !!tooltip?.id &&
-          Array.from(
-            event.currentTarget.querySelectorAll("[aria-describedby]"),
-          ).some((control) =>
+          [...event.currentTarget.querySelectorAll("[aria-describedby]"), ...(popup.current?.querySelectorAll("[aria-describedby]") ?? [])].some((control) =>
             control
               .getAttribute("aria-describedby")
               ?.split(/\s+/)
@@ -727,6 +742,7 @@ export function TopicContextPicker({
         if (
           !nativePopup &&
           !event.currentTarget.contains(destination as Node) &&
+          !popup.current?.contains(destination as Node) &&
           !ownedTooltip
         )
           close();
@@ -785,8 +801,9 @@ export function TopicContextPicker({
         />
       )}
       {expanded && (
-        <TopicPickerPopup anchor={root} onClose={() => close()}>
+        <TopicPickerPopup anchor={root} onClose={() => close()} domPortal>
           <div
+            ref={popup}
             className="topic-context-popup"
             role="region"
             aria-label="Выбор топика"

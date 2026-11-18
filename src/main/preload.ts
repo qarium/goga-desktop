@@ -200,6 +200,7 @@ const api: DesktopAPI = {
   readRunJournal: (id, after) => invoke("run-journal", id, after),
   onRunOutputChanged: (callback) => listen("run-output", callback),
   closeRun: (id) => invoke("close-run", id),
+  clearRunHistory: (request) => invoke("clear-run-history", request),
   stopRun: (id) => invoke("stop-run", id),
   listAttachedDashboards:()=>invoke("attached-dashboards"),
   attachDashboard:(scope,url,key)=>invoke("attach-dashboard",scope,url,key),

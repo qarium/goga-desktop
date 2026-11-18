@@ -2,10 +2,14 @@ import type {AttachedDashboard} from "../shared/attached-dashboard";
 import {Cable} from "lucide-react";
 import {AttachedPanelCard} from "./AttachedPanels";
 import { useState } from "react";
+import { RunHistoryClear } from "./RunHistoryClear";
+import type { ClearRunHistoryRequest, ClearRunHistoryResult } from "../shared/run-history";
 import type { Pipeline, Run } from "../shared/types";
 import {
   relativeRunPlanPath,
   runsForContext,
+  contextKey,
+  contextRef,
   type RunKind,
   type RunWithContext,
   type TopicContextIdentity,
@@ -16,6 +20,7 @@ export interface ContextRunsProps {
   runs: RunWithContext[];
   context: TopicContextIdentity | null;
   onOpen: (runId: string) => void;
+  onClearHistory?: (request: ClearRunHistoryRequest) => Promise<ClearRunHistoryResult>;
   panels?: AttachedDashboard[];
   onAttach?:()=>void;
   onOpenPanel?:(id:string)=>void;
@@ -38,6 +43,7 @@ export function ContextRuns({
   runs,
   context,
   onOpen,
+  onClearHistory,
   panels=[],onAttach,onOpenPanel,viewErrors,
   pipelines = [],
   contextLabel,
@@ -53,7 +59,14 @@ export function ContextRuns({
   const filtered = scoped.filter((run) => (run.kind ?? "pipeline") === filter);
   return (
     <section className="context-runs" aria-label="Запуски выбранного топика">
-      <div className="context-runs-heading"><h2>Запуски</h2>{onAttach&&<button onClick={onAttach}><Cable size={16}/>Подключить конвейер</button>}</div>
+      <div className="context-runs-heading"><h2>Запуски</h2><div className="context-runs-heading-actions">
+        {onAttach&&<button onClick={onAttach}><Cable size={16}/>Подключить конвейер</button>}
+        {onClearHistory && (context || primaryProjectId) && <RunHistoryClear
+          key={JSON.stringify([context ? contextKey(context) : primaryProjectId, filter])}
+          scope={context ? contextRef(context) : primaryProjectId!}
+          kind={filter} runs={filtered} label={context?.topic ?? "Без топика"} clear={onClearHistory}
+        />}
+      </div></div>
       {contextLabel && (
         <p className="context-run-hint">Топик: {contextLabel}</p>
       )}

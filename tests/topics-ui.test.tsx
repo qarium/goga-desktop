@@ -2,6 +2,7 @@
 import React from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -10,6 +11,7 @@ import {
   waitFor,
 } from "@testing-library/react";
 import { TopicsWorkspace } from "../src/renderer/TopicsWorkspace";
+import { TopicTableCache } from "../src/renderer/topic-table-cache";
 import { TopicFeedback } from "../src/renderer/TopicsCommon";
 import { TopicCard } from "../src/renderer/TopicCard";
 import { createTopicsStore } from "../src/renderer/topics-model";
@@ -345,7 +347,6 @@ it("row deletion previews the exact topic and cancel never executes", async () =
   expect(api.prepareTopicRemoval).toHaveBeenCalledExactlyOnceWith({
     projectId: "p",
     year: "2026",
-    expectedRevision: "rev",
     action: "delete",
     topics: ["feature-b"],
   });
@@ -795,3 +796,141 @@ it.each([false, true])(
     ).toBe(false);
   },
 );
+
+it("keeps the visible table, filters and selected rows while refreshing and after a failed refresh", async () => {
+  const store = createTopicsStore();
+  store.years.set(project.id, board.year);
+  const changed = vi.fn();
+  const refreshRelated = vi.fn();
+  render(
+    <TopicsWorkspace
+      project={project}
+      store={store}
+      onOpenTopic={vi.fn()}
+      onChanged={changed}
+      onRefreshRelated={refreshRelated}
+    />,
+  );
+  await screen.findByRole("button", { name: "Открыть топик feature-b" });
+  const search = screen.getByRole("searchbox", { name: "Поиск топиков" });
+  fireEvent.change(search, { target: { value: "feature-b" } });
+  const row = screen.getByRole("row", { name: /feature-b/ });
+  const selection = within(row).getByRole("checkbox") as HTMLInputElement;
+  fireEvent.click(selection);
+  let fail!: (e: Error) => void;
+  api.readTopicTable.mockImplementationOnce(
+    () =>
+      new Promise((_resolve, reject) => {
+        fail = reject;
+      }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Обновить список" }));
+  expect(screen.getByRole("row", { name: /feature-b/ })).toBe(row);
+  expect(selection.checked).toBe(true);
+  expect(
+    screen.queryByRole("status", { name: "Загружаем топики…" }),
+  ).toBeNull();
+  expect(changed).not.toHaveBeenCalled();
+  expect(refreshRelated).toHaveBeenCalledTimes(1);
+  fail(new Error("Данные временно недоступны"));
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    "Данные временно недоступны",
+  );
+  expect(screen.getByRole("row", { name: /feature-b/ })).toBe(row);
+  expect((search as HTMLInputElement).value).toBe("feature-b");
+  expect(selection.checked).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: "Обновить список" }));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(screen.getByRole("row", { name: /feature-b/ })).toBe(row);
+  expect(selection.checked).toBe(true);
+  expect(api.readTopicTable).toHaveBeenCalledTimes(3);
+  expect(refreshRelated).toHaveBeenCalledTimes(2);
+});
+
+it("opens the warmed table synchronously and keeps an unfinished board edit on data refresh", async () => {
+  const cache = new TopicTableCache();
+  const store = createTopicsStore();
+  const scope = { projectId: project.id, path: project.path, year: board.year };
+  store.setYear(project.id, scope.year);
+  let view: ReturnType<typeof render> | undefined;
+  try {
+    cache.activate(scope);
+    await cache.refresh(scope);
+    view = render(
+      <TopicsWorkspace
+        tableCache={cache}
+        project={project}
+        store={store}
+        onOpenTopic={vi.fn()}
+        onChanged={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByRole("button", { name: "Открыть топик feature-a" }),
+    ).toBeTruthy();
+    expect(api.readTopicTable).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole("button", { name: "Доска" }));
+    fireEvent.click(screen.getByRole("button", { name: "Добавить колонку" }));
+    const name = screen.getByRole("textbox", {
+      name: "Название новой колонки",
+    });
+    fireEvent.change(name, { target: { value: "В работе над планом" } });
+    api.readTopicTable.mockResolvedValueOnce({
+      ...board,
+      entries: [{ ...board.entries[0]!, statuses: ["changed"] }],
+    });
+    await act(async () => {
+      await cache.refresh(scope);
+    });
+    expect(
+      screen.getByRole("textbox", { name: "Название новой колонки" }),
+    ).toBe(name);
+    expect((name as HTMLInputElement).value).toBe("В работе над планом");
+    expect(
+      screen.getByRole("button", { name: /Перетащить статус changed/ }),
+    ).toBeTruthy();
+    expect(api.readTopicTable).toHaveBeenCalledTimes(2);
+  } finally {
+    view?.unmount();
+    cache.dispose();
+  }
+});
+
+it("keeps confirmed topic actions available while the minute timer reads a new table", async () => {
+  vi.useFakeTimers();
+  const store = createTopicsStore();
+  store.setYear(project.id, board.year);
+  const cache = new TopicTableCache();
+  const scope = { projectId: project.id, path: project.path, year: board.year };
+  let view: ReturnType<typeof render> | undefined;
+  try {
+    cache.activate(scope);
+    await cache.refresh(scope);
+    view = render(
+      <TopicsWorkspace
+        project={project}
+        store={store}
+        tableCache={cache}
+        onOpenTopic={vi.fn()}
+        onChanged={vi.fn()}
+      />,
+    );
+    const create = screen.getByRole("button", {
+      name: "Создать топик",
+    }) as HTMLButtonElement;
+    expect(create.disabled).toBe(false);
+    api.readTopicTable.mockImplementationOnce(() => new Promise(() => {}));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(api.readTopicTable).toHaveBeenCalledTimes(2);
+    expect(
+      screen.getByRole("status", { name: "Обновляем список топиков" }),
+    ).toBeTruthy();
+    expect(create.disabled).toBe(false);
+  } finally {
+    view?.unmount();
+    cache.dispose();
+    vi.useRealTimers();
+  }
+});

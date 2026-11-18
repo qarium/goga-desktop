@@ -366,7 +366,10 @@ export class ProjectCreationCoordinator {
     }
   }
   async prepareShutdown(): Promise<PreparedShutdown> {
-    if (this.frozen || this.disposed)
+    // Disposal seals new creations, not future exit attempts. A later shutdown
+    // participant may fail after this one has already completed; its next lease
+    // must report the remaining work (including unsettled cleanup), not deadlock.
+    if (this.frozen)
       throw Error("Подготовка к выходу уже выполняется.");
     this.frozen = true;
     const id = this.active?.id ?? this.unsettled;

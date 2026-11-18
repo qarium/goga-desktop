@@ -18,6 +18,16 @@ const ownerChanged = () =>
   Error(
     "Владелец или контекст сохранённого запуска изменён; запись запрещена.",
   );
+/** The journal was replaced, but durability confirmation failed afterwards.
+ * Callers must reflect these committed removals instead of restoring old rows. */
+export class RunHistoryClearCommittedError extends Error {
+  constructor(readonly removedRunIds: string[]) {
+    super(
+      "Очистка истории записана, но подтверждение сохранения на диске не завершено. Повторите проверку истории.",
+    );
+    this.name = "RunHistoryClearCommittedError";
+  }
+}
 const absolute = (value: string) =>
   path.isAbsolute(value) &&
   path.resolve(value) === value &&
@@ -308,7 +318,12 @@ export class ContextRunsStore {
       throw invalid();
     }
   }
-  private async install(value: Document, expected: string | undefined) {
+  private async install(
+    value: Document,
+    expected: string | undefined,
+    beforeCommit?: () => void,
+    onCommitted?: () => void,
+  ) {
     const raw = JSON.stringify(value, null, 2) + "\n";
     if (Buffer.byteLength(raw) > MAX_BYTES) throw invalid();
     const temp = `${this.file}.${randomUUID()}.tmp`;
@@ -330,6 +345,7 @@ export class ContextRunsStore {
       await this.assertRoot();
       if ((await this.readText()) !== expected) throw conflict();
       await noSymlinks(this.file);
+      beforeCommit?.();
       if (expected === undefined) {
         try {
           await link(temp, this.file);
@@ -339,6 +355,12 @@ export class ContextRunsStore {
           throw error;
         }
       } else await rename(temp, this.file);
+      // rename/link has committed the new journal even if directory fsync or
+      // opening that directory fails next. Retain its exact baseline so a
+      // retry or later lifecycle save cannot deadlock on our own replacement.
+      this.known = true;
+      this.knownRaw = raw;
+      onCommitted?.();
       // Remove the temporary hardlink before another read checks nlink == 1.
       await unlink(temp).catch(() => {});
       const directory = await open(
@@ -350,8 +372,6 @@ export class ContextRunsStore {
       } finally {
         await directory.close();
       }
-      this.known = true;
-      this.knownRaw = raw;
     } finally {
       await unlink(temp).catch(() => {});
     }
@@ -385,6 +405,8 @@ export class ContextRunsStore {
       const bindings = new Map(
         value.bindings.map((binding) => [binding.id, binding]),
       );
+      const existing = new Set(value.runs.map((run) => run.id));
+      const visible: Snapshot[] = [];
       for (const run of runs) {
         const hash = identity(run),
           old = bindings.get(run.id);
@@ -396,6 +418,10 @@ export class ContextRunsStore {
           : undefined;
         if (old?.processHash && old.processHash !== processHash)
           throw ownerChanged();
+        // The terminal identity ledger survives clearing/closing history.
+        // Absence plus a terminal binding is a durable tombstone: a queued
+        // pre-clear snapshot must never resurrect that same run identifier.
+        if (old?.terminal && !existing.has(run.id)) continue;
         if (old?.terminal && run.status !== old.terminal)
           throw Error(
             "Завершённое состояние запуска изменено; устаревшая запись запрещена.",
@@ -412,16 +438,72 @@ export class ContextRunsStore {
           ...(processHash ? { processHash } : {}),
           ...(terminal ? { terminal } : {}),
         });
+        visible.push(run);
       }
       await this.install(
         {
           schemaVersion: 1,
           revision: randomUUID(),
-          runs,
+          runs: visible,
           bindings: [...bindings.values()],
         },
         raw,
       );
+    });
+  }
+  async clearCompleted(
+    input: string[],
+    beforeCommit?: () => void,
+  ): Promise<string[]> {
+    const ids = new Set(z.array(text(256, 1)).max(100000).parse(input));
+    let committedIds: string[] | undefined;
+    return this.locked(async () => {
+      const raw = await this.readText();
+      if (this.known && raw !== this.knownRaw) throw conflict();
+      const value = this.parse(raw);
+      const removed = value.runs.filter((run) => ids.has(run.id));
+      for (const run of removed)
+        if (
+          !["exited", "failed", "stopped"].includes(run.status) ||
+          run.syncPending ||
+          run.recovery === "unverified"
+        )
+          throw Error(
+            "Запуск ещё требует контроля или синхронизации. История сохранена.",
+          );
+      if (!removed.length) return [];
+      const terminal = new Map(
+        removed.map((run) => [
+          run.id,
+          run.status as "exited" | "failed" | "stopped",
+        ]),
+      );
+      const bindings = value.bindings.map((binding) => {
+        const status = terminal.get(binding.id);
+        if (status && binding.terminal && status !== binding.terminal)
+          throw invalid();
+        return status ? { ...binding, terminal: status } : binding;
+      });
+      const removedRunIds = removed.map((run) => run.id);
+      await this.install(
+        {
+          ...value,
+          revision: randomUUID(),
+          runs: value.runs.filter((run) => !ids.has(run.id)),
+          bindings,
+        },
+        raw,
+        beforeCommit,
+        () => {
+          committedIds = removedRunIds;
+        },
+      );
+      return removedRunIds;
+    }).catch((error) => {
+      // Lock release is also after the commit. Reflect the actual replacement
+      // even if a later cleanup step, rather than directory fsync, failed.
+      if (committedIds) throw new RunHistoryClearCommittedError(committedIds);
+      throw error;
     });
   }
 }

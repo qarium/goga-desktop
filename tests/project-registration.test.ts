@@ -7,6 +7,7 @@ import {
   CommandExitError,
   CommandSpawnError,
   RunnerShutdownError,
+  type Runner,
 } from "../src/host/process";
 import { installGitFixtureScope } from "./helpers/git-test-scope";
 const fsControl = vi.hoisted(() => ({ deny: "" }));
@@ -29,7 +30,7 @@ beforeEach(() => {
   fsControl.deny = "";
 });
 const scope = installGitFixtureScope();
-async function fixture() {
+async function fixture(pipeline = false) {
   const dir = await fs.mkdtemp("/private/tmp/goga-registration-");
   scope().cleanup(() => fs.rm(dir, { recursive: true, force: true }));
   const home = path.join(dir, "home"),
@@ -48,17 +49,216 @@ async function fixture() {
   };
   for (const key of Object.keys(process.env))
     if (key.startsWith("GIT_") && !(key in env)) env[key] = undefined;
-  const runner = new NodeRunner(15000, env);
+  const runner = scope.runner(new NodeRunner(15000, env));
+  const commands: { executable: string; args: string[]; cwd: string }[] = [];
+  const starts: { executable: string; args: string[]; cwd: string }[] = [];
+  const pipelineRunner: Runner = {
+    command: async (executable, args, cwd, commandEnv, stdin) => {
+      commands.push({ executable, args: [...args], cwd });
+      if (executable === "git")
+        return runner.command(executable, args, cwd, commandEnv, stdin);
+      if (args.includes("--list"))
+        return { stdout: "* example\n    name: Example\n", stderr: "" };
+      if (args.includes("board")) return { stdout: "[]", stderr: "" };
+      if (args.includes("--info"))
+        return {
+          stdout: "name: Example\n---\n* work:\n    title: Work\n",
+          stderr: "",
+        };
+      throw Error("Unexpected synthetic Goga command");
+    },
+    start: (executable, args, cwd) => {
+      starts.push({ executable, args: [...args], cwd });
+      return runner.start(
+        process.execPath,
+        [
+          "-e",
+          "require('http').createServer((q,s)=>s.end(JSON.stringify({flow_name:'fixture',stages:[]}))).listen(0,'127.0.0.1',function(){console.log('dashboard: http://127.0.0.1:'+this.address().port)})",
+        ],
+        cwd,
+        env,
+      );
+    },
+    kill: (child) => runner.kill(child),
+  };
   const host = new HostService({
     home,
     dataDir: path.join(dir, "data"),
-    runner: scope.runner(runner),
+    runner: pipeline ? pipelineRunner : runner,
     goga: "/nonexistent/disabled-goga",
   });
   scope().cleanup(() => host.dispose());
   scope().cleanup(() => runner.dispose());
-  return { folder, runner, host: scope().own(host), env };
+  return { folder, runner, host: scope().own(host), env, commands, starts };
 }
+
+it(
+  "loads, previews and launches a no-topic pipeline in a plain folder without Git or history writes",
+  scope.run(async () => {
+    const f = await fixture(true);
+    await fs.writeFile(path.join(f.folder, "keep.txt"), "untouched");
+    const project = await f.host.addProject(f.folder);
+    f.commands.splice(0);
+    const catalog = await f.host.discover(project.id);
+    expect(catalog).toMatchObject({
+      repository: "missing",
+      topics: [],
+      branches: [],
+      currentBranch: "",
+      pipelines: [{ id: "example", name: "Example" }],
+    });
+    const request = {
+      projectId: project.id,
+      pipeline: "example",
+      workflow: "none",
+      profile: "",
+      skips: [],
+    };
+    const preview = await f.host.preview(request);
+    expect(preview.stages).toEqual([{ id: "work", title: "Work" }]);
+    expect(await f.host.checkoutBranch(project.id)).toBe("");
+    const run = await f.host.launch({
+      ...request,
+      previewToken: preview.token,
+      topic: { mode: "none" },
+      task: "",
+      confirmEmptyTask: false,
+      expectedBranch: "",
+      confirmBranchSwitch: false,
+      clean: false,
+    });
+    expect(run).toMatchObject({
+      projectId: project.id,
+      pipeline: "example",
+      branch: "",
+      topic: "",
+      status: "starting",
+    });
+    expect(f.starts).toEqual([
+      {
+        executable: "/nonexistent/disabled-goga",
+        args: ["pipeline", "example", "--no-workflow"],
+        cwd: f.folder,
+      },
+    ]);
+    await vi.waitFor(() => {
+      const row = f.host.runs().find((row) => row.id === run.id);
+      if (!row?.url) throw Error(JSON.stringify(row));
+      expect(row.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/);
+    });
+    expect(f.commands.every((call) => call.executable !== "git")).toBe(true);
+    expect(f.commands.some((call) => call.args[0] === "topics")).toBe(false);
+    await f.host.stop(run.id);
+    expect(await fs.readdir(f.folder)).toEqual(["keep.txt"]);
+    expect(await fs.readFile(path.join(f.folder, "keep.txt"), "utf8")).toBe(
+      "untouched",
+    );
+  }),
+);
+
+it(
+  "rediscovers Git added after a plain-folder pipeline catalog was opened",
+  scope.run(async () => {
+    const f = await fixture(true),
+      project = await f.host.addProject(f.folder);
+    expect((await f.host.discover(project.id)).repository).toBe("missing");
+    await f.runner.command(
+      "git",
+      ["init", "--template=", "-b", "main"],
+      f.folder,
+      f.env,
+    );
+    expect((await f.host.discover(project.id)).repository).toBe("ready");
+    expect(await f.host.checkoutBranch(project.id)).toBe("main");
+  }),
+);
+
+it.each(["new", "existing"] as const)(
+  "refuses a %s-topic pipeline without initializing Git or writing task history",
+  scope.run(async (mode) => {
+    const f = await fixture(true),
+      project = await f.host.addProject(f.folder);
+    f.commands.splice(0);
+    await expect(
+      f.host.launch({
+        projectId: project.id,
+        pipeline: "example",
+        workflow: "none",
+        profile: "",
+        skips: [],
+        previewToken: "presentation",
+        expectedBranch: "",
+        confirmBranchSwitch: true,
+        clean: false,
+        confirmEmptyTask: false,
+        task: "draft task",
+        topic:
+          mode === "new"
+            ? { mode, name: "fresh", baseRef: "HEAD" }
+            : { mode, topic: "fresh", branch: "fresh" },
+      }),
+    ).rejects.toThrow(/Git/i);
+    expect(f.starts).toEqual([]);
+    expect(f.commands.every((call) => call.executable !== "git")).toBe(true);
+    expect(await fs.readdir(f.folder)).toEqual([]);
+  }),
+);
+
+it.each(["malformed", "permission"] as const)(
+  "does not suppress %s Git metadata errors when loading a pipeline catalog",
+  scope.run(async (mode) => {
+    const f = await fixture(true),
+      project = await f.host.addProject(f.folder);
+    if (mode === "malformed") await fs.mkdir(path.join(f.folder, ".git"));
+    else fsControl.deny = path.join(f.folder, ".git");
+    await expect(f.host.discover(project.id)).rejects.toThrow();
+    expect(f.starts).toEqual([]);
+  }),
+);
+
+it(
+  "keeps unverified primary-run admission tied to its project when Git is added later",
+  scope.run(async () => {
+    const f = await fixture(true),
+      project = await f.host.addProject(f.folder);
+    const host = f.host as any;
+    host.runList.push({
+      id: "unverified",
+      projectId: project.id,
+      status: "running",
+      recovery: "unverified",
+    });
+    const request = {
+      projectId: project.id,
+      pipeline: "example",
+      workflow: "none",
+      profile: "",
+      skips: [],
+      previewToken: "presentation",
+      expectedBranch: "",
+      confirmBranchSwitch: false,
+      clean: false,
+      confirmEmptyTask: false,
+      task: "",
+      topic: { mode: "none" as const },
+    };
+    try {
+      await expect(f.host.launch(request)).rejects.toThrow(/не подтверждено/);
+      await f.runner.command(
+        "git",
+        ["init", "--template=", "-b", "main"],
+        f.folder,
+        f.env,
+      );
+      await expect(
+        f.host.launch({ ...request, expectedBranch: "main" }),
+      ).rejects.toThrow(/не подтверждено/);
+      expect(f.starts).toEqual([]);
+    } finally {
+      host.runList = [];
+    }
+  }),
+);
 
 it(
   "registers a plain local folder without Git initialization, supports files/settings and detects Git added later",
@@ -358,23 +558,41 @@ it(
   }),
 );
 
-it("a demonstration is admitted only for the registered owner; pending open excludes removal, not ordinary reads or another project",scope.run(async()=>{
-  const f=await fixture(),a=await f.host.addProject(f.folder);
-  const bpath=path.join(path.dirname(f.folder),"other");await fs.mkdir(bpath);
-  const b=await f.host.addProject(bpath);
-  let admitted!:()=>void, release!:()=>void;
-  const started=new Promise<void>(r=>admitted=r);
-  const opening=f.host.withDemonstrationOwner(a.id,async(label)=>{
-    expect(label).toBe(a.name);admitted();await new Promise<void>(r=>release=r);
-  });
-  await started;
-  try{
-    await expect(f.host.removeProject({id:a.id,path:a.path})).rejects.toThrow(/демонстрац/);
-    await expect(f.host.listOverviewDirectory(a.id,"")).resolves.toBeDefined();
-    await f.host.removeProject({id:b.id,path:b.path});
-    const unexpected=vi.fn();
-    await expect(f.host.withDemonstrationOwner(b.id,unexpected)).rejects.toThrow();
-    expect(unexpected).not.toHaveBeenCalled();
-  }finally{release();await opening;}
-  await expect(f.host.removeProject({id:a.id,path:a.path})).resolves.toEqual([]);
-}));
+it(
+  "a demonstration is admitted only for the registered owner; pending open excludes removal, not ordinary reads or another project",
+  scope.run(async () => {
+    const f = await fixture(),
+      a = await f.host.addProject(f.folder);
+    const bpath = path.join(path.dirname(f.folder), "other");
+    await fs.mkdir(bpath);
+    const b = await f.host.addProject(bpath);
+    let admitted!: () => void, release!: () => void;
+    const started = new Promise<void>((r) => (admitted = r));
+    const opening = f.host.withDemonstrationOwner(a.id, async (label) => {
+      expect(label).toBe(a.name);
+      admitted();
+      await new Promise<void>((r) => (release = r));
+    });
+    await started;
+    try {
+      await expect(
+        f.host.removeProject({ id: a.id, path: a.path }),
+      ).rejects.toThrow(/демонстрац/);
+      await expect(
+        f.host.listOverviewDirectory(a.id, ""),
+      ).resolves.toBeDefined();
+      await f.host.removeProject({ id: b.id, path: b.path });
+      const unexpected = vi.fn();
+      await expect(
+        f.host.withDemonstrationOwner(b.id, unexpected),
+      ).rejects.toThrow();
+      expect(unexpected).not.toHaveBeenCalled();
+    } finally {
+      release();
+      await opening;
+    }
+    await expect(
+      f.host.removeProject({ id: a.id, path: a.path }),
+    ).resolves.toEqual([]);
+  }),
+);

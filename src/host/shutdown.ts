@@ -21,6 +21,7 @@ export interface PreparedShutdown {
   release(): void;
 }
 export interface ShutdownParticipant {
+  kind?: "project-creation" | "runs" | "terminals" | "demonstrations";
   prepare(): Promise<PreparedShutdown>;
 }
 

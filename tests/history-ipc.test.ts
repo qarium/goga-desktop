@@ -116,7 +116,8 @@ it("exposes scoped History methods through preload", async () => {
   }
   expect(
     Object.keys(api)
-      .filter((name) => name.toLowerCase().includes("history"))
+      // Run history is a separate surface with its own scope and IPC tests.
+      .filter((name) => name.toLowerCase().includes("history") && name !== "clearRunHistory")
       .sort(),
   ).toEqual(
     [

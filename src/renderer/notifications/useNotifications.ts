@@ -12,6 +12,7 @@ const empty: NotificationSnapshot = {
   hasMore: false,
   unreadCount: 0,
   byProject: {},
+  byRun: {},
   unreadRunIds: [],
   systemEnabled: false,
 };

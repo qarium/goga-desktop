@@ -13,19 +13,33 @@ import {
 } from "../shared/worktrees";
 import type { ContextDeletionPreview } from "../shared/context-deletion";
 import type { TopicOperationResult } from "../shared/topics";
-import type { CloneRemovalBaseline } from "./clones";
-import { normalizeTopicBranch, type TopicRef } from "./topics";
+import type { CloneRemovalBaseline, WholeCopyIdentity } from "./clones";
+import { assertReadActive } from "./read-scope";
+import {
+  normalizeTopicBranch,
+  type TopicRef,
+  type TopicMutationSnapshot,
+} from "./topics";
+type RemovalBaseline = CloneRemovalBaseline | WholeCopyIdentity;
 export interface RemovalInventory {
   projectId: string;
   projectPath: string;
   year: string;
   revision: string;
+  primaryState: TopicMutationSnapshot;
   refs: TopicRef[];
   owners: WorktreeRecord[];
 }
 export interface TopicRemovalAccess {
   inventory: () => Promise<RemovalInventory>;
-  inspect: (owner: TopicContextRef) => Promise<CloneRemovalBaseline>;
+  diskOnlyRemaining: (
+    inventory: RemovalInventory,
+    topics: string[],
+  ) => Promise<Set<string>>;
+  inspect: (
+    owner: TopicContextRef,
+    action: TopicRemovalRequest["action"],
+  ) => Promise<RemovalBaseline>;
   prepareNative: (
     request: TopicRemovalRequest,
     before: RemovalInventory,
@@ -36,7 +50,7 @@ export interface TopicRemovalAccess {
   ) => Promise<TopicOperationResult>;
   prepareCleanup: (
     owner: TopicContextRef,
-    baseline?: CloneRemovalBaseline,
+    baseline?: RemovalBaseline,
   ) => Promise<ContextDeletionPreview>;
 }
 interface Prepared {
@@ -44,7 +58,7 @@ interface Prepared {
   request: TopicRemovalRequest;
   before: RemovalInventory;
   nativeToken?: string;
-  baselines: Map<string, CloneRemovalBaseline>;
+  baselines: Map<string, RemovalBaseline>;
 }
 const stale = () =>
   Error(
@@ -76,6 +90,7 @@ export function removalInventoryKey(i: RemovalInventory) {
 export function ownTopicRefs(refs: TopicRef[], topic: string) {
   return refs.filter(
     (r) =>
+      (!r.remote || r.name.startsWith("origin/")) &&
       normalizeTopicBranch(
         r.remote ? r.name.slice(r.name.indexOf("/") + 1) : r.name,
       ) === topic,
@@ -103,35 +118,39 @@ export class TopicRemovalDomain {
     if (
       before.projectId !== request.projectId ||
       before.year !== request.year ||
-      before.revision !== request.expectedRevision
+      (request.expectedRevision !== undefined &&
+        before.revision !== request.expectedRevision)
     )
       throw stale();
     const owners = before.owners.filter(
       (o) => request.action === "clear" || request.topics.includes(o.topic),
     );
-    const baselines = new Map<string, CloneRemovalBaseline>();
+    const baselines = new Map<string, RemovalBaseline>();
     const blocked: Array<{ topic: string; reason: string }> = [];
     for (const owner of owners) {
+      assertReadActive();
       try {
         baselines.set(
           owner.contextId,
-          await access.inspect(worktreeContextRef(owner)),
+          await access.inspect(worktreeContextRef(owner), request.action),
         );
-      } catch {
+      } catch (error) {
+        assertReadActive();
         if (request.action === "delete")
           blocked.push({
             topic: owner.topic,
             reason:
-              "Рабочая копия требует проверки: файлы, владелец, незавершённое удаление или активные сессии. Сначала разберите причину или исключите топик.",
+              error instanceof Error
+                ? error.message
+                : "Не удалось проверить владельца рабочей копии.",
           });
       }
     }
+    assertReadActive();
     const native = await access.prepareNative(request, before);
-    if (
-      removalInventoryKey(await access.inventory()) !==
-      removalInventoryKey(before)
-    )
-      throw stale();
+    // This read merely grants a preview. Execution re-reads and compares the
+    // inventory under the operation lock before consuming any native authority.
+    assertReadActive();
     const plan: TopicRemovalPreview = {
       projectId: request.projectId,
       year: request.year,
@@ -146,8 +165,11 @@ export class TopicRemovalDomain {
         ...(native?.details ?? [
           "В основной папке нет собственной ветки выбранного топика. История других веток сохраняется.",
         ]),
-        "Только после успешного удаления топиков соответствующие проверенные рабочие копии будут перемещены в системную Корзину.",
-        "Копии с локальными изменениями, активными процессами или неподтверждёнными коммитами сохраняются. Ошибка команды не запускает очистку копий.",
+        ...(request.action === "clear"
+          ? [
+              "Копии с локальными изменениями, активными процессами или неподтверждёнными коммитами сохраняются. Ошибка команды не запускает очистку копий.",
+            ]
+          : []),
       ],
     };
     this.prune(this.tickets);
@@ -195,7 +217,7 @@ export class TopicRemovalDomain {
     let native: TopicOperationResult;
     try {
       native = p.nativeToken
-        ? await access.executeNative(p.nativeToken, p.before)
+        ? await access.executeNative(p.nativeToken, current)
         : {
             projectId: p.request.projectId,
             status: "success",
@@ -222,15 +244,34 @@ export class TopicRemovalDomain {
       );
       return result;
     }
-    this.prune(this.receipts);
-    this.receipts.set(p.plan.token, {
-      ...p,
-      plan: { ...p.plan, expiresAt: Date.now() + 120000 },
-    });
     let after: RemovalInventory;
+    const unconfirmed = (message: string) => {
+      result.topics = { status: "partial", message };
+      result.copies = owners.map((o) =>
+        kept(o, "Удаление не подтверждено. Копия сохранена."),
+      );
+      return result;
+    };
     try {
       after = await access.inventory();
+      if (p.request.action === "delete") {
+        const topics = p.request.topics;
+        const diskOnly = await access.diskOnlyRemaining(after, topics);
+        const remaining = topics.filter(
+          (t) => ownTopicRefs(after.refs, t).length || diskOnly.has(t),
+        );
+        if (remaining.length)
+          return unconfirmed(
+            "Удаление не подтверждено: в основной папке остались топики " +
+              remaining.join(", ") +
+              ".",
+          );
+      }
     } catch {
+      if (p.request.action === "delete")
+        return unconfirmed(
+          "Команда завершилась, но проверить удаление выбранных топиков не удалось.",
+        );
       result.copies = owners.map((o) =>
         kept(
           o,
@@ -239,6 +280,11 @@ export class TopicRemovalDomain {
       );
       return result;
     }
+    this.prune(this.receipts);
+    this.receipts.set(p.plan.token, {
+      ...p,
+      plan: { ...p.plan, expiresAt: Date.now() + 120000 },
+    });
     for (const owner of owners) {
       const beforeRefs = ownTopicRefs(p.before.refs, owner.topic),
         afterRefs = ownTopicRefs(after.refs, owner.topic);
@@ -280,21 +326,20 @@ export class TopicRemovalDomain {
           baseline,
         );
         result.cleanup.push({ owner: worktreeContextRef(owner), plan });
-      } catch {
+      } catch (error) {
         result.copies.push(
           kept(
             owner,
-            "Топик удалён; копия сохранена: требуется свежая проверка файлов, коммитов и активных сессий.",
+            error instanceof Error
+              ? error.message
+              : "Не удалось проверить копию. Она оставлена на диске.",
           ),
         );
       }
     }
     return result;
   }
-  baseline(
-    token: string,
-    owner: TopicContextRef,
-  ): CloneRemovalBaseline | undefined {
+  baseline(token: string, owner: TopicContextRef): RemovalBaseline | undefined {
     const receipt = this.receipts.get(token);
     if (
       !receipt ||

@@ -153,6 +153,7 @@ export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
   "select-run": "run",
   "set-dashboard-viewport": "transport",
   "close-run": "run",
+  "clear-run-history": "topic-or-primary-admin",
   "stop-run": "run",
   "repeat-build": "run",
   "list-settings": "home",

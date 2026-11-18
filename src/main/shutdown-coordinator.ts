@@ -91,6 +91,15 @@ export class ShutdownCoordinator {
     };
     try {
       for (const participant of this.dependencies.participants) {
+        const component =
+          participant.kind &&
+          {
+            "project-creation": "Создание проектов",
+            runs: "Конвейеры и сборки",
+            terminals: "Терминалы",
+            demonstrations: "Демонстрации",
+          }[participant.kind];
+        phase = `Подготовка к выходу${component ? ` · ${component}` : ""}`;
         const lease = await participant.prepare();
         prepared.push(lease);
         itemIds.set(lease, new Set(lease.items.map((item) => item.id)));

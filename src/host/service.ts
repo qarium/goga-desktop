@@ -3,13 +3,14 @@ import {
   type ProjectRemovalRequest,
 } from "../shared/project-registration";
 import { ProjectCreationCoordinator } from "./project-creation";
+import { clearRunHistoryRequestSchema, type ClearRunHistoryRequest, type ClearRunHistoryResult } from "../shared/run-history";
 import type { ProjectCreationRequest } from "../shared/project-creation";
 import * as specifications from "./project-specifications";
 import { pipelineDisplayMetadata } from "../shared/pipeline-display";
 import { capturePipelineRepeat, pipelineRepeatSnapshotSchema } from "../shared/pipeline-repeat";
 import { topicRemovalRequestSchema, topicRemovalTokenSchema, topicCloneCleanupRequestSchema, type TopicRemovalRequest, type TopicCloneCleanupRequest } from "../shared/topic-removal";
 import { TopicRemovalDomain, ownTopicRefs, type TopicRemovalAccess, type RemovalInventory } from "./topic-removal";
-import { readTopicRefInventory, readTopicMutationSnapshot } from "./topics";
+import { diskOnlyTopicDirectories, readTopicRefInventory, readTopicMutationSnapshot } from "./topics";
 import {
   overviewFileActionRequestSchema,
   overviewFileActionTokenSchema,
@@ -216,13 +217,20 @@ import {
   readBuildPlan as readPlan,
 } from "./build";
 import { createBuildRepeatSnapshot } from "./build-repeat";
-import { CloneManager, type ContextDeletionPlan } from "./clones";
+import {
+  CloneManager,
+  ensureCloneTopicDirectory,
+  type ContextDeletionPlan,
+} from "./clones";
 import {
   ContextExchangeManager,
   type BaseSnapshot,
   type PublicationSnapshot,
 } from "./context-exchange";
-import { ContextRunsStore } from "./context-runs-store";
+import {
+  ContextRunsStore,
+  RunHistoryClearCommittedError,
+} from "./context-runs-store";
 import { ContextSyncManager } from "./context-sync";
 import {
   deletionSwitchBranches,
@@ -322,7 +330,7 @@ import {
   taskPath,
   validateTaskText,
 } from "./topic-task";
-import { TopicsDomain, readBranchChoices, type TopicsContext } from "./topics";
+import { TopicsDomain, readSelectedTopicDeletionSnapshot, readBranchChoices, type TopicsContext } from "./topics";
 import { assertTopicBranchesAvailable } from "./worktree-topic-guards";
 import { WorktreeManager } from "./worktrees";
 const slug = (name: string) =>
@@ -476,6 +484,7 @@ export class HostService extends EventEmitter {
   private worktrees: WorktreeManager;
   private contextPreparations = new Map<string, Promise<WorktreeRecord>>();
   private disposed = false;
+  private shutdownFinalized = false;
   private shutdownAdmission = false;
   private readonly demonstrationActive?: (projectId:string, contextId?:string)=>boolean;
   private readonly demoAdmissions = new Map<symbol,ScopeRef>();
@@ -3326,6 +3335,13 @@ export class HostService extends EventEmitter {
     invoke: () => Promise<T>,
     offer: (candidate: GitUpdateHandoffCandidate) => void,
   ): Promise<T> {
+    // Both update entry points arrive here only when the user commits the
+    // operation. Never create directories while displaying a board or preview.
+    if (typeof scope !== "string") {
+      if (scope.branch !== input.targetBranch)
+        throw Error("Запрошена ветка другого топика.");
+      await ensureCloneTopicDirectory(await this.resolveTopicContext(scope));
+    }
     let attempt: object | undefined;
     try {
       attempt = await this.gitUpdateContext(
@@ -3761,7 +3777,7 @@ export class HostService extends EventEmitter {
       stage: plan.stage,
       switchBranch: plan.primarySwitch?.to,
       clonePath: plan.path,
-      aheadCount: plan.aheadCount,
+      ...(plan.schemaVersion === 4 ? {} : { aheadCount: plan.aheadCount }),
       requiresAheadConfirmation:
         plan.stage === "prepared" && plan.aheadCount > 0,
       details: [
@@ -3775,7 +3791,9 @@ export class HostService extends EventEmitter {
         plan.flow === "clone-after-topic"
           ? "Топик уже удалён. Сейчас очищается только эта копия; повторная команда Goga не выполняется."
           : "После переключения в основную папку Goga удалит топик. Основная папка и внешние рабочие копии не удаляются.",
-        "Незакоммиченные, неотслеживаемые и ignored-файлы блокируют удаление. Архивные refs, синхронизация и публикация не создаются.",
+        plan.schemaVersion === 4
+          ? "Копия перемещается целиком вместе с локальными файлами и непереданными коммитами. Архив и резервная ветка не создаются."
+          : "Незакоммиченные, неотслеживаемые и ignored-файлы блокируют удаление. Архивные refs, синхронизация и публикация не создаются.",
       ],
     };
   }
@@ -4079,6 +4097,9 @@ export class HostService extends EventEmitter {
                 await this.assertCleanupTopicAbsent(
                   latest.owner,
                   latest.projectPath,
+                  latest.schemaVersion === 4
+                    ? "explicit-copy"
+                    : "verified-absent",
                 );
               else await this.contextTopicDeletion(latest);
             },
@@ -4865,16 +4886,30 @@ export class HostService extends EventEmitter {
   private async assertCleanupTopicAbsent(
     owner: TopicContextRef,
     expectedPath?: string,
+    mode: "verified-absent" | "explicit-copy" = "verified-absent",
   ) {
     return this.snapshot(owner.projectId, async () => {
       const project = await this.project(owner.projectId);
       if (expectedPath && project.path !== expectedPath)
         throw Error("Основная папка изменилась.");
       const d = await this.topicsContext(owner.projectId);
-      if (ownTopicRefs(await readTopicRefInventory(d.git), owner.topic).length)
+      const refs = await readTopicRefInventory(d.git);
+      if (ownTopicRefs(refs, owner.topic).length)
         throw Error(
           "Собственная ветка топика существует. Очистка копии не разрешена.",
         );
+      if (
+        (
+          await diskOnlyTopicDirectories(d, refs, owner.year, [owner.topic])
+        ).has(owner.topic)
+      )
+        throw Error(
+          "Каталог топика остаётся в основной папке. Копия сохранена.",
+        );
+      // For an explicitly selected copy the confirmed native command owns its
+      // remote effects. Moving the local directory does not need an additional
+      // server round-trip (in particular a clone-only topic can be offline).
+      if (mode === "explicit-copy") return;
       const remotes = (await d.git(["remote"])).split("\n");
       if (
         remotes.includes("origin") &&
@@ -4892,9 +4927,9 @@ export class HostService extends EventEmitter {
     });
   }
   private async topicRemovalAccess(
-    projectId: string,
-    year: string,
+    request: TopicRemovalRequest,
   ): Promise<TopicRemovalAccess> {
+    const { projectId, year } = request;
     const project = await this.project(projectId);
     const owners = async () =>
       (await this.clones.list(projectId)).filter(
@@ -4907,9 +4942,13 @@ export class HostService extends EventEmitter {
     const inventory = async (): Promise<RemovalInventory> => {
       // Mutation admission needs public Git state and registry ownership, not
       // repeated Goga status projections from every clone in the display table.
-      const before = await this.clones.reconcile(projectId);
+      assertReadActive();
+      const before = await this.clones.list(projectId);
       const d = await this.topicsContext(projectId),
-        local = await readTopicMutationSnapshot(d, year);
+        local =
+          request.action === "delete" && request.expectedRevision === undefined
+            ? await readSelectedTopicDeletionSnapshot(d, year)
+            : await readTopicMutationSnapshot(d, year);
       const after = await this.clones.list(projectId);
       if (JSON.stringify(before) !== JSON.stringify(after))
         throw Error("Каталог контекстов изменился.");
@@ -4923,6 +4962,7 @@ export class HostService extends EventEmitter {
             before.map((r) => [r.contextId, r.revision, r.state]),
           ]),
         ),
+        primaryState: local,
         refs: local.refs,
         owners: before.filter(
           (o) =>
@@ -4933,10 +4973,13 @@ export class HostService extends EventEmitter {
         ),
       };
     };
-    const nativeContext = async (before: RemovalInventory) => {
+    const nativeContext = async (
+      before: RemovalInventory,
+      beforeCommand?: () => void,
+    ) => {
       if (before.projectPath !== project.path)
         throw Error("Основная папка изменилась.");
-      const d = await this.topicsContext(projectId);
+      const d = await this.topicsContext(projectId, undefined, beforeCommand);
       if (d.owner || d.root !== project.path)
         throw Error("Подмена основной папки рабочей копией запрещена.");
       d.removalFlow = true;
@@ -4958,51 +5001,102 @@ export class HostService extends EventEmitter {
     };
     return {
       inventory,
-      inspect: async (owner) => {
+      diskOnlyRemaining: async (after, topics) =>
+        diskOnlyTopicDirectories(
+          await this.topicsContext(projectId),
+          after.refs,
+          year,
+          topics,
+        ),
+      inspect: async (owner, action) => {
         if (this.deletionGuards(owner).active)
           throw Error("В копии есть активные сессии.");
         const recovery = await this.contextDeletionRecovery(owner);
         if (recovery) throw Error("Есть незавершённое удаление копии.");
-        return this.clones.captureRemovalBaseline(owner);
+        return action === "delete"
+          ? this.clones.captureWholeCopyIdentity(owner)
+          : this.clones.captureRemovalBaseline(owner);
       },
       prepareNative: async (request, before) => {
-        const d = await nativeContext(before),
-          local = await this.topicDomain.board(d, year);
-        const topics =
-          request.action === "delete"
-            ? request.topics.filter(
-                (topic) =>
-                  ownTopicRefs(before.refs, topic).length ||
-                  !before.owners.some((o) => o.topic === topic),
-              )
-            : [];
+        const d = await nativeContext(before);
+        let topics: string[] = [];
+        if (request.action === "delete") {
+          const managed = new Set(before.owners.map((owner) => owner.topic));
+          const noOwn = new Set(
+            request.topics.filter(
+              (topic) =>
+                managed.has(topic) && !ownTopicRefs(before.refs, topic).length,
+            ),
+          );
+          const diskOnly = await diskOnlyTopicDirectories(
+            d,
+            before.refs,
+            year,
+            [...noOwn],
+          );
+          topics = request.topics.filter(
+            (topic) => !noOwn.has(topic) || diskOnly.has(topic),
+          );
+        }
         if (request.action === "delete" && !topics.length) return null;
-        return this.topicDomain.prepare(d, {
-          ...request,
-          ...(request.action === "delete" ? { topics } : {}),
-          expectedRevision: local.revision,
-        });
+        return this.topicDomain.prepare(
+          d,
+          {
+            ...request,
+            ...(request.action === "delete" ? { topics } : {}),
+            expectedRevision: before.primaryState.revision,
+          },
+          before.primaryState,
+        );
       },
       executeNative: async (token, before) => {
-        const d = await nativeContext(before),
+        // An admitted run/terminal need not change the clone registry. Check
+        // live activity at the command boundary, after async CLI resolution.
+        // A selected-delete ticket issues one Goga mutation for the whole batch.
+        const selected = new Set(
+          request.action === "delete" ? request.topics : [],
+        );
+        const targets = before.owners.filter((owner) =>
+          selected.has(owner.topic),
+        );
+        let blocked = "";
+        const d = await nativeContext(before, () => {
+            const busy = targets.find(
+              (owner) => this.deletionGuards(worktreeContextRef(owner)).active,
+            );
+            if (busy) {
+              blocked = `В копии топика «${busy.topic}» появилась активная сессия. Удаление не начато.`;
+              throw Error(blocked);
+            }
+          }),
           key = await this.key(project);
         const previous = this.locks.get(key) ?? Promise.resolve();
         const next = previous
           .catch(() => {})
-          .then(() => this.topicDomain.execute(d, token));
+          .then(() => this.topicDomain.execute(d, token, before.primaryState));
         this.locks.set(key, next);
         try {
-          return await next;
+          const result = await next;
+          return blocked
+            ? { projectId, status: "failed" as const, message: blocked }
+            : result;
         } finally {
           if (this.locks.get(key) === next) this.locks.delete(key);
         }
       },
       prepareCleanup: async (owner, baseline) => {
-        await this.assertCleanupTopicAbsent(owner, project.path);
+        const wholeCopy =
+          !!baseline && "kind" in baseline && baseline.kind === "whole-copy";
+        await this.assertCleanupTopicAbsent(
+          owner,
+          project.path,
+          wholeCopy ? "explicit-copy" : "verified-absent",
+        );
         const plan = await this.clones.prepareContextCleanup(
           owner,
           this.deletionGuards(owner),
           baseline,
+          wholeCopy,
         );
         return this.contextDeletionPreview(plan);
       },
@@ -5012,16 +5106,15 @@ export class HostService extends EventEmitter {
     if (this.context.getStore()?.binding)
       throw Error("Удаление доступно только для основной папки проекта.");
     const request = topicRemovalRequestSchema.parse(input);
-    return this.operation(() =>
-      this.exclusive(request.projectId, () =>
-        this.snapshot(request.projectId, async () =>
-          this.topicRemovals.prepare(
-            await this.topicRemovalAccess(request.projectId, request.year),
-            request,
-          ),
-        ),
-      ),
-    );
+    // The preview does not mutate the project. It must neither hold the global
+    // operation queue nor leave an obsolete read blocking navigation/other work.
+    return this.snapshot(request.projectId, async () => {
+      assertReadActive();
+      return this.topicRemovals.prepare(
+        await this.topicRemovalAccess(request),
+        request,
+      );
+    });
   }
   async executeTopicRemoval(input: { projectId: string; token: string }) {
     if (this.context.getStore()?.binding)
@@ -5034,10 +5127,7 @@ export class HostService extends EventEmitter {
           parsed.projectId,
           async () => {
             const result = await this.topicRemovals.execute(
-              await this.topicRemovalAccess(
-                parsed.projectId,
-                prepared.request.year,
-              ),
+              await this.topicRemovalAccess(prepared.request),
               prepared,
             );
             return result;
@@ -5074,7 +5164,7 @@ export class HostService extends EventEmitter {
             await this.clones.prepareContextCleanup(
               owner,
               this.deletionGuards(owner),
-              baseline,
+              baseline && !("kind" in baseline) ? baseline : undefined,
             ),
           );
         }),
@@ -6810,6 +6900,110 @@ export class HostService extends EventEmitter {
       throw error;
     }
   }
+  /** Clear private Desktop history only. Never resolve a working copy or signal a process. */
+  async clearRunHistory(
+    input: ClearRunHistoryRequest,
+  ): Promise<ClearRunHistoryResult> {
+    this.check();
+    const request = clearRunHistoryRequestSchema.parse(input);
+    const belongs = (run: Run) => {
+      const scope = request.scope;
+      if (typeof scope === "string")
+        return run.projectId === scope && !run.context;
+      const owner = run.context;
+      return (
+        run.projectId === scope.projectId &&
+        run.topic === scope.topic &&
+        run.branch === scope.branch &&
+        owner &&
+        owner.projectId === scope.projectId &&
+        owner.contextId === scope.contextId &&
+        owner.year === scope.year &&
+        owner.topic === scope.topic &&
+        owner.branch === scope.branch
+      );
+    };
+    const reason = (
+      run: Run,
+    ): ClearRunHistoryResult["retained"][number]["reason"] | undefined => {
+      if (
+        this.children.has(run.id) ||
+        !["exited", "failed", "stopped"].includes(run.status)
+      )
+        return "active";
+      if (run.recovery === "unverified") return "unverified";
+      if (run.syncPending) return "pending-sync";
+      if (
+        this.closeFlights.has(run.id) ||
+        this.stopFlights.has(run.id) ||
+        this.pipelineRepeatFlights.has(run.id)
+      )
+        return "busy";
+      return undefined;
+    };
+    const inspect = () => {
+      const eligible: string[] = [],
+        retained: ClearRunHistoryResult["retained"] = [];
+      const current = new Map(this.runList.map((run) => [run.id, run]));
+      for (const id of request.runIds) {
+        const run = current.get(id);
+        if (!run) continue; // a repeated confirmed request is idempotent
+        if (!belongs(run) || (run.kind ?? "pipeline") !== request.kind)
+          throw Error(
+            "Запуск не относится к выбранному разделу или рабочему контексту. История не изменена.",
+          );
+        const keep = reason(run);
+        if (keep) retained.push({ id, reason: keep });
+        else eligible.push(id);
+      }
+      return { eligible, retained };
+    };
+    const initial = inspect();
+    if (!initial.eligible.length)
+      return { removedRunIds: [], retained: initial.retained };
+    // Drain any preceding lifecycle writes. Concurrent later snapshots remain
+    // safe because the store's terminal ledger prevents deleted IDs reappearing.
+    await this.persistRuns();
+    this.check();
+    const fresh = inspect();
+    const confirmed = new Set(initial.eligible),
+      initiallyRetained = new Set(initial.retained.map((item) => item.id));
+    const candidates = fresh.eligible.filter((id) => confirmed.has(id));
+    const retained = [
+      ...initial.retained,
+      ...fresh.retained.filter((item) => !initiallyRetained.has(item.id)),
+    ];
+    if (!candidates.length) return { removedRunIds: [], retained };
+    const current = () => {
+      this.check();
+      const safe = new Set(inspect().eligible);
+      const existing = new Set(this.runList.map((run) => run.id));
+      if (candidates.some((id) => existing.has(id) && !safe.has(id)))
+        throw Error(
+          "Состояние запуска изменилось во время очистки. История сохранена; повторите попытку.",
+        );
+    };
+    const publishRemoval = (ids: string[]) => {
+      const deleted = new Set(ids);
+      this.runList = this.runList.filter((run) => !deleted.has(run.id));
+      for (const id of ids) {
+        this.dashboardFlights.get(id)?.controller.abort();
+        this.buildRequests.delete(id);
+      }
+      this.lastRunSave = "";
+      this.emit("runs", this.runCatalog());
+    };
+    let removedRunIds: string[];
+    try {
+      removedRunIds = await this.runStore.clearCompleted(candidates, current);
+    } catch (error) {
+      if (error instanceof RunHistoryClearCommittedError)
+        publishRemoval(error.removedRunIds);
+      throw error;
+    }
+    publishRemoval(candidates);
+    return { removedRunIds, retained };
+  }
   closeRun(
     id: string,
     confirm: (run: Run) => Promise<boolean>,
@@ -7192,7 +7386,9 @@ export class HostService extends EventEmitter {
    * a recovery launch may already be between journal persistence and actual spawn.
    */
   async prepareShutdown(): Promise<PreparedShutdown> {
-    this.check();
+    // A later window finalizer can fail after this host has already closed.
+    // Retry may prove its empty inventory, but must never reopen admission.
+    if (!this.shutdownFinalized) this.check();
     if (this.shutdownAdmission)
       throw Error("Подготовка к выходу уже выполняется.");
     this.shutdownAdmission = true;
@@ -7200,8 +7396,9 @@ export class HostService extends EventEmitter {
     const active = () =>
       this.runList.filter(
         (run) =>
-          ["starting", "running"].includes(run.status) ||
-          this.children.has(run.id),
+          (!this.shutdownFinalized || !this.detachedRuns.has(run.id)) &&
+          (["starting", "running"].includes(run.status) ||
+            this.children.has(run.id)),
       );
     try {
       await this.operationTail;
@@ -7338,6 +7535,7 @@ export class HostService extends EventEmitter {
       )
     )
       throw Error("Сначала требуется завершить запуски приложения.");
+    if (this.shutdownFinalized) return;
     await this.operationTail;
     await this.persistRuns();
     await this.runSaveTail;
@@ -7348,6 +7546,7 @@ export class HostService extends EventEmitter {
       await this.projectCreation.dispose();
       await this.runner.dispose?.();
       clearInterval(this.recoveryPoll);
+      this.shutdownFinalized = true;
     } catch (error) {
       this.disposed = false;
       throw error;

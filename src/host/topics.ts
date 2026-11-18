@@ -68,12 +68,14 @@ export interface TopicRef {
   remote: boolean;
   commit: string;
 }
-interface State {
+export interface TopicMutationSnapshot {
+  kind?: "selected-delete";
   refs: TopicRef[];
   current: string;
   dirty: boolean;
   revision: string;
 }
+type State = TopicMutationSnapshot;
 interface Command {
   args: string[];
   stdin?: string;
@@ -120,6 +122,89 @@ async function refs(d: Pick<TopicsContext, "git">): Promise<TopicRef[]> {
 export async function readTopicRefInventory(git: TopicsContext["git"]) {
   return refs({ git });
 }
+const treeReadConcurrency = 4;
+async function hostedSlugs(
+  git: TopicsContext["git"],
+  commit: string,
+  prefix: string,
+  target = prefix,
+) {
+  // Match Goga's --name-only line projection exactly for identity and
+  // directory effects. Git C-quotes whole paths for certain filenames;
+  // CLI skips those lines. Still protect the actual topic on such trees.
+  const paths = await git([
+    "ls-tree",
+    "-r",
+    "--name-only",
+    "--full-name",
+    commit,
+    "--",
+    target,
+  ]);
+  const visible = new Set<string>(),
+    physical = new Set<string>();
+  for (const line of paths.split("\n")) {
+    const quoted = line.startsWith('"');
+    const file = quoted ? line.slice(1, -1) : line;
+    if (!file.startsWith(prefix)) continue;
+    const topic = file.slice(prefix.length).split("/")[0]!;
+    if (!quoted) visible.add(topic);
+    physical.add(topic);
+  }
+  return { visible, physical };
+}
+/** Goga resolves the exact directory entry name, even on case-insensitive disks. */
+async function topicsOnDisk(directory: string) {
+  await noSymlinks(directory);
+  const dirs = new Set<string>(),
+    links = new Set<string>();
+  try {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.isDirectory()) dirs.add(entry.name);
+      if (entry.isSymbolicLink()) links.add(entry.name);
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return (topic: string) => {
+    if (links.has(topic)) throw Error("Символические ссылки не разрешены");
+    return dirs.has(topic);
+  };
+}
+/** A managed clone can coexist with a deletable, uncommitted topic in primary.
+ * No own ref is not proof that primary has no native target. Checked-in history
+ * carried by other refs is retained by Goga; inspect each unique tip at most once. */
+export async function diskOnlyTopicDirectories(
+  d: Pick<TopicsContext, "git" | "root" | "project">,
+  refs: TopicRef[],
+  year: string,
+  topics: string[],
+) {
+  if (!topics.length) return new Set<string>();
+  const prefix = `.goga/history/${year}/`;
+  const onDisk = await topicsOnDisk(
+    path.join(d.root ?? d.project.path, prefix),
+  );
+  const diskOnly = new Set(topics.filter(onDisk));
+  if (!diskOnly.size) return diskOnly;
+  const commits = [...new Set(refs.map((ref) => ref.commit))];
+  for (
+    let i = 0;
+    i < commits.length && diskOnly.size;
+    i += treeReadConcurrency
+  ) {
+    assertReadActive();
+    const target = diskOnly.size === 1 ? prefix + [...diskOnly][0]! : prefix;
+    const sets = await Promise.all(
+      commits
+        .slice(i, i + treeReadConcurrency)
+        .map((commit) => hostedSlugs(d.git, commit, prefix, target)),
+    );
+    for (const tree of sets)
+      for (const topic of tree.physical) diskOnly.delete(topic);
+  }
+  return diskOnly;
+}
 /** Names only; deliberately no state fingerprint, Goga, base config or clone inventory. */
 export async function readBranchChoices(git: TopicsContext["git"]) {
   const inventory = await refs({ git });
@@ -144,6 +229,7 @@ async function workingFileDigest(file: string): Promise<string> {
       buffer = Buffer.alloc(64 * 1024);
     let offset = 0;
     while (offset < before.size) {
+      assertReadActive();
       const { bytesRead } = await handle.read(
         buffer,
         0,
@@ -206,6 +292,7 @@ async function state(d: TopicsContext, year: string): Promise<State> {
   ]);
   const extra: string[] = [];
   for (const name of untracked.split("\0").filter(Boolean)) {
+    assertReadActive();
     const file = path.resolve(d.root ?? d.project.path, name);
     if (!file.startsWith((d.root ?? d.project.path) + path.sep))
       throw Error("Некорректный путь Git");
@@ -255,6 +342,46 @@ export async function readTopicMutationSnapshot(
   year: string,
 ) {
   return state(d, year);
+}
+/** For deletion of named topics, working files outside their history directories
+ * aren't operands. Keep refs, checkout, Git configuration and invocation pinned;
+ * deletion() separately verifies the removable directories and worktrees. */
+export async function readSelectedTopicDeletionSnapshot(
+  d: TopicsContext,
+  year: string,
+): Promise<TopicMutationSnapshot> {
+  const root = d.root ?? d.project.path;
+  await guardedProject(root);
+  assertReadActive();
+  const [inventory, branch, config, invocation, directory, git] =
+    await Promise.all([
+      refs(d),
+      d.git(["branch", "--show-current"]),
+      d.git(["config", "--null", "--list", "--show-origin"]),
+      d.fingerprint(),
+      lstat(root),
+      lstat(path.join(root, ".git")),
+    ]);
+  return {
+    kind: "selected-delete",
+    refs: inventory,
+    current: branch.trim(),
+    dirty: false,
+    revision: digest(
+      JSON.stringify([
+        d.project,
+        year,
+        directory.dev,
+        directory.ino,
+        git.dev,
+        git.ino,
+        inventory,
+        branch,
+        config,
+        invocation,
+      ]),
+    ),
+  };
 }
 export class TopicsDomain {
   private tickets = new Map<string, Prepared>();
@@ -478,9 +605,10 @@ export class TopicsDomain {
   async prepare(
     d: TopicsContext,
     input: TopicOperationRequest,
+    removalState?: TopicMutationSnapshot,
   ): Promise<TopicOperationPlan> {
     const request = topicOperationSchema.parse(input);
-    const prepared = await this.resolve(d, request);
+    const prepared = await this.resolve(d, request, removalState);
     for (const [token, ticket] of this.tickets)
       if (Date.now() >= ticket.plan.expiresAt) this.tickets.delete(token);
     if (this.tickets.size >= 100)
@@ -491,14 +619,18 @@ export class TopicsDomain {
   private async resolve(
     d: TopicsContext,
     r: TopicOperationRequest,
+    removalState?: TopicMutationSnapshot,
   ): Promise<Prepared> {
     if (d.active())
       throw Error(
         "В репозитории работает конвейер. Остановите его перед изменением топиков.",
       );
-    const board = await this.board(d, r.year);
-    if (board.revision !== r.expectedRevision) throw stale();
-    const s = await state(d, r.year);
+    // Destructive operations are resolved from exact Git refs, the target
+    // directories and registry guards, never from Goga's display projections.
+    const removing = r.action === "delete" || r.action === "clear";
+    const board = removing ? null : await this.board(d, r.year);
+    if (board && board.revision !== r.expectedRevision) throw stale();
+    const s = removing && removalState ? removalState : await state(d, r.year);
     if (s.revision !== r.expectedRevision) throw stale();
     if (r.task !== undefined) validateTaskText(r.task);
     const prefix = ["topics", "--year", r.year],
@@ -520,13 +652,14 @@ export class TopicsDomain {
         "В рабочей копии есть незакоммиченные изменения (dirty). Сохраните их перед операцией.",
       );
     const ensureBase = async () => {
-      const base = r.baseRef || board.baseRef;
+      const base = r.baseRef || board?.baseRef || (await d.baseRef());
       if (!base || base.startsWith("-") || /[\x00-\x20]/.test(base))
         throw Error("Выберите базовую ветку");
       await d.git(["rev-parse", "--verify", `${base}^{commit}`]);
       return base;
     };
     if (r.action === "create") {
+      if (!board) throw stale();
       if (!r.branch) throw Error("Укажите имя ветки");
       await d.git(["check-ref-format", "--branch", r.branch]);
       await d.assertBranchesAvailable?.([r.branch], r.action);
@@ -656,13 +789,20 @@ export class TopicsDomain {
         ...new Set(r.topics ?? (r.target ? [r.target.topic] : [])),
       ];
       if (!topics.length) throw Error("Выберите топики для удаления");
-      await this.deletion(d, r.year, s, topics, details, guards);
-      commands.push({ args: [...prefix, "delete", ...topics, "--yes"] });
+      const identifiers = await this.deletion(
+        d,
+        r.year,
+        s,
+        topics,
+        details,
+        guards,
+      );
+      commands.push({ args: [...prefix, "delete", ...identifiers, "--yes"] });
       details.push(
         "Удаление без корзины. Ранее удалённые топики не восстанавливаются при ошибке следующего.",
       );
     } else {
-      if (!r.target) throw Error("Выберите топик");
+      if (!board || !r.target) throw Error("Выберите топик");
       if (r.action === "update") await d.assertPrimaryOwnerAvailable?.(r);
       if (
         ![...board.records, ...board.remoteRecords].some(
@@ -671,8 +811,36 @@ export class TopicsDomain {
             row.branch === r.target!.branch &&
             row.remote === r.target!.remote,
         )
-      )
-        throw Error("Топик отсутствует");
+      ) {
+        // Old managed clones can have a valid checked-out owner but no
+        // history directory (Git never transports empty directories).
+        // Admit only this host-bound update, not arbitrary board targets.
+        if (
+          r.action !== "update" ||
+          !d.owner ||
+          !r.context ||
+          d.owner.contextId !== r.context.contextId ||
+          d.owner.revision !== r.context.revision ||
+          d.owner.projectId !== r.projectId ||
+          d.owner.year !== r.year ||
+          d.owner.topic !== r.target.topic ||
+          d.owner.branch !== r.target.branch ||
+          s.current !== r.target.branch ||
+          r.target.remote
+        )
+          throw Error("Топик отсутствует");
+        const directory = path.dirname(
+          path.join(d.root ?? d.project.path, taskPath(d.owner.topic, r.year)),
+        );
+        await noSymlinks(directory);
+        if (
+          await lstat(directory).catch((error) => {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+            throw error;
+          })
+        )
+          throw Error("Топик отсутствует в каталоге Goga");
+      }
       if (
         normalize(
           r.target.remote ? short(r.target.branch) : r.target.branch,
@@ -744,7 +912,11 @@ export class TopicsDomain {
       details.unshift(`${r.action}: ${r.target.topic} → ${identifier}.`);
       commands.push({ args });
     }
-    if ((await state(d, r.year)).revision !== s.revision) throw stale();
+    const after =
+      s.kind === "selected-delete" && r.action === "delete"
+        ? await readSelectedTopicDeletionSnapshot(d, r.year)
+        : await state(d, r.year);
+    if (after.revision !== s.revision) throw stale();
     return {
       guards,
       request: r,
@@ -779,27 +951,23 @@ export class TopicsDomain {
     guards: string[],
   ) {
     const prefix = `.goga/history/${year}/`;
-    const hosted = new Map<string, Set<string>>();
-    for (const ref of s.refs) {
-      const paths = await d.git([
-        "ls-tree",
-        "-r",
-        "--name-only",
-        "-z",
-        ref.commit,
-        "--",
-        prefix,
-      ]);
-      hosted.set(
-        ref.full,
-        new Set(
-          paths
-            .split("\0")
-            .filter((p) => p.startsWith(prefix))
-            .map((p) => p.slice(prefix.length).split("/")[0]!),
-        ),
+    const byCommit = new Map<string, Awaited<ReturnType<typeof hostedSlugs>>>();
+    // A local branch and its remote twins frequently point to the same
+    // immutable tree; no ref checkout or per-ref duplicate traversal.
+    const commits = [...new Set(s.refs.map((ref) => ref.commit))];
+    for (let i = 0; i < commits.length; i += treeReadConcurrency) {
+      assertReadActive();
+      await Promise.all(
+        commits.slice(i, i + treeReadConcurrency).map(async (commit) => {
+          byCommit.set(commit, await hostedSlugs(d.git, commit, prefix));
+        }),
       );
     }
+    const onDisk = await topicsOnDisk(
+      path.join(d.root ?? d.project.path, prefix),
+    );
+    const identifiers: string[] = [];
+    const removingRefs = new Set<TopicRef>();
     for (const topic of topics) {
       if (normalize(s.current) === topic && d.deletionSwitchFrom !== s.current)
         throw Error(
@@ -812,37 +980,40 @@ export class TopicsDomain {
         origin = own.filter((r) => r.remote && r.name.startsWith("origin/"));
       if (local.length > 1 || origin.length > 1)
         throw Error("Неоднозначный топик: несколько собственных веток");
-      if (local.length)
-        await d.assertBranchesAvailable?.(
-          local.map((ref) => ref.name),
-          "delete",
-        );
       const directory = path.join(d.root ?? d.project.path, prefix, topic);
-      await noSymlinks(directory);
-      let disk = false;
-      try {
-        disk = (await lstat(directory)).isDirectory();
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-      const carried = s.refs.some((r) => hosted.get(r.full)!.has(topic));
+      const disk = onDisk(topic);
+      const carried = s.refs.some((r) =>
+        byCommit.get(r.commit)!.physical.has(topic),
+      );
       if (!own.length && carried)
         throw Error(
           "Топик не имеет собственной ветки: это история, удалять нечего",
         );
-      if (!carried && !disk) throw Error("Топик отсутствует");
-      // Match the CLI first (exact branch-name) tier. Never allow it to widen a slug into other hosted topics.
+      // No CLI identifier may fall through to prefix matching.
+      if (!carried && !disk) throw Error(`Топик «${topic}» отсутствует`);
+      if (
+        !disk &&
+        !s.refs.some((r) => byCommit.get(r.commit)!.visible.has(topic))
+      )
+        throw Error(
+          `Goga не может точно определить топик «${topic}» по именам файлов. Удаление не выполнено.`,
+        );
+      // Goga prioritizes exact branch names over normalized slugs. For a
+      // colliding name force the verified exact-slug tier: ':' cannot occur
+      // in a Git ref and is stripped by Goga's slug normalizer.
       const exact = s.refs.filter(
         (r) => (r.remote ? short(r.name) : r.name) === topic,
       );
-      const matched = new Set(exact.flatMap((r) => [...hosted.get(r.full)!]));
-      if (matched.size > 1 || (matched.size === 1 && !matched.has(topic)))
-        throw Error(
-          "Неоднозначный идентификатор удаления: ветка содержит другие топики",
-        );
+      const collides = exact.some((r) =>
+        [...byCommit.get(r.commit)!.visible].some((name) => name !== topic),
+      );
+      identifiers.push(collides ? `:${topic}` : topic);
+      if (local[0]) removingRefs.add(local[0]);
+      if (origin[0]) removingRefs.add(origin[0]);
       const survivors = s.refs.filter((r) => r !== local[0] && r !== origin[0]);
       const removeDir =
-        disk && !survivors.some((r) => hosted.get(r.full)!.has(topic));
+        disk &&
+        !survivors.some((r) => byCommit.get(r.commit)!.visible.has(topic));
       if (!local.length && !origin.length && !removeDir)
         throw Error(
           "Для топика нет удаляемой локальной ветки или origin-двойника",
@@ -856,8 +1027,29 @@ export class TopicsDomain {
           : `Каталог ${prefix}${topic} сохраняется: отсутствует или есть другие ветки-носители.`,
       );
     }
+    const localBranches = [...removingRefs]
+      .filter((ref) => !ref.remote)
+      .map((ref) => ref.name);
+    if (localBranches.length)
+      await d.assertBranchesAvailable?.(localBranches, "delete");
+    // Shared history is not ambiguity. Only stop if the whole selection
+    // would remove the last carrier of an unselected, non-disk topic.
+    const surviving = new Set(topics);
+    const dropping = new Set<string>();
+    for (const ref of s.refs) {
+      const kept = removingRefs.has(ref) ? dropping : surviving;
+      for (const name of byCommit.get(ref.commit)!.physical) kept.add(name);
+    }
+    for (const name of dropping) {
+      if (surviving.has(name) || onDisk(name)) continue;
+      throw Error(
+        `Будет потерян невыбранный топик «${name}»: он есть только в удаляемых ветках.`,
+      );
+    }
+    return identifiers;
   }
   private async guardDirectory(directory: string, depth = 0): Promise<string> {
+    assertReadActive();
     if (depth > 32) throw Error("Каталог топика слишком глубок");
     await noSymlinks(directory);
     const parts: string[] = [];
@@ -886,6 +1078,7 @@ export class TopicsDomain {
   async execute(
     d: TopicsContext,
     token: string,
+    removalState?: TopicMutationSnapshot,
   ): Promise<TopicOperationResult> {
     if (d.deletionSwitchFrom)
       throw Error(
@@ -895,7 +1088,7 @@ export class TopicsDomain {
       ticket = this.tickets.get(token)!;
     this.tickets.delete(token);
     if (id !== d.project.id) throw stale();
-    const fresh = await this.resolve(d, ticket.request);
+    const fresh = await this.resolve(d, ticket.request, removalState);
     if (
       JSON.stringify([
         fresh.commands,

@@ -228,7 +228,7 @@ it("Launch task error and preview error end loading and permit retry", async () 
   await screen.findByDisplayValue("task");
   expect(document.querySelector(".loading-state")).toBeNull();
 });
-it("Topics hides pending table content but preserves filters and the mounted table during refresh", async () => {
+it("Topics hides the cold table, then keeps it visible with its filters during refresh", async () => {
   const d = deferred();
   api.readTopicTable.mockReturnValueOnce(d.promise);
   render(
@@ -259,8 +259,8 @@ it("Topics hides pending table content but preserves filters and the mounted tab
     (screen.getByRole("button", { name: "Создать топик" }) as HTMLButtonElement)
       .disabled,
   ).toBe(true);
-  expect(screen.queryByRole("table")).toBeNull();
-  expect(table.isConnected).toBe(true);
+  expect(screen.getByRole("table")).toBe(table);
+  expect(screen.queryByRole("status", { name: "Загружаем топики…" })).toBeNull();
   await flush(next, board);
   expect(screen.getByRole("table")).toBe(table);
   expect(screen.getByRole("searchbox")).toBe(input);

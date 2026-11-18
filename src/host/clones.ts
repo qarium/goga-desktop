@@ -8,6 +8,7 @@ import {
 import { constants } from "node:fs";
 import {
   lstat,
+  mkdir,
   open,
   realpath,
   readdir,
@@ -63,6 +64,36 @@ const normalize = (name: string) =>
     .replace(/[^\x00-\x7f]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
+/** Goga recognizes a current topic by its directory, even without a todo or
+ * commit. Git does not carry empty directories when creating a clone. Call
+ * only after resolving this owner and its currently checked-out branch. */
+export async function ensureCloneTopicDirectory(owner: WorktreeRecord) {
+  if (
+    owner.storageKind !== "clone" ||
+    owner.ownership !== "managed" ||
+    owner.state !== "ready" ||
+    !/^\d{4}$/.test(owner.year) ||
+    !owner.topic ||
+    owner.topic !== normalize(owner.branch)
+  )
+    throw Error(
+      "Нельзя подготовить каталог истории: топик не соответствует ветке рабочей копии.",
+    );
+
+  let dir = owner.path;
+  for (const part of [".goga", "history", owner.year, owner.topic]) {
+    dir = path.join(dir, part);
+    await noSymlinks(dir);
+    try {
+      await mkdir(dir, { mode: 0o700 });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+    if (!(await lstat(dir)).isDirectory())
+      throw Error("Путь истории топика не является каталогом.");
+  }
+  await noSymlinks(dir);
+}
 const createSchema = z
   .object({
     year: z.string().regex(/^\d{4}$/),
@@ -148,7 +179,36 @@ const contextDeletionSchema = z.discriminatedUnion("schemaVersion", [
     flow: z.literal("clone-after-topic"),
     primarySwitch: z.never().optional(),
   }),
+  // A separate, persisted authorization: the exact owned directory as a
+  // whole, *only* after native removal. It is not a clean-copy snapshot.
+  trashFirstDeletionSchema
+    .omit({
+      head: true,
+      fingerprint: true,
+      primaryFingerprint: true,
+      primarySurvivorsFingerprint: true,
+      primaryHistoryFingerprint: true,
+    })
+    .extend({
+      schemaVersion: z.literal(4),
+      flow: z.literal("clone-after-topic"),
+      primaryTopicAbsent: z.literal(true),
+      primaryHead: z.null(),
+      primarySwitch: z.never().optional(),
+      aheadCount: z.literal(0),
+      cloneRoot: inodeSchema,
+      cloneGit: inodeSchema,
+    }),
 ]);
+export interface WholeCopyIdentity {
+  kind: "whole-copy";
+  owner: TopicContextRef;
+  path: string;
+  cloneRoot: z.infer<typeof inodeSchema>;
+  cloneGit: z.infer<typeof inodeSchema>;
+  sourceRoot: z.infer<typeof inodeSchema>;
+  sourceGit: z.infer<typeof inodeSchema>;
+}
 export interface CloneRemovalBaseline {
   owner: TopicContextRef;
   path: string;
@@ -756,7 +816,15 @@ export class CloneManager {
           repository.projectPath,
         )
       ).trim();
-      return this.prepare(project, identity, repository, oid, true);
+      const record = await this.prepare(
+        project,
+        identity,
+        repository,
+        oid,
+        true,
+      );
+      await ensureCloneTopicDirectory(record);
+      return record;
     });
   }
   async resolve(input: TopicContextRef): Promise<WorktreeRecord> {
@@ -1468,7 +1536,11 @@ export class CloneManager {
   ): Promise<string | null> {
     const refs = (
       await this.git(
-        ["for-each-ref", "--format=%(refname)%00%(objectname)", "refs/heads"],
+        [
+          "for-each-ref",
+          "--format=%(refname)%00%(objectname)",
+          `refs/heads/${row.branch}`,
+        ],
         row.projectPath,
       )
     ).trim();
@@ -1576,11 +1648,170 @@ export class CloneManager {
         .length,
     };
   }
+  private async wholeCopyIdentity(
+    row: WorktreeRecord,
+  ): Promise<WholeCopyIdentity> {
+    if (
+      row.ownership !== "managed" ||
+      row.storageKind !== "clone" ||
+      row.preparation ||
+      row.deletedAt ||
+      !row.sourceCommonDir
+    )
+      throw changed();
+    // The private owner record binds the deterministic clone path and both
+    // physical repositories. No path below the worktree is enumerated.
+    await this.readStore.assertOwned(row);
+    // A second registered worktree is outside the selected directory, but
+    // depends on its .git. Consent for this copy must not break that other one.
+    const worktrees = path.join(row.gitCommonDir, "worktrees");
+    await noSymlinks(worktrees);
+    let entries: string[];
+    try {
+      entries = await readdir(worktrees);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      entries = [];
+    }
+    for (const entry of entries) {
+      const admin = path.join(worktrees, entry);
+      await noSymlinks(admin);
+      const handle = await open(
+        path.join(admin, "gitdir"),
+        constants.O_RDONLY | constants.O_NOFOLLOW,
+      );
+      let gitdir: string;
+      try {
+        const info = await handle.stat();
+        if (!info.isFile() || info.size > 65536) throw changed();
+        gitdir = (await handle.readFile("utf8")).replace(/\n$/, "");
+      } finally {
+        await handle.close();
+      }
+      if (!path.isAbsolute(gitdir) || path.basename(gitdir) !== ".git")
+        throw changed();
+      const directory = path.dirname(gitdir);
+      const locked = await lstat(path.join(admin, "locked")).then(
+        () => true,
+        (error: NodeJS.ErrnoException) => {
+          if (error.code !== "ENOENT") throw error;
+          return false;
+        },
+      );
+      // Git keeps registrations after temporary folders disappear. They live
+      // inside the selected clone and need neither pruning nor user action.
+      // A locked registration may instead refer to an offline drive; retain it.
+      if (!locked) {
+        try {
+          await lstat(directory);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+          throw error;
+        }
+      }
+      throw Error(
+        `Копия используется другой рабочей папкой${locked ? " (защищённой Git)" : ""}: ${directory}. Удаление копии повредит её Git-данные. Эта папка не входит в выбранное удаление.`,
+      );
+    }
+    const identity = await this.git(
+      [
+        "rev-parse",
+        "--path-format=absolute",
+        "--show-toplevel",
+        "--git-common-dir",
+        "--absolute-git-dir",
+        "--symbolic-full-name",
+        "HEAD",
+      ],
+      row.path,
+      row,
+      undefined,
+      this.readStore,
+    );
+    if (
+      identity !==
+      [
+        row.path,
+        row.gitCommonDir,
+        row.gitCommonDir,
+        `refs/heads/${row.branch}`,
+        "",
+      ].join("\n")
+    )
+      throw changed();
+    return {
+      kind: "whole-copy",
+      owner: worktreeContextRef(row),
+      path: row.path,
+      cloneRoot: await this.inode(row.path),
+      cloneGit: await this.inode(row.gitCommonDir),
+      sourceRoot: await this.inode(row.projectPath),
+      sourceGit: await this.inode(row.sourceCommonDir),
+    };
+  }
+  async captureWholeCopyIdentity(
+    input: TopicContextRef,
+  ): Promise<WholeCopyIdentity> {
+    const ref = topicContextRefSchema.parse(input);
+    const row = (await this.readStore.read()).records.find(
+      (r) => r.contextId === ref.contextId,
+    );
+    if (
+      !row ||
+      !sameIdentity(row, ref) ||
+      row.revision !== ref.revision ||
+      row.state !== "ready"
+    )
+      throw changed();
+    return this.wholeCopyIdentity(row);
+  }
   async prepareContextCleanup(
     ref: TopicContextRef,
     guards: { active: boolean; current: boolean },
-    baseline?: CloneRemovalBaseline,
+    baseline?: CloneRemovalBaseline | WholeCopyIdentity,
+    explicitWholeCopy = false,
   ): Promise<ContextDeletionPlan> {
+    if (explicitWholeCopy) {
+      this.deletionGuards({ ...guardsSchema.parse(guards), current: false });
+      if (!baseline || !("kind" in baseline) || baseline.kind !== "whole-copy")
+        throw changed();
+      const initial = (await this.readStore.read()).records.find(
+        (r) => r.contextId === ref.contextId,
+      );
+      if (!initial) throw changed();
+      return this.store.withRepositoryLock(initial.repositoryKey, async () => {
+        const fresh = await this.captureWholeCopyIdentity(ref);
+        if (
+          JSON.stringify(fresh) !== JSON.stringify(baseline) ||
+          (await this.primaryDeletionHead(initial)) !== null
+        )
+          throw changed();
+        const plan = contextDeletionSchema.parse({
+          schemaVersion: 4,
+          flow: "clone-after-topic",
+          token: randomUUID(),
+          owner: fresh.owner,
+          path: fresh.path,
+          projectPath: initial.projectPath,
+          sourceCommonDir: initial.sourceCommonDir,
+          sourceRoot: fresh.sourceRoot,
+          sourceGit: fresh.sourceGit,
+          cloneRoot: fresh.cloneRoot,
+          cloneGit: fresh.cloneGit,
+          primaryTopicAbsent: true,
+          primaryHead: null,
+          aheadCount: 0,
+          stage: "prepared",
+          expiresAt: Date.now() + 120000,
+          recordRevision: fresh.owner.revision,
+          deletionRevision: randomUUID(),
+          tombstoneRevision: randomUUID(),
+        });
+        await this.writeDeletion(plan, true);
+        return plan;
+      });
+    }
+    if (baseline && "kind" in baseline) throw changed();
     return this.prepareContextDeletion(ref, guards, true, undefined, {
       baseline,
     });
@@ -1709,6 +1940,26 @@ export class CloneManager {
       (row.state !== "ready" && row.state !== "deleting")
     )
       throw changed();
+    if (plan.schemaVersion === 4) {
+      const physical = await this.wholeCopyIdentity(row);
+      if (
+        JSON.stringify([
+          physical.cloneRoot,
+          physical.cloneGit,
+          physical.sourceRoot,
+          physical.sourceGit,
+        ]) !==
+          JSON.stringify([
+            plan.cloneRoot,
+            plan.cloneGit,
+            plan.sourceRoot,
+            plan.sourceGit,
+          ]) ||
+        (await this.primaryDeletionHead(row)) !== null
+      )
+        throw changed();
+      return;
+    }
     if (plan.primarySwitch)
       await verifyDeletionSwitch(
         (args) => this.git(args, row.projectPath),
@@ -1930,10 +2181,11 @@ export class CloneManager {
           await this.assertContextDeletionSource(plan, row);
           if (
             (await this.primaryDeletionHead(row)) !== null ||
-            (await this.primaryDeletionFingerprint(row)) !==
-              plan.primaryFingerprint ||
-            (await this.primaryHistoryFingerprint(row)) !==
-              plan.primaryHistoryFingerprint
+            (plan.schemaVersion !== 4 &&
+              ((await this.primaryDeletionFingerprint(row)) !==
+                plan.primaryFingerprint ||
+                (await this.primaryHistoryFingerprint(row)) !==
+                  plan.primaryHistoryFingerprint))
           )
             throw changed();
           plan.stage = "completed";

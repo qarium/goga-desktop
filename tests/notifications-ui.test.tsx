@@ -64,6 +64,9 @@ const snapshot = (records = [event()]) => ({
   hasMore: false,
   unreadCount: records.filter((e) => !e.readAt).length,
   byProject: { p: records.filter((e) => !e.readAt).length },
+  byRun: records.some((e) => !e.readAt)
+    ? { r: records.filter((e) => !e.readAt).length }
+    : {},
   unreadRunIds: records.some((e) => !e.readAt) ? ["r"] : [],
   systemEnabled: false,
 });

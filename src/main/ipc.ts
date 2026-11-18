@@ -1,4 +1,5 @@
 import { projectRemovalRequestSchema } from "../shared/project-registration";
+import { clearRunHistoryRequestSchema } from "../shared/run-history";
 import { projectCreationRequestSchema, projectCreationIdSchema } from "../shared/project-creation";
 import { specificationPathSchema } from "../shared/project-specifications";
 import { PIPELINE_DISPLAY_LIMITS } from "../shared/pipeline-display";
@@ -870,6 +871,9 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   });
   handle("close-run", (value) =>
     d.service.closeRun(id.parse(value), d.confirmClose),
+  );
+  handle("clear-run-history", (value) =>
+    d.service.clearRunHistory(clearRunHistoryRequestSchema.parse(value)),
   );
   handle("stop-run", (value) => d.stop(id.parse(value)));
   handle("list-settings", () => d.settings.listSettings());

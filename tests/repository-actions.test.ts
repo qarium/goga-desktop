@@ -144,6 +144,57 @@ describe("header repository actions", () => {
     }),
     gitIntegrationBudget(15000),
   );
+  it(
+    "updates an existing clone-only empty topic without inventing a task, commit or topic in the primary",
+    fixtureScope.run(async () => {
+      const f = await fixture();
+      const relative = ".goga/history/2026/alpha";
+      const folder = path.join(f.owner.path, relative);
+      const tip = await f.git(["rev-parse", "HEAD"], f.owner.path);
+      await expect(fs.lstat(folder)).rejects.toMatchObject({ code: "ENOENT" });
+      f.intercept(async (exe, args, cwd) => {
+        // Goga resolves the current branch as an exchange target only when
+        // its own year/slug directory exists in the working copy.
+        if (
+          exe === "FAKE-GOGA" &&
+          args.includes("update") &&
+          !(
+            await fs.lstat(path.join(cwd, relative)).catch(() => null)
+          )?.isDirectory()
+        )
+          throw Error(
+            "branch 'alpha' hosts no topic — it is no exchange addressee",
+          );
+      });
+      const result = await f.action("update-base");
+      expect(result.status, result.log).toBe("success");
+      expect(await fs.readdir(folder)).toEqual([]);
+      expect(await f.git(["status", "--porcelain"], f.owner.path)).toBe("");
+      expect(await f.git(["rev-parse", "HEAD"], f.owner.path)).toBe(tip);
+      await expect(fs.lstat(path.join(f.repo, relative))).rejects.toMatchObject(
+        { code: "ENOENT" },
+      );
+    }),
+    gitIntegrationBudget(15000),
+  );
+  it(
+    "never initializes a topic directory through a link in the clone",
+    fixtureScope.run(async () => {
+      const f = await fixture();
+      const outside = path.join(f.root, "outside");
+      await fs.mkdir(outside);
+      await fs.symlink(outside, path.join(f.owner.path, ".goga"));
+      const result = await f.action("update-base");
+      expect(result.status).toBe("error");
+      expect(
+        f.calls.some(
+          (call) => call.exe === "FAKE-GOGA" && call.args.includes("update"),
+        ),
+      ).toBe(false);
+      expect(await fs.readdir(outside)).toEqual([]);
+    }),
+    gitIntegrationBudget(15000),
+  );
   it.each([
     "base_ref: null",
     "base_ref: ''",

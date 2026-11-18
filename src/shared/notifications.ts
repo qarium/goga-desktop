@@ -82,6 +82,7 @@ export const NotificationSnapshotSchema = z
     hasMore: z.boolean(),
     unreadCount: sequence,
     byProject: z.record(identifier, sequence),
+    byRun: z.record(identifier, sequence),
     unreadRunIds: z.array(identifier),
     systemEnabled: z.boolean(),
     error: z.string().max(1024).optional(),

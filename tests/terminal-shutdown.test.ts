@@ -197,6 +197,25 @@ it("reports failed preparation and unknown inventory rather than zero remaining"
   expect(result.message).not.toContain("private-secret");
 });
 
+it("identifies the refusing component during preparation without exposing its raw error", async () => {
+  const coordinator = new ShutdownCoordinator({
+    participants: [
+      {
+        kind: "terminals",
+        prepare: async () => {
+          throw Error("SECRET=value");
+        },
+      },
+    ],
+    confirm: vi.fn(async () => true),
+    finalize: vi.fn(),
+  });
+  const result = await coordinator.close();
+  expect(result.inventoryComplete).toBe(false);
+  expect(result.message).toContain("Подготовка к выходу · Терминалы");
+  expect(result.message).not.toContain("SECRET");
+});
+
 it("shows the safe helper-replacement reason without authorizing shutdown", async () => {
   const f = fixture();
   f.terminals.prepare.mockRejectedValue(new TerminalInspectorError("changed"));

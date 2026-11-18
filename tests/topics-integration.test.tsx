@@ -209,6 +209,201 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
+
+const currentYear = () => String(new Date().getFullYear());
+function displayTable(projectId: string, year: string) {
+  const name = `row-${projectId}-${year}`;
+  const row = {
+    ...a,
+    topic: name,
+    branch: name,
+    current: false,
+    hosts: [name],
+  };
+  return {
+    ...board,
+    projectId,
+    year,
+    entries: [row],
+    records: [row],
+    currentTopic: null,
+  };
+}
+function installTableProjects() {
+  const q = {
+    id: "table-q",
+    name: "Other table project",
+    path: "/fixture/other-table",
+  };
+  api.listProjects.mockResolvedValue([p, q]);
+  api.listTopicContexts.mockResolvedValue([]);
+  api.readTopicCatalog = vi.fn(async (projectId: string, year: string) => ({
+    projectId,
+    year,
+    entries: [],
+    currentTopic: null,
+  }));
+  localStorage.setItem(
+    "goga.desktop.topicsBoard.v1." + q.id,
+    JSON.stringify({
+      schemaVersion: 1,
+      view: "table",
+      columns: [],
+      statusCategory: {},
+    }),
+  );
+  return q;
+}
+
+it("starts the display table when entering a project and reuses both the pending read and its result on navigation", async () => {
+  installTableProjects();
+  const year = currentYear();
+  let finish!: () => void;
+  api.readTopicTable = vi.fn(
+    () =>
+      new Promise((resolve) => {
+        finish = () => resolve(displayTable(p.id, year));
+      }),
+  );
+  render(<App />);
+  await openFirstProject();
+  await waitFor(() =>
+    expect(api.readTopicTable).toHaveBeenCalledExactlyOnceWith(p.id, year),
+  );
+  expect(screen.queryByRole("button", { name: "Обновить список" })).toBeNull();
+  const topics = () =>
+    fireEvent.click(screen.getByRole("button", { name: "Топики" }));
+  const overview = () =>
+    fireEvent.click(screen.getByRole("button", { name: "Обзор" }));
+  topics();
+  overview();
+  topics();
+  await act(async () => finish());
+  const row = { name: `Открыть топик row-${p.id}-${year}` };
+  expect(await screen.findByRole("button", row)).toBeTruthy();
+  overview();
+  topics();
+  expect(screen.getByRole("button", row)).toBeTruthy();
+  expect(api.readTopicTable).toHaveBeenCalledTimes(1);
+  const refresh = screen.getByRole("button", { name: "Обновить список" });
+  fireEvent.click(refresh);
+  fireEvent.click(refresh);
+  expect(screen.getByRole("button", row)).toBeTruthy();
+  expect(api.readTopicTable).toHaveBeenCalledTimes(2);
+  await act(async () => finish());
+  expect(api.readTopicTable).toHaveBeenCalledTimes(2);
+  expect(api.readTopicBoard).not.toHaveBeenCalled();
+});
+
+it("never displays a different year's rows while loading, or a late former project's table", async () => {
+  const q = installTableProjects();
+  const year = currentYear(),
+    previousYear = String(Number(year) - 1);
+  let finishOld!: () => void;
+  api.readTopicTable = vi.fn((projectId: string, requestedYear: string) =>
+    projectId === p.id && requestedYear === previousYear
+      ? new Promise((resolve) => {
+          finishOld = () => resolve(displayTable(projectId, requestedYear));
+        })
+      : Promise.resolve(displayTable(projectId, requestedYear)),
+  );
+  render(<App />);
+  await openFirstProject();
+  fireEvent.click(await screen.findByRole("button", { name: "Топики" }));
+  const pRow = { name: `Открыть топик row-${p.id}-${year}` };
+  expect(await screen.findByRole("button", pRow)).toBeTruthy();
+  fireEvent.change(screen.getByRole("textbox", { name: "Год" }), {
+    target: { value: previousYear },
+  });
+  await waitFor(() =>
+    expect(api.readTopicTable).toHaveBeenCalledWith(p.id, previousYear),
+  );
+  expect(screen.queryByRole("button", pRow)).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: q.name }));
+  await waitFor(() =>
+    expect(api.readTopicTable).toHaveBeenCalledWith(q.id, year),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Топики" }));
+  const qRow = { name: `Открыть топик row-${q.id}-${year}` };
+  expect(await screen.findByRole("button", qRow)).toBeTruthy();
+  await act(async () => finishOld());
+  expect(screen.getByRole("button", qRow)).toBeTruthy();
+  expect(
+    screen.queryByRole("button", {
+      name: `Открыть топик row-${p.id}-${previousYear}`,
+    }),
+  ).toBeNull();
+});
+
+it("polls from another section of the active project but not on Home, in a hidden window or for parked projects", async () => {
+  const q = installTableProjects();
+  const year = currentYear();
+  api.readTopicTable = vi.fn(async (id: string, year: string) =>
+    displayTable(id, year),
+  );
+  vi.useFakeTimers();
+  const visibility = vi
+    .spyOn(document, "visibilityState", "get")
+    .mockReturnValue("visible");
+  const hidden = vi.spyOn(document, "hidden", "get").mockReturnValue(false);
+  try {
+    render(<App />);
+    await act(async () => {});
+    const side = within(screen.getByRole("complementary"));
+    const tick = () =>
+      act(async () => {
+        await vi.advanceTimersByTimeAsync(60_001);
+      });
+    await tick();
+    expect(api.readTopicTable).not.toHaveBeenCalled();
+    fireEvent.click(side.getByRole("button", { name: p.name }));
+    await act(async () => {});
+    expect(api.readTopicTable).toHaveBeenCalledExactlyOnceWith(p.id, year);
+    await tick();
+    expect(api.readTopicTable.mock.calls).toEqual([
+      [p.id, year],
+      [p.id, year],
+    ]);
+    fireEvent.click(side.getByRole("button", { name: q.name }));
+    await act(async () => {});
+    await tick();
+    expect(api.readTopicTable.mock.calls.slice(2)).toEqual([
+      [q.id, year],
+      [q.id, year],
+    ]);
+    fireEvent.click(screen.getByRole("button", { name: "Топики" }));
+    const row = { name: `Открыть топик row-${q.id}-${year}` };
+    const before = screen.getByRole("button", row);
+    visibility.mockReturnValue("hidden");
+    hidden.mockReturnValue(true);
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    await tick();
+    expect(api.readTopicTable).toHaveBeenCalledTimes(4);
+    let finishResume!: () => void;
+    api.readTopicTable.mockImplementationOnce(() => new Promise(resolve => {
+      finishResume = () => resolve(displayTable(q.id, year));
+    }));
+    visibility.mockReturnValue("visible");
+    hidden.mockReturnValue(false);
+    await act(async () => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    expect(api.readTopicTable.mock.calls.slice(4)).toEqual([[q.id, year]]);
+    expect(screen.getByRole("button", row)).toBe(before);
+    await act(async () => finishResume());
+    fireEvent.click(side.getByRole("button", { name: "Главная" }));
+    await tick();
+    expect(api.readTopicTable).toHaveBeenCalledTimes(5);
+  } finally {
+    cleanup();
+    visibility.mockRestore();
+    hidden.mockRestore();
+    vi.useRealTimers();
+  }
+});
+
 it("navigates board/card back to launch without losing task or pipeline or running/checkout", async () => {
   render(<App />);
   await openFirstProject();
@@ -280,7 +475,7 @@ it("prepares requested local target and refuses to replace its dirty launch draf
   expect(api.checkoutBranch).not.toHaveBeenCalled();
   expect(api.launch).not.toHaveBeenCalled();
 });
-it("run tab retains its own topic and branch without duplicate context-bar labels", async () => {
+it("run tab shows its own topic without duplicating the branch or context-bar labels", async () => {
   const run = {
     id: "run",
     projectId: "p",
@@ -311,7 +506,7 @@ it("run tab retains its own topic and branch without duplicate context-bar label
     selected: true,
   });
   expect(tab.textContent).toContain(b.topic);
-  expect(tab.textContent).toContain(b.branch);
+  expect(tab.textContent).not.toContain(b.branch);
   const bar = screen
     .getByLabelText("Путь выбранного контекста")
     .closest(".run-context")!;

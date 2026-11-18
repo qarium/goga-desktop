@@ -145,6 +145,21 @@ function choose(topic: string) {
   fireEvent.click(screen.getByRole("row", { name: new RegExp(`^${topic} `) }));
 }
 
+it("renders the topic menu outside clipped terminal/header ancestors and keeps portal interactions open", async () => {
+  const user = userEvent.setup();
+  const { container } = mount();
+  open();
+  const popup = screen.getByRole("region", { name: "Выбор топика" });
+  expect(popup.closest(".topic-context-dom-root")?.parentElement).toBe(document.body);
+  expect(container.contains(popup)).toBe(false);
+  const search = screen.getByRole("combobox");
+  await user.click(search);
+  await user.type(search, "no-matching-topic");
+  expect(screen.getByRole("region", { name: "Выбор топика" })).toBe(popup);
+  await user.click(document.body);
+  expect(screen.queryByRole("region", { name: "Выбор топика" })).toBeNull();
+});
+
 describe("compact context picker", () => {
   it("places primary first, hides only selected owner and preserves sync beside Есть копия", () => {
     mount({ knownContexts: [alpha, beta] });
