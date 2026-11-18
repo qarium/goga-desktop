@@ -39,13 +39,15 @@ afterEach(async () => {
 });
 const workflow = (name = "Build") =>
   ({ kind: "workflow", name }) as ProjectDocumentTarget;
-async function setup() {
+async function setup(gitCheckout = false) {
   const dir = await mkdtemp("/private/tmp/goga-workflows-");
   dirs.push(dir);
   const root = path.join(dir, "project"),
     home = path.join(dir, "home"),
     dataDir = path.join(dir, "data");
   await mkdir(root);
+  if (gitCheckout) await mkdir(path.join(root, ".git"));
+
   await mkdir(home);
   await new DesktopStateStore(home, dataDir).addProject({
     id: "registered",
@@ -320,7 +322,7 @@ it("resolves registered IDs only and preserves config/tool YAML validation", asy
   }
 });
 it("discovers a saved workflow and launches current data without a preview admission token", async () => {
-  const { host, id, start } = await setup();
+  const { host, id, start } = await setup(true);
   const request = {
     projectId: id,
     pipeline: "build",
@@ -397,7 +399,7 @@ it("does not clobber an external file created immediately before the atomic crea
   ]);
 });
 it("launch waits for a pending save and then executes current data, not an invalidated preview", async () => {
-  const { host, id, file, runner, start } = await setup();
+  const { host, id, file, runner, start } = await setup(true);
   await file(".goga/workflows/Build.yml", "original");
   const request = {
     projectId: id,

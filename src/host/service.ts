@@ -5777,7 +5777,11 @@ export class HostService extends EventEmitter {
   }
 
   private async launchChoices(
-    p: Project, repository: boolean, pinned: WorktreeRecord | undefined, formYear?: string,
+    p: Project,
+    repository: boolean,
+    pinned: WorktreeRecord | undefined,
+    relatedReads: Promise<unknown>[],
+    formYear?: string,
   ): Promise<Pick<Discovery, "topics" | "branches" | "currentBranch"> & { byBranch?: FormRead["members"] }> {
     if (!repository || pinned)
       return { topics: [], branches: [], currentBranch: pinned?.branch ?? "" };
@@ -5790,10 +5794,10 @@ export class HostService extends EventEmitter {
       this.cmd(p, ["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"], true),
       this.cmd(p, ["branch", "--show-current"], true),
     ] as const;
-    const [topics, refs, head] = await Promise.all(reads).catch(async error => {
-      await Promise.allSettled(reads);
-      throw error;
-    });
+    // Let the outer discovery retain these sibling reads, while observing the
+    // first failure immediately instead of masking it behind a slower sibling.
+    relatedReads.push(...reads);
+    const [topics, refs, head] = await Promise.all(reads);
     return {
       topics,
       branches: refs.trim().split("\n").filter(b => b && !b.endsWith("/HEAD")),
@@ -5807,9 +5811,10 @@ export class HostService extends EventEmitter {
     const p = formProject ?? await this.project(id);
     const pinned = formProject && this.binding(formProject);
     const repository = await this.hasProjectGit(p);
+    const relatedReads: Promise<unknown>[] = [];
     const reads = [
       this.cmd(p, ["pipeline", "--list", "--info"]),
-      this.launchChoices(p, repository, pinned, year),
+      this.launchChoices(p, repository, pinned, relatedReads, year),
       this.config(p),
       this.names(path.join(this.root(p), ".goga/workflows")),
       this.names(path.join(this.home, ".goga/profiles")),
@@ -5825,6 +5830,9 @@ export class HostService extends EventEmitter {
     ] = await Promise.all(reads).catch(async (error) => {
       // Peers can still hold settings locks; retain ownership until all settle.
       await Promise.allSettled(reads);
+      // The choices read may have registered these peers after another top-level
+      // promise failed; drain only once all the top-level promises settled.
+      await Promise.allSettled(relatedReads);
       throw error;
     });
     const profiles = new Map<string, "home" | "project">(

@@ -28,7 +28,7 @@ const source = (name = "shared") => ({
   projectId: "p",
   target: target(name),
 });
-async function setup() {
+async function setup(gitCheckout = false) {
   const dir = await mkdtemp("/private/tmp/goga-project-profiles-");
   dirs.push(dir);
   const root = path.join(dir, "p"),
@@ -36,6 +36,7 @@ async function setup() {
     home = path.join(dir, "home"),
     dataDir = path.join(dir, "data");
   for (const p of [root, other, home, path.join(dir, "trash")]) await mkdir(p);
+  if (gitCheckout) await mkdir(path.join(root, ".git"));
   const state = new DesktopStateStore(home, dataDir);
   for (const [id, p] of [
     ["p", root],
@@ -264,7 +265,7 @@ it("blocks project profile deletion during an active run without stopping it", a
   }
 });
 it("profile save permits launch with current bytes; deletion reports the actual missing profile", async () => {
-  const f = await setup();
+  const f = await setup(true);
   await f.file(f.root, "shared.yml");
   await mkdir(path.join(f.root, ".goga/workflows"));
   await writeFile(path.join(f.root, ".goga/workflows/build.yml"), "{}\n");

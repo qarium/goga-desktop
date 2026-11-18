@@ -51,6 +51,7 @@ async function setup(
     home = path.join(dir, "home"),
     dataDir = path.join(dir, "data");
   await mkdir(root);
+  if (runner) await mkdir(path.join(root, ".git"));
   await mkdir(home);
   await mkdir(path.join(dir, "trash"));
   await new DesktopStateStore(home, dataDir).addProject({

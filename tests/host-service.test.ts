@@ -2032,6 +2032,10 @@ it.each(["discover", "buildContext"] as const)(
       settings.version,
     );
     let release!: () => void, entered!: () => void, failed!: () => void;
+    let boardEntered!: () => void;
+    const boardStarted = new Promise<void>((resolve) => {
+      boardEntered = resolve;
+    });
     const held = new Promise<void>((resolve) => {
       release = resolve;
     });
@@ -2055,9 +2059,14 @@ it.each(["discover", "buildContext"] as const)(
         await held;
         throw Error("later peer error");
       }
+      if (exe !== "git" && args.includes("board") && method === "discover") {
+        boardEntered();
+        await held;
+      }
       if (exe === "git" && args.includes("for-each-ref")) {
         failedCalls++;
         await started;
+        if (method === "discover") await boardStarted;
         failed();
         throw Error("first metadata failure fixture-drain-canary");
       }

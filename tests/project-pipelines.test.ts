@@ -39,13 +39,15 @@ afterEach(async () => {
 });
 const pipeline = (name = "Build") =>
   ({ kind: "pipeline", name }) as ProjectDocumentTarget;
-async function setup() {
+async function setup(gitCheckout = false) {
   const dir = await mkdtemp("/private/tmp/goga-pipelines-");
   dirs.push(dir);
   const root = path.join(dir, "project"),
     home = path.join(dir, "home"),
     dataDir = path.join(dir, "data");
   await mkdir(root);
+  if (gitCheckout) await mkdir(path.join(root, ".git"));
+
   await mkdir(home);
   await new DesktopStateStore(home, dataDir).addProject({
     id: "registered",
@@ -321,7 +323,7 @@ it("resolves registered IDs only and preserves config/tool YAML validation", asy
   }
 });
 it("discovers a saved pipeline and launches current data without a preview admission token", async () => {
-  const { host, id, start } = await setup();
+  const { host, id, start } = await setup(true);
   const request = {
     projectId: id,
     pipeline: "build",
@@ -400,7 +402,7 @@ it("does not clobber an external file created immediately before the atomic crea
   ]);
 });
 it("launch waits for a pending save and then executes current data, not an invalidated preview", async () => {
-  const { host, id, file, runner, start } = await setup();
+  const { host, id, file, runner, start } = await setup(true);
   await file(".goga/pipelines/Build.yml", "original");
   const request = {
     projectId: id,
@@ -666,7 +668,7 @@ it("never lists or edits home pipelines or another registered project's document
   );
 });
 it("external pipeline bytes do not stale the form and current command reaches the executor", async () => {
-  const { host, id, file, runner, start } = await setup();
+  const { host, id, file, runner, start } = await setup(true);
   const source = await file(
     ".goga/pipelines/build.yml",
     "name: Original\n---\n- phase: plan\n",
