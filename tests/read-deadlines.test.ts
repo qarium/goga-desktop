@@ -93,3 +93,52 @@ it.each([undefined, null, 0, ""])(
     ).rejects.toBe(error);
   },
 );
+it.each(["preview", "readTopicTask"] as const)(
+  "keeps the same two-read admission budget for %s with different display hints",
+  async (method) => {
+    const { readRequest } = await import("../src/renderer/read-request");
+    const a = deferred(),
+      b = deferred();
+    const read = vi
+      .fn()
+      .mockReturnValueOnce(a.promise)
+      .mockReturnValueOnce(b.promise)
+      .mockResolvedValue("admitted");
+    vi.stubGlobal("window", { goga: { readRequest: read } });
+    const send = (projectId: string, formReadId?: string) => {
+      const args = { projectId, ...(formReadId ? { formReadId } : {}) };
+      return method === "preview"
+        ? readRequest("preview", {
+            ...args,
+            pipeline: "verify",
+            profile: "",
+            workflow: "auto",
+            skips: [],
+          })
+        : readRequest("readTopicTask", {
+            ...args,
+            branch: "main",
+            topic: "main",
+          });
+    };
+    const firstId = crypto.randomUUID(),
+      secondId = crypto.randomUUID();
+    try {
+      const pending = [send("p", firstId), send("p", secondId)];
+      const received = read.mock.calls.map(
+        ([, , [request]]) => request.formReadId,
+      );
+      expect(received).toEqual([firstId, secondId]);
+      await expect(send("p")).rejects.toThrow(/предыдущих чтений/);
+      await expect(send("another")).resolves.toBe("admitted");
+      a.resolve("first");
+      b.resolve("second");
+      await Promise.all(pending);
+      await expect(send("p")).resolves.toBe("admitted");
+    } finally {
+      a.resolve("");
+      b.resolve("");
+      vi.unstubAllGlobals();
+    }
+  },
+);

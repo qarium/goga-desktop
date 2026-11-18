@@ -191,7 +191,7 @@ const api: DesktopAPI = {
   readProjectSettings: (id) => invoke("read-project-settings", id),
   saveProjectSettings: (id, value, version) =>
     invoke("save-project-settings", id, value, version),
-  discover: (id) => invoke("discover", id),
+  discover: (id, options) => options === undefined ? invoke("discover", id) : invoke("discover", id, options),
   checkoutBranch: (id) => invoke("checkout-branch", id),
   readTopicTask: (r) => invoke("read-topic-task", r),
   preview: (r) => invoke("preview", r),

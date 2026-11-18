@@ -40,7 +40,13 @@ export interface ProjectSettingsDocument {
 export interface ProjectSettingsView extends ProjectSettingsDocument {
   profiles: { name: string; source: "home" | "project" }[];
 }
+export interface LaunchDiscoveryOptions {
+  forLaunchForm: true;
+}
 export interface Discovery {
+  /** Optional hint for this opening's reads. Never a receipt for a launch or write. */
+  formReadId?: string;
+  repository?: "missing" | "ready";
   projectSettings?: { version: string; profile: string; executable: string };
   pipelines: Pipeline[];
   topics: Topic[];
@@ -61,6 +67,9 @@ export interface PipelineRequest {
   profile: string;
   profileMode?: "project" | "auto";
   skips: string[];
+}
+export interface PipelinePreviewRequest extends PipelineRequest {
+  formReadId?: string;
 }
 export interface Stage {
   id: string;
@@ -168,6 +177,7 @@ export interface SettingsMetadata {
 }
 
 export interface TopicTaskRequest {
+  formReadId?: string;
   context?: TopicContextRef;
   projectId: string;
   branch: string;

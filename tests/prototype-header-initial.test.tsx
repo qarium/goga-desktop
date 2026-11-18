@@ -338,6 +338,7 @@ it("explicit card intent prepares its exact clone before opening a full inert pi
   });
   expect(api.discover).toHaveBeenCalledWith(
     expect.objectContaining({ contextId: owner.contextId }),
+    { forLaunchForm: true },
   );
   assertNoExecution();
 });
@@ -412,7 +413,7 @@ it("primary header remains usable when clone APIs are unavailable", async () => 
   expect(
     screen.queryByRole("textbox", { name: "Что нужно сделать?" }),
   ).toBeNull();
-  expect(api.discover).toHaveBeenCalledWith("p");
+  expect(api.discover).toHaveBeenCalledWith("p", { forLaunchForm: true });
   expect(api.resolveTopicContext).not.toHaveBeenCalled();
   assertNoExecution();
 });
@@ -503,6 +504,7 @@ it("another owner's active build does not block ready-owner preparation", async 
   await screen.findByRole("textbox", { name: "Что нужно сделать?" });
   expect(api.discover).toHaveBeenCalledWith(
     expect.objectContaining({ contextId: owner.contextId }),
+    { forLaunchForm: true },
   );
   assertNoExecution();
 });
@@ -1798,6 +1800,7 @@ it("opens a verified selected clone form without repeating physical preparation 
       contextId: owner.contextId,
       revision: owner.revision,
     }),
+    { forLaunchForm: true },
   );
   expect(api.readTopicTask).toHaveBeenCalledWith(
     expect.objectContaining({

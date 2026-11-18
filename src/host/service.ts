@@ -36,6 +36,8 @@ import {
 import { withNativeGitCompletion } from "./git-native-completion";
 import { NativeGitSequence } from "./git-native-sequence";
 import { createGogaPathReader, gogaEnvironment } from "./goga-environment";
+import { readLaunchTopicIndex } from "./launch-topic-index";
+import { LaunchFormReads, hasLocalTopicMetadata, type FormRead } from "./launch-form-read";
 import {
   CommandSpawnError,
   CommandExitError,
@@ -178,8 +180,10 @@ import type {
 import { topicTargetSchema, topicYearSchema } from "../shared/topics-schema";
 import type {
   Discovery,
+  LaunchDiscoveryOptions,
   LaunchRequest,
   Pipeline,
+  PipelinePreviewRequest,
   PipelineRequest,
   Preview,
   Project,
@@ -327,6 +331,27 @@ const slug = (name: string) =>
     .replace(/[^\x00-\x7f]/g, "")
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
+interface SettingsSnapshot {
+  projectId: string;
+  scopedProject: Project;
+  document: ProjectSettingsDocument;
+  catalogEpoch: number;
+  binding?: WorktreeRecord;
+  formDisplay?: true;
+}
+function standardFormBoard(settings: ProjectSettings) {
+  return settings.executable === "goga" && !settings.env.some(row => row.key === "PATH");
+}
+const effectivePathArgs = [
+  "--path-format=absolute", "--show-toplevel", "--absolute-git-dir", "--git-common-dir",
+  "--git-path", "index", "--git-path", "objects",
+];
+function assertGitPaths(binding: WorktreeRecord, paths: string[]) {
+  const expected = [binding.path, binding.gitCommonDir, binding.gitCommonDir,
+    path.join(binding.gitCommonDir, "index"), path.join(binding.gitCommonDir, "objects")];
+  if (paths.length !== expected.length || paths.some((p, i) => path.resolve(binding.path, p) !== expected[i]))
+    throw Error("Эффективные пути Git не соответствуют контексту. Запуск в другой папке запрещён.");
+}
 export class HostService extends EventEmitter {
   private overviewSchemaIssued = new Map<string, number>();
   private overviewSchemas = new Map<
@@ -425,13 +450,8 @@ export class HostService extends EventEmitter {
   private runner: Runner;
   private projectCreation: ProjectCreationCoordinator;
   private state: DesktopStateStore;
-  private context = new AsyncLocalStorage<{
-    projectId: string;
-    scopedProject: Project;
-    document: ProjectSettingsDocument;
-    catalogEpoch: number;
-    binding?: WorktreeRecord;
-  }>();
+  private context = new AsyncLocalStorage<SettingsSnapshot>();
+  private readonly formReads = new LaunchFormReads();
   private settingsLocks = new Map<string, Promise<unknown>>();
   private documentSaveRevisions = new Map<string, number>();
   private runList: Run[] = [];
@@ -701,14 +721,13 @@ export class HostService extends EventEmitter {
     this.assertCatalog(epoch);
     await this.project(id);
     const document = await this.state.read(scopeProjectId(id));
-    return this.context.run(
-      {
-        projectId: id,
-        scopedProject,
-        document,
-        catalogEpoch: epoch,
-        ...(binding ? { binding } : {}),
-      },
+    return this.withSettingsSnapshot({
+      projectId: id, scopedProject, document, catalogEpoch: epoch, binding,
+    }, action, verifyAfter);
+  }
+  private withSettingsSnapshot<T>(snapshot: SettingsSnapshot, action: () => Promise<T>, verifyAfter = true) {
+    const { projectId: id, document, catalogEpoch: epoch } = snapshot;
+    return this.context.run(snapshot,
       async () => {
         try {
           this.assertCatalog(epoch);
@@ -1624,43 +1643,101 @@ export class HostService extends EventEmitter {
   private async assertEffectiveRoot(project: Project) {
     const binding = this.binding(project);
     if (!binding) return;
+    if (this.context.getStore()?.formDisplay) {
+      await this.formGitFacts(project);
+      return;
+    }
     await this.clones.store.assertOwned(binding);
-    // Validate the same normal HOME/system/global inputs used by real children.
-    // Admission with management-only Git config is not sufficient for execution.
-    const raw = (
-      await this.runner.command(
-        "git",
-        [
-          "rev-parse",
-          "--path-format=absolute",
-          "--show-toplevel",
-          "--absolute-git-dir",
-          "--git-common-dir",
-          "--git-path",
-          "index",
-          "--git-path",
-          "objects",
-        ],
-        binding.path,
-        { HOME: this.home },
-      )
-    ).stdout;
+    // Use the same normal HOME/system/global inputs as real children.
+    const raw = (await this.runner.command("git", ["rev-parse", ...effectivePathArgs], binding.path, { HOME: this.home })).stdout;
     await this.clones.store.assertOwned(binding);
-    const paths = raw.trim().split("\n");
-    const expected = [
-      binding.path,
-      binding.gitCommonDir,
-      binding.gitCommonDir,
-      path.join(binding.gitCommonDir, "index"),
-      path.join(binding.gitCommonDir, "objects"),
-    ];
-    if (
-      paths.length !== expected.length ||
-      paths.some((p, i) => path.resolve(binding.path, p) !== expected[i])
-    )
-      throw Error(
-        "Эффективные пути Git не соответствуют контексту. Запуск в другой папке запрещён.",
-      );
+    assertGitPaths(binding, raw.trim().split("\n"));
+  }
+  /** Each observation is live. For a clone it verifies physical ownership on
+   * both sides of the command and normal (not management-only) Git paths. */
+  private async formGitFacts(project: Project, requestedBranch?: string) {
+    this.check();
+    assertReadActive();
+    const binding = this.binding(project);
+    if (binding) await this.clones.assertNativeOperationOwnerRecord(binding);
+    const raw = (await this.runner.command("git", ["rev-parse",
+      ...(binding ? effectivePathArgs : []),
+      requestedBranch ? `refs/heads/${requestedBranch}^{commit}` : "HEAD",
+      "--symbolic-full-name", "HEAD",
+    ], this.root(project), { HOME: this.home })).stdout;
+    if (binding) await this.clones.assertNativeOperationOwnerRecord(binding);
+    const lines = raw.replace(/\n$/, "").split("\n");
+    const ref = lines.pop(), commit = lines.pop();
+    if (binding) assertGitPaths(binding, lines);
+    if ((!binding && lines.length) || !commit || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit) ||
+        !ref || (ref !== "HEAD" && !/^refs\/heads\/[^\x00-\x20\x7f]+$/.test(ref)))
+      throw Error("Не удалось определить ветку топика.");
+    const branch = ref === "HEAD" ? "" : ref.slice("refs/heads/".length);
+    if (binding && branch !== binding.branch)
+      throw Error("Ветка рабочей копии изменилась. Выберите контекст заново.");
+    assertReadActive();
+    return {commit, branch};
+  }
+  private async resolveFormOwner(ref: TopicContextRef, project: Project) {
+    const {record, operationBinding} = await this.clones.resolveGitRead(ref);
+    if (operationBinding || record.projectPath !== project.path ||
+        record.storageKind !== "clone" || record.ownership !== "managed" ||
+        record.state !== "ready" || record.preparation || record.reason || record.deletedAt)
+      throw Error("Клон недоступен или не принадлежит выбранному топику.");
+    return record;
+  }
+  /** Display-only admission. A receipt is an optimization hint, never authority:
+   * no registry refresh, fallback to the primary folder, or cross-request settings. */
+  private formSnapshot<T>(scope: ScopeRef, hint: FormRead | undefined, phase: "discover" | "task" | "preview",
+    action: (p: Project, reusable: FormRead | undefined, year: string) => Promise<T>) {
+    return this.context.exit(async () => {
+      this.check();
+      assertReadActive();
+      const ref = this.parseScope(scope), id = scopeProjectId(ref), epoch = this.catalogEpoch;
+      this.assertCatalog(epoch);
+      const {project: registered, document} = await this.state.readRegisteredProject(id);
+      const project = { ...registered };
+      await guardedProject(project.path);
+      const year = typeof ref === "string" ? String(new Date().getFullYear()) : ref.year;
+      const reusable = hint && hint.projectPath === project.path && hint.settingsVersion === document.version &&
+        hint.epoch === epoch && hint.year === year ? hint : undefined;
+      let binding: WorktreeRecord | undefined;
+      if (typeof ref !== "string") {
+        // Only an exact local task read can skip full re-admission. Before running
+        // a configurable --list/--info/board, re-check remotes, config and owner.
+        binding = phase === "task" && reusable?.binding && standardFormBoard(document.value)
+          ? reusable.binding : await this.resolveFormOwner(ref, project);
+        await this.clones.assertNativeOperationOwnerRecord(binding);
+        this.bindings.set(project, binding);
+      }
+      const result = await this.withSettingsSnapshot({
+        projectId: id, scopedProject: project, document, catalogEpoch: epoch, binding, formDisplay: true,
+      }, async () => {
+        // The task/preview starts with its own combined observation. Discovery also
+        // reads files in parallel, so verify the effective root before admitting it.
+        if (binding && phase === "discover") await this.formGitFacts(project);
+        const result = await action(project, reusable, year);
+        // Never share the terminal verification/cancellation signal between two IPC reads.
+        if (binding && typeof ref !== "string") {
+          if (phase !== "discover") {
+            const live = await this.resolveFormOwner(ref, project);
+            if (JSON.stringify(live) !== JSON.stringify(binding))
+              throw Error("Рабочая копия изменилась во время чтения.");
+          }
+          await this.formGitFacts(project);
+        }
+        const current = await this.state.readRegisteredProject(id);
+        if (current.document.version !== document.version)
+          throw Error("Настройки проекта изменились. Предпросмотр устарел; обновите данные перед запуском.");
+        if (current.project.path !== project.path || await realpath(project.path) !== project.path)
+          throw Error("Основная папка проекта изменилась. Обновите данные.");
+        this.check();
+        assertReadActive();
+        return result;
+      }, false); // The paired read above verifies both registration and settings.
+      assertReadActive();
+      return result;
+    });
   }
   private assertScopeWritable(p: Project) {
     const binding = this.binding(p);
@@ -1891,6 +1968,12 @@ export class HostService extends EventEmitter {
       .filter((t) => !t.remote && t.topic === slug(t.branch));
   }
   async readTopicTask(request: TopicTaskRequest): Promise<TopicTaskDocument> {
+    if (request?.formReadId) {
+      const scope = this.parseScope(request.context ?? request.projectId);
+      const hint = this.formReads.claim(request.formReadId, scope, "task");
+      return this.formSnapshot(scope, hint, "task", (_, reusable, year) =>
+        this.readTopicTaskWithSettings(request, false, undefined, {reusable, year}));
+    }
     return this.snapshot(request?.context ?? request?.projectId, () =>
       this.readTopicTaskWithSettings(request),
     );
@@ -1899,6 +1982,7 @@ export class HostService extends EventEmitter {
     request: TopicTaskRequest,
     forLaunch = false,
     launchYear?: string,
+    form?: { reusable?: FormRead; year: string },
   ): Promise<TopicTaskDocument> {
     if (
       !request ||
@@ -1938,14 +2022,42 @@ export class HostService extends EventEmitter {
       throw Error("Задача относится к другому контексту.");
     // Catalog rows describe presentation, not authority to launch in an already
     // resolved checkout. Launch reads only this task and validates the live owner.
-    const matches = forLaunch
-      ? undefined
-      : (await this.topics(p, taskOwner?.year)).filter(
-          (t) => t.branch === request.branch && t.topic === request.topic,
-        );
-    if (matches && matches.length > 1)
+    const facts = form ? await this.formGitFacts(p, request.branch) : undefined;
+    const settings = snapshot?.document.value;
+    // Explicit executables and custom PATH can supply a different board provider.
+    // Only the standard Goga contract equates current-topic membership with its directory.
+    const standard = settings && standardFormBoard(settings);
+    let count: number | undefined, localMetadata: boolean | undefined;
+    if (form?.reusable && standard && taskOwner) {
+      localMetadata = await hasLocalTopicMetadata(this.root(p), form.year, request.topic);
+      count = localMetadata ? 1 : 0;
+    } else if (form?.reusable && standard && facts?.branch === request.branch &&
+        form.reusable.currentBranch === request.branch && form.reusable.currentTopicCount > 0 &&
+        await hasLocalTopicMetadata(this.root(p), form.year, request.topic)) {
+      localMetadata = true;
+      count = form.reusable.currentTopicCount;
+    } else if (!forLaunch) {
+      const members = form?.reusable?.members;
+      const member = members?.get(request.branch);
+      // In a different checkout the topic directory is immutable at this
+      // commit. A matching slug alone is not proof: observe the live ref
+      // on both sides of the file read, and never use this on a write/launch.
+      if (!taskOwner && standard && facts && facts.branch !== request.branch &&
+          member?.topic === request.topic && member.oid === facts.commit) {
+        count = 1;
+      } else {
+        // Only retry the index if this form previously admitted it. Other
+        // providers and consumers retain their original catalog semantics.
+        const index = members && form && !taskOwner && standard
+          ? await this.primaryFormIndex(p, form.year)
+          : undefined;
+        const rows = index?.topics ?? await this.topics(p, taskOwner?.year ?? form?.year);
+        count = rows.filter(t => t.branch === request.branch && t.topic === request.topic).length;
+      }
+    }
+    if (count !== undefined && count > 1)
       throw new Error("Топик неоднозначен. Обновите каталог.");
-    if (matches?.length === 0 && !taskOwner)
+    if (count === 0 && !taskOwner)
       throw new Error(
         "Данные задачи выбранного топика не найдены. Обновите каталог.",
       );
@@ -1954,10 +2066,10 @@ export class HostService extends EventEmitter {
       request.context?.year ?? this.context.getStore()?.binding?.year ?? launchYear,
     );
     const git = (args: string[]) => this.cmd(p, args, true);
-    const current = (await git(["branch", "--show-current"])).trim();
+    const current = facts?.branch ?? (await git(["branch", "--show-current"])).trim();
     if (taskOwner && current !== taskOwner.branch)
       throw Error("Ветка рабочей копии изменилась. Выберите контекст заново.");
-    const commit = (
+    const commit = facts?.commit ?? (
       await git([
         "rev-parse",
         "--verify",
@@ -1976,18 +2088,21 @@ export class HostService extends EventEmitter {
             git,
             childEnvironment(process.env, { HOME: this.home }),
           );
+    const after = form ? await this.formGitFacts(p, request.branch) : undefined;
     if (
-      (await git(["branch", "--show-current"])).trim() !== current ||
+      (after?.branch ?? (await git(["branch", "--show-current"])).trim()) !== current ||
       // A working task is not pinned to an unrelated HEAD revision. Only
       // display/committed reads need their exact ref to remain coherent.
       ((!forLaunch || current !== request.branch) &&
-        (
+        (after?.commit ?? (
           await git([
             "rev-parse",
             "--verify",
             `refs/heads/${request.branch}^{commit}`,
           ])
-        ).trim() !== commit) ||
+        ).trim()) !== commit) ||
+      (localMetadata !== undefined && form &&
+        await hasLocalTopicMetadata(this.root(p), form.year, request.topic) !== localMetadata) ||
       taskPath(
         request.topic,
         request.context?.year ?? this.context.getStore()?.binding?.year ?? launchYear,
@@ -1998,11 +2113,12 @@ export class HostService extends EventEmitter {
       );
     if (forLaunch) await this.validateBinding(p);
     assertReadActive();
-    if (taskOwner) await this.resolveTopicContext(taskOwner);
+    // Form reads run a read-only physical owner check at the outer return boundary.
+    if (taskOwner && !form) await this.resolveTopicContext(taskOwner);
     assertReadActive();
     return taskDocument(this.root(p), request.branch, commit, relative, {
       ...value,
-      ...(matches?.length === 0
+      ...(count === 0
         ? { catalogState: "missing-local-metadata" as const }
         : {}),
     });
@@ -5604,29 +5720,96 @@ export class HostService extends EventEmitter {
     return this.launchBuild({ ...structuredClone(original), confirmClean });
   }
   async checkoutBranch(id: ScopeRef): Promise<string> {
-    return (
-      await this.cmd(await this.project(id), ["branch", "--show-current"], true)
-    ).trim();
+    return this.pipelineBranch(await this.project(id));
   }
-  async discover(id: ScopeRef): Promise<Discovery> {
-    return this.snapshot(id, () => this.discoverWithSettings(id));
+  /** Absence is supported only for original local folders. Corrupt metadata,
+   * permission errors and missing managed repositories must still fail closed. */
+  private async hasProjectGit(p: Project): Promise<boolean> {
+    if (this.binding(p)) return true;
+    try {
+      await lstat(path.join(this.root(p), ".git"));
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
   }
-  private async discoverWithSettings(id: ScopeRef): Promise<Discovery> {
-    const p = await this.project(id);
+  private async pipelineBranch(p: Project): Promise<string> {
+    return (await this.hasProjectGit(p))
+      ? (await this.cmd(p, ["branch", "--show-current"], true)).trim()
+      : "";
+  }
+  async discover(id: ScopeRef, options?: LaunchDiscoveryOptions): Promise<Discovery> {
+    if (options?.forLaunchForm === true) {
+      const scope = this.parseScope(id);
+      const {result, hint} = await this.formSnapshot(scope, undefined, "discover", async (project, _, year) => {
+        const snapshot = this.context.getStore()!;
+        const { discovery: result, members } = await this.discoverWithSettings(scope, project, year);
+        const hint: FormRead = {
+          members,
+          projectPath: project.path, binding: snapshot.binding, epoch: snapshot.catalogEpoch,
+          settingsVersion: snapshot.document.version, year, currentBranch: result.currentBranch,
+          currentTopicCount: result.topics.filter(t => t.branch === result.currentBranch && t.topic === slug(result.currentBranch)).length,
+        };
+        return {result, hint};
+      });
+      return {...result, formReadId: this.formReads.issue(scope, hint)};
+    }
+    return this.snapshot(id, async () => (await this.discoverWithSettings(id)).discovery);
+  }
+
+  private async primaryFormIndex(p: Project, year: string) {
+    const snapshot = this.context.getStore();
+    if (!snapshot?.formDisplay || this.binding(p) || !standardFormBoard(snapshot.document.value))
+      return;
+    this.check();
+    assertReadActive();
+    await this.assertSettings(p.id);
+    const { executable, env } = await this.invocation(p);
+    const index = await readLaunchTopicIndex({
+      cwd: this.root(p), year, executable, env, runner: this.runner,
+    });
+    // An unsupported installation may fall back; an aborted read or failure
+    // running Goga's hooks must not launch a second provider.
+    this.check();
+    assertReadActive();
+    return index;
+  }
+
+  private async launchChoices(
+    p: Project, repository: boolean, pinned: WorktreeRecord | undefined, formYear?: string,
+  ): Promise<Pick<Discovery, "topics" | "branches" | "currentBranch"> & { byBranch?: FormRead["members"] }> {
+    if (!repository || pinned)
+      return { topics: [], branches: [], currentBranch: pinned?.branch ?? "" };
+    if (formYear) {
+      const index = await this.primaryFormIndex(p, formYear);
+      if (index) return index;
+    }
+    const reads = [
+      this.topics(p, formYear),
+      this.cmd(p, ["for-each-ref", "--format=%(refname:short)", "refs/heads", "refs/remotes"], true),
+      this.cmd(p, ["branch", "--show-current"], true),
+    ] as const;
+    const [topics, refs, head] = await Promise.all(reads).catch(async error => {
+      await Promise.allSettled(reads);
+      throw error;
+    });
+    return {
+      topics,
+      branches: refs.trim().split("\n").filter(b => b && !b.endsWith("/HEAD")),
+      currentBranch: head.trim(),
+    };
+  }
+
+  private async discoverWithSettings(id: ScopeRef, formProject?: Project, year?: string): Promise<{
+    discovery: Discovery; members?: FormRead["members"];
+  }> {
+    const p = formProject ?? await this.project(id);
+    const pinned = formProject && this.binding(formProject);
+    const repository = await this.hasProjectGit(p);
     const reads = [
       this.cmd(p, ["pipeline", "--list", "--info"]),
-      this.topics(p),
-      this.cmd(
-        p,
-        [
-          "for-each-ref",
-          "--format=%(refname:short)",
-          "refs/heads",
-          "refs/remotes",
-        ],
-        true,
-      ),
-      this.cmd(p, ["branch", "--show-current"], true),
+      this.launchChoices(p, repository, pinned, year),
       this.config(p),
       this.names(path.join(this.root(p), ".goga/workflows")),
       this.names(path.join(this.home, ".goga/profiles")),
@@ -5634,9 +5817,7 @@ export class HostService extends EventEmitter {
     ] as const;
     const [
       catalog,
-      topics,
-      branches,
-      current,
+      choices,
       config,
       workflows,
       homeProfiles,
@@ -5650,19 +5831,17 @@ export class HostService extends EventEmitter {
       homeProfiles.map((n) => [n, "home"]),
     );
     for (const n of projectProfiles) profiles.set(n, "project");
-    return {
+    const discovery: Discovery = {
+      repository: repository ? "ready" : "missing",
       projectSettings: {
         version: this.context.getStore()!.document.version,
         profile: (await this.invocation(p)).value.profile,
         executable: (await this.invocation(p)).executable,
       },
       pipelines: parseCatalog(catalog),
-      topics,
-      branches: branches
-        .trim()
-        .split("\n")
-        .filter((b) => b && !b.endsWith("/HEAD")),
-      currentBranch: current.trim(),
+      topics: choices.topics,
+      branches: choices.branches,
+      currentBranch: choices.currentBranch,
       baseRef:
         typeof config?.topics?.base_ref === "string"
           ? config.topics.base_ref
@@ -5672,6 +5851,7 @@ export class HostService extends EventEmitter {
         .sort(([a], [b]) => a.localeCompare(b))
         .map(([name, source]) => ({ name, source })),
     };
+    return { discovery, members: choices.byBranch };
   }
   private normalize(r: PipelineRequest): PipelineRequest {
     if (!r || typeof r.projectId !== "string")
@@ -5696,10 +5876,15 @@ export class HostService extends EventEmitter {
       skips: [...new Set(r.skips)],
     };
   }
-  private async fingerprint(p: Project) {
+  private async fingerprint(p: Project, formDisplay = false) {
+    const repository = await this.hasProjectGit(p);
+    const facts = repository && formDisplay ? await this.formGitFacts(p) : undefined;
     const chunks: string[] = [
-      await this.cmd(p, ["rev-parse", "HEAD"], true),
-      await this.cmd(p, ["branch", "--show-current"], true),
+      facts ? facts.commit + "\n" : repository
+        ? await this.cmd(p, ["rev-parse", "HEAD"], true)
+        : "local-folder:no-git",
+      facts ? (facts.branch ? facts.branch + "\n" : "") :
+        repository ? await this.cmd(p, ["branch", "--show-current"], true) : "",
       process.env.GOGA_PROFILE ?? "",
       (await this.state.read(p.id)).version,
       JSON.stringify((await this.invocation(p)).value),
@@ -5783,21 +5968,27 @@ export class HostService extends EventEmitter {
     );
     return { stages: parseCard(output), workflow, profile };
   }
-  async preview(request: PipelineRequest): Promise<Preview> {
+  async preview(request: PipelinePreviewRequest): Promise<Preview> {
+    if (request?.formReadId) {
+      const scope = this.parseScope(request.context ?? request.projectId);
+      const hint = this.formReads.claim(request.formReadId, scope, "preview");
+      return this.formSnapshot(scope, hint, "preview", project => this.previewWithSettings(request, project));
+    }
     return this.snapshot(request?.context ?? request?.projectId, () =>
       this.previewWithSettings(request),
     );
   }
   private async previewWithSettings(
     request: PipelineRequest,
+    formProject?: Project,
   ): Promise<Preview> {
     const r = this.normalize(request),
-      p = await this.project(r.projectId);
+      p = formProject ?? await this.project(r.projectId);
     const epoch = this.context.getStore()!.catalogEpoch;
     this.assertCatalog(epoch);
-    const before = await this.fingerprint(p);
+    const before = await this.fingerprint(p, !!formProject);
     const composed = await this.compose(p, r);
-    if (before !== (await this.fingerprint(p)))
+    if (before !== (await this.fingerprint(p, !!formProject)))
       throw new Error(
         "Определения изменились во время предпросмотра. Обновите его.",
       );
@@ -6002,6 +6193,11 @@ export class HostService extends EventEmitter {
     ).trim();
     return realpath(path.resolve(this.root(p), dir));
   }
+  private async pipelineLaunchKey(p: Project) {
+    return (await this.hasProjectGit(p))
+      ? this.key(p)
+      : "local-folder:" + (await realpath(this.root(p)));
+  }
   async launch(request: LaunchRequest): Promise<Run> {
     this.assertLaunchAllowed();
     if (request?.update !== undefined && typeof request.update !== "boolean")
@@ -6095,7 +6291,7 @@ export class HostService extends EventEmitter {
     const r = this.normalize(request),
       p = await this.project(r.projectId);
     await guardedProject(this.root(p));
-    const key = await this.key(p);
+    const key = await this.pipelineLaunchKey(p);
     const previous = this.locks.get(key) ?? Promise.resolve();
     const next = previous
       .catch(() => {})
@@ -6182,9 +6378,12 @@ export class HostService extends EventEmitter {
     const selection = request.topic;
     if (!selection || !["none", "existing", "new"].includes(selection.mode))
       throw new Error("Выберите топик");
-    const current = (
-      await this.cmd(p, ["branch", "--show-current"], true)
-    ).trim();
+    const repository = await this.hasProjectGit(p);
+    if (!repository && selection.mode !== "none")
+      throw Error(
+        "Топики доступны только в Git-репозитории. Выберите запуск «Без топика».",
+      );
+    const current = await this.pipelineBranch(p);
     if (
       this.binding(p) &&
       (request.topic.mode !== "existing" ||
@@ -6194,8 +6393,8 @@ export class HostService extends EventEmitter {
       throw Error("Выберите топик, которому принадлежит клон.");
     const assertBranch = async (expected: string) => {
       if (
-        (await this.cmd(p, ["branch", "--show-current"], true)).trim() !==
-        expected
+        (await this.hasProjectGit(p)) !== repository ||
+        (await this.pipelineBranch(p)) !== expected
       )
         throw new Error(
           "Текущая ветка изменилась вне приложения. Обновите каталог и подтвердите запуск повторно.",
@@ -6390,11 +6589,7 @@ export class HostService extends EventEmitter {
         }
       }
       this.check();
-      const actual = (
-        await this.cmd(p, ["branch", "--show-current"], true)
-      ).trim();
-      if (actual !== branch)
-        throw new Error("Текущая ветка изменилась вне приложения");
+      await assertBranch(branch);
       // Preview is presentation only. Compose the chosen command against the
       // current checkout rather than comparing it to a cached admission token.
       const composed = await this.compose(p, r);

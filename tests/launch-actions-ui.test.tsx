@@ -58,6 +58,107 @@ beforeEach(() => {
   window.goga = api;
 });
 afterEach(cleanup);
+it("launches a plain folder without exposing unavailable Git topic modes or a fake HEAD branch", async () => {
+  api.discover.mockResolvedValue({
+    ...data,
+    repository: "missing",
+    topics: [],
+    branches: [],
+    currentBranch: "",
+  });
+  api.checkoutBranch.mockResolvedValue("");
+  await setup();
+  expect(screen.getByRole("radio", { name: "Без топика" })).toHaveProperty(
+    "checked",
+    true,
+  );
+  for (const name of ["Существующий", "Создать новый"])
+    expect(screen.getByRole("radio", { name })).toHaveProperty(
+      "disabled",
+      true,
+    );
+  expect(screen.getByText(/Git не инициализирован/)).toBeTruthy();
+  expect(screen.queryByText(/HEAD без ветки|текущая ветка/)).toBeNull();
+  expect(api.readTopicTask).not.toHaveBeenCalled();
+  fireEvent.focus(window);
+  await waitFor(() => expect(api.checkoutBranch).toHaveBeenCalled());
+  expect(screen.queryByRole("alert")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+  await waitFor(() => expect(api.launch).toHaveBeenCalledOnce());
+  expect(api.launch.mock.calls[0][0]).toMatchObject({
+    topic: { mode: "none" },
+    task: "",
+    expectedBranch: "",
+    confirmBranchSwitch: false,
+  });
+});
+
+it.each(["existing", "new"] as const)(
+  "uses no-topic for a plain folder without deleting the remembered %s topic draft",
+  async (mode) => {
+    api.discover.mockResolvedValue({
+      ...data,
+      repository: "missing",
+      topics: [],
+      branches: [],
+      currentBranch: "",
+    });
+    api.checkoutBranch.mockResolvedValue("");
+    const store = createDraftStore();
+    const remembered = {
+      mode,
+      branch: "other",
+      topic: "other",
+      name: "next",
+      baseRef: "main",
+      profile: "",
+    };
+    store.forms.set(project.id, remembered);
+    const task = {
+      text: "keep topic text",
+      status: "ready" as const,
+      error: "",
+    };
+    const taskKey = JSON.stringify([
+      project.id,
+      mode,
+      mode === "new" ? "draft" : "other",
+      mode === "new" ? "" : "other",
+    ]);
+    store.tasks.set(taskKey, task);
+    render(
+      <LaunchForm
+        project={project}
+        draftStore={store}
+        onCancel={() => {}}
+        onLaunched={() => {}}
+      />,
+    );
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Запустить" })).toHaveProperty(
+        "disabled",
+        false,
+      ),
+    );
+    expect(screen.getByRole("radio", { name: "Без топика" })).toHaveProperty(
+      "checked",
+      true,
+    );
+    expect(store.forms.get(project.id)).toBe(remembered);
+    expect(api.readTopicTask).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
+    await waitFor(() => expect(api.launch).toHaveBeenCalledOnce());
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Запустить" })).toHaveProperty(
+        "disabled",
+        false,
+      ),
+    );
+    expect(api.launch.mock.calls[0][0].topic).toEqual({ mode: "none" });
+    expect(store.forms.get(project.id)).toBe(remembered);
+    expect(store.tasks.get(taskKey)).toBe(task);
+  },
+);
 async function setup(
   onLaunched: (run: any, stale?: boolean) => void = () => {},
 ) {
@@ -79,6 +180,27 @@ async function setup(
   );
   return { store, view };
 }
+it("shares a primary catalog hint only with its two initial display reads", async () => {
+  const formReadId = "00000000-0000-4000-8000-000000000001";
+  api.discover.mockResolvedValue({ ...data, formReadId });
+  await setup();
+  expect(api.preview.mock.calls[0][0]).toMatchObject({ formReadId });
+  expect(api.readTopicTask).toHaveBeenCalledExactlyOnceWith({
+    projectId: project.id,
+    branch: "main",
+    topic: "main",
+    formReadId,
+  });
+  expect(api.discover).toHaveBeenCalledExactlyOnceWith(project.id, {
+    forLaunchForm: true,
+  });
+  fireEvent.click(screen.getByRole("checkbox", { name: /One/ }));
+  await waitFor(() => expect(api.preview).toHaveBeenCalledTimes(2));
+  expect(api.preview.mock.calls[1][0]).not.toHaveProperty("formReadId");
+  await chooseOther();
+  await waitFor(() => expect(api.readTopicTask).toHaveBeenCalledTimes(2));
+  expect(api.readTopicTask.mock.calls[1][0]).not.toHaveProperty("formReadId");
+});
 const chooseOther = async () => {
   fireEvent.click(screen.getByRole("radio", { name: "Существующий" }));
   fireEvent.click(

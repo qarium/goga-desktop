@@ -31,6 +31,16 @@ const a = {
   revision: "00000000-0000-4000-8000-000000000001",
 };
 const b = { ...a, topic: "b", branch: "b", contextId: "ctx-" + "b".repeat(64) };
+const catalogFor = (scope: typeof a) => ({
+  pipelines: [
+    { id: "verify", name: "Verify", description: "From " + scope.topic },
+  ],
+  topics: [],
+  currentBranch: scope.branch,
+  workflows: [],
+  profiles: [],
+  branches: ["main"],
+});
 let api: any;
 beforeEach(() => {
   HTMLDialogElement.prototype.showModal = function () {
@@ -61,16 +71,7 @@ beforeEach(() => {
       projectId: "p",
       ...request,
     })),
-    discover: vi.fn(async (scope: any) => ({
-      pipelines: [
-        { id: "verify", name: "Verify", description: "From " + scope.topic },
-      ],
-      topics: [],
-      currentBranch: scope.branch,
-      workflows: [],
-      profiles: [],
-      branches: ["main"],
-    })),
+    discover: vi.fn(async (scope: typeof a) => catalogFor(scope)),
     preview: vi.fn(async () => ({
       token: "preview",
       stages: [{ id: "one", title: "One" }],
@@ -162,6 +163,8 @@ it("preserves independent build drafts for two clones of the same project", asyn
   expect(drafts.has(draftKey(a, "build"))).toBe(true);
 });
 it("uses contextual catalog/task/preview/branch without offering another topic selection", async () => {
+  const formReadId = "00000000-0000-4000-8000-000000000002";
+  api.discover.mockResolvedValue({ ...catalogFor(a), formReadId });
   render(
     <LaunchForm
       project={project}
@@ -176,7 +179,23 @@ it("uses contextual catalog/task/preview/branch without offering another topic s
   await waitFor(() =>
     expect((task as HTMLTextAreaElement).value).toBe("Task a"),
   );
-  expect(api.discover).toHaveBeenCalledWith(a);
+  expect(api.readTopicTask).toHaveBeenCalledExactlyOnceWith({
+    projectId: project.id,
+    context: a,
+    topic: a.topic,
+    branch: a.branch,
+    formReadId,
+  });
+  expect(api.preview.mock.calls[0][0]).toMatchObject({
+    context: a,
+    formReadId,
+  });
+  expect(api.discover).toHaveBeenCalledExactlyOnceWith(a, {
+    forLaunchForm: true,
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Перечитать задачу" }));
+  await waitFor(() => expect(api.readTopicTask).toHaveBeenCalledTimes(2));
+  expect(api.readTopicTask.mock.calls[1][0]).not.toHaveProperty("formReadId");
   expect(
     api.preview.mock.calls.every(
       ([request]: any[]) => request.context?.contextId === a.contextId,
@@ -186,10 +205,47 @@ it("uses contextual catalog/task/preview/branch without offering another topic s
   expect(screen.queryByText("Создать новый")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Запустить" }));
   await waitFor(() => expect(api.launch).toHaveBeenCalled());
+  expect(api.launch.mock.calls[0][0]).not.toHaveProperty("formReadId");
   expect(api.checkoutBranch).toHaveBeenCalledWith(a);
   expect(api.launch.mock.calls[0][0]).toMatchObject({
     context: a,
     topic: { mode: "existing", branch: "a", topic: "a" },
+  });
+});
+it("waits for the next owner's catalog rather than sending a previous form hint across navigation", async () => {
+  const hintA = "00000000-0000-4000-8000-00000000000a";
+  const hintB = "00000000-0000-4000-8000-00000000000b";
+  let finishB!: () => void;
+  api.discover
+    .mockResolvedValueOnce({ ...catalogFor(a), formReadId: hintA })
+    .mockReturnValueOnce(
+      new Promise((resolve) => {
+        finishB = () => resolve({ ...catalogFor(b), formReadId: hintB });
+      }),
+    );
+  const form = (owner: typeof a) => (
+    <LaunchForm
+      project={project}
+      owner={owner}
+      onCancel={() => {}}
+      onLaunched={() => {}}
+    />
+  );
+  const view = render(form(a));
+  await waitFor(() => expect(api.readTopicTask).toHaveBeenCalledTimes(1));
+  view.rerender(form(b));
+  await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
+  expect(api.readTopicTask).toHaveBeenCalledTimes(1);
+  expect(api.preview).toHaveBeenCalledTimes(1);
+  finishB();
+  await waitFor(() => expect(api.readTopicTask).toHaveBeenCalledTimes(2));
+  expect(api.readTopicTask.mock.calls[1][0]).toMatchObject({
+    context: b,
+    formReadId: hintB,
+  });
+  expect(api.preview.mock.calls[1][0]).toMatchObject({
+    context: b,
+    formReadId: hintB,
   });
 });
 it("keeps contextual document drafts and saves separate from primary and another clone", async () => {

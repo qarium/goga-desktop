@@ -273,6 +273,7 @@ it("opens a full clone-bound preparation without intermediate blocker or a secon
   });
   expect(api.discover).toHaveBeenCalledWith(
     expect.objectContaining({ contextId: contextB.contextId }),
+    { forLaunchForm: true },
   );
   expect(screen.queryByText("Существующий")).toBeNull();
   fireEvent.change(task, { target: { value: "Owned draft" } });

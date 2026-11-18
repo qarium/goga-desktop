@@ -77,3 +77,71 @@ it("passes only narrow context refs to owner-scoped readers and lifecycle writes
     }),
   ).toThrow();
 });
+
+it("accepts a form read id only in read requests; never as launch authority", async () => {
+  const handlers = new Map<string, Function>();
+  const service = {
+    discover: vi.fn(),
+    preview: vi.fn(),
+    readTopicTask: vi.fn(),
+    launch: vi.fn(),
+  };
+  registerIPC(
+    { handle: (k: string, f: Function) => handlers.set(k, f) } as any,
+    {
+      service,
+      window: { webContents: { id: 1 } },
+      shellURL: "file:///app/index.html",
+    } as any,
+  );
+  const event = {
+    sender: { id: 1 },
+    senderFrame: { url: "file:///app/index.html", parent: null },
+  };
+  const call = (name: string, ...args: unknown[]) =>
+    handlers.get("goga:" + name)!(event, ...args);
+  const options = { forLaunchForm: true },
+    formReadId = "a12a2568-62eb-406a-8043-be0a1de90c01";
+  await call("read-request", "form-1", "discover", [ref, options]);
+  expect(service.discover).toHaveBeenCalledWith(ref, options);
+  expect(() =>
+    call("discover", ref, { forLaunchForm: true, path: "/tmp/other" }),
+  ).toThrow();
+  expect(() => call("discover", ref, { forLaunchForm: "true" })).toThrow();
+  const task = {
+    projectId: "p",
+    context: ref,
+    topic: "feature",
+    branch: "feature",
+    formReadId,
+  };
+  const preview = {
+    projectId: "p",
+    context: ref,
+    pipeline: "x",
+    workflow: "auto",
+    profile: "",
+    skips: [],
+    formReadId,
+  };
+  await call("read-topic-task", task);
+  await call("preview", preview);
+  expect(service.readTopicTask).toHaveBeenCalledWith(task);
+  expect(service.preview).toHaveBeenCalledWith(preview);
+  expect(() => call("preview", { ...preview, formReadId: 7 })).toThrow();
+  expect(() =>
+    call("read-topic-task", { ...task, formReadId: "x".repeat(1000) }),
+  ).toThrow();
+  expect(() =>
+    call("launch", {
+      ...preview,
+      expectedBranch: "feature",
+      confirmBranchSwitch: false,
+      clean: false,
+      topic: { mode: "existing", branch: "feature", topic: "feature" },
+      task: "",
+      confirmEmptyTask: false,
+    }),
+  ).toThrow();
+  expect(service.launch).not.toHaveBeenCalled();
+});

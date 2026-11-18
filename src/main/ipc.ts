@@ -165,8 +165,12 @@ const pipeline = z
     skips: z.array(id).max(1000),
   })
   .strict();
+const launchFormOptions = z.object({forLaunchForm: z.literal(true)}).strict();
+const formReadId = z.string().uuid().optional();
+const displayPreview = pipeline.extend({formReadId});
 const taskReader = z
   .object({
+    formReadId,
     projectId: id,
     context: topicContextRefSchema.optional(),
     branch: id.refine(
@@ -840,13 +844,16 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
       id.parse(version),
     );
   });
-  handle("discover", (value) =>
-    d.service.discover(scopeRefSchema.parse(value)),
-  );
+  handle("discover", (value, options) => {
+    const scope = scopeRefSchema.parse(value);
+    return options === undefined
+      ? d.service.discover(scope)
+      : d.service.discover(scope, launchFormOptions.parse(options));
+  });
   handle("read-topic-task", (value) =>
     d.service.readTopicTask(taskReader.parse(value)),
   );
-  handle("preview", (value) => d.service.preview(pipeline.parse(value)));
+  handle("preview", (value) => d.service.preview(displayPreview.parse(value)));
   handle("launch", (value) => d.service.launch(launch.parse(value)));
   handle("runs", () => d.service.runCatalog());
   handle("run-journal", (value, after) =>

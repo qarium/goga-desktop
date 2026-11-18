@@ -135,6 +135,22 @@ async function setup(own = false) {
   const project = await service.addProject(repo);
   return { service, project, repo, home, calls, node, runner };
 }
+it("loads pipeline discovery in a local folder without invoking Git-only metadata", async () => {
+  const { service, project, repo, calls } = await setup();
+  await rename(path.join(repo, ".git"), repo + "-saved-git");
+  calls.splice(0);
+  const data = await service.discover(project.id);
+  expect(data).toMatchObject({
+    repository: "missing",
+    currentBranch: "",
+    branches: [],
+    topics: [],
+  });
+  expect(data.pipelines).toHaveLength(1);
+  const optIn = await service.discover(project.id, {forLaunchForm: true});
+  expect(optIn).toMatchObject({repository: "missing", topics: [], branches: [], pipelines: data.pipelines});
+  expect(calls.some(args => args[0] === "topics")).toBe(false);
+});
 it("registers canonical git root, persists projects and resolves profile precedence", async () => {
   const { service, project, repo } = await setup();
   await mkdir(path.join(repo, "nested"));
@@ -3448,4 +3464,670 @@ it("retains supplied catalog labels only for run presentation, never command sel
   });
   expect(start.mock.calls[0][1]).toEqual(["pipeline", "build"]);
   await service.stop(run.id);
+});
+
+it("cold launch form shares exactly one primary board but reads the current file; a lost hint cannot expire the form", async () => {
+  const { service, project, repo, calls } = await setup(true);
+  const dir = path.join(
+    repo,
+    ".goga/history",
+    String(new Date().getFullYear()),
+    "main",
+  );
+  await mkdir(dir, { recursive: true });
+  const file = path.join(dir, "todo.md");
+  await writeFile(file, "one");
+  calls.length = 0;
+  const catalog = await service.discover(project.id, { forLaunchForm: true });
+  expect(catalog.formReadId).toEqual(expect.any(String));
+  expect(catalog.topics.map((t) => t.topic)).toContain("main");
+  const target = { projectId: project.id, topic: "main", branch: "main" };
+  await writeFile(file, "two");
+  const [, task] = await Promise.all([
+    service.preview({
+      projectId: project.id,
+      pipeline: "build",
+      workflow: "none",
+      profile: "",
+      skips: [],
+      formReadId: catalog.formReadId,
+    }),
+    service.readTopicTask({ ...target, formReadId: catalog.formReadId }),
+  ]);
+  expect(task.text).toBe("two");
+  expect(calls.filter((argv) => argv.includes("board"))).toHaveLength(1);
+  await writeFile(file, "three");
+  const lost = "00000000-0000-4000-8000-000000000003";
+  expect(
+    (await service.readTopicTask({ ...target, formReadId: lost })).text,
+  ).toBe("three");
+  expect((await service.discover(project.id)).formReadId).toBeUndefined();
+});
+
+it(
+  "cold launch form reads only its pinned topic, while ordinary readers and other owners stay independent",
+  async () => {
+    const { service, project, repo, calls } = await setup(true);
+    const year = String(new Date().getFullYear());
+    const owner = await service.createTopicContext({
+      projectId: project.id,
+      year,
+      branch: "case/topic",
+      baseRef: "HEAD",
+    });
+    const { worktreeContextRef } = await import("../src/shared/worktrees");
+    const ref = worktreeContextRef(owner),
+      topic = ref.topic;
+    const relative = path.join(".goga/history", year, topic);
+    await mkdir(path.join(repo, relative), { recursive: true });
+    await writeFile(path.join(repo, relative, "todo.md"), "original only");
+    const file = path.join(owner.path, relative, "todo.md");
+    await mkdir(path.dirname(file), { recursive: true });
+    await writeFile(file, "pinned only");
+    calls.length = 0;
+    const catalog = await service.discover(ref, { forLaunchForm: true });
+    expect(catalog.formReadId).toEqual(expect.any(String));
+    expect(catalog.branches).toEqual([]);
+    const req = {
+      projectId: project.id,
+      context: ref,
+      topic,
+      branch: ref.branch,
+      formReadId: catalog.formReadId,
+    };
+    const [task, stages] = await Promise.all([
+      service.readTopicTask(req),
+      service.preview({
+        projectId: project.id,
+        context: ref,
+        pipeline: "build",
+        workflow: "none",
+        profile: "",
+        skips: [],
+        formReadId: catalog.formReadId,
+      }),
+    ]);
+    expect(task.text).toBe("pinned only");
+    expect(task.catalogState).toBeUndefined();
+    expect(stages.stages.length).toBeGreaterThan(0);
+    expect(calls.filter((argv) => argv.includes("board"))).toHaveLength(0);
+    // A managed copy may legitimately have a directory with no todo, or no directory at all.
+    await rm(file);
+    const emptyDirectory = await service.discover(ref, { forLaunchForm: true });
+    expect(
+      await service.readTopicTask({
+        ...req,
+        formReadId: emptyDirectory.formReadId,
+      }),
+    ).toMatchObject({ text: "", exists: false });
+    await rename(path.dirname(file), path.dirname(file) + "-moved");
+    const missing = await service.discover(ref, { forLaunchForm: true });
+    expect(
+      await service.readTopicTask({ ...req, formReadId: missing.formReadId }),
+    ).toMatchObject({ exists: false, catalogState: "missing-local-metadata" });
+    // A foreign hint does not confer the authority to use its registered path.
+    const other = await service.readTopicTask({
+      projectId: project.id,
+      topic: "main",
+      branch: "main",
+      formReadId: missing.formReadId,
+    });
+    expect(other.text).not.toBe("pinned only");
+    calls.length = 0;
+    expect((await service.discover(ref)).branches.length).toBeGreaterThan(0);
+    expect(calls.filter((argv) => argv.includes("board"))).toHaveLength(1);
+  },
+  gitIntegrationBudget(20000),
+);
+
+it(
+  "cold launch form never delivers a pinned preview after the checkout changes during Goga --info",
+  async () => {
+    const { service, project, runner, node } = await setup();
+    const branch = "other-test",
+      owner = await service.createTopicContext({
+        projectId: project.id,
+        year: String(new Date().getFullYear()),
+        branch,
+        baseRef: "HEAD",
+      });
+    const { worktreeContextRef } = await import("../src/shared/worktrees");
+    const context = worktreeContextRef(owner);
+    const { formReadId } = await service.discover(context, {
+      forLaunchForm: true,
+    });
+    const command = runner.command.bind(runner);
+    vi.spyOn(runner, "command").mockImplementation(async (...args) => {
+      const result = await command(...args);
+      if (
+        args[0] !== "git" &&
+        args[1][0] === "pipeline" &&
+        args[1].includes("--info") &&
+        !args[1].includes("--list")
+      )
+        await node.command(
+          "git",
+          ["switch", "-c", "outside-scope"],
+          owner.path,
+        );
+      return result;
+    });
+    await expect(
+      service.preview({
+        projectId: project.id,
+        context,
+        formReadId,
+        pipeline: "build",
+        workflow: "none",
+        profile: "",
+        skips: [],
+      }),
+    ).rejects.toThrow();
+  },
+  gitIntegrationBudget(20000),
+);
+
+it(
+  "cold launch form keeps a custom CLI authoritative for missing or duplicate pinned metadata",
+  async () => {
+    const { service, project, runner } = await setup(true);
+    const settings = await service.readProjectSettings(project.id);
+    await service.saveProjectSettings(
+      project.id,
+      { ...settings.value, executable: "/custom/goga-adapter" },
+      settings.version,
+    );
+    const owner = await service.createTopicContext({
+      projectId: project.id,
+      year: String(new Date().getFullYear()),
+      branch: "work/topic",
+      baseRef: "HEAD",
+    });
+    const { worktreeContextRef } = await import("../src/shared/worktrees");
+    const context = worktreeContextRef(owner);
+    const req = {
+      projectId: project.id,
+      context,
+      topic: context.topic,
+      branch: context.branch,
+    };
+    const row = {
+      topic: req.topic,
+      branch: req.branch,
+      current: true,
+      remote: false,
+    };
+    const command = runner.command.bind(runner);
+    let duplicates = false;
+    vi.spyOn(runner, "command").mockImplementation(async (...args) =>
+      args[0] === "/custom/goga-adapter" && args[1].includes("board")
+        ? { stdout: JSON.stringify(duplicates ? [row, row] : []), stderr: "" }
+        : command(...args),
+    );
+    const a = await service.discover(context, { forLaunchForm: true });
+    expect(
+      (await service.readTopicTask({ ...req, formReadId: a.formReadId }))
+        .catalogState,
+    ).toBe("missing-local-metadata");
+    duplicates = true;
+    const b = await service.discover(context, { forLaunchForm: true });
+    await expect(
+      service.readTopicTask({ ...req, formReadId: b.formReadId }),
+    ).rejects.toThrow(/неоднозначен/i);
+  },
+  gitIntegrationBudget(20000),
+);
+
+it("cold launch form expiring a display hint never expires or overwrites the task", async () => {
+  const { service, project, repo } = await setup(true);
+  const dir = path.join(
+    repo,
+    ".goga/history",
+    String(new Date().getFullYear()),
+    "main",
+  );
+  await mkdir(dir, { recursive: true });
+  const { formReadId } = await service.discover(project.id, {
+    forLaunchForm: true,
+  });
+  const file = path.join(dir, "todo.md");
+  await writeFile(file, "external edit");
+  const now = Date.now();
+  const clock = vi.spyOn(Date, "now").mockReturnValue(now + 86400000);
+  try {
+    const result = await service.readTopicTask({
+      projectId: project.id,
+      branch: "main",
+      topic: "main",
+      formReadId,
+    });
+    expect(result.text).toBe("external edit");
+    expect(await readFile(file, "utf8")).toBe("external edit");
+  } finally {
+    clock.mockRestore();
+  }
+});
+
+it(
+  "cold launch form cancelling preview does not cancel the independent pinned task",
+  async () => {
+    const { service, project, runner } = await setup();
+    const owner = await service.createTopicContext({
+      projectId: project.id,
+      year: String(new Date().getFullYear()),
+      branch: "cancel-safe",
+      baseRef: "HEAD",
+    });
+    const { worktreeContextRef } = await import("../src/shared/worktrees");
+    const { withReadScope } = await import("../src/host/read-scope");
+    const context = worktreeContextRef(owner);
+    const { formReadId } = await service.discover(context, {
+      forLaunchForm: true,
+    });
+    const ctrl = new AbortController();
+    let entered!: () => void, release!: () => void;
+    const waiting = new Promise<void>((r) => {
+        entered = r;
+      }),
+      blocker = new Promise<void>((r) => {
+        release = r;
+      });
+    const command = runner.command.bind(runner);
+    vi.spyOn(runner, "command").mockImplementation(async (...args) => {
+      if (
+        args[0] !== "git" &&
+        args[1][0] === "pipeline" &&
+        args[1].includes("--info") &&
+        !args[1].includes("--list")
+      ) {
+        entered();
+        await blocker;
+      }
+      return command(...args);
+    });
+    const preview = withReadScope(ctrl.signal, () =>
+      service.preview({
+        projectId: project.id,
+        context,
+        formReadId,
+        pipeline: "build",
+        workflow: "none",
+        profile: "",
+        skips: [],
+      }),
+    );
+    try {
+      await waiting;
+      ctrl.abort();
+      const task = await service.readTopicTask({
+        projectId: project.id,
+        context,
+        formReadId,
+        topic: context.topic,
+        branch: context.branch,
+      });
+      expect(task.text).toBe("");
+    } finally {
+      release();
+      await expect(preview).rejects.toThrow();
+    }
+  },
+  gitIntegrationBudget(20000),
+);
+
+it(
+  "cold launch form refuses a changed clone transport before invoking the stage lookup",
+  async () => {
+    const { service, project, node, calls } = await setup();
+    const owner = await service.createTopicContext({
+      projectId: project.id, year: String(new Date().getFullYear()),
+      branch: "transport-change", baseRef: "HEAD",
+    });
+    const { worktreeContextRef } = await import("../src/shared/worktrees");
+    const context = worktreeContextRef(owner);
+    const { formReadId } = await service.discover(context, { forLaunchForm: true });
+    await node.command("git", ["config", "--local", "remote.desktop-source.pushurl", owner.path], owner.path);
+    calls.length = 0;
+    await expect(service.preview({
+      projectId: project.id, context, formReadId, pipeline: "build",
+      workflow: "none", profile: "", skips: [],
+    })).rejects.toThrow();
+    expect(calls.some(argv => argv[0] === "pipeline" && argv.includes("--info"))).toBe(false);
+  },
+  gitIntegrationBudget(20000),
+);
+
+// Git reads are real, but Goga, its Python helper and pipeline execution are synthetic.
+async function indexedPrimaryFixture() {
+  const { repo, home, calls, node, runner: original } = await setup(true);
+  const git = (...args: string[]) => node.command("git", args, repo);
+  const branch = "feature/alpha",
+    topic = "feature-alpha";
+  await git("switch", "-qc", branch);
+  const file = path.join(
+    repo,
+    ".goga/history",
+    String(new Date().getFullYear()),
+    topic,
+    "todo.md",
+  );
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, "committed task");
+  await git("add", ".goga");
+  await git("commit", "-qm", "topic");
+  await git("switch", "-q", "main");
+  const venv = path.join(home, "venv"),
+    bin = path.join(venv, "bin"),
+    python = path.join(bin, "python"),
+    executable = path.join(bin, "goga");
+  await mkdir(bin, { recursive: true });
+  await writeFile(
+    path.join(venv, "pyvenv.cfg"),
+    "home = /usr/bin\ninclude-system-site-packages = false\n",
+  );
+  await writeFile(python, "#!/bin/false\n", { mode: 0o755 });
+  await writeFile(
+    executable,
+    [
+      "#!" + python,
+      "import sys",
+      "from goga.cli import app",
+      "if __name__ == '__main__':",
+      "    sys.argv[0] = sys.argv[0].removesuffix('.exe')",
+      "    sys.exit(app())",
+      "",
+    ].join("\n"),
+    { mode: 0o755 },
+  );
+  const rank = vi.fn(async (groups: string[][]) => groups.map(() => 0));
+  const start = vi.fn(() => {
+    throw Error("run must not start");
+  });
+  const runner: Runner = {
+    ...original,
+    start,
+    command: (exe, args, cwd, env, stdin) =>
+      exe === "git"
+        ? node.command(exe, args, cwd, env, stdin)
+        : original.command(exe, args, cwd, env, stdin),
+    commandBytes: async (cmd) => {
+      if (cmd.executable === python) {
+        const ranks = await rank(JSON.parse(String(cmd.stdin)));
+        return {
+          stdout: Buffer.from(JSON.stringify(ranks)),
+          stderr: Buffer.alloc(0),
+          processSettled: true,
+          signal: null,
+          exitCode: 0,
+        };
+      }
+      if (cmd.executable !== "git") throw Error("unexpected executable");
+      return node.commandBytes(cmd);
+    },
+  };
+  const service = new HostService({
+    home,
+    dataDir: path.join(home, "indexed-state"),
+    goga: executable,
+    shellPath: async () => bin + path.delimiter + process.env.PATH,
+    runner,
+  });
+  services.push(service);
+  const project = await service.addProject(repo);
+  return {
+    repo,
+    service,
+    project,
+    calls,
+    rank,
+    git,
+    start,
+    executable,
+    branch,
+    topic,
+    runner,
+    home,
+  };
+}
+
+it(
+  "primary launch index prepares an off-branch task without either full-board traversal",
+  async () => {
+    const { service, project, calls, rank, start, branch, topic } =
+      await indexedPrimaryFixture();
+    expect(rank).not.toHaveBeenCalled();
+    calls.length = 0;
+    const catalog = await service.discover(project.id, { forLaunchForm: true });
+    expect(catalog.topics.map((t) => [t.topic, t.branch])).toEqual([
+      [topic, branch],
+    ]);
+    expect(catalog).not.toHaveProperty("byBranch");
+    expect(
+      await service.readTopicTask({
+        projectId: project.id,
+        branch,
+        topic,
+        formReadId: catalog.formReadId,
+      }),
+    ).toMatchObject({ text: "committed task", exists: true });
+    expect(calls.some((args) => args.includes("board"))).toBe(false);
+    expect(rank).toHaveBeenCalledTimes(1);
+    expect(start).not.toHaveBeenCalled();
+    expect((await service.discover(project.id)).formReadId).toBeUndefined();
+    expect(calls.filter((args) => args.includes("board"))).toHaveLength(1);
+  },
+  gitIntegrationBudget(20000),
+);
+
+it(
+  "primary launch index never reuses membership after its branch tip changes",
+  async () => {
+    const { service, project, calls, rank, git, branch, topic } =
+      await indexedPrimaryFixture();
+    const catalog = await service.discover(project.id, { forLaunchForm: true });
+    expect(catalog.topics.map((t) => t.branch)).toContain(branch);
+    const old = (await git("rev-parse", branch)).stdout.trim();
+    await git("update-ref", "refs/heads/" + branch, "HEAD", old);
+    await expect(
+      service.readTopicTask({
+        projectId: project.id,
+        formReadId: catalog.formReadId,
+        branch,
+        topic,
+      }),
+    ).rejects.toThrow(/не найдены/);
+    expect(rank).toHaveBeenCalled();
+    expect(calls.some((args) => args.includes("board"))).toBe(false);
+  },
+  gitIntegrationBudget(20000),
+);
+
+it(
+  "primary launch index preserves the tool-ranked topic order, slug collisions, live working tree and remote base choices",
+  async () => {
+    const { service, project, repo, git, rank, calls } =
+      await indexedPrimaryFixture();
+    const year = String(new Date().getFullYear());
+    for (const [branch, slug, y, leaf] of [
+      ["case-item", "case-item", year, "todo.md"],
+      ["case/item", "case-item", year, "todo.md"],
+      ["another", "another", year, "nested/extension.marker"],
+      ["archived", "archived", "1999", "todo.md"],
+      ["only-other", "unrelated", year, "todo.md"],
+    ]) {
+      await git("switch", "-qc", branch, "main");
+      const file = path.join(repo, ".goga/history", y, slug, leaf);
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, "topic");
+      await git("add", ".goga");
+      await git("commit", "-qm", "test");
+    }
+    await git("switch", "-q", "main");
+    await git("update-ref", "refs/remotes/origin/remote-only", "HEAD");
+    const own = path.join(repo, ".goga/history", year, "main");
+    await mkdir(own, { recursive: true }); // empty and untracked, nevertheless an own topic
+    rank.mockImplementation(async (groups) =>
+      groups.map((files) =>
+        files.includes("nested/extension.marker") ? 10 : files.length ? 3 : 0,
+      ),
+    );
+    const before = await service.discover(project.id, { forLaunchForm: true });
+    expect(before.topics.map((t) => [t.topic, t.branch, t.current])).toEqual([
+      ["main", "main", true],
+      ["case-item", "case-item", false],
+      ["case-item", "case/item", false],
+      ["feature-alpha", "feature/alpha", false],
+      ["another", "another", false],
+    ]);
+    expect(before.branches).toContain("origin/remote-only");
+    await rm(own, { recursive: true });
+    const next = await service.discover(project.id, { forLaunchForm: true });
+    expect(next.topics.map((t) => t.branch)).not.toContain("main");
+    expect(rank).toHaveBeenCalledTimes(2);
+    expect(calls.some((args) => args.includes("board"))).toBe(false);
+  },
+  gitIntegrationBudget(20000),
+);
+
+it("primary launch index delegates wrappers to their own catalog without running Python", async () => {
+  const { service, project, executable, rank, calls } =
+    await indexedPrimaryFixture();
+  await writeFile(executable, '#!/bin/sh\nexec unknown-wrapper "$@"\n');
+  const catalog = await service.discover(project.id, { forLaunchForm: true });
+  expect(catalog.topics.map((t) => t.branch)).toEqual(["main"]);
+  expect(calls.filter((args) => args.includes("board"))).toHaveLength(1);
+  expect(rank).not.toHaveBeenCalled();
+});
+
+it("primary launch index does not hide rank/config hook errors by running the board a second time", async () => {
+  const { service, project, rank, calls } = await indexedPrimaryFixture();
+  rank.mockRejectedValueOnce(Error("synthetic rank failure"));
+  await expect(
+    service.discover(project.id, { forLaunchForm: true }),
+  ).rejects.toThrow();
+  expect(rank).toHaveBeenCalledTimes(1);
+  expect(calls.some((args) => args.includes("board"))).toBe(false);
+});
+
+it("primary launch index cancellation does not retry the board or change the next form", async () => {
+  const { service, project, rank, calls } = await indexedPrimaryFixture();
+  const ctrl = new AbortController();
+  const { withReadScope } = await import("../src/host/read-scope");
+  rank.mockImplementationOnce(async (groups) => {
+    ctrl.abort();
+    return groups.map(() => 0);
+  });
+  await expect(
+    withReadScope(ctrl.signal, () =>
+      service.discover(project.id, { forLaunchForm: true }),
+    ),
+  ).rejects.toThrow();
+  expect(calls.some((args) => args.includes("board"))).toBe(false);
+  expect(
+    (await service.discover(project.id, { forLaunchForm: true })).topics,
+  ).toHaveLength(1);
+  expect(rank).toHaveBeenCalledTimes(2);
+});
+
+it("primary launch index delegates redirected working tree metadata before calling rank", async () => {
+  const { service, project, repo, home, rank, calls } =
+    await indexedPrimaryFixture();
+  const dir = path.join(
+    repo,
+    ".goga/history",
+    String(new Date().getFullYear()),
+  );
+  await mkdir(dir, { recursive: true });
+  await symlink(home, path.join(dir, "main")); // both sides private to fixture
+  const d = await service.discover(project.id, { forLaunchForm: true });
+  expect(d.topics.map((t) => t.branch)).toEqual(["main"]);
+  expect(calls.filter((args) => args.includes("board"))).toHaveLength(1);
+  expect(rank).not.toHaveBeenCalled();
+});
+
+it("primary launch index delegates an unsupported Goga version detected before hooks", async () => {
+  const { service, project, rank, calls, runner } =
+    await indexedPrimaryFixture();
+  const commandBytes = runner.commandBytes!.bind(runner);
+  vi.spyOn(runner, "commandBytes").mockImplementation(async (cmd) => {
+    if (cmd.executable === "git") return commandBytes(cmd);
+    return {
+      stdout: Buffer.alloc(0),
+      stderr: Buffer.alloc(0),
+      exitCode: 74,
+      signal: null,
+      processSettled: true,
+    };
+  });
+  const result = await service.discover(project.id, { forLaunchForm: true });
+  expect(result.topics.map((t) => t.branch)).toEqual(["main"]);
+  expect(calls.filter((args) => args.includes("board"))).toHaveLength(1);
+  expect(rank).not.toHaveBeenCalled();
+});
+
+it("primary launch index rejects refs changing during hooked rank without dispatching the hooks twice", async () => {
+  const { service, project, git, rank, calls } = await indexedPrimaryFixture();
+  rank.mockImplementationOnce(async (groups) => {
+    await git("branch", "side-change");
+    return groups.map(() => 0);
+  });
+  await expect(
+    service.discover(project.id, { forLaunchForm: true }),
+  ).rejects.toThrow();
+  expect(rank).toHaveBeenCalledTimes(1);
+  expect(calls.some((args) => args.includes("board"))).toBe(false);
+});
+
+it.each([true, false])(
+  "primary launch index bounds ref output and only falls back when both Git reads settled (settled=%s)",
+  async (canFallback) => {
+    const { ByteCommandError } = await import("../src/host/process");
+    const { service, project, rank, calls, runner } =
+      await indexedPrimaryFixture();
+    const commandBytes = runner.commandBytes!.bind(runner);
+    vi.spyOn(runner, "commandBytes").mockImplementation(async (cmd) => {
+      if (cmd.executable === "git" && cmd.args[0] === "for-each-ref") {
+        throw new ByteCommandError(
+          "output-limit",
+          true,
+          Buffer.alloc(0),
+          Buffer.alloc(0),
+        );
+      }
+      if (
+        !canFallback &&
+        cmd.executable === "git" &&
+        cmd.args[0] === "branch"
+      ) {
+        throw new ByteCommandError(
+          "process-unsettled",
+          false,
+          Buffer.alloc(0),
+          Buffer.alloc(0),
+        );
+      }
+      return commandBytes(cmd);
+    });
+    const read = service.discover(project.id, { forLaunchForm: true });
+    if (canFallback)
+      expect((await read).topics.map((t) => t.branch)).toEqual(["main"]);
+    else await expect(read).rejects.toThrow();
+    expect(calls.filter((args) => args.includes("board"))).toHaveLength(
+      canFallback ? 1 : 0,
+    );
+    expect(rank).not.toHaveBeenCalled();
+  },
+);
+
+it("primary launch index keeps a separate project Git configuration home on the CLI path", async () => {
+  const { service, project, calls, rank, repo } = await indexedPrimaryFixture();
+  const settings = await service.readProjectSettings(project.id);
+  await service.saveProjectSettings(project.id, {
+    ...settings.value,
+    env: [...settings.value.env, {key: "XDG_CONFIG_HOME", value: path.join(repo, "config-home"), secret: false, runtime: false}],
+  }, settings.version);
+  calls.length = 0;
+  await service.discover(project.id, {forLaunchForm: true});
+  expect(calls.filter(args => args.includes("board"))).toHaveLength(1);
+  expect(rank).not.toHaveBeenCalled();
 });

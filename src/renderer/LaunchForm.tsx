@@ -88,20 +88,40 @@ export function LaunchForm({
   const localDrafts = useRef(createDraftStore());
   const drafts = draftStore ?? localDrafts.current;
   const initial = drafts.forms.get(storageKey);
-  const [data, setData] = useState<Discovery | null>(null),
+  const [catalogAttempt, setCatalogAttempt] = useState(0);
+  const catalogKey = JSON.stringify([ownerKey, catalogAttempt]);
+  const [catalogSettled, setCatalogSettled] = useState("");
+  const [catalogData, setData] = useState<Discovery | null>(null),
     [error, setError] = useState(""),
     [pipeline, setPipeline] = useState("");
+  // A changed owner/revision must not start its initial reads with the catalog
+  // still in state from the preceding render.
+  const data = catalogSettled === catalogKey ? catalogData : null;
+  // Only the first projection of an accepted catalog can share its host work.
+  // Subsequent edits, retries, and explicit rereads keep the ordinary requests.
+  const [consumedFormReadId, setConsumedFormReadId] = useState<string>();
+  const catalogReadId = data?.formReadId;
+  const formReadId =
+    !suspended && catalogReadId !== consumedFormReadId
+      ? catalogReadId
+      : undefined;
+  useEffect(() => {
+    if (catalogReadId) setConsumedFormReadId(catalogReadId);
+  }, [catalogReadId]);
   // Catalog/preview refreshes must not erase a failed submitted operation.
   const [launchError, setLaunchError] = useState("");
   const [workflow, setWorkflow] = useState("auto"),
     [profile, setProfile] = useState(initial?.profile ?? ""),
     [skips, setSkips] = useState<string[]>([]);
-  const [mode, setMode] = useState<"none" | "existing" | "new">(
+  const [topicMode, setMode] = useState<"none" | "existing" | "new">(
       owner ? "existing" : (initial?.mode ?? "none"),
     ),
     [topicIndex, setTopicIndex] = useState("0"),
     [name, setName] = useState(initial?.name ?? ""),
     [baseRef, setBaseRef] = useState(initial?.baseRef ?? "HEAD");
+  // Missing Git changes the available destination, not the stored topic draft.
+  const repositoryMissing = !owner && data?.repository === "missing";
+  const mode = repositoryMissing ? "none" : topicMode;
   const [confirmEmpty, setConfirmEmpty] = useState(false),
     [clean, setClean] = useState(false),
     [launching, setLaunching] = useState(false);
@@ -127,9 +147,6 @@ export function LaunchForm({
   const [appliedCatalogEpoch, setAppliedCatalogEpoch] = useState(0);
   const [settingsRefreshError, setSettingsRefreshError] = useState("");
   const [settingsPreviewFailure, setSettingsPreviewFailure] = useState(false);
-  const [catalogAttempt, setCatalogAttempt] = useState(0);
-  const catalogKey = JSON.stringify([ownerKey, catalogAttempt]);
-  const [catalogSettled, setCatalogSettled] = useState("");
   const [previewAttempt, setPreviewAttempt] = useState(0);
   const [previewSettled, setPreviewSettled] = useState("");
   const [previewError, setPreviewError] = useState("");
@@ -149,7 +166,7 @@ export function LaunchForm({
     setPending(true);
     currentBranchRef.current = null;
     setError("");
-    read("discover", scope).then(
+    read("discover", scope, { forLaunchForm: true }).then(
       (d) => {
         if (!alive || epoch !== discoveryGeneration.current) return;
         discoveryInFlight.current = false;
@@ -230,11 +247,17 @@ export function LaunchForm({
                 ),
               )
             : Number(topicIndex);
-        if (!owner && mode === "existing" && nextIndex < 0)
+        if (
+          !owner &&
+          fresh.repository !== "missing" &&
+          mode === "existing" &&
+          nextIndex < 0
+        )
           throw new Error(
             "Выбранный топик отсутствует в обновлённом каталоге. Черновик сохранён.",
           );
         // Publish the new catalog even when selection validation or preview fails.
+        setCatalogSettled(catalogKey);
         setData(fresh);
         const missingProfile = missingProfileName(fresh, profile);
         if (missingPipeline || missingProfile) {
@@ -343,6 +366,7 @@ export function LaunchForm({
     setError("");
     readPreview("preview", {
       projectId: project.id,
+      ...(formReadId ? { formReadId } : {}),
       ...(owner ? { context: contextRef(owner) } : {}),
       pipeline,
       workflow,
@@ -392,6 +416,12 @@ export function LaunchForm({
     ? { topic: owner.topic, branch: owner.branch, remote: false }
     : data?.topics[Number(topicIndex)];
   useEffect(() => {
+    if (
+      repositoryMissing &&
+      drafts.forms.get(storageKey)?.mode !== "none" &&
+      drafts.forms.has(storageKey)
+    )
+      return;
     if (data)
       drafts.forms.set(storageKey, {
         mode,
@@ -410,6 +440,7 @@ export function LaunchForm({
     name,
     baseRef,
     profile,
+    repositoryMissing,
   ]);
   const taskKey =
     !data || mode === "none"
@@ -423,6 +454,7 @@ export function LaunchForm({
   const selectedTaskRequest = topic
     ? {
         projectId: project.id,
+        ...(formReadId ? { formReadId } : {}),
         ...(owner ? { context: contextRef(owner) } : {}),
         branch: topic.branch,
         topic: topic.topic,
@@ -665,8 +697,9 @@ export function LaunchForm({
       const fresh = await read("discover", scope);
       if (!current()) return;
       let index = Number(topicIndex);
-      let nextMode = mode;
-      if (mode === "existing") {
+      let nextMode =
+        !owner && fresh.repository === "missing" ? ("none" as const) : mode;
+      if (nextMode === "existing") {
         if (data && !topic)
           throw new Error(
             "Выбранный топик отсутствует. Выберите топик повторно.",
@@ -752,13 +785,18 @@ export function LaunchForm({
           status: "ready",
           error: "",
         });
-      drafts.forms.set(storageKey, {
-        mode: nextMode,
-        branch: selected?.branch ?? "",
-        topic: selected?.topic,
-        name: nextMode === "new" ? "" : name,
-        baseRef: nextMode === "new" ? "HEAD" : baseRef,
-      });
+      if (!(
+        fresh.repository === "missing" &&
+        originalForm &&
+        originalForm.mode !== "none"
+      ))
+        drafts.forms.set(storageKey, {
+          mode: nextMode,
+          branch: selected?.branch ?? "",
+          topic: selected?.topic,
+          name: nextMode === "new" ? "" : name,
+          baseRef: nextMode === "new" ? "HEAD" : baseRef,
+        });
       currentBranchRef.current = fresh.currentBranch;
       setData(fresh);
       setCatalogSettled(catalogKey);
@@ -1024,6 +1062,8 @@ export function LaunchForm({
     setLaunchConfirmation(null);
     launchInFlight.current = true;
     const submittedForm = drafts.forms.get(storageKey);
+    const preserveTopicForm =
+      repositoryMissing && submittedForm?.mode !== "none";
     setLaunching(true);
     onLaunchStarted?.();
     setError("");
@@ -1050,8 +1090,9 @@ export function LaunchForm({
         editor.clear();
         // Catalog refresh can recreate this presentation record unchanged.
         if (
+          !preserveTopicForm &&
           JSON.stringify(drafts.forms.get(storageKey)) ===
-          JSON.stringify(submittedForm)
+            JSON.stringify(submittedForm)
         )
           drafts.forms.delete(storageKey);
       }
@@ -1242,6 +1283,7 @@ export function LaunchForm({
                       type="radio"
                       name={topicModeName}
                       checked={mode === "existing"}
+                      disabled={repositoryMissing}
                       onChange={() => {
                         setMode("existing");
                       }}
@@ -1253,6 +1295,7 @@ export function LaunchForm({
                       type="radio"
                       name={topicModeName}
                       checked={mode === "new"}
+                      disabled={repositoryMissing}
                       onChange={() => {
                         setMode("new");
                       }}
@@ -1262,9 +1305,15 @@ export function LaunchForm({
                 </fieldset>
                 {mode === "none" ? (
                   <p className="hint">
-                    Исходный проект · текущая ветка{" "}
-                    {data.currentBranch || "HEAD без ветки"}. Без создания
-                    топика и копии, переключения ветки и записи задачи.
+                    {repositoryMissing ? (
+                      "Исходная папка проекта. Git не инициализирован: топики и рабочие копии недоступны. Конвейер запустится без топика и записи задачи."
+                    ) : (
+                      <>
+                        Исходный проект · текущая ветка{" "}
+                        {data.currentBranch || "HEAD без ветки"}. Без создания
+                        топика и копии, переключения ветки и записи задачи.
+                      </>
+                    )}
                   </p>
                 ) : mode === "existing" ? (
                   <>

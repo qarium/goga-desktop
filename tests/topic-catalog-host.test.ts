@@ -228,3 +228,49 @@ it("does not dispatch Goga when cancellation arrives while settings are validate
   );
   expect(f.command).not.toHaveBeenCalled();
 });
+
+// The stock Git bundled with macOS and the user's Homebrew Git may differ.
+// Simulate both logical views so this regression does not require either binary in CI.
+it.each(["same", "branch", "revision"] as const)(
+  "launch topic index compares both Git views before running status hooks: %s",
+  async (mismatch) => {
+    const { collectLaunchTopicIndex } =
+      await import("../src/host/launch-topic-index");
+    const repo = await mkdtemp("/private/tmp/goga-two-git-");
+    cleanup.push(() => rm(repo, { recursive: true, force: true }));
+    await mkdir(path.join(repo, ".goga/history/2026/main"), {
+      recursive: true,
+    });
+    const refs = (id: string) =>
+      ["refs/heads/main", "main", id.repeat(40), "*"].join("\0") + "\n";
+    const git = vi.fn(async (args: string[]) =>
+      args[0] === "for-each-ref" ? refs("a") : "main\n",
+    );
+    const desktopGit = vi.fn(async (args: string[]) =>
+      args[0] === "for-each-ref"
+        ? refs(mismatch === "revision" ? "b" : "a")
+        : mismatch === "branch"
+          ? "other\n"
+          : "main\n",
+    );
+    const rank = vi.fn(async (groups: string[][]) => groups.map(() => 0));
+    const check = collectLaunchTopicIndex({
+      cwd: repo,
+      year: "2026",
+      git,
+      desktopGit,
+      gitBytes: async () => {
+        throw Error("unexpected tree read");
+      },
+      rank,
+    });
+    if (mismatch === "same") {
+      expect((await check).topics.map((t) => t.branch)).toEqual(["main"]);
+      expect(rank).toHaveBeenCalledTimes(1);
+    } else {
+      await expect(check).rejects.toThrow();
+      expect(rank).not.toHaveBeenCalled();
+    }
+    expect(desktopGit).toHaveBeenCalled();
+  },
+);

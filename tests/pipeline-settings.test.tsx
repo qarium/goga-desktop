@@ -1310,7 +1310,7 @@ it("isolates primary pipeline saves from an owner form and refreshes only its cl
     contextId: owner.contextId,
     revision: owner.revision,
   };
-  expect(api.discover).toHaveBeenLastCalledWith(ref);
+  expect(api.discover).toHaveBeenLastCalledWith(ref, { forLaunchForm: true });
   expect(api.readTopicTask).toHaveBeenCalledWith({
     projectId: "p",
     topic: "t",

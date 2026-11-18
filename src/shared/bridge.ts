@@ -150,7 +150,8 @@ import type {
   Preview,
   Run,
   RunJournalSlice,
-  PipelineRequest,
+  PipelinePreviewRequest,
+  LaunchDiscoveryOptions,
   LaunchRequest,
   TopicTaskRequest,
   TopicTaskDocument,
@@ -430,10 +431,10 @@ export interface DesktopAPI {
     value: ProjectSettings,
     version: string,
   ): Promise<ProjectSettingsView>;
-  discover(projectId: ScopeRef): Promise<Discovery>;
+  discover(projectId: ScopeRef, options?: LaunchDiscoveryOptions): Promise<Discovery>;
   checkoutBranch(projectId: ScopeRef): Promise<string>;
   readTopicTask(request: TopicTaskRequest): Promise<TopicTaskDocument>;
-  preview(request: PipelineRequest): Promise<Preview>;
+  preview(request: PipelinePreviewRequest): Promise<Preview>;
   launch(request: LaunchRequest): Promise<Run>;
   runs(): Promise<Run[]>;
   readRunJournal?(id: string, after?: number): Promise<RunJournalSlice>;

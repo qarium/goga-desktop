@@ -8,6 +8,17 @@ import {
 type ReadArgs<M extends ReadMethod> = Parameters<DesktopAPI[M]>;
 type ReadResult<M extends ReadMethod> = Awaited<ReturnType<DesktopAPI[M]>>;
 const coordinators = new WeakMap<object, ReadCoordinator>();
+function admissionKey(method: ReadMethod, args: readonly unknown[]) {
+  if (method === "preview" || method === "readTopicTask") {
+    const [request, ...rest] = args;
+    if (request && typeof request === "object" && "formReadId" in request) {
+      // A one-use display hint is not a new owner, selection, or read budget.
+      const { formReadId: _hint, ...selection } = request;
+      return JSON.stringify([method, [selection, ...rest]]);
+    }
+  }
+  return JSON.stringify([method, args]);
+}
 function trackedRequest<M extends ReadMethod>(
   signal: AbortSignal | undefined,
   method: M,
@@ -23,7 +34,7 @@ function trackedRequest<M extends ReadMethod>(
   const id = crypto.randomUUID();
   let invoked = false;
   const result = coordinator.run(
-    JSON.stringify([method, args]),
+    admissionKey(method, args),
     READ_BUDGETS[method],
     () => {
       invoked = true;
