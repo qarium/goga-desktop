@@ -68,3 +68,46 @@ test("new Desktop captions and accessible labels go into the language packs", ()
   }
   assert.deepEqual(problems, []);
 });
+
+test("Desktop messages are formatted after the language is loaded", () => {
+  const problems = [];
+  for (const file of readdirSync(root, { recursive: true }).filter(
+    (file) => /\.tsx?$/.test(file) && !file.endsWith(".generated.ts"),
+  )) {
+    const source = ts.createSourceFile(
+      file,
+      readFileSync(join(root, file), "utf8"),
+      ts.ScriptTarget.Latest,
+      true,
+    );
+    const names = new Set();
+    for (const statement of source.statements) {
+      if (
+        ts.isImportDeclaration(statement) &&
+        ts.isStringLiteral(statement.moduleSpecifier) &&
+        statement.moduleSpecifier.text.endsWith("/i18n")
+      ) {
+        const bindings = statement.importClause?.namedBindings;
+        if (bindings && ts.isNamedImports(bindings))
+          for (const entry of bindings.elements)
+            if ((entry.propertyName ?? entry.name).text === "t")
+              names.add(entry.name.text);
+      }
+    }
+    if (!names.size) continue;
+    function visit(node) {
+      if (ts.isFunctionLike(node)) return;
+      if (
+        ts.isCallExpression(node) &&
+        ts.isIdentifier(node.expression) &&
+        names.has(node.expression.text)
+      ) {
+        const { line } = source.getLineAndCharacterOfPosition(node.getStart(source));
+        problems.push(file + ":" + (line + 1));
+      }
+      ts.forEachChild(node, visit);
+    }
+    visit(source);
+  }
+  assert.deepEqual(problems, [], "Keep message keys at module scope; format on use");
+});

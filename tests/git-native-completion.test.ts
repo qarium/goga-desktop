@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { setLocale } from "../src/shared/i18n";
 import {
   withNativeGitCompletion,
   deferNativeGitRecovery,
@@ -93,4 +94,28 @@ it("verified rejection cleans after context but unbound result cannot clear anot
   });
   expect(unrelated.status).toBe("uncertain");
   expect(cleaned).toBe(false);
+});
+
+it.each([
+  ["en", /^Final Git verification/],
+  ["ru", /провер/],
+] as const)("formats recovery messages at completion time in %s", async (locale, message) => {
+  setLocale(locale === "en" ? "ru" : "en");
+  let finish!: () => void;
+  const gate = new Promise<void>(resolve => { finish = resolve; });
+  const native = proof();
+  let finalized = false;
+  const operation = withNativeGitCompletion(async () => {
+    deferNativeGitRecovery(async () => {
+      finalized = true;
+      return native;
+    }, native);
+    await gate;
+    throw Error("fixture-private-output");
+  });
+  setLocale(locale);
+  finish();
+  await expect(operation).rejects.toThrow(message);
+  await expect(operation).rejects.not.toThrow("fixture-private-output");
+  expect(finalized).toBe(false);
 });

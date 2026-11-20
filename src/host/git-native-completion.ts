@@ -7,7 +7,7 @@ type Deferred = {
   finish(): Promise<NativeGitOperationResult>;
 };
 const boundary = new AsyncLocalStorage<Deferred[]>();
-const message =
+const message = () =>
   gitMessage("gitHost.finalGitVerificationOrContextReleaseCouldNotBe");
 
 /** Host-only completion scope. Nested handoffs share the OUTERMOST lease, so an
@@ -36,7 +36,7 @@ function uncertain<T extends object>(
   if (result.native && typeof result.native === "object")
     result.native = { ...result.native, outcome: "uncertain" };
   if (proof?.recoveryPath) result.recoveryPath = proof.recoveryPath;
-  if ("message" in result) result.message = message;
+  if ("message" in result) result.message = message();
   return result as T;
 }
 export async function withNativeGitCompletion<T extends object>(
@@ -51,7 +51,7 @@ export async function withNativeGitCompletion<T extends object>(
     } catch (error) {
       // No returned/sanitized response: never expose raw child output from the
       // throwing context, and NEVER finalize its persisted recovery/fence.
-      if (pending.length) throw Error(message);
+      if (pending.length) throw Error(message());
       throw error;
     }
     const result = value as Result,
