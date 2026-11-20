@@ -144,9 +144,8 @@ export function LaunchForm({
   );
   const [settingsRefreshing, setSettingsRefreshing] = useState(false);
   const [settingsRefreshAttempt, setSettingsRefreshAttempt] = useState(0);
-  // Fast discovery/preview promises may batch refreshing true → false into
-  // one render. Publish the accepted catalog epoch to always prepare a fresh
-  // token for the preserved selection (including skipped stages).
+  // Even an instantly refreshed catalog re-arms the exact selection check.
+  // A full preview is already exact when no stages were skipped.
   const [appliedCatalogEpoch, setAppliedCatalogEpoch] = useState(0);
   const [settingsRefreshError, setSettingsRefreshError] = useState("");
   const [settingsPreviewFailure, setSettingsPreviewFailure] = useState(false);
@@ -154,6 +153,13 @@ export function LaunchForm({
   const [previewSettled, setPreviewSettled] = useState("");
   const [previewError, setPreviewError] = useState("");
   const initialSettingsRevision = useRef(settingsRevision);
+  // A hidden form retains its draft, not permission to do discovery work.
+  // Lifetime is separate from explicit task reload/reset and branch observation.
+  const discoveryKey = JSON.stringify([
+    catalogKey, settingsRevision, settingsRefreshAttempt,
+  ]);
+  const readCatalog = useReadScope(JSON.stringify([discoveryKey, suspended]));
+  const failedRefreshKey = useRef<string | undefined>(undefined);
   const generation = useRef(0);
   const launchInFlight = useRef(false);
   const discoveryInFlight = useRef(true);
@@ -161,6 +167,10 @@ export function LaunchForm({
   const discoveryGeneration = useRef(0);
   const currentBranchRef = useRef<string | null>(null);
   useEffect(() => {
+    if (
+      suspended || catalogSettled === catalogKey ||
+      settingsRevision !== initialSettingsRevision.current
+    ) return;
     let alive = true;
     const epoch = ++discoveryGeneration.current;
     discoveryInFlight.current = true;
@@ -169,7 +179,7 @@ export function LaunchForm({
     setPending(true);
     currentBranchRef.current = null;
     setError("");
-    read("discover", scope, { forLaunchForm: true }).then(
+    readCatalog("discover", scope, { forLaunchForm: true }).then(
       (d) => {
         if (!alive || epoch !== discoveryGeneration.current) return;
         discoveryInFlight.current = false;
@@ -207,9 +217,12 @@ export function LaunchForm({
     return () => {
       alive = false;
     };
-  }, [ownerKey, catalogAttempt]);
+  }, [catalogKey, settingsRevision, suspended]);
   useEffect(() => {
-    if (settingsRevision === initialSettingsRevision.current) return;
+    if (
+      suspended || settingsRevision === initialSettingsRevision.current ||
+      failedRefreshKey.current === discoveryKey
+    ) return;
     let alive = true;
     const epoch = ++discoveryGeneration.current;
     discoveryInFlight.current = true;
@@ -226,7 +239,7 @@ export function LaunchForm({
     (async () => {
       let readingPreview = false;
       try {
-        const fresh = await read("discover", scope);
+        const fresh = await readCatalog("discover", scope, { forLaunchForm: true });
         if (!alive || epoch !== discoveryGeneration.current) return;
         // No prior catalog means no user selection to preserve. A genuinely
         // missing selection must instead stay visible until explicitly changed.
@@ -262,11 +275,10 @@ export function LaunchForm({
         // Publish the new catalog even when selection validation or preview fails.
         setCatalogSettled(catalogKey);
         setData(fresh);
+        setTopicIndex(String(nextIndex));
         const missingProfile = missingProfileName(fresh, profile);
         if (missingPipeline || missingProfile) {
           currentBranchRef.current = fresh.currentBranch;
-          setData(fresh);
-          setTopicIndex(String(nextIndex));
           setCards([]);
           setError(
             missingProfile
@@ -280,8 +292,9 @@ export function LaunchForm({
           return;
         }
         readingPreview = true;
-        const complete = await read("preview", {
+        const complete = await readCatalog("preview", {
           projectId: project.id,
+          ...(fresh.formReadId ? { formReadId: fresh.formReadId } : {}),
           ...(owner ? { context: contextRef(owner) } : {}),
           pipeline: nextPipeline,
           workflow,
@@ -292,9 +305,17 @@ export function LaunchForm({
         if (!alive || epoch !== discoveryGeneration.current) return;
         currentBranchRef.current = fresh.currentBranch;
         setCards(complete.stages);
-        setData(fresh);
+        // With no skipped stages this *is* the exact selection. Publish the
+        // token atomically instead of issuing the same preview a second time.
+        if (!skips.length) {
+          const key = keyForPreview(nextPipeline, workflow, profile, skips, fresh);
+          preparedPreviewKey.current = key;
+          setPreview(complete);
+          setReadyKey(key);
+          setPreviewSettled(key);
+          setPending(false);
+        }
         setPipeline(nextPipeline);
-        setTopicIndex(String(nextIndex));
         setError("");
         initialSettingsRevision.current = settingsRevision;
         setAppliedCatalogEpoch(epoch);
@@ -303,6 +324,7 @@ export function LaunchForm({
         if (!alive || epoch !== discoveryGeneration.current) return;
         // A valid catalog with an invalid composition remains editable, but
         // cannot launch until an explicit retry or selection change succeeds.
+        failedRefreshKey.current = discoveryKey;
         setSettingsPreviewFailure(readingPreview);
         setSettingsRefreshError(message(e));
         setSettingsRefreshing(false);
@@ -315,22 +337,22 @@ export function LaunchForm({
     return () => {
       alive = false;
     };
-  }, [ownerKey, settingsRevision, settingsRefreshAttempt]);
+  }, [discoveryKey, suspended]);
   const profileRequest =
     profile === "__auto__"
       ? { profile: "", profileMode: "auto" as const }
       : { profile };
-  const compositionKey = JSON.stringify([
-    ownerKey,
-    pipeline,
-    workflow,
-    profile,
-    skips,
-    data?.currentBranch,
-    data?.projectSettings?.version,
-    settingsRevision,
-    previewAttempt,
-  ]);
+  function keyForPreview(
+    selectedPipeline: string, selectedWorkflow: string, selectedProfile: string,
+    selectedSkips: string[], catalog: Discovery | null,
+  ) {
+    return JSON.stringify([
+      ownerKey, selectedPipeline, selectedWorkflow, selectedProfile, selectedSkips,
+      catalog?.currentBranch, catalog?.projectSettings?.version, settingsRevision,
+      previewAttempt,
+    ]);
+  }
+  const compositionKey = keyForPreview(pipeline, workflow, profile, skips, data);
   const readPreview = useReadScope(compositionKey);
   const [readyKey, setReadyKey] = useState("");
   const preparedPreviewKey = useRef<string | null>(null);
@@ -697,7 +719,7 @@ export function LaunchForm({
     setReloadConfirmation(null);
     setError("");
     try {
-      const fresh = await read("discover", scope);
+      const fresh = await read("discover", scope, { forLaunchForm: true });
       if (!current()) return;
       let index = Number(topicIndex);
       let nextMode =
@@ -751,6 +773,7 @@ export function LaunchForm({
         nextMode === "existing"
           ? await read("readTopicTask", {
               projectId: project.id,
+              ...(fresh.formReadId ? { formReadId: fresh.formReadId } : {}),
               ...(owner ? { context: contextRef(owner) } : {}),
               branch: selected.branch,
               topic: selected.topic,
@@ -759,6 +782,7 @@ export function LaunchForm({
       if (!current() || drafts.tasks.get(nextKey) !== previousTarget) return;
       const prepared = await read("preview", {
         projectId: project.id,
+        ...(fresh.formReadId ? { formReadId: fresh.formReadId } : {}),
         ...(owner ? { context: contextRef(owner) } : {}),
         pipeline: nextPipeline,
         workflow: "auto",
@@ -766,21 +790,19 @@ export function LaunchForm({
         skips: [],
       });
       if (!current() || drafts.tasks.get(nextKey) !== previousTarget) return;
-      const nextCompositionKey = JSON.stringify([
-        ownerKey,
-        nextPipeline,
-        "auto",
-        "",
-        [],
-        fresh.currentBranch,
-        fresh.projectSettings?.version,
-        settingsRevision,
-        previewAttempt,
-      ]);
+      const nextCompositionKey = keyForPreview(nextPipeline, "auto", "", [], fresh);
       // No await after this point: publish one prepared state, never a partial reset.
       generation.current++;
+      // Clearing a failed refresh also re-arms the preview effect, even when
+      // the default selections did not change. Reset already read that exact
+      // preview and its catalog for this revision.
       preparedPreviewKey.current =
-        nextCompositionKey !== compositionKey ? nextCompositionKey : null;
+        nextCompositionKey !== compositionKey || settingsRefreshError
+          ? nextCompositionKey : null;
+      initialSettingsRevision.current = settingsRevision;
+      failedRefreshKey.current = undefined;
+      setSettingsRefreshError("");
+      setSettingsPreviewFailure(false);
       if (nextMode !== "none")
         drafts.tasks.set(nextKey, {
           text: document?.text ?? "",

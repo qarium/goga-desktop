@@ -20,6 +20,20 @@ export async function assertLocalOrigin(
     ["config", "--local", "--includes", "--null", "--list"],
     owner.path,
   );
+  if (await verifyLocalOriginConfig(owner, git, raw)) return true;
+  if (!migrateMissing) return false;
+  // Never replace a custom origin, even when it would prevent synchronization.
+  await git(["remote", "add", "origin", owner.projectPath], owner.path);
+  return assertLocalOrigin(owner, git);
+}
+
+/** Validate this observation only; effective fetch and push URLs are still read
+ * live. This path cannot opt into creating a missing remote. */
+export async function verifyLocalOriginConfig(
+  owner: WorktreeRecord,
+  git: Git,
+  raw: string,
+): Promise<boolean> {
   const rows = raw
     .split("\0")
     .filter(Boolean)
@@ -28,12 +42,7 @@ export async function assertLocalOrigin(
       return [row.slice(0, n), row.slice(n + 1)];
     })
     .filter(([key]) => key.startsWith("remote.origin."));
-  if (!rows.length) {
-    if (!migrateMissing) return false;
-    // Never replace a custom origin, even when it would prevent synchronization.
-    await git(["remote", "add", "origin", owner.projectPath], owner.path);
-    return assertLocalOrigin(owner, git);
-  }
+  if (!rows.length) return false;
   if (
     rows.some(
       ([key]) =>

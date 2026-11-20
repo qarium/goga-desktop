@@ -374,6 +374,18 @@ export async function readLaunchTopicIndex({
     return result.stdout;
   };
   try {
+    // Unsupported providers should pay only for their own catalog, not first
+    // for our Git traversal. Probe package metadata without loading any Goga
+    // modules/hooks. Ranking checks the version again in case of an upgrade.
+    const probe = await run({
+      executable: python,
+      args: ["-IB", "-c", launchTopicRanksProgram, "--check-version"],
+      cwd,
+      env,
+      maxOutputBytes: 4096,
+    });
+    assertReadActive();
+    if (probe.exitCode !== 0 || probe.signal) return undefined;
     return await collectLaunchTopicIndex({
       cwd,
       year,

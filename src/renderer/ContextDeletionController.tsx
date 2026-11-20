@@ -26,7 +26,7 @@ interface Operation {
 }
 export function useContextDeletionController(
   leave: (owner: TopicContextRef) => Promise<void>,
-  changed: () => void,
+  changed: (projectId: string) => void,
 ) {
   const latest = useRef({ leave, changed });
   latest.current = { leave, changed };
@@ -68,7 +68,7 @@ export function useContextDeletionController(
       if (removed) {
         if (result.status === "success") {
           update(null);
-          latest.current.changed();
+          latest.current.changed(owner.projectId);
         } else if (!delegated) update({ ...item(), error: result.message });
       }
       return result;

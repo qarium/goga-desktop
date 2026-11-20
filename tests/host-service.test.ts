@@ -3516,7 +3516,7 @@ it("cold launch form shares exactly one primary board but reads the current file
 it(
   "cold launch form reads only its pinned topic, while ordinary readers and other owners stay independent",
   async () => {
-    const { service, project, repo, calls } = await setup(true);
+    const { service, project, repo, calls, runner } = await setup(true);
     const year = String(new Date().getFullYear());
     const owner = await service.createTopicContext({
       projectId: project.id,
@@ -3534,6 +3534,7 @@ it(
     await mkdir(path.dirname(file), { recursive: true });
     await writeFile(file, "pinned only");
     calls.length = 0;
+    const commands = vi.spyOn(runner, "command");
     const catalog = await service.discover(ref, { forLaunchForm: true });
     expect(catalog.formReadId).toEqual(expect.any(String));
     expect(catalog.branches).toEqual([]);
@@ -3560,6 +3561,11 @@ it(
     expect(task.catalogState).toBeUndefined();
     expect(stages.stages.length).toBeGreaterThan(0);
     expect(calls.filter((argv) => argv.includes("board"))).toHaveLength(0);
+    // Cold opening with a local origin must keep the three reads independent
+    // without paying repeatedly for Git facts within each admission.
+    expect(commands.mock.calls.filter(([exe]) => exe === "git").length)
+      .toBeLessThanOrEqual(46);
+    commands.mockRestore();
     // A managed copy may legitimately have a directory with no todo, or no directory at all.
     await rm(file);
     const emptyDirectory = await service.discover(ref, { forLaunchForm: true });
@@ -3801,6 +3807,11 @@ it(
       projectId: project.id, context, formReadId, pipeline: "build",
       workflow: "none", profile: "", skips: [],
     })).rejects.toThrow();
+    // The batching optimization changes only how live facts are obtained,
+    // not whether the initial task read must verify its owner before returning.
+    await expect(service.readTopicTask({
+      projectId: project.id, context, formReadId, topic: context.topic, branch: context.branch,
+    })).rejects.toThrow();
     expect(calls.some(argv => argv[0] === "pipeline" && argv.includes("--info"))).toBe(false);
   },
   gitIntegrationBudget(20000),
@@ -3861,6 +3872,8 @@ async function indexedPrimaryFixture() {
         : original.command(exe, args, cwd, env, stdin),
     commandBytes: async (cmd) => {
       if (cmd.executable === python) {
+        if (cmd.args.at(-1) === "--check-version")
+          return { stdout: Buffer.alloc(0), stderr: Buffer.alloc(0), processSettled: true, signal: null, exitCode: 0 };
         const ranks = await rank(JSON.parse(String(cmd.stdin)));
         return {
           stdout: Buffer.from(JSON.stringify(ranks)),
@@ -4054,23 +4067,68 @@ it("primary launch index delegates redirected working tree metadata before calli
   expect(rank).not.toHaveBeenCalled();
 });
 
-it("primary launch index delegates an unsupported Goga version detected before hooks", async () => {
-  const { service, project, rank, calls, runner } =
-    await indexedPrimaryFixture();
+it.each([
+  ["2.1.1", true],
+  ["2.1.2.dev21+gf71c19ed0", true],
+  ["2.1.2.dev21+g000000000", false],
+  ["2.1.2", false],
+] as const)("primary launch index probes the exact Goga build before any index Git reads: %s", async (version, supported) => {
+  const { service, project, calls, runner, rank, branch } = await indexedPrimaryFixture();
+  const node = new NodeRunner(), commandBytes = runner.commandBytes!.bind(runner);
+  const steps: string[] = [];
+  vi.spyOn(runner, "commandBytes").mockImplementation(async cmd => {
+    if (cmd.args.at(-1) !== "--check-version") {
+      steps.push(cmd.executable === "git" ? "git" : "rank");
+      return commandBytes(cmd);
+    }
+    steps.push("probe");
+    // Execute the actual probe with synthetic distribution metadata. Importing
+    // Goga in probe mode would dispatch project code too early.
+    const guard = [
+      "import sys, importlib.metadata",
+      `importlib.metadata.version = lambda name: ${JSON.stringify(version)} if name == 'goga' else None`,
+      "def no_goga(event, args):",
+      "    if event == 'import' and args[0].split('.')[0] == 'goga': raise AssertionError('early import')",
+      "sys.addaudithook(no_goga)",
+    ].join("\n");
+    return node.commandBytes({
+      ...cmd, executable: "/usr/bin/python3",
+      args: ["-IB", "-c", guard + "\n" + cmd.args[2], "--check-version"],
+    });
+  });
+  try {
+    const result = await service.discover(project.id, { forLaunchForm: true });
+    expect(steps[0]).toBe("probe");
+    expect(steps.filter(step => step === "probe")).toHaveLength(1);
+    expect(result.topics.map(t => t.branch)).toEqual([supported ? branch : "main"]);
+    expect(calls.filter(args => args.includes("board"))).toHaveLength(supported ? 0 : 1);
+    if (!supported) expect(steps).toEqual(["probe"]); // no wasted refs or tree reads
+    expect(rank).toHaveBeenCalledTimes(supported ? 1 : 0);
+  } finally {
+    await node.dispose();
+  }
+});
+
+it("primary launch index falls back once if the provider changes between admission and ranking", async () => {
+  const { service, project, rank, calls, runner } = await indexedPrimaryFixture();
   const commandBytes = runner.commandBytes!.bind(runner);
-  vi.spyOn(runner, "commandBytes").mockImplementation(async (cmd) => {
+  const steps: string[] = [];
+  vi.spyOn(runner, "commandBytes").mockImplementation(async cmd => {
     if (cmd.executable === "git") return commandBytes(cmd);
+    if (cmd.args.at(-1) === "--check-version") {
+      steps.push("probe");
+      return commandBytes(cmd);
+    }
+    steps.push("rank");
     return {
-      stdout: Buffer.alloc(0),
-      stderr: Buffer.alloc(0),
-      exitCode: 74,
-      signal: null,
-      processSettled: true,
+      stdout: Buffer.alloc(0), stderr: Buffer.alloc(0),
+      exitCode: 74, signal: null, processSettled: true,
     };
   });
   const result = await service.discover(project.id, { forLaunchForm: true });
-  expect(result.topics.map((t) => t.branch)).toEqual(["main"]);
-  expect(calls.filter((args) => args.includes("board"))).toHaveLength(1);
+  expect(steps).toEqual(["probe", "rank"]);
+  expect(result.topics.map(t => t.branch)).toEqual(["main"]);
+  expect(calls.filter(args => args.includes("board"))).toHaveLength(1);
   expect(rank).not.toHaveBeenCalled();
 });
 

@@ -291,8 +291,10 @@ it("preserves launch composition and task draft, then refreshes discovery and pr
     projectSettings: { ...discovery.projectSettings, version: "v2" },
   });
   fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
-  await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
+  await screen.findByText("Сохранено. Изменения применятся к следующим запускам.");
+  expect(api.discover).toHaveBeenCalledTimes(1);
   await openPrototypeLaunch();
+  await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
   await waitFor(() =>
     expect(api.preview).toHaveBeenLastCalledWith(
       expect.objectContaining({
@@ -433,8 +435,10 @@ it("blocks stale launch and composition edits until refreshed project settings a
       }),
   );
   fireEvent.click(screen.getByRole("button", { name: "Сохранить" }));
-  await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
+  await screen.findByText("Сохранено. Изменения применятся к следующим запускам.");
+  expect(api.discover).toHaveBeenCalledTimes(1);
   await openPrototypeLaunch();
+  await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
   expect(
     (retainedButton("Сохранить и запустить") as HTMLButtonElement).disabled,
   ).toBe(true);

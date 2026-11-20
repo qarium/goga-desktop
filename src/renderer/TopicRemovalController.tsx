@@ -24,7 +24,7 @@ interface Operation {
 }
 export function useTopicRemovalController(
   executor: ContextDeletionExecutor | null,
-  changed: () => void,
+  changed: (projectId: string) => void,
 ) {
   const [operation, setOperation] = useState<Operation | null>(null),
     [busy, setBusy] = useState(false);
@@ -123,7 +123,7 @@ export function useTopicRemovalController(
     } finally {
       flight.current = false;
       setBusy(false);
-      latest.current.changed();
+      latest.current.changed(plan.projectId);
     }
   };
   const cleanup = async (contextId: string, allowAhead: boolean) => {
@@ -139,7 +139,7 @@ export function useTopicRemovalController(
     } finally {
       flight.current = false;
       setBusy(false);
-      latest.current.changed();
+      latest.current.changed(item.owner.projectId);
     }
   };
   const check = async (contextId: string) => {

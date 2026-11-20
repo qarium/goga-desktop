@@ -6,7 +6,7 @@ import { z } from "zod";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { CloneStore } from "./clone-store";
-import { assertLocalOrigin } from "./local-origin";
+import { assertLocalOrigin, verifyLocalOriginConfig } from "./local-origin";
 import { noSymlinks } from "./settings";
 import { childEnvironment } from "./process-environment";
 import { RunnerShutdownError, type Runner } from "./process";
@@ -162,17 +162,26 @@ async function ownerHash(owner: WorktreeRecord) {
     ]),
   );
 }
-async function originConfig(
+async function readLocalConfig(
   runner: Pick<Runner, "command">,
   cwd: string,
   env: NodeJS.ProcessEnv,
-): Promise<OriginConfig | undefined> {
-  const raw = await git(
+) {
+  return git(
     runner,
     ["config", "--local", "--includes", "--null", "--list"],
     cwd,
     env,
   );
+}
+async function originConfig(
+  runner: Pick<Runner, "command">,
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+): Promise<OriginConfig | undefined> {
+  return parseOriginConfig(await readLocalConfig(runner, cwd, env));
+}
+function parseOriginConfig(raw: string): OriginConfig | undefined {
   const rows = raw
     .split("\0")
     .filter(Boolean)
@@ -418,20 +427,21 @@ export async function assertClonePublicationOrigin(
   home: string,
   runner: Pick<Runner, "command">,
   owner: WorktreeRecord,
+  formRead = false,
 ) {
-  const config = await originConfig(
-    runner,
-    owner.path,
-    isolatedEnvironment(home),
-  );
+  const env = isolatedEnvironment(home);
+  // A read-only form may reuse the same local config observation between two
+  // adjacent parsers. Effective Git fetch/push endpoints are still read live.
+  const local = await readLocalConfig(runner, owner.path, env);
+  const config = parseOriginConfig(local);
   if (!config) {
     if (await readPolicy(owner)) throw policyError();
     return;
   }
   if (config.url === owner.projectPath) {
-    await assertLocalOrigin(owner, (args, cwd) =>
-      git(runner, args, cwd, isolatedEnvironment(home)),
-    );
+    const read = (args: string[], cwd: string) => git(runner, args, cwd, env);
+    if (formRead) await verifyLocalOriginConfig(owner, read, local);
+    else await assertLocalOrigin(owner, read);
     return;
   }
   await checkedPhysicalPolicy(home, runner, owner);

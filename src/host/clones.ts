@@ -326,6 +326,29 @@ export class CloneManager {
       throw Error(tr("host.couldNotVerifyTheGitRepositoryPaths"));
     return { top: values[0]!, common: values[1]!, git: values[2]! };
   }
+  /** Single command, one observation: checkout paths, peeled commit and branch.
+   * Display only. The independent branch check at the end remains mandatory. */
+  private async formGitIdentity(git: (args: string[]) => Promise<string>) {
+    const raw = await git([
+      "rev-parse",
+      "--path-format=absolute",
+      "--show-toplevel",
+      "--git-common-dir",
+      "--absolute-git-dir",
+      "HEAD^{commit}",
+      "--abbrev-ref",
+      "HEAD",
+    ]);
+    const parts = raw.replace(/\n$/, "").split("\n");
+    if (
+      parts.length !== 5 ||
+      parts.slice(0, 3).some((value) => !path.isAbsolute(value)) ||
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(parts[3]) ||
+      !parts[4]
+    )
+      throw unavailable();
+    return { top: parts[0], common: parts[1], git: parts[2], branch: parts[4] };
+  }
   private async repository(
     project: Project,
     store = this.store,
@@ -391,7 +414,7 @@ export class CloneManager {
   private async validate(
     record: WorktreeRecord,
     readStore?: CloneStore,
-    physicalOnly = false,
+    mode: "standard" | "physical" | "launch-form" = "standard",
   ): Promise<{
     state: "ready" | "missing" | "conflict";
     reason?: WorktreeRecord["reason"];
@@ -444,27 +467,31 @@ export class CloneManager {
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
+      const formIdentity =
+        mode === "launch-form" ? await this.formGitIdentity(git) : undefined;
       const {
         top,
         common,
         git: gitDir,
-      } = await this.gitPaths(record.path, record, store);
+      } = formIdentity ?? (await this.gitPaths(record.path, record, store));
       if (
         (await realpath(top)) !== record.path ||
         (await realpath(common)) !== record.gitCommonDir ||
         (await realpath(gitDir)) !== record.gitCommonDir
       )
         return { state: "conflict", reason: "repository" };
-      const branch = (await git(["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+      const branch =
+        formIdentity?.branch ??
+        (await git(["rev-parse", "--abbrev-ref", "HEAD"])).trim();
       let operationBinding: string | undefined;
-      if (physicalOnly) {
+      if (mode === "physical") {
         // Physical ownership is not continuation authority. The caller must
         // independently admit the durable native journal before any write.
       } else if (branch === "HEAD" && readStore)
         operationBinding = await readRebaseBinding(record, git);
       else if (branch !== record.branch)
         return { state: "conflict", reason: "branch" };
-      await git(["rev-parse", "--verify", "HEAD^{commit}"]);
+      if (!formIdentity) await git(["rev-parse", "--verify", "HEAD^{commit}"]);
       const index = await lstat(path.join(record.gitCommonDir, "index"));
       if (!index.isFile() || index.nlink !== 1)
         return { state: "conflict", reason: "repository" };
@@ -485,9 +512,14 @@ export class CloneManager {
       // Discovery validates persisted physical trust, not a guessed native env.
       // Exchange prepare/verify checks effective endpoints under the final child env.
       if (remotes.includes("origin"))
-        await assertClonePublicationOrigin(this.home, this.runner, record);
+        await assertClonePublicationOrigin(
+          this.home,
+          this.runner,
+          record,
+          mode === "launch-form",
+        );
       await store.assertOwned(record);
-      if (readStore && !physicalOnly) {
+      if (readStore && mode !== "physical") {
         if (operationBinding) {
           if (operationBinding !== (await readRebaseBinding(record, git)))
             throw unavailable();
@@ -856,7 +888,17 @@ export class CloneManager {
   }
   /** Host-only display admission. Never refreshes a row, takes a lifecycle lock,
    * or makes this owner available to the ordinary resolver and write operations. */
-  async resolveGitRead(input: TopicContextRef): Promise<{
+  resolveGitRead(input: TopicContextRef) {
+    return this.readOwner(input, "standard");
+  }
+  /** Initial form reads only; do not use this resolver for writes or launch. */
+  resolveFormGitRead(input: TopicContextRef) {
+    return this.readOwner(input, "launch-form");
+  }
+  private async readOwner(
+    input: TopicContextRef,
+    mode: "standard" | "launch-form",
+  ): Promise<{
     record: WorktreeRecord;
     operationBinding?: string;
   }> {
@@ -876,7 +918,7 @@ export class CloneManager {
         )
       )
         throw unavailable();
-      const result = await this.validate(initial, this.readStore);
+      const result = await this.validate(initial, this.readStore, mode);
       if (
         result.state !== "ready" ||
         (initial.state !== "ready" && !result.operationBinding)
@@ -919,7 +961,8 @@ export class CloneManager {
       )
         throw unavailable();
       if (
-        (await this.validate(initial, this.readStore, true)).state !== "ready"
+        (await this.validate(initial, this.readStore, "physical")).state !==
+        "ready"
       )
         throw unavailable();
       const current = (await this.readStore.read()).records.find(

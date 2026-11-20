@@ -14,6 +14,7 @@ export interface RepositoryActionFailure {
 }
 interface Snapshot {
   revision: number;
+  projectRevisions: ReadonlyMap<string, number>;
   busy: ReadonlyMap<
     string,
     {
@@ -32,7 +33,7 @@ export function repositoryActionKey(
 /** Writes outlive their buttons. The captured owner, never the current selector,
  * labels the completion; closing the selector cannot swallow an operation error. */
 class RepositoryActionController {
-  private state: Snapshot = { busy: new Map(), failures: [], revision: 0 };
+  private state: Snapshot = { busy: new Map(), failures: [], revision: 0, projectRevisions: new Map() };
   private listeners = new Set<() => void>();
   constructor(private api: DesktopAPI) {}
   snapshot = () => this.state;
@@ -109,7 +110,9 @@ class RepositoryActionController {
     } finally {
       const busy = new Map(this.state.busy);
       busy.delete(key);
-      this.update({ ...this.state, busy, revision: this.state.revision + 1 });
+      const projectRevisions = new Map(this.state.projectRevisions);
+      projectRevisions.set(request.projectId, (projectRevisions.get(request.projectId) ?? 0) + 1);
+      this.update({ ...this.state, busy, revision: this.state.revision + 1, projectRevisions });
     }
   };
 }

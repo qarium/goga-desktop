@@ -1,5 +1,5 @@
 import { gitIntegrationBudget } from "./helpers/git-integration";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { execFile } from "node:child_process";
@@ -1725,3 +1725,102 @@ it(
   },
   gitIntegrationBudget(15000),
 );
+
+describe("launch-form clone read admission", { timeout: gitIntegrationBudget(10000) }, () => {
+  async function fixture() {
+    const f = await setup();
+    onTestFinished(() => fs.rm(f.root, { recursive: true, force: true }));
+    const row = await f.manager.ensure(f.project, f.identity);
+    return { f, row, ref: worktreeContextRef(row) };
+  }
+
+  it("removes exactly three processes without sharing with ordinary Git reads", async () => {
+    const { f, ref } = await fixture();
+    f.calls.length = 0;
+    const normal = await f.manager.resolveGitRead(ref);
+    const before = f.calls.length;
+    f.calls.length = 0;
+    expect(await f.manager.resolveFormGitRead(ref)).toEqual(normal);
+    expect(f.calls.length).toBe(before - 3);
+    expect(
+      f.calls.filter((c) => c.args.includes("HEAD^{commit}")),
+    ).toHaveLength(1);
+    expect(f.calls.filter((c) => c.args.includes("--includes"))).toHaveLength(
+      1,
+    );
+    expect(
+      f.calls.filter(
+        (c) => c.args.includes("get-url") && c.args.includes("origin"),
+      ),
+    ).toHaveLength(2);
+  });
+  it("rejects changed checkout after the combined observation", async () => {
+    const { f, row, ref } = await fixture();
+    const original = f.runner.command;
+    let switched = false;
+    f.runner.command = async (...args) => {
+      const result = await original(...args);
+      if (!switched && args[1].includes("HEAD^{commit}")) {
+        switched = true;
+        await f.git(["checkout", "--detach"], row.path);
+      }
+      return result;
+    };
+    await expect(f.manager.resolveFormGitRead(ref)).rejects.toThrow();
+    expect(switched).toBe(true);
+    expect(
+      (
+        await f.git(["rev-parse", "--abbrev-ref", "HEAD"], row.path)
+      ).stdout.trim(),
+    ).toBe("HEAD");
+  });
+  it("rejects ambiguous included origin or changed effective origin without touching the copy", async () => {
+    const { f, row, ref } = await fixture();
+    const include = path.join(f.root, "another-config");
+    await fs.writeFile(include, '[remote "origin"]\n    url = /another\n');
+    await f.git(["config", "include.path", include], row.path);
+    await expect(f.manager.resolveFormGitRead(ref)).rejects.toThrow();
+    // Only origin's effective push URL is rewritten. The origin config itself
+    // and both desktop-source endpoints remain valid: get-url must catch it.
+    await fs.writeFile(
+      include,
+      '[url "/elsewhere"]\n    pushInsteadOf = ' + f.repo + "\n",
+    );
+    expect(
+      (
+        await f.git(["remote", "get-url", "desktop-source"], row.path)
+      ).stdout.trim(),
+    ).toBe(f.repo);
+    expect(
+      (
+        await f.git(["remote", "get-url", "--push", "desktop-source"], row.path)
+      ).stdout.trim(),
+    ).toBe("/dev/null");
+    expect(
+      (
+        await f.git(["remote", "get-url", "--push", "origin"], row.path)
+      ).stdout.trim(),
+    ).toBe("/elsewhere");
+    await expect(f.manager.resolveFormGitRead(ref)).rejects.toThrow();
+    expect(
+      (
+        await f.git(["rev-parse", "--abbrev-ref", "HEAD"], row.path)
+      ).stdout.trim(),
+    ).toBe("alpha");
+  });
+  it("fails closed on a malformed result of the combined path/commit/branch command", async () => {
+    const { f, ref } = await fixture();
+    const original = f.runner.command;
+    f.runner.command = async (...args) => {
+      const result = await original(...args);
+      if (args[1].includes("HEAD^{commit}"))
+        return {
+          ...result,
+          stdout:
+            result.stdout.split("\n").slice(0, 3).join("\n") + "\nalpha\n",
+        };
+      return result;
+    };
+    await expect(f.manager.resolveFormGitRead(ref)).rejects.toThrow();
+  });
+});

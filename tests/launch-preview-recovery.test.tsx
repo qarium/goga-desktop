@@ -84,11 +84,12 @@ beforeEach(() => {
   window.goga = api;
 });
 afterEach(cleanup);
-const form = (context?: TopicContextRef, revision = "v1") => (
+const form = (context?: TopicContextRef, revision = "v1", suspended = false) => (
   <LaunchForm
     project={project}
     owner={context}
     settingsRevision={revision}
+    suspended={suspended}
     onCancel={() => {}}
     onLaunched={() => {}}
   />
@@ -133,6 +134,98 @@ for (const context of [undefined, owner]) {
     },
   );
 }
+it("coalesces hidden revisions and reads the latest catalog and exact stages once when shown", async () => {
+  rejectComposition = false;
+  const hint = "00000000-0000-4000-8000-000000000002";
+  const view = render(form(owner));
+  await waitFor(() => expect(launchButton().disabled).toBe(false));
+  fireEvent.change(screen.getByRole("textbox", { name: "Что нужно сделать?" }), {
+    target: { value: "Keep my edits" },
+  });
+  view.rerender(form(owner, "v1", true));
+  view.rerender(form(owner, "v2", true));
+  view.rerender(form(owner, "v3", true));
+  await act(async () => {});
+  expect(api.discover).toHaveBeenCalledTimes(1);
+  expect(api.preview).toHaveBeenCalledTimes(1);
+  api.discover.mockResolvedValueOnce({ ...catalog, formReadId: hint });
+  view.rerender(form(owner, "v3"));
+  await waitFor(() => expect(launchButton().disabled).toBe(false));
+  expect(api.discover).toHaveBeenCalledTimes(2);
+  expect(api.discover).toHaveBeenLastCalledWith(owner, { forLaunchForm: true });
+  expect(api.preview).toHaveBeenCalledTimes(2);
+  expect(api.preview).toHaveBeenLastCalledWith(expect.objectContaining({ formReadId: hint, skips: [] }));
+  expect(screen.getByDisplayValue("Keep my edits")).toBeTruthy();
+  view.rerender(form(owner, "v3", true));
+  view.rerender(form(owner, "v3"));
+  await act(async () => {});
+  expect(api.discover).toHaveBeenCalledTimes(2);
+  expect(api.preview).toHaveBeenCalledTimes(2);
+  expect(api.readTopicTask).toHaveBeenCalledTimes(1);
+});
+it("does not discover a hidden mount and never starts dependent reads from superseded discovery", async () => {
+  rejectComposition = false;
+  const view = render(form(owner, "v1", true));
+  await act(async () => {});
+  expect(api.discover).not.toHaveBeenCalled();
+  let finishOld!: (d: typeof catalog) => void;
+  api.discover.mockReturnValueOnce(new Promise(resolve => { finishOld = resolve; }));
+  view.rerender(form(owner));
+  await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(1));
+  view.rerender(form(owner, "v2", true));
+  await act(async () => finishOld(catalog));
+  expect(api.preview).not.toHaveBeenCalled();
+  expect(api.readTopicTask).not.toHaveBeenCalled();
+  view.rerender(form(owner, "v2"));
+  await waitFor(() => expect(launchButton().disabled).toBe(false));
+  expect(api.discover).toHaveBeenCalledTimes(2);
+  expect(api.preview).toHaveBeenCalledTimes(1);
+  expect(api.readTopicTask).toHaveBeenCalledTimes(1);
+});
+it("discards a hidden in-flight full preview and refreshes skipped stages exactly once on return", async () => {
+  const stages = [{ id: "step", title: "Step" }, { id: "other", title: "Other" }];
+  api.preview.mockImplementation(async (request: { skips: string[] }) => ({
+    ...preview, stages: stages.filter(stage => !request.skips.includes(stage.id)),
+  }));
+  const view = render(form(owner));
+  await waitFor(() => expect(launchButton().disabled).toBe(false));
+  fireEvent.click(screen.getByRole("checkbox", { name: /other/i }));
+  await waitFor(() => expect(launchButton().disabled).toBe(false));
+
+  const obsolete = heldPreview();
+  api.preview.mockReturnValueOnce(obsolete.promise);
+  view.rerender(form(owner, "v2"));
+  await waitFor(() => expect(api.preview).toHaveBeenCalledTimes(3));
+  view.rerender(form(owner, "v2", true));
+  await act(async () => obsolete.resolve({ ...preview, stages: [{ id: "late", title: "Obsolete" }] }));
+  expect(api.preview).toHaveBeenCalledTimes(3);
+  expect(screen.queryByText("Obsolete")).toBeNull();
+  view.rerender(form(owner, "v2"));
+  await waitFor(() => expect(launchButton().disabled).toBe(false));
+  expect(api.discover).toHaveBeenCalledTimes(3);
+  expect(api.preview.mock.calls.map(([r]: [{ skips: string[] }]) => r.skips))
+    .toEqual([[], ["other"], [], [], ["other"]]);
+  expect(screen.getByRole("checkbox", { name: /other/i })).toHaveProperty("checked", false);
+});
+
+it("a successful explicit reset recovers after a failed revision without another catalog or preview", async () => {
+  rejectComposition = false;
+  const view = render(form(owner));
+  await waitFor(() => expect(launchButton().disabled).toBe(false));
+  api.discover.mockRejectedValueOnce(Error("refresh failed"));
+  view.rerender(form(owner, "v2"));
+  await screen.findByText("refresh failed");
+  const hint = "00000000-0000-4000-8000-000000000003";
+  api.discover.mockResolvedValueOnce({ ...catalog, formReadId: hint });
+  fireEvent.click(screen.getByRole("button", { name: "Сбросить" }));
+  await waitFor(() => expect(api.preview).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(launchButton().disabled).toBe(false));
+  expect(screen.queryByText("refresh failed")).toBeNull();
+  expect(api.discover).toHaveBeenCalledTimes(3);
+  expect(api.discover).toHaveBeenLastCalledWith(owner, { forLaunchForm: true });
+  expect(api.preview).toHaveBeenLastCalledWith(expect.objectContaining({ formReadId: hint }));
+  expect(api.readTopicTask).toHaveBeenLastCalledWith(expect.objectContaining({ formReadId: hint }));
+});
 it("settings refresh with a valid catalog and invalid composition remains correctable", async () => {
   rejectComposition = false;
   const view = render(form(owner));

@@ -75,6 +75,14 @@ async function openSettings(primary = false) {
   click("Конвейеры");
   await waitFor(() => expect(api.listProjectPipelines).toHaveBeenCalled());
 }
+async function resumeAfterPipelineSave(readsBeforeReturn: number) {
+  // Saving an already visible document invalidates its hidden launch draft;
+  // the fresh read belongs to the next visit, not to the save.
+  await act(async () => {});
+  expect(api.discover).toHaveBeenCalledTimes(readsBeforeReturn);
+  await openPrototypeLaunch();
+  await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(readsBeforeReturn + 1));
+}
 async function setup() {
   render(<App />);
   await openFirstProject();
@@ -469,8 +477,7 @@ it.each(["success", "failure"])(
     );
     await screen.findByRole("button", { name: "Сохранить" });
     click("Сохранить");
-    await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
-    await openPrototypeLaunch();
+    await resumeAfterPipelineSave(1);
     await act(async () => {
       if (outcome === "success")
         stale({
@@ -715,8 +722,7 @@ it.each(["success", "failure"])(
     replace(raw);
     await screen.findByRole("button", { name: "Сохранить" });
     click("Сохранить");
-    await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
-    await openPrototypeLaunch();
+    await resumeAfterPipelineSave(1);
     openCatalog(await screen.findByRole("combobox", { name: "Конвейер" }));
     await screen.findByRole("option", { name: /new-flow/ });
     await act(async () => {
@@ -744,8 +750,7 @@ it("releases the discovery lock if refresh supersedes a pending initial discover
   await create("new-flow");
   await screen.findByRole("button", { name: "Сохранить" });
   click("Сохранить");
-  await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
-  await openPrototypeLaunch();
+  await resumeAfterPipelineSave(1);
   await screen.findByText("fresh catalog unavailable");
   click("Сбросить");
   await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(3));
@@ -784,8 +789,7 @@ it.each(["success", "failure"])(
     );
     await screen.findByRole("button", { name: "Сохранить" });
     click("Сохранить");
-    await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(3));
-    await openPrototypeLaunch();
+    await resumeAfterPipelineSave(2);
     await act(async () => {
       if (outcome === "success") reset(original);
       else failReset(Error("stale reset failure"));
@@ -964,8 +968,7 @@ it.each(["discover", "preview"])(
     api[stage].mockRejectedValueOnce(Error("fresh refresh failed"));
     await screen.findByRole("button", { name: "Сохранить" });
     click("Сохранить");
-    await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
-    await openPrototypeLaunch();
+    await resumeAfterPipelineSave(1);
     await screen.findByText("fresh refresh failed");
     const launch = retainedButton("Сохранить и запустить") as HTMLButtonElement;
     expect(launch.disabled).toBe(true);
@@ -1020,8 +1023,7 @@ it("blocks a removed selected pipeline and preserves edited task until another p
   });
   await screen.findByRole("button", { name: "Сохранить" });
   click("Сохранить");
-  await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
-  await openPrototypeLaunch();
+  await resumeAfterPipelineSave(1);
   await screen.findByText(/Выбранный конвейер отсутствует/);
   expect((screen.getByLabelText("Конвейер") as HTMLButtonElement).value).toBe(
     "run",
@@ -1081,9 +1083,11 @@ it.each([
     );
     await screen.findByRole("button", { name: "Сохранить" });
     click("Сохранить");
-    await waitFor(() =>
-      expect(api[stage].mock.calls.length).toBe(callsBefore + 1),
-    );
+    await act(async () => {});
+    expect(api[stage]).toHaveBeenCalledTimes(callsBefore);
+    await openPrototypeLaunch();
+    await waitFor(() => expect(api[stage]).toHaveBeenCalledTimes(callsBefore + 1));
+    await openSettings();
     await waitFor(() =>
       expect(
         (screen.getByRole("button", { name: "Сохранить" }) as HTMLButtonElement)
@@ -1116,8 +1120,7 @@ it.each([
     replace(raw + "# latest edit");
     await screen.findByRole("button", { name: "Сохранить" });
     click("Сохранить");
-    await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(3));
-    await openPrototypeLaunch();
+    await resumeAfterPipelineSave(2);
     await screen.findByRole("checkbox", { name: /Latest stage/ });
     await waitFor(() => expect(screen.queryByText("проверяем…")).toBeNull());
     await act(async () => {
@@ -1244,8 +1247,10 @@ it("preserves standalone new-topic fields, profile, workflow and skip selection 
   await create("new-flow");
   await screen.findByRole("button", { name: "Сохранить" });
   click("Сохранить");
-  await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
+  await act(async () => {});
+  expect(api.discover).toHaveBeenCalledTimes(1);
   click("Показать форму");
+  await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
   await act(async () => {});
   await waitFor(() =>
     expect(screen.queryAllByText("проверяем…")).toHaveLength(0),
@@ -1348,11 +1353,8 @@ it("isolates primary pipeline saves from an owner form and refreshes only its cl
       "missing",
     ),
   );
-  await waitFor(() =>
-    expect(api.discover).toHaveBeenCalledTimes(initialReads + 1),
-  );
-  expect(api.discover).toHaveBeenLastCalledWith(ref);
-  await openPrototypeLaunch();
+  await resumeAfterPipelineSave(initialReads);
+  expect(api.discover).toHaveBeenLastCalledWith(ref, { forLaunchForm: true });
   await screen.findByRole("checkbox", { name: /One/ });
   expect(
     (screen.getByLabelText("Что нужно сделать?") as HTMLTextAreaElement).value,

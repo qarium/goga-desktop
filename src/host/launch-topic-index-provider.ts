@@ -193,8 +193,12 @@ export const launchTopicRanksProgram = `
 import sys, json, contextlib, importlib.metadata
 def main():
     try:
-        if importlib.metadata.version("goga") != "2.1.1":
+        # This adapter mirrors catalog semantics of these exact builds, not
+        # every release sharing a major/minor or the same private API names.
+        if importlib.metadata.version("goga") not in ("2.1.1", "2.1.2.dev21+gf71c19ed0"):
             return 74
+        if sys.argv[1:] == ["--check-version"]:
+            return 0
         from goga.commands.topics.topics import _topics_section
         from goga.history import assemble_status_scale
     except (ImportError, importlib.metadata.PackageNotFoundError):

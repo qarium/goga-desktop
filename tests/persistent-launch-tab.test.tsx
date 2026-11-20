@@ -274,6 +274,37 @@ it("isolates full launch preparation values and DOM between projects", async () 
   expect(beta.value).toBe("beta task");
 });
 
+it("refreshes only the originating project's draft when a topic operation finishes after switching projects", async () => {
+  let finish!: () => void;
+  api.runRepositoryAction = vi.fn((request) => new Promise((resolve) => {
+    finish = () => resolve({
+      projectId: request.projectId, contextId: request.context?.contextId,
+      action: request.action, status: "success", log: "done",
+    });
+  }));
+  await mountReadyOwner();
+  click("Проект");
+  const alpha = await launch();
+  fireEvent.change(alpha, { target: { value: "keep Alpha draft" } });
+  click("Опубликовать топик");
+  await waitFor(() => expect(api.runRepositoryAction).toHaveBeenCalledTimes(1));
+
+  click("Beta");
+  await launch();
+  api.discover.mockClear();
+  api.preview.mockClear();
+  await act(async () => finish());
+  expect(api.discover).not.toHaveBeenCalled();
+  expect(api.preview).not.toHaveBeenCalled();
+
+  click("Alpha");
+  fireEvent.click(screen.getByRole("tab", { name: /^Новый конвейер · / }));
+  await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(1));
+  expect(api.discover).toHaveBeenCalledWith(expect.objectContaining({ projectId: "p" }), { forLaunchForm: true });
+  expect((await screen.findByRole("textbox", { name: "Что нужно сделать?" }) as HTMLTextAreaElement).value).toBe("keep Alpha draft");
+  await waitFor(() => expect(api.preview).toHaveBeenCalledTimes(1));
+});
+
 it("closing an inactive launch tab respects the dirty Home settings guard", async () => {
   await mountReadyOwner();
   click("Проект");
@@ -830,6 +861,36 @@ it("an explicit return to the originating preparation after topic navigation ado
       .getByRole("tab", { name: "pipeline-result · main · main" })
       .getAttribute("aria-selected"),
   ).toBe("true");
+});
+
+it("does not publish a late verified clone into another project's empty topic inventory", async () => {
+  await prepareNewTopic();
+  const original = (await api.listTopicContexts("p"))[0];
+  const created = {
+    ...original, topic: "fresh-topic", branch: "fresh-topic",
+    contextId: "ctx-" + "f".repeat(64), path: "/fixture/checked-copies/fresh",
+  };
+  let verify!: (record: typeof created) => void;
+  api.resolveTopicContext.mockImplementationOnce(() => new Promise(resolve => { verify = resolve; }));
+  api.launch = vi.fn(async () => ({
+    ...run, id: "created-in-alpha", kind: "pipeline", pipeline: "verify",
+    topic: created.topic, branch: created.branch, context: created,
+  }));
+  click("Запустить");
+  click("Создать и запустить");
+  await waitFor(() => expect(verify).toBeTypeOf("function"));
+
+  // Beta has neither a known owner nor an available catalog. An unrelated
+  // verification must not turn "unavailable" into an empty search result.
+  api.listTopicContexts.mockImplementation(async (id: string) => id === "q" ? [] : [original, created]);
+  api.readTopicBoard.mockRejectedValueOnce(Error("Catalog unavailable"));
+  click("Beta");
+  await screen.findByRole("heading", { level: 1, name: "Beta" });
+  click("Выбрать другой топик");
+  await screen.findByText("Список топиков пока недоступен.");
+  await act(async () => verify(created));
+  expect(screen.getByText("Список топиков пока недоступен.")).toBeTruthy();
+  expect(screen.queryByRole("row", { name: /fresh-topic/ })).toBeNull();
 });
 
 it("keeps a background created-owner verification failure attached to its run, not another project's form", async () => {

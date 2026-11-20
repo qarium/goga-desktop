@@ -511,10 +511,11 @@ it.each(["trashed", "uncertain", "bridge-error"])(
         status === "trashed" ? { status } : { status, message: "uncertain" },
       );
     await remove();
-    await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
+    expect(api.discover).toHaveBeenCalledTimes(1);
     if (screen.queryByRole("button", { name: "← Назад" }))
       fireEvent.click(screen.getByRole("button", { name: "← Назад" }));
     else await openPrototypeLaunch();
+    await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
     expect(
       retainedButton("Сохранить и запустить").hasAttribute("disabled"),
     ).toBe(true);
@@ -539,19 +540,16 @@ it("App preserves explicit profile through global settings deletion with the lau
   click("Профили");
   await waitFor(() => expect(api.listSettings).toHaveBeenCalled());
   api.listSettings.mockResolvedValue({ profiles: ["other"] });
-  // The file is absent when deletion publishes its revision. A retained hidden
-  // launch can refresh immediately; do not change the mock catalog afterwards.
+  // The file is absent when the retained launch refreshes on return.
   discovery = { ...discovery, profiles: [] };
   api.preview.mockClear();
   const readsBeforeDeletion = api.discover.mock.calls.length;
   await remove();
-  await waitFor(() =>
-    expect(api.discover).toHaveBeenCalledTimes(readsBeforeDeletion + 1),
-  );
+  expect(api.discover).toHaveBeenCalledTimes(readsBeforeDeletion);
   if (screen.queryByRole("button", { name: "← Назад" }))
     fireEvent.click(screen.getByRole("button", { name: "← Назад" }));
-  else await openPrototypeLaunch();
   await openPrototypeLaunch();
+  await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(readsBeforeDeletion + 1));
   openCatalog(await screen.findByRole("combobox", { name: "Профиль" }));
   await screen.findByRole("option", { name: /personal.*не найден/ });
   expect((screen.getByLabelText("Профиль") as HTMLButtonElement).value).toBe(
@@ -665,13 +663,12 @@ it.each(["save", "delete"] as const)(
       click("Сохранить");
       await waitFor(() => expect(api.saveProjectDocument).toHaveBeenCalled());
     } else await remove();
-    await waitFor(() =>
-      expect(api.discover.mock.calls.length).toBeGreaterThan(before),
-    );
+    expect(api.discover).toHaveBeenCalledTimes(before);
     if (screen.queryByRole("button", { name: "← Назад" }))
       fireEvent.click(screen.getByRole("button", { name: "← Назад" }));
     else await openPrototypeLaunch();
     await ready();
+    await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(before + 1));
     expect((screen.getByLabelText("Профиль") as HTMLButtonElement).value).toBe(
       "personal",
     );

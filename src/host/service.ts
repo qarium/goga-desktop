@@ -1690,7 +1690,7 @@ export class HostService extends EventEmitter {
     return {commit, branch};
   }
   private async resolveFormOwner(ref: TopicContextRef, project: Project) {
-    const {record, operationBinding} = await this.clones.resolveGitRead(ref);
+    const {record, operationBinding} = await this.clones.resolveFormGitRead(ref);
     if (operationBinding || record.projectPath !== project.path ||
         record.storageKind !== "clone" || record.ownership !== "managed" ||
         record.state !== "ready" || record.preparation || record.reason || record.deletedAt)

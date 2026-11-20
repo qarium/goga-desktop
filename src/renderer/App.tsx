@@ -287,7 +287,7 @@ export function App() {
     ReadonlyMap<string, string>
   >(new Map());
   useEffect(() => {
-    if (repositoryActions.revision) { gitSummaryCacheFor(window.goga).invalidateAll(); topicsChanged(); }
+    if (repositoryActions.revision) gitSummaryCacheFor(window.goga).invalidateAll();
   }, [repositoryActions.revision]);
   const draftStore = useRef(createDraftStore());
   const buildDrafts = useRef(createBuildDrafts());
@@ -471,6 +471,15 @@ export function App() {
   pageRef.current = page;
   const projectIdRef = useRef(projectId);
   projectIdRef.current = projectId;
+  // The visible inventory belongs to one project. A pending launch or migration
+  // may still complete for a different project after the user has switched.
+  function rememberVisibleContext(record: WorktreeRecord) {
+    if (projectIdRef.current !== record.projectId) return;
+    setKnownContexts((values) => [
+      ...values.filter((item) => item.contextId !== record.contextId),
+      record,
+    ]);
+  }
   const [showLogs, setShowLogs] = useState<Record<string, boolean>>({});
   const settingsGuard = useRef<ProjectSettingsGuard | null>(null);
   const [launchSettingsBusy, setSettingsBusy] = useState(false);
@@ -478,7 +487,12 @@ export function App() {
   const otherSettingsBusy = launchSettingsBusy || topicsBusy || repeatBusy || !!projectRemoval?.busy;
   const settingsBusy = otherSettingsBusy || documentActivity !== "idle";
   const topicsStore = useRef(createTopicsStore());
-  const [topicsRevision, setTopicsRevision] = useState(0);
+  const [topicEdits, setTopicEdits] = useState<ReadonlyMap<string, number>>(new Map());
+  // Topic choices belong to the original project, including its retained copies.
+  // Async completions use the issuing project, never the currently visible tab.
+  const topicRevisionFor = (id: string) =>
+    (topicEdits.get(id) ?? 0) + (repositoryActions.projectRevisions.get(id) ?? 0);
+  const topicsRevision = topicRevisionFor(projectId);
   // A manual refresh also renews the selector and the clone registry. It isn't
   // a mutation: the table already joined/started its own read via the button.
   const [topicInventoryRefresh, setTopicInventoryRefresh] = useState(0);
@@ -657,8 +671,8 @@ export function App() {
       if (pageRef.current === "build") setPage("project-settings");
     },false,"stay");
   }
-  function topicsChanged() {
-    setTopicsRevision((n) => n + 1);
+  function topicsChanged(id: string) {
+    setTopicEdits((previous) => new Map(previous).set(id, (previous.get(id) ?? 0) + 1));
   }
 
   const [settingsRevision, setSettingsRevision] = useState<
@@ -957,7 +971,7 @@ export function App() {
         ...previous,
         [owner]: (previous[owner] ?? 0) + 1,
       }));
-      topicsChanged();
+      topicsChanged(scopeProjectId(scope));
       void settingsDocuments.refreshProject(scope);
       navigate(() => {
         const current = selectedContextRef.current
@@ -2193,7 +2207,7 @@ export function App() {
                 board={currentTopics}
                 repository={topicRepository}
                 catalogError={currentTopicsError}
-                onRetryCatalog={() => setTopicsRevision((value) => value + 1)}
+                onRetryCatalog={() => setTopicInventoryRefresh((value) => value + 1)}
                 selected={selectedContext}
                 knownContexts={knownContexts}
                 runs={runs as RunWithContext[]}
@@ -2218,14 +2232,9 @@ export function App() {
                 onShowCreation={identity=>navigateContext(()=>showTopicCreation(identity),"pipeline")}
                 showCreationFeedback={false}
                 onCreated={(record) => {
+                  topicsChanged(record.projectId);
                   if (projectIdRef.current !== record.projectId) return;
-                  setKnownContexts((values) => [
-                    ...values.filter(
-                      (value) => value.contextId !== record.contextId,
-                    ),
-                    record,
-                  ]);
-                  topicsChanged();
+                  rememberVisibleContext(record);
                   // Retain success even if the user left preparation or a
                   // modal currently prevents continuation. Returning can resume
                   // the form without creating/ensuring the copy again.
@@ -2237,12 +2246,7 @@ export function App() {
                       ...values,
                       [projectId]: record,
                     }));
-                    setKnownContexts((values) => [
-                      ...values.filter(
-                        (value) => value.contextId !== record.contextId,
-                      ),
-                      record,
-                    ]);
+                    rememberVisibleContext(record);
                     selectedRef.current = null;
                     selectedContextRef.current = record;
                     setSelected(null);
@@ -2828,7 +2832,7 @@ export function App() {
                         // Reloading their catalogs would temporarily disable Git
                         // and dismiss the branch popup that owns this update.
                         if (change === "references-only") return;
-                        topicsChanged();
+                        topicsChanged(id);
                         void settingsDocuments.refreshProject(issuedScope);
                       }}
                       disabled={
@@ -2964,17 +2968,12 @@ export function App() {
                     key={contextKey(displayOwner)}
                     record={displayOwner}
                     onMigrated={(record) => {
-                      setKnownContexts((values) => [
-                        ...values.filter(
-                          (item) => item.contextId !== record.contextId,
-                        ),
-                        record,
-                      ]);
+                      rememberVisibleContext(record);
                       setContextSelections((values) => ({
                         ...values,
                         [record.projectId]: record,
                       }));
-                      topicsChanged();
+                      topicsChanged(record.projectId);
                     }}
                   />
                 )}
@@ -3063,7 +3062,7 @@ export function App() {
                     knownContexts={knownContexts}
                     loading={contextsLoading}
                     inventoryError={contextsError}
-                    onRetryInventory={topicsChanged}
+                    onRetryInventory={() => setTopicInventoryRefresh((value) => value + 1)}
                     flights={initialFlights.current}
                     onCancel={() => navigate(() => setPage("context-runs"))}
                     onPrepared={(record) => {
@@ -3079,12 +3078,7 @@ export function App() {
                         ...values,
                         [record.projectId]: record,
                       }));
-                      setKnownContexts((values) => [
-                        ...values.filter(
-                          (value) => value.contextId !== record.contextId,
-                        ),
-                        record,
-                      ]);
+                      rememberVisibleContext(record);
                       if (
                         workspaceLaunchBlockReason(
                           runsRef.current,
@@ -3191,7 +3185,7 @@ export function App() {
                         owner ? contextRef(owner) : buildProject.id,
                       ),
                       homeDocumentRevision,
-                      topicsRevision,
+                      topicRevisionFor(buildProject.id),
                     ])}
                     onBusyChange={onBuildBusy}
                     onCancel={() => closeBuild(id)}
@@ -3237,14 +3231,14 @@ export function App() {
                   aria-labelledby={`pipeline-draft-tab-${encodeURIComponent(id)}`}
                 >
                   <LaunchForm
-                    onTopicsChanged={topicsChanged}
+                    onTopicsChanged={() => topicsChanged(launchProject.id)}
                     settingsRevision={JSON.stringify([
                       settingsRevision[launchProject.id],
                       settingsDocuments.projectRevision(
                         owner ? contextRef(owner) : launchProject.id,
                       ),
                       homeDocumentRevision,
-                      topicsRevision,
+                      topicRevisionFor(launchProject.id),
                     ])}
                     suspended={
                       page !== "launch" ||
@@ -3344,13 +3338,8 @@ export function App() {
                               msg("shell.theNewWorkingCopyHasChangedSelectTheTopicAgain"),
                             );
                           createdOwner = record;
-                          setKnownContexts((values) => [
-                            ...values.filter(
-                              (v) => v.contextId !== record.contextId,
-                            ),
-                            record,
-                          ]);
-                          topicsChanged();
+                          rememberVisibleContext(record);
+                          topicsChanged(launchProject.id);
                         } catch (error) {
                           launchOwnerErrors.current.set(r.id, message(error));
                         }
@@ -3453,7 +3442,7 @@ export function App() {
                   tableCache={topicTableCache}
                   onRefreshRelated={() => setTopicInventoryRefresh((n) => n + 1)}
                   revision={topicScope}
-                  onChanged={topicsChanged}
+                  onChanged={() => topicsChanged(project.id)}
                   onBusy={setTopicsBusy}
                   runs={runs as RunWithContext[]}
                   knownContexts={knownContexts}
@@ -3567,12 +3556,7 @@ export function App() {
             contextsLoading ? "loading" : cardOwnerError ? "error" : "confirmed"
           }
           ownerReadError={cardOwnerError}
-          onContextPrepared={(record) =>
-            setKnownContexts((values) => [
-              ...values.filter((item) => item.contextId !== record.contextId),
-              record,
-            ])
-          }
+          onContextPrepared={rememberVisibleContext}
           owner={cardOwner}
           deletionOwner={deletionOwner}
           selectedContextId={selectedContext?.contextId}
@@ -3580,7 +3564,7 @@ export function App() {
           store={topicsStore.current}
           onClose={() => setTopicCard(null)}
           onBusy={setTopicsBusy}
-          onChanged={topicsChanged}
+          onChanged={() => topicsChanged(topicCard.project.id)}
           onHandoff={openHandoff}
           onPrepare={(target, year, text) => {
             if (year !== String(new Date().getFullYear()) || target.remote)
