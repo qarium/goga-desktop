@@ -308,6 +308,9 @@ it("protects project settings IPC and rejects malformed secret-bearing payload w
     value,
     "revision",
   );
+  const {ProjectSettingsVersionConflict} = await import("../src/host/desktop-state");
+  service.saveProjectSettings.mockRejectedValueOnce(new ProjectSettingsVersionConflict("untrusted diagnostic"));
+  expect(await handlers.get("goga:save-project-settings")!(event, "p", value, "revision")).toEqual({code:"settings-version-conflict"});
   expect(() =>
     handlers.get("goga:save-project-settings")!(
       event,
@@ -824,4 +827,22 @@ it("keeps dashboard observers scoped and never dispatches an unowned refresh or 
   call("refresh-dashboard",shell,"attached:test","p",false);expect(panels.refresh).toHaveBeenCalledWith("p","attached:test",false);
   call("refresh-dashboard",shell,"ours");expect(ownedRefresh).toHaveBeenCalledExactlyOnceWith("ours");
   expect(stop).not.toHaveBeenCalled();
+});
+
+it("only the trusted shell can read or change the interface language", () => {
+  const handlers = new Map<string, Function>();
+  const preference = { get: vi.fn(() => "ru"), set: vi.fn(() => "en") };
+  registerIPC({ handle: (k: string, f: Function) => handlers.set(k, f) } as any,
+    { interfaceLanguage: preference, window: { webContents: { id: 1 } }, shellURL: "file:///app/index.html" } as any);
+  const shell = { sender: { id: 1 }, senderFrame: { url: "file:///app/index.html", parent: null } };
+  for (const name of ["get-interface-language", "set-interface-language"]) {
+    const handler = handlers.get("goga:" + name)!;
+    expect(() => handler({ ...shell, sender: { id: 2 } }, "en")).toThrow("IPC");
+    expect(() => handler({ ...shell, senderFrame: { ...shell.senderFrame, parent: {} } }, "en")).toThrow("IPC");
+    expect(() => handler({ ...shell, senderFrame: { ...shell.senderFrame, url: "http://localhost:12345" } }, "en")).toThrow("IPC");
+  }
+  expect(preference.set).not.toHaveBeenCalled();
+  expect(handlers.get("goga:get-interface-language")!(shell)).toBe("ru");
+  expect(handlers.get("goga:set-interface-language")!(shell, "en")).toBe("en");
+  expect(preference.set).toHaveBeenCalledExactlyOnceWith("en");
 });

@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { isOfflineGitRead } from "./read-scope";
 import { applyNativeGitEnvironment } from "./git-native-policy";
 import path from "node:path";
@@ -44,7 +45,7 @@ export function childEnvironment(
   const nativeIndex = nativeGitIndex();
   if (nativeIndex) {
     if (index || isPrivateGitRead())
-      throw new Error("Несовместимые области индекса Git.");
+      throw new Error(tr("host.incompatibleGitIndexScopes"));
     result.GIT_INDEX_FILE = nativeIndex;
     if (nativeGitObjects()) result.GIT_OBJECT_DIRECTORY = nativeGitObjects();
   }
@@ -112,6 +113,6 @@ export function assertContextEnvironment(
     )
   )
     throw new Error(
-      "Переменные перенаправления Git недопустимы для контекста топика.",
+      tr("host.gitRedirectionVariablesAreNotAllowedInATopicContext"),
     );
 }

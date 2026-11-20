@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import { useEffect, useRef, useState } from "react";
 import { preparationErrorMessage } from "./preparation-error";
 import {
@@ -32,12 +33,12 @@ export async function saveLeaveFiles(
   const groups = new Map<string, WorkspaceLeaveFile[]>();
   const expected = new Map<WorkspaceLeaveFile, string | null | undefined>();
   const check = (file: WorkspaceLeaveFile) => {
-    if (!current()) throw Error("Рабочая область изменилась. Переход отменён.");
+    if (!current()) throw Error(msg("workspace.theWorkspaceChangedNavigationWasCanceled"));
     if (
       file.readText &&
       (expected.get(file) === null || file.readText() !== expected.get(file))
     )
-      throw Error("Черновик изменился. Проверьте правки перед сохранением.");
+      throw Error(msg("workspace.theDraftChangedReviewYourEditsBeforeSaving"));
   };
   let active = files[0];
   try {
@@ -53,7 +54,7 @@ export async function saveLeaveFiles(
           expected.get(group[0]) !== expected.get(file))
       )
         throw Error(
-          "Файл изменён в двух редакторах. Сверьте правки в «Обзоре» и «Проекте» и сохраните нужный вариант.",
+          msg("workspace.theFileWasEditedInTwoEditorsCompareYourEdits"),
         );
       group.push(file);
       groups.set(file.path, group);
@@ -137,7 +138,7 @@ export function useWorkspaceLeave() {
       if (extra)
         throw new FileSaveFailure(
           extra,
-          "В редакторе остались новые правки. Проверьте их перед переходом.",
+          msg("workspace.thereAreNewEditsInTheEditorReviewThemBefore"),
         );
       if (remember) setAutoSaveOnLeave(true);
     } catch (error) {

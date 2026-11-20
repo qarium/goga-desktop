@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import {
   readPersonalProfile,
   savePersonalProfile,
@@ -34,7 +35,7 @@ export async function noSymlinks(target: string) {
     cursor = path.join(cursor, part);
     try {
       if ((await lstat(cursor)).isSymbolicLink())
-        throw new Error("Символические ссылки не разрешены");
+        throw new Error(tr("host.symbolicLinksAreNotAllowed"));
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
     }
@@ -81,7 +82,7 @@ export class SettingsStore {
   constructor(private home: string) {}
   private file(kind: SettingsKind, name?: string) {
     if (kind !== "config" && kind !== "profile")
-      throw new Error("Неизвестный вид настроек");
+      throw new Error(tr("host.unknownSettingsType"));
     if (kind === "profile") {
       profileName(name);
       return path.join(this.home, ".goga", "profiles", `${name}.yml`);
@@ -140,7 +141,7 @@ export class SettingsStore {
       validateYaml(text, kind);
       const prev = await this.readSettings(kind, name);
       if (prev.version !== version)
-        throw new Error("Файл изменён извне. Откройте его заново.");
+        throw new Error(tr("host.theFileChangedExternallyOpenItAgain"));
       if (kind === "profile")
         await savePersonalProfile(this.home, name!, text, version);
       else await atomicWrite(p, text);

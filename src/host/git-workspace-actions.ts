@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import { createHash, randomBytes } from "node:crypto";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -52,7 +53,7 @@ export interface GitCommitAdmissionTicket {
 }
 const stale = () =>
   Error(
-    "Предпросмотр Git устарел или изменился владелец. Обновите список и подтвердите заново.",
+    gitMessage("gitHost.theGitPreviewExpiredOrItsOwnerChangedRefresh"),
   );
 const digest = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
@@ -113,7 +114,7 @@ async function regularFile(
     info.nlink !== 1n ||
     info.size > 256n * 1024n * 1024n
   )
-    throw Error("Небезопасный тип или размер файла Git.");
+    throw Error(gitMessage("gitHost.unsafeGitFileTypeOrSize"));
   const handle = await fs.open(
     filename,
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
@@ -144,10 +145,10 @@ async function selectedFile(root: string, name: string) {
     const info = await stat(current);
     if (!info) return null;
     if (info.isSymbolicLink())
-      throw Error("Символические ссылки не поддерживаются при коммите.");
+      throw Error(gitMessage("gitHost.committingSymbolicLinksIsNotSupported"));
     if (i === parts.length - 1) return regularFile(current);
     if (!info.isDirectory() || (await stat(path.join(current, ".git"))))
-      throw Error("Вложенный репозиторий или небезопасный путь Git.");
+      throw Error(gitMessage("gitHost.nestedRepositoryOrUnsafeGitPath"));
   }
   return null;
 }
@@ -165,7 +166,7 @@ async function auditWritableMetadata(root: string) {
       info.isSymbolicLink() ||
       (!info.isDirectory() && (!info.isFile() || info.nlink !== 1n))
     )
-      throw Error("Небезопасная ссылка или тип записываемых метаданных Git.");
+      throw Error(gitMessage("gitHost.unsafeLinkOrFileTypeInWritableGitMetadata"));
     if (info.isDirectory())
       for (const name of await fs.readdir(filename))
         await visit(path.join(filename, name), depth + 1);
@@ -176,7 +177,7 @@ async function auditWritableMetadata(root: string) {
     message &&
     (!message.isFile() || message.isSymbolicLink() || message.nlink !== 1n)
   )
-    throw Error("Небезопасные метаданные Git COMMIT_EDITMSG.");
+    throw Error(gitMessage("gitHost.unsafeGitCommitEditmsgMetadata"));
 }
 function entries(raw: string) {
   return raw
@@ -192,7 +193,7 @@ function entries(raw: string) {
 }
 function ident(raw: string) {
   const match = /^(.+ <[^<>\n]+>) \d+ [+-]\d{4}\n?$/.exec(raw);
-  if (!match) throw Error("Git не подтвердил настроенное авторство коммита.");
+  if (!match) throw Error(gitMessage("gitHost.gitCouldNotVerifyTheConfiguredCommitAuthor"));
   return match[1];
 }
 /** Serial admission is supplied by HostService. Tickets never authorize a path or
@@ -276,7 +277,7 @@ export abstract class GitWorkspaceActions {
       )
     ).stdout.trim();
     if (!["true", "false"].includes(signingValue))
-      throw Error("Git не подтвердил настройку подписи коммита.");
+      throw Error(gitMessage("gitHost.gitCouldNotVerifyTheCommitSigningConfiguration"));
     const signing = signingValue === "true";
     const filemodeValue = (
       await this.git(
@@ -286,7 +287,7 @@ export abstract class GitWorkspaceActions {
       )
     ).stdout.trim();
     if (!["true", "false"].includes(filemodeValue))
-      throw Error("Git не подтвердил режим файлов.");
+      throw Error(gitMessage("gitHost.gitCouldNotVerifyFileModeSettings"));
     return {
       config: digest(`${raw}\0${author}\0${committer}`),
       author,
@@ -305,7 +306,7 @@ export abstract class GitWorkspaceActions {
       !path.isAbsolute(context.root) ||
       path.resolve(context.root) !== context.root
     )
-      throw Error("Небезопасная рабочая папка Git.");
+      throw Error(gitMessage("gitHost.unsafeGitWorkingFolder"));
     await context.verify();
     await auditWritableMetadata(context.root);
     const snapshot = await context.snapshot();
@@ -319,7 +320,7 @@ export abstract class GitWorkspaceActions {
       snapshot.files.some((f) => f.kind === "conflict")
     )
       throw Error(
-        "Сначала завершите текущую операцию Git и разрешите конфликты.",
+        gitMessage("gitHost.finishTheCurrentGitOperationAndResolveConflictsFirst"),
       );
     const headFile = await regularFile(path.join(context.root, ".git/HEAD"));
     if (!headFile) throw stale();
@@ -334,7 +335,7 @@ export abstract class GitWorkspaceActions {
         recursive !== reference
       )
         throw Error(
-          "Цепочки символических Git refs не поддерживаются для коммита.",
+          gitMessage("gitHost.chainedSymbolicGitRefsAreNotSupportedForCommits"),
         );
     } else if (headFile.bytes.toString("utf8").trim() !== snapshot.head)
       throw stale();
@@ -349,7 +350,7 @@ export abstract class GitWorkspaceActions {
       )
     ).stdout.split("\0");
     if (attributes.length !== paths.length * 3 + 1 || attributes.at(-1) !== "")
-      throw Error("Некорректный ответ Git attributes.");
+      throw Error(gitMessage("gitHost.invalidGitAttributesResponse"));
     for (let i = 0; i < paths.length; i++)
       if (
         attributes[i * 3] !== paths[i] ||
@@ -357,7 +358,7 @@ export abstract class GitWorkspaceActions {
         !["unspecified", "unset"].includes(attributes[i * 3 + 2])
       )
         throw Error(
-          "Внешние clean/process фильтры выбранных файлов (например LFS) пока не поддерживаются.",
+          gitMessage("gitHost.externalCleanProcessFiltersSuchAsLfsAreNot"),
         );
     const modes = (
       await this.git(
@@ -367,7 +368,7 @@ export abstract class GitWorkspaceActions {
       )
     ).stdout;
     if (modes.split("\0").some((row) => /^(120000|160000) /.test(row)))
-      throw Error("Коммит ссылок и подмодулей пока не поддерживается.");
+      throw Error(gitMessage("gitHost.committingLinksAndSubmodulesIsNotSupported"));
     if (snapshot.head) {
       const tree = (
         await this.git(
@@ -377,7 +378,7 @@ export abstract class GitWorkspaceActions {
         )
       ).stdout;
       if (tree.split("\0").some((row) => /^(120000|160000) /.test(row)))
-        throw Error("Коммит ссылок и подмодулей пока не поддерживается.");
+        throw Error(gitMessage("gitHost.committingLinksAndSubmodulesIsNotSupported"));
     }
     const modesByPath: Record<string, string> = Object.create(null);
     for (const row of modes.split("\0").filter(Boolean)) {
@@ -408,7 +409,7 @@ export abstract class GitWorkspaceActions {
             : (modesByPath[name] ?? "100644")
           : null;
         if (file && !/^[a-f0-9]{40,64}$/.test(blobs[name]!))
-          throw Error("Некорректный хеш выбранного файла.");
+          throw Error(gitMessage("gitHost.invalidHashForTheSelectedFile"));
         if (
           fingerprint(await stat(path.join(context.root, name))) !==
           (file?.stamp ?? "missing")
@@ -456,9 +457,9 @@ export abstract class GitWorkspaceActions {
     if (snapshot.revision !== request.revision) throw stale();
     const selected = request.paths.map((name) => {
       const file = snapshot.files.find((file) => file.path === name);
-      if (!file) throw Error("Выбранного файла нет в списке изменений Git.");
+      if (!file) throw Error(gitMessage("gitHost.theSelectedFileIsNotInTheListOf"));
       if (file.submodule || file.kind === "conflict")
-        throw Error("Коммит подмодулей и конфликтов не поддерживается.");
+        throw Error(gitMessage("gitHost.committingSubmodulesAndConflictsIsNotSupported"));
       return file;
     });
     // A rename source is implicit only as a deletion. If it was recreated,
@@ -470,7 +471,7 @@ export abstract class GitWorkspaceActions {
         (await selectedFile(context.root, file.originalPath))
       )
         throw Error(
-          "Исходный путь переименованного файла создан заново. Выберите его отдельно либо исключите переименование.",
+          gitMessage("gitHost.theSourcePathOfARenamedFileWasRecreated"),
         );
     const paths = [
       ...new Set(
@@ -480,7 +481,7 @@ export abstract class GitWorkspaceActions {
         ]),
       ),
     ];
-    if (paths.length > 2000) throw Error("Слишком много выбранных путей.");
+    if (paths.length > 2000) throw Error(gitMessage("gitHost.tooManySelectedPaths"));
     const state = await this.capture(context, paths);
     if (state.revision !== request.revision) throw stale();
     const now = this.now();

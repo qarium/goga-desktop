@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import path from "node:path";
 import { realpath } from "node:fs/promises";
 import type { TopicOperationRequest } from "../shared/topics";
@@ -8,7 +9,7 @@ interface Worktree {
 }
 const invalidInventory = () =>
   Error(
-    "Не удалось проверить каталог рабочих копий Git. Операция остановлена.",
+    tr("host.couldNotVerifyTheGitWorkingCopyCatalogOperationStopped"),
   );
 
 // -z preserves spaces, newlines and non-ASCII paths without Git's quoting.
@@ -100,7 +101,7 @@ export async function assertTopicBranchesAvailable(
     }
     if (operation !== "delete" && owner === current) continue;
     throw Error(
-      `Ветка «${worktree.branch}» открыта ${owner === current ? "в рабочей копии" : "в другой рабочей копии"}. Операция недоступна: сначала переключите эту копию на другой топик.`,
+      tr("host.branchBranchIsCheckedOutValue2SwitchThatCopyTo", { branch: worktree.branch, value2: owner === current ? tr("host.inTheWorkingCopy") : tr("host.inAnotherWorkingCopy") }),
     );
   }
 }

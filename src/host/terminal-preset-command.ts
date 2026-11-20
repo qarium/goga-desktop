@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { createServer, type Socket } from "node:net";
 import { chmod, mkdtemp, writeFile } from "node:fs/promises";
 import { rmSync } from "node:fs";
@@ -15,7 +16,7 @@ export interface PreparedPresetCommand {
 
 const quote = (value: string) => "'" + value.replaceAll("'", "'\\''") + "'";
 const unavailable = () =>
-  Error("Не удалось подготовить первый запуск команды терминала.");
+  Error(t("hostTerminal.presetLaunchFailed"));
 
 /** The one-shot secret stays in host memory until a prompt asks for it.
  * No keyboard input, command argument, command file, PATH lookup, or TCP.

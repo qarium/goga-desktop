@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { AttachedDashboards } from "./attached-dashboards";
 import {
   sameDashboardOwner,
@@ -88,7 +89,7 @@ export class WindowDashboards {
     key: string,
   ): Promise<ConnectedPanel> {
     if (this.flight || this.disposed)
-      throw Error("Подключение уже выполняется или окно закрыто.");
+      throw Error(t("native.attachPending"));
     const owner = ownerOf(scope);
     const controller = new AbortController(),
       flight: AttachFlight = { key, owner, controller };
@@ -96,7 +97,7 @@ export class WindowDashboards {
     let result: ConnectedPanel | undefined;
     const check = () => {
       if (controller.signal.aborted || this.disposed)
-        throw Error("Подключение отменено.");
+        throw Error(t("native.attachCancelled"));
     };
     try {
       await this.host.withDemonstrationOwner(scope, async () => {
@@ -134,7 +135,7 @@ export class WindowDashboards {
             })
           )
             throw Error(
-              "Этот управляемый запуск открыт в другой рабочей области.",
+              t("native.managedElsewhere"),
             );
           this.registry.detach(owner, row.id);
           flight.tentative = undefined;
@@ -146,18 +147,18 @@ export class WindowDashboards {
           throw (
             this.pinErrors.get(row.id) ??
             Error(
-              "Не удалось открыть подтверждённую панель. Проверьте, что конвейер всё ещё работает.",
+              t("native.openVerifiedDashboard"),
             )
           );
         check();
         const loaded = this.registry.get(owner, row.id);
-        if (!loaded) throw Error("Панель была отключена.");
+        if (!loaded) throw Error(t("native.dashboardDetached"));
         this.published.set(row.id, loaded);
         flight.tentative = undefined;
         this.publish();
         result = { kind: "attached", panel: loaded };
       });
-      if (!result) throw Error("Не удалось подтвердить подключение.");
+      if (!result) throw Error(t("native.attachUnconfirmed"));
       return result;
     } catch (e) {
       this.releaseTentative(flight);
@@ -177,7 +178,7 @@ export class WindowDashboards {
   require(scope: ScopeRef, id: string) {
     const row = this.registry.get(ownerOf(scope), id);
     if (!row || !this.published.has(id))
-      throw Error("Панель не подключена к этой рабочей области.");
+      throw Error(t("native.dashboardOutsideWorkspace"));
     return row;
   }
   select(scope: ScopeRef, id: string) {
@@ -200,7 +201,7 @@ export class WindowDashboards {
   }
   async refresh(scope: ScopeRef, id: string, recover: boolean) {
     const row = this.require(scope, id);
-    if (!this.views.isTarget(id)) throw Error("Эта панель сейчас не выбрана.");
+    if (!this.views.isTarget(id)) throw Error(t("native.dashboardUnselected"));
     this.pinErrors.delete(id);
     const check = async () => {
       await this.verify(row);
@@ -216,7 +217,7 @@ export class WindowDashboards {
       throw (
         this.pinErrors.get(id) ??
         Error(
-          "Не удалось обновить панель этого запуска. Процесс не перезапускался.",
+          t("native.refreshAttachedFailed"),
         )
       );
     if (this.published.has(id)) {

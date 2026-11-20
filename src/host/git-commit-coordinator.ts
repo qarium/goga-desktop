@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import type { NativeGitOperationResult } from "../shared/git-native-operation";
 import {
   gitCommitRequestSchema,
@@ -26,7 +27,7 @@ import { nativeGitPhysicalIdentity } from "./git-native-state";
 import { ByteCommandError, type ByteCommandResult } from "./process";
 
 const stale = () =>
-  Error("Состояние Git изменилось. Подтвердите коммит заново.");
+  Error(gitMessage("gitHost.gitStateChangedConfirmTheCommitAgain"));
 const text = (bytes: Buffer) =>
   new TextDecoder("utf-8", { fatal: true }).decode(bytes);
 function checked(r: ByteCommandResult) {
@@ -161,14 +162,14 @@ export class GitCommitCoordinator extends GitWorkspaceActions {
     this.tickets.delete(token);
     this.nativeTickets.delete(token);
     if (!ticket || !native || ticket.preview.expiresAt <= this.now())
-      throw Error("Подтверждение истекло или уже использовано.");
+      throw Error(gitMessage("gitHost.thisConfirmationHasExpiredOrWasAlreadyUsed"));
     let finalize: (() => Promise<NativeGitOperationResult>) | undefined,
       observed: GitCommitResult | undefined;
     const uncertain = (result: GitCommitResult): GitCommitResult => ({
       ...result,
       status: "uncertain",
       message:
-        "Результат коммита требует проверки. Не повторяйте операцию; материалы восстановления сохранены.",
+        gitMessage("gitHost.theCommitNeedsReviewDoNotRepeatTheOperation"),
     });
     try {
       const response = await this.options.context(
@@ -506,10 +507,10 @@ export class GitCommitCoordinator extends GitWorkspaceActions {
               : {}),
             log,
             message: success
-              ? "Локальный коммит создан. Остальные подготовленные изменения сохранены."
+              ? gitMessage("gitHost.localCommitCreatedOtherStagedChangesWerePreserved")
               : result.outcome === "rejected"
-                ? "Git не создал коммит. Исходные данные и индекс проверены и сохранены."
-                : "Результат коммита требует проверки. Не повторяйте операцию; материалы восстановления сохранены.",
+                ? gitMessage("gitHost.gitDidNotCreateTheCommitTheOriginalData")
+                : gitMessage("gitHost.theCommitNeedsReviewDoNotRepeatTheOperation"),
           });
         },
       );
@@ -524,7 +525,7 @@ export class GitCommitCoordinator extends GitWorkspaceActions {
       if (!observed) throw error;
       return uncertain({
         ...observed,
-        log: "Завершающая проверка коммита или освобождение контекста завершились ошибкой. Диагностика окружения скрыта.",
+        log: gitMessage("gitHost.finalCommitVerificationOrContextReleaseFailedEnvironmentDiagnostics"),
       });
     }
   }

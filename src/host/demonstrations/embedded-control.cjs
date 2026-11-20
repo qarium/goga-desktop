@@ -1,3 +1,4 @@
+const { text: t, helperError } = require("./messages.cjs");
 // Private per-child RPC for Electron-only target lifecycle. Page CDP and its
 // strict event/response order remain unchanged on the real Chromium pipe.
 const { createInterface } = require("node:readline");
@@ -35,7 +36,7 @@ function createEmbeddedControl(proc) {
     closed = true;buffered=[];size=0;pendingBytes=0;
     for (const p of pending.values()) {
       clearTimeout(p.timer);
-      p.reject(Error("Браузер демонстрации отключён."));
+      p.reject(Error(t("hostTerminal.browserDisconnected")));
     }
     pending.clear();
   }
@@ -55,7 +56,7 @@ function createEmbeddedControl(proc) {
     clearTimeout(p.timer);
     pending.delete(msg.id); pendingBytes -= p.bytes;
     if(p.gated) endGate();
-    msg.error ? p.reject(Error(msg.error)) : p.resolve(msg.result);
+    msg.error ? p.reject(Error(helperError(msg.error))) : p.resolve(msg.result);
   });
   lines.once("close", close);
   proc.stdin.on("error", close);
@@ -73,10 +74,10 @@ function createEmbeddedControl(proc) {
     call(method, params) {
       return new Promise((resolve, reject) => {
         if (!supported.has(method) || closed || pending.size >= 128)
-          throw Error("Команда показа недоступна.");
+          throw Error(t("hostTerminal.commandUnavailable"));
         const id = ++serial, data = JSON.stringify({id, method, params});
         const bytes=Buffer.byteLength(data)+1;
-        if (pendingBytes + bytes > LIMIT) throw Error("Слишком большая команда показа.");
+        if (pendingBytes + bytes > LIMIT) throw Error(t("hostTerminal.commandLarge"));
         const gated=method==="Target.createBrowserContext" || method.startsWith("Storage.");
         if(gated) gates++;
         pendingBytes += bytes;

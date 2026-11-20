@@ -86,10 +86,6 @@
   overflow-y: auto;
   overscroll-behavior: contain;
   padding: 4px;
-  border: 1px solid #415572;
-  border-radius: 7px;
-  background: #10192c;
-  box-shadow: 0 12px 28px #0008;
 }
 .topic-select-option {
   position: relative;

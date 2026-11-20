@@ -1,3 +1,5 @@
+import { t } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useId, useRef, useState } from "react";
 import {
   contextKey,
@@ -31,6 +33,7 @@ export function ContextLaunchMenu({
   demoItem,
   primaryProjectId,
 }: ContextLaunchMenuProps) {
+  useLocale();
   const nativePopup = useNativeTopicPopup();
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
@@ -59,7 +62,7 @@ export function ContextLaunchMenu({
     blockedReason ||
     pipelineReason ||
     (!context && !prepareWithoutContext
-      ? "Выберите топик и проверенную рабочую копию для подготовки запуска."
+      ? t("general.selectATopicAndAVerifiedWorkingCopyTo")
       : "");
   const blocked = Boolean(reason);
   const reasonId = `${id}-reason`;
@@ -155,15 +158,13 @@ export function ContextLaunchMenu({
             close(true);
           }
         }}
-      >
-        Запустить
-        <span className="context-select-chevron" aria-hidden="true" />
+      >{t("general.launch")}<span className="context-select-chevron" aria-hidden="true" />
       </button>
       {open && !inactive && (
         <TopicPickerPopup
           anchor={trigger}
           width={296}
-          label="Подготовить новый запуск"
+          label={t("general.prepareANewRun")}
           onClose={() => close()}
         >
           <div
@@ -172,7 +173,7 @@ export function ContextLaunchMenu({
             ref={setMenu}
             role="menu"
             tabIndex={-1}
-            aria-label="Подготовить новый запуск"
+            aria-label={t("general.prepareANewRun")}
             aria-describedby={describedBy}
             onFocusCapture={(event) => {
               if (!nativePopup || !nativeFocusPending.current) return;
@@ -234,13 +235,12 @@ export function ContextLaunchMenu({
               disabled={blocked}
               aria-describedby={reason ? reasonId : undefined}
               onClick={() => prepare("pipeline")}
-            >
-              Конвейер<small>Описать задачу и настроить запуск</small>
+            >{t("general.pipeline")}<small>{t("general.describeTheTaskAndConfigureTheRun")}</small>
             </button>
             {activeBuild ? (
               <div className="context-launch-hint" id={buildHintId}>
-                <p>Сборка уже выполняется</p>
-                <small>Открыть её можно через «Запуски».</small>
+                <p>{t("general.aBuildIsAlreadyRunning")}</p>
+                <small>{t("general.openItFromRuns")}</small>
               </div>
             ) : (
               <button
@@ -249,8 +249,7 @@ export function ContextLaunchMenu({
                 disabled={blocked}
                 aria-describedby={describedBy}
                 onClick={() => prepare("build")}
-              >
-                Сборка<small>Выбрать план и настроить запуск</small>
+              >{t("general.build")}<small>{t("general.chooseAPlanAndConfigureTheRun")}</small>
               </button>
             )}
             {demoItem?.(() => close(true))}

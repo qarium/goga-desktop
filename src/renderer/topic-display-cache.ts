@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { z } from "zod";
 import type { Project } from "../shared/types";
 import type { TopicCatalogSnapshot } from "../shared/topics";
@@ -130,7 +131,7 @@ export function persistDeletedWorkspaceSelection(
       throw Error("Selection was not saved");
   } catch {
     throw Error(
-      "Не удалось сохранить переход в «Без топика». Клон уже в Корзине; удаление топика не продолжено.",
+      tr("topics.couldNotPersistTheSwitchToNoTopic"),
     );
   }
 }

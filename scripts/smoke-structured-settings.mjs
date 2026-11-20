@@ -394,6 +394,7 @@ async function fixture() {
     );
     await clickText("Конфигурация");
     assert.equal(await ev(`!!(${editor})`), false);
+    await clickText("Конфигурация");
     await clickText("Открыть редактор");
     await until(`!!(${editor})`);
     const projectDraft = "# Unsaved project draft\ncustom: true\n";
@@ -527,9 +528,10 @@ async function fixture() {
     );
     await ev("document.querySelector('.settings-button').click()");
     await until(
-      "!!document.querySelector('nav[aria-label=\"Разделы общих настроек\"]')",
+      "!!document.querySelector('nav[aria-label=\"Разделы настроек\"]')",
     );
     assert.equal(await ev(`!!(${editor})`), false);
+    await clickText("Конфигурация");
     await clickText("Открыть редактор");
     await until(`!!(${editor})`);
     await shot("general-config", 1320, 900);

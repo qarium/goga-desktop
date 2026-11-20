@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { createContext, useContext, useRef, useState } from "react";
 import type { TopicContextRef } from "../shared/worktrees";
 import { TopicModal } from "./TopicsCommon";
@@ -37,7 +39,7 @@ export function useContextDeletionController(
     setOperation(value);
   };
   const execute: ContextDeletionExecutor = async (owner, plan, allowAhead) => {
-    if (flight.current) throw Error("Дождитесь завершения удаления.");
+    if (flight.current) throw Error(msg("workspace.waitForDeletionToFinish"));
     flight.current = true;
     setBusy(true);
     const previous =
@@ -47,7 +49,7 @@ export function useContextDeletionController(
     const delegated = plan.purpose === "clone-after-topic";
     let removed = !!previous;
     const log: string[] = previous
-      ? [...previous.log, "Повторяем незавершённую операцию…"]
+      ? [...previous.log, msg("workspace.retryingUnfinishedOperation")]
       : [];
     const item = () => ({ owner, plan, allowAhead, log: [...log] });
     try {
@@ -75,7 +77,7 @@ export function useContextDeletionController(
         update({
           ...item(),
           error:
-            error instanceof Error ? error.message : "Удаление не завершено.",
+            error instanceof Error ? error.message : msg("workspace.deletionIncomplete"),
         });
       throw error;
     } finally {
@@ -90,17 +92,18 @@ export function ContextDeletionPopup({
 }: {
   controller: ReturnType<typeof useContextDeletionController>;
 }) {
+  useLocale();
   const operation = controller.operation;
   if (!operation) return null;
   return (
     <TopicModal
-      title={`Удаление топика ${operation.owner.topic}`}
+      title={msg("workspace.deleteTopic", { topic: String(operation.owner.topic) })}
       busy={controller.busy}
       onClose={controller.close}
     >
       <div className="topic-operation-log">
         <pre>{operation.log.join("\n")}</pre>
-        {controller.busy && <LoadingState label="Удаляем топик" />}
+        {controller.busy && <LoadingState label={msg("workspace.deletingTopic")} />}
         {operation.error && (
           <p role="alert" className="error">
             {operation.error}
@@ -114,9 +117,7 @@ export function ContextDeletionPopup({
                 .execute(operation.owner, operation.plan, operation.allowAhead)
                 .catch(() => {})
             }
-          >
-            Продолжить удаление
-          </button>
+          >{msg("workspace.resumeDeletion2")}</button>
         )}
       </div>
     </TopicModal>

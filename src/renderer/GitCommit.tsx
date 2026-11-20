@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useRef, useState } from "react";
 import type { ScopeRef } from "../shared/context";
 import type { GitWorkspaceSnapshot } from "../shared/git-workspace";
@@ -64,7 +66,7 @@ export function useGitCommit(scope: ScopeRef, onCommitted: () => void) {
       );
       if (!alive.current) return;
       if (documentScopeId(value.scope) !== owner)
-        throw Error("Подтверждение относится к другому контексту.");
+        throw Error(msg("git.theConfirmationBelongsToAnotherContext"));
       setPreview(value);
     } catch (error) {
       if (alive.current) setResult(topicError(error));
@@ -86,7 +88,7 @@ export function useGitCommit(scope: ScopeRef, onCommitted: () => void) {
       if (!alive.current) return;
       if (documentScopeId(value.scope) !== owner)
         throw Error(
-          "Результат относится к другому контексту. Проверьте состояние Git.",
+          msg("git.theResultBelongsToAnotherContextCheckTheGitState"),
         );
       if (value.status === "committed" && value.indexPublished) {
         setPaths((current) =>
@@ -104,10 +106,10 @@ export function useGitCommit(scope: ScopeRef, onCommitted: () => void) {
         setResult(
           [
             value.message,
-            value.commit && `Коммит: ${value.commit}`,
+            value.commit && msg("git.commit", { commit: String(value.commit) }),
             value.log,
             value.recoveryPath &&
-              `Материалы восстановления: ${value.recoveryPath}`,
+              msg("git.recoveryFiles", { recoveryPath: String(value.recoveryPath) }),
           ]
             .filter(Boolean)
             .join("\n\n"),
@@ -117,7 +119,7 @@ export function useGitCommit(scope: ScopeRef, onCommitted: () => void) {
       if (alive.current) {
         setUncertain(true);
         setResult(
-          `${topicError(error)}\n\nПроверьте состояние Git перед новой попыткой: ответ не подтверждает, что коммит не был создан.`,
+          msg("git.checkTheGitStateBeforeRetryingTheResponseDoesNot", { value1: String(topicError(error)) }),
         );
       }
     } finally {
@@ -207,6 +209,7 @@ export function GitCommitFooter({
   disabled: boolean;
   visible: boolean;
 }) {
+  useLocale();
   const blocked =
     disabled ||
     !!commit.pending ||
@@ -223,19 +226,17 @@ export function GitCommitFooter({
       <div className="git-commit-form">
         <label
           htmlFor={`git-message-${documentScopeId(snapshot?.scope ?? "pending")}`}
-        >
-          Сообщение коммита
-        </label>
+        >{msg("git.commitMessage")}</label>
         <div className="git-commit-input-row">
           <textarea
             id={`git-message-${documentScopeId(snapshot?.scope ?? "pending")}`}
-            aria-label="Сообщение коммита"
+            aria-label={msg("git.commitMessage")}
             rows={2}
             maxLength={10000}
             value={commit.message}
             disabled={disabled || !!commit.pending || !!commit.preview}
             onChange={(e) => commit.setMessage(e.target.value)}
-            placeholder="Кратко опишите изменения"
+            placeholder={msg("git.brieflyDescribeTheChanges")}
           />
           <button
             type="button"
@@ -249,53 +250,43 @@ export function GitCommitFooter({
             onClick={() => {
               if (snapshot) void commit.prepare(snapshot);
             }}
-          >
-            Создать коммит…
-          </button>
+          >{msg("git.createCommit")}</button>
         </div>
         <p role={commit.pending ? "status" : undefined}>
           {commit.pending === "prepare"
-            ? "Проверяем выбранные файлы…"
+            ? msg("git.checkingSelectedFiles")
             : commit.pending === "execute"
-              ? "Создаём локальный коммит…"
+              ? msg("git.creatingLocalCommit")
               : commit.uncertain
-                ? "Сначала обновите изменения и проверьте состояние Git. Автоматического повтора не будет."
-                : `Выбрано файлов: ${commit.paths.length}. Коммит содержит файлы целиком и не публикуется на сервер.`}
+                ? msg("git.refreshChangesAndCheckTheGitStateFirstThereWill")
+                : msg("git.selectedFilesTheCommitIncludesCompleteFilesAndWillNot", { length: String(commit.paths.length) })}
         </p>
       </div>
       {visible && commit.preview && (
         <TopicModal
-          title="Подтвердить коммит"
-          closeLabel="Закрыть подтверждение коммита"
+          title={msg("git.confirmCommit")}
+          closeLabel={msg("git.closeCommitConfirmation")}
           className="git-commit-modal"
           onClose={commit.closePreview}
         >
           <div className="git-commit-preview">
-            <p>
-              В коммит войдёт полное текущее содержимое выбранных файлов.
-              Изменения остальных файлов сохранятся.
-            </p>
+            <p>{msg("git.theCommitIncludesTheEntireCurrentContentsOfSelectedFiles")}</p>
             <dl>
-              <dt>Рабочая папка</dt>
+              <dt>{msg("git.workingDirectory")}</dt>
               <dd>{commit.preview.root}</dd>
-              <dt>Ветка</dt>
-              <dd>{commit.preview.branch ?? "Отсоединённый HEAD"}</dd>
-              <dt>Автор</dt>
+              <dt>{msg("git.branch2")}</dt>
+              <dd>{commit.preview.branch ?? msg("git.detachedHEAD")}</dd>
+              <dt>{msg("git.author")}</dt>
               <dd>{commit.preview.author}</dd>
-              <dt>Коммиттер</dt>
+              <dt>{msg("git.committer")}</dt>
               <dd>{commit.preview.committer}</dd>
-              <dt>Подпись</dt>
+              <dt>{msg("git.signing")}</dt>
               <dd>
-                {commit.preview.signing ? "По настройкам Git" : "Не настроена"}
+                {commit.preview.signing ? msg("git.fromGitConfiguration") : msg("git.notConfigured")}
               </dd>
             </dl>
-            <p>
-              Git-хуки не запускаются. Публикация и синхронизация не
-              выполняются.
-            </p>
-            <strong>
-              Файлов: {commit.preview.paths.length} · удалений:{" "}
-              {commit.preview.deletedCount}
+            <p>{msg("git.gitHooksWillNotRunNothingWillBePushedOr")}</p>
+            <strong>{msg("git.commitFileSummary", { count: commit.preview.paths.length, deleted: commit.preview.deletedCount })}
             </strong>
             <ul>
               {commit.preview.paths.map((p) => (
@@ -310,16 +301,14 @@ export function GitCommitFooter({
               className="primary"
               disabled={disabled || !!commit.pending}
               onClick={() => void commit.execute()}
-            >
-              Создать локальный коммит
-            </button>
+            >{msg("git.createLocalCommit")}</button>
           </div>
         </TopicModal>
       )}
       {visible && commit.result && (
         <TopicModal
-          title="Результат коммита"
-          closeLabel="Закрыть результат коммита"
+          title={msg("git.commitResult")}
+          closeLabel={msg("git.closeCommitResult")}
           className="git-workspace-error"
           onClose={commit.closeResult}
         >

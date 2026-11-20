@@ -1,3 +1,5 @@
+import { t } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useState } from "react";
 import { Settings2, SquareTerminal } from "lucide-react";
 import type { TerminalPresetMenuItem } from "../shared/terminal-presets";
@@ -13,6 +15,7 @@ export function TerminalPresetMenu({
   onSettings: () => void;
   disabled: boolean;
 }) {
+  useLocale();
   const read = window.goga?.terminalPresets;
   const [items, setItems] = useState<TerminalPresetMenuItem[]>(),
     [error, setError] = useState(""),
@@ -38,7 +41,7 @@ export function TerminalPresetMenu({
   return (
     <>
       <div className="terminal-menu-divider" role="separator" />
-      <div className="terminal-preset-menu-title">Пресеты</div>
+      <div className="terminal-preset-menu-title">{t("general.presets")}</div>
       {error ? (
         <>
           <small className="terminal-preset-menu-note" role="alert">
@@ -48,16 +51,12 @@ export function TerminalPresetMenu({
             type="button"
             role="menuitem"
             onClick={() => retry((v) => v + 1)}
-          >
-            Повторить загрузку
-          </button>
+          >{t("general.retryLoading")}</button>
         </>
       ) : !items ? (
-        <small className="terminal-preset-menu-note" role="status">
-          Загружаем пресеты…
-        </small>
+        <small className="terminal-preset-menu-note" role="status">{t("general.loadingPresets")}</small>
       ) : !items.length ? (
-        <small className="terminal-preset-menu-note">Пока нет пресетов</small>
+        <small className="terminal-preset-menu-note">{t("general.noPresetsYet2")}</small>
       ) : (
         items.map((p) => (
           <button
@@ -79,9 +78,7 @@ export function TerminalPresetMenu({
         disabled={disabled}
         onClick={onSettings}
       >
-        <Settings2 size={16} aria-hidden="true" />
-        Настроить пресеты…
-      </button>
+        <Settings2 size={16} aria-hidden="true" />{t("general.managePresets")}</button>
     </>
   );
 }

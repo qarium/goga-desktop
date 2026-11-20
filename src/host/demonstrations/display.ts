@@ -1,3 +1,4 @@
+import { t } from "../../shared/i18n";
 import { randomUUID } from "node:crypto";
 import { createLiveView } from "./live-view.cjs";
 import { trackPage } from "./navigation.cjs";
@@ -45,7 +46,7 @@ export async function createPageDisplay(
     tail: Promise<void> = Promise.resolve(),
     closing: Promise<void> | undefined;
   const retired = new Set<Promise<void>>();
-  const unavailable = () => Error("Страница показа уже закрыта или заменена.");
+  const unavailable = () => Error(t("hostTerminal.pageReplaced"));
   const requireOpen = () => {
     if (closed) throw unavailable();
   };

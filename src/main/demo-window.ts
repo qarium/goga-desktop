@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { clipboard, type BrowserWindow, type IpcMain } from "electron";
 import type { HostService } from "../host/service";
 import type { Demonstrations } from "../host/demonstrations/runtime";
@@ -54,7 +55,7 @@ export function createWindowDemonstrations(
       if (op.op === "reload") return execute({ action: "reload", showId });
       if (op.op === "navigate")
         return execute({ action: "navigate", showId, url: op.url });
-      throw Error("Некорректная команда показа.");
+      throw Error(t("native.demoBadCommand"));
     },
   });
   const unregister = registerDemoIPC(ipc, {

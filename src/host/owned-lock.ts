@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { constants } from "node:fs";
 import { open, unlink, link, lstat } from "node:fs/promises";
 import path from "node:path";
@@ -13,7 +14,7 @@ const ownerSchema = z
   .strict();
 const busy = () =>
   Error(
-    "Хранилище занято: владелец блокировки жив или неопределён. Повторите позже.",
+    tr("host.storageIsBusyTheLockOwnerIsStillRunningOr"),
   );
 type Snapshot = {
   dev: number;

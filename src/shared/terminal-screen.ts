@@ -48,6 +48,7 @@ export function sameTerminalGrant(a: TerminalGrant, b: TerminalGrant): boolean {
   );
 }
 export const terminalScreenCommandSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("language"), language: z.string().max(35) }).strict(),
   z.object({ kind: z.literal("grant"), grant: terminalGrantSchema }).strict(),
   z
     .object({

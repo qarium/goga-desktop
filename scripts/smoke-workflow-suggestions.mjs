@@ -393,7 +393,7 @@ async function fixture() {
         const controls=document.querySelector('.tool-controls');
         const popup=document.querySelector('[role=listbox]');
         const long=popup?.querySelectorAll('[role=option]')[2];
-        return {width:innerWidth,height:innerHeight,viewport:rect(area),tabs,tabBottom:document.querySelector('.project-settings-panel > .section-tabs').getBoundingClientRect().bottom,
+        return {width:innerWidth,height:innerHeight,viewport:rect(area),tabs,tabBottom:document.querySelector('.project-settings-panel > [data-settings-tabs]').getBoundingClientRect().bottom,
           popup:popup?{...rect(popup),scrollHeight:popup.scrollHeight,clientHeight:popup.clientHeight}:null,
           longWrapped:long?long.querySelector('span').getBoundingClientRect().height>parseFloat(getComputedStyle(long.querySelector('span')).lineHeight):null,
           overflow:[...document.querySelectorAll('.app-shell,.scroll-area,.project-settings-panel,.workflow-name-form,.workflow-name-input,.workflow-name-popup,.workflow-name-option')].filter(e=>e.getClientRects().length&&e.scrollWidth>e.clientWidth+1).map(e=>e.className),

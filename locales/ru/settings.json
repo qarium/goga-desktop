@@ -1,0 +1,9 @@
+{
+  "language": "Язык",
+  "languageHint": "Язык Goga Desktop на этом компьютере.",
+  "languageSaveError": "Не удалось сохранить настройку языка.",
+  "unsavedFiles_one": "{count} несохранённый файл",
+  "unsavedFiles_few": "{count} несохранённых файла",
+  "unsavedFiles_many": "{count} несохранённых файлов",
+  "unsavedFiles_other": "{count} несохранённого файла"
+}

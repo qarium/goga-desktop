@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 const indexScope = new AsyncLocalStorage<string>();
@@ -20,7 +21,7 @@ export function withTrustedGitIndex<T>(filename: string, action: () => T): T {
       filename,
     )
   )
-    throw new Error("Недопустимый служебный индекс Git.");
+    throw new Error(gitMessage("gitHost.invalidInternalGitIndex"));
   return indexScope.run(filename, action);
 }
 export const trustedGitIndex = () => indexScope.getStore();
@@ -34,7 +35,7 @@ export function withNativeGitIndex<T>(filename: string, action: () => T): T {
     path.resolve(filename) !== filename ||
     !/\/goga-native-index-[A-Za-z0-9]+\/index$/.test(filename)
   )
-    throw new Error("Недопустимый временный индекс штатного Git.");
+    throw new Error(gitMessage("gitHost.invalidTemporaryGitIndex"));
   return nativeIndexScope.run(filename, action);
 }
 /** Narrow host-only capability used by the frozen native client's stat refresh.
@@ -46,7 +47,7 @@ export function withNativeGitIndexRefresh<T>(root: string, action: () => T): T {
     path.resolve(root) !== root ||
     root.includes("\0")
   )
-    throw Error("Недопустимая рабочая папка штатного Git.");
+    throw Error(gitMessage("gitHost.invalidGitWorkingFolder"));
   return nativeIndexScope.run(path.join(root, ".git/index"), action);
 }
 export const nativeGitIndex = () => nativeIndexScope.getStore();
@@ -61,7 +62,7 @@ export function withNativeGitObjects<T>(directory: string, action: () => T): T {
     path.resolve(directory) !== directory ||
     !directory.endsWith("/.git/objects")
   )
-    throw Error("Недопустимое хранилище объектов штатного Git.");
+    throw Error(gitMessage("gitHost.invalidGitObjectStore"));
   return nativeObjectScope.run(directory, action);
 }
 export const nativeGitObjects = () => nativeObjectScope.getStore();

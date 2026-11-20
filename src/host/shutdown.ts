@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 /** Main-owned shutdown lease. Never accept this capability from a renderer.
  * Preparation freezes admissions but MUST NOT stop processes. A failing prepare
  * releases its own gate. Release restores admissions, never restarts old work.
@@ -32,13 +33,13 @@ export class ShutdownKeepError extends Error {
   ) {
     const messages = {
       unsupported:
-        "Активный запуск не поддерживает сохранение после выхода. Выберите остановку процессов или отмените выход.",
+        tr("host.anActiveRunCannotBeKeptRunningAfterExitChoose"),
       unavailable:
-        "Сохранение запущенных процессов после выхода сейчас недоступно. Приложение остаётся открытым.",
+        tr("host.keepingProcessesRunningAfterExitIsCurrentlyUnavailableTheApplication"),
       changed:
-        "Состав сохраняемых процессов изменился. Требуется новое подтверждение выхода.",
+        tr("host.theSetOfProcessesToKeepChangedConfirmExitAgain"),
       incomplete:
-        "Безопасное сохранение запущенных процессов после выхода не подтверждено. Приложение остаётся открытым.",
+        tr("host.cannotVerifyThatTheRunningProcessesCanSafelyBeKept"),
     };
     super(messages[code] ?? messages.incomplete);
     this.name = "ShutdownKeepError";

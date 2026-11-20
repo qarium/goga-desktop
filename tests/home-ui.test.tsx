@@ -20,3 +20,23 @@ it('never interprets an unverified process as running or offers to restart it',(
  const p=props();render(<HomePage {...p} runs={[{...r,recovery:'unverified',dashboardMessage:'Проверка'}]}/>);expect(screen.getByText('Состояние не подтверждено')).toBeTruthy();
  expect(screen.queryByText('Работает')).toBeNull();expect(screen.queryByText('Восстановить панель')).toBeNull();
 });
+
+it('switches the visible language without losing the active build filter or translating a project name', async () => {
+ const {setLocale} = await import('../src/shared/i18n');
+ const {act} = await import('@testing-library/react');
+ const p=props();
+ try {
+  setLocale('en');
+  render(<HomePage {...p} projects={[{...p.projects[0],name:'Проект'}]}/>);
+  expect(screen.getByRole('heading',{name:'Home'})).toBeTruthy();
+  const button=screen.getByRole('button',{name:'Builds'});
+  fireEvent.click(button);
+  expect(screen.queryByText('editor')).toBeNull();
+  expect(screen.getByText('Compilation')).toBeTruthy();
+  expect(screen.getByText('Проект')).toBeTruthy();
+  act(()=>{setLocale('ru')});
+  expect(screen.getByRole('heading',{name:'Главная'})).toBeTruthy();
+  expect(screen.getByRole('button',{name:'Сборки'})).toBe(button);
+  expect(screen.queryByText('editor')).toBeNull();
+ } finally { act(()=>{setLocale('ru')}); }
+});

@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { parseTerminalPresetEnv } from "../shared/terminal-presets";
 import { prepareTopicPrompt } from "./terminal-prompt";
 import {
@@ -41,7 +42,7 @@ export async function prepareTerminalEnvironment(
   system: TerminalSystem = {},
 ): Promise<TerminalLaunch> {
   const owner = terminalContextSchema.safeParse(context);
-  if (!owner.success) throw Error("Недопустимый контекст терминала.");
+  if (!owner.success) throw Error(t("hostTerminal.badContext"));
   const key = terminalContextKey(owner.data);
   const resolveOwned = async () => {
     try {
@@ -51,7 +52,7 @@ export async function prepareTerminalEnvironment(
       return value;
     } catch {
       throw Error(
-        "Не удалось подтвердить контекст терминала. Выберите его заново.",
+        t("hostTerminal.selectContextAgain"),
       );
     }
   };
@@ -71,7 +72,7 @@ export async function prepareTerminalEnvironment(
     shell = candidate;
   } catch {
     throw Error(
-      "Оболочка аккаунта недоступна или не поддерживается. Требуется zsh или bash.",
+      t("hostTerminal.shellUnsupported"),
     );
   }
   // Desktop may be launched by non-interactive tooling with colors disabled.
@@ -93,7 +94,7 @@ export async function prepareTerminalEnvironment(
   for (const [name, value] of Object.entries(merged)) {
     if (value === undefined || isBlockedTerminalChildEnvKey(name)) continue;
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name) || value.includes("\0"))
-      throw Error("Недопустимое окружение терминала. Значения скрыты.");
+      throw Error(t("hostTerminal.badEnvironment"));
     Object.defineProperty(env, name, {
       value,
       enumerable: true,
@@ -111,7 +112,7 @@ export async function prepareTerminalEnvironment(
     const fresh = await resolveOwned();
     const current = await directoryIdentity(fresh.root);
     if (pin !== current)
-      throw Error("Рабочая папка терминала изменилась. Обновите сессию.");
+      throw Error(t("hostTerminal.directoryChanged"));
   };
   await verifyRoot();
   const prompt =
@@ -153,7 +154,7 @@ async function directoryIdentity(root: string): Promise<string> {
     return `${root}:${info.dev}:${info.ino}`;
   } catch {
     throw Error(
-      "Рабочая папка терминала недоступна или заменена. Основная папка не будет использована вместо копии.",
+      t("hostTerminal.directoryReplaced"),
     );
   }
 }

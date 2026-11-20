@@ -105,9 +105,10 @@ beforeEach(() => {
 afterEach(cleanup);
 it("separates personal tabs, retains drafts through profile creation and reads only after consent", async () => {
   render(<Settings />);
+  fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
   await waitFor(() => expect(api.listSettings).toHaveBeenCalled());
   expect(
-    screen.getByRole("navigation", { name: "Разделы общих настроек" }),
+    screen.getByRole("navigation", { name: "Разделы настроек" }),
   ).toBeTruthy();
   expect(api.readSettings).not.toHaveBeenCalled();
   const view = await reveal();
@@ -292,9 +293,10 @@ it("allows leaving during a pending read without showing its result in a differe
   );
   render(<App />);
   fireEvent.click(await screen.findByRole("button", { name: "Настройки" }));
+  fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
   fireEvent.click(screen.getByRole("button", { name: "Открыть редактор" }));
   fireEvent.click(screen.getByRole("button", { name: "← Назад" }));
-  expect(screen.queryByRole("heading", { name: "Общие настройки" })).toBeNull();
+  expect(screen.queryByRole("heading", { name: "Настройки", level: 2 })).toBeNull();
   await act(async () => finish({ text: "late: value\r\n", version: "late1" }));
   expect(editor()).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Настройки" }));
@@ -507,6 +509,7 @@ it("uses the returned version after successful A save while B remains selected",
 it("retains home drafts after Back and does not turn successful saves into catalog refresh failures", async () => {
   render(<App />);
   fireEvent.click(await screen.findByRole("button", { name: "Настройки" }));
+  fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
   await waitFor(() => expect(api.listSettings).toHaveBeenCalledOnce());
   const view = await reveal();
   act(() =>
@@ -600,8 +603,9 @@ it("supports keyboard folder expansion and keeps manual state across tool select
 it("places configuration and personal profiles inside the constrained retained settings viewport", async () => {
   render(<App />);
   fireEvent.click(await screen.findByRole("button", { name: "Настройки" }));
+  fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
   const settings = screen
-    .getByRole("heading", { name: "Общие настройки" })
+    .getByRole("heading", { name: "Настройки", level: 2 })
     .closest(".settings-panel")!;
   const viewport = settings.closest(".scroll-area")!;
   expect(viewport.classList.contains("global-settings-scroll-area")).toBe(true);
@@ -729,4 +733,22 @@ it("lists paths as text, expands without losing the opt-in, and only requests re
     expect(props.onStay).toHaveBeenCalledTimes(2);
     ui.unmount();
   }
+});
+
+it.each([
+  ["en", "Settings", ["General", "Configuration", "Terminal", "Demonstration", "Profiles"]],
+  ["ru", "Настройки", ["Общие", "Конфигурация", "Терминал", "Демонстрация", "Профили"]],
+] as const)("opens General first without reading personal files (%s)", async (language, heading, labels) => {
+  const { setLocale } = await import("../src/shared/i18n");
+  setLocale(language);
+  api.terminalPresets = {};
+  api.demoState = vi.fn();
+  render(<Settings />);
+  expect(screen.getByRole("heading", { name: heading, level: 2 })).toBeTruthy();
+  const buttons = [...screen.getByRole("navigation").querySelectorAll("button")];
+  expect(buttons.map(button => button.textContent)).toEqual(labels);
+  expect(buttons[0].getAttribute("aria-current")).toBe("page");
+  expect(api.listSettings).not.toHaveBeenCalled();
+  expect(api.readSettings).not.toHaveBeenCalled();
+  expect(api.demoState).not.toHaveBeenCalled();
 });

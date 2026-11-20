@@ -1,3 +1,5 @@
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useState } from "react";
 import type { Project } from "../shared/types";
 import type { TopicTarget } from "../shared/topics";
@@ -19,6 +21,7 @@ import {
 export function TopicRemovalEntry(
   props: Parameters<typeof TopicDeleteDialog>[0],
 ) {
+  useLocale();
   const owner = props.owner;
   const read = useReadScope(
     JSON.stringify(["removal-entry", owner?.contextId, owner?.revision]),
@@ -34,7 +37,7 @@ export function TopicRemovalEntry(
     read("contextDeletionRecovery", contextRef(owner))
       .then((plan) => {
         if (plan && plan.contextId !== owner.contextId)
-          throw Error("Журнал удаления относится к другой копии.");
+          throw Error(tr("topics.theRemovalLogBelongsToAnotherCopy"));
         if (alive) setLegacy(!!plan);
       })
       .catch((e) => {
@@ -46,18 +49,16 @@ export function TopicRemovalEntry(
   }, [read, owner, attempt]);
   if (legacy === null)
     return (
-      <TopicModal title="Проверяем удаление" onClose={props.onClose}>
+      <TopicModal title={tr("topics.checkingRemoval")} onClose={props.onClose}>
         {error ? (
           <>
             <p role="alert" className="error">
               {error}
             </p>
-            <button type="button" onClick={() => setAttempt((n) => n + 1)}>
-              Повторить проверку
-            </button>
+            <button type="button" onClick={() => setAttempt((n) => n + 1)}>{tr("topics.checkAgain")}</button>
           </>
         ) : (
-          <LoadingState label="Проверяем прежнее подтверждение…" />
+          <LoadingState label={tr("topics.checkingPreviousConfirmation")} />
         )}
       </TopicModal>
     );
@@ -98,6 +99,7 @@ export function TopicDeleteDialog({
   onChanged: () => void;
   onBusy?: (v: boolean) => void;
 }) {
+  useLocale();
   const key = JSON.stringify([
     "delete",
     project.id,
@@ -113,9 +115,9 @@ export function TopicDeleteDialog({
   const [ownerBusy, setOwnerBusy] = useState(false);
   const operation = useTopicOperation(key, onChanged);
   const reason = active
-    ? "Сначала завершите запуски топика."
+    ? tr("topics.finishTheTopicSRunsFirst")
     : !owner && current
-      ? "Сначала выберите другой топик."
+      ? tr("topics.selectAnotherTopicFirst")
       : "";
   useEffect(() => {
     let alive = true;
@@ -128,7 +130,7 @@ export function TopicDeleteDialog({
       .then(async (fresh) => {
         if (!alive) return;
         if (fresh.projectId !== project.id || fresh.year !== year)
-          throw Error("Каталог относится к другому проекту или году.");
+          throw Error(tr("topics.theCatalogBelongsToAnotherProjectOrYear"));
         await operation.prepare({
           projectId: project.id,
           year,
@@ -154,7 +156,7 @@ export function TopicDeleteDialog({
   }, [busy, onBusy]);
   return (
     <TopicModal
-      title={`Удалить топик ${target.topic}`}
+      title={tr("topics.deleteTopicTopic", { topic: target.topic })}
       busy={busy}
       onClose={onClose}
     >
@@ -175,7 +177,7 @@ export function TopicDeleteDialog({
       ) : (
         <>
           {reason && <p className="hint">{reason}</p>}
-          {checking && <LoadingState label="Проверяем последствия удаления…" />}
+          {checking && <LoadingState label={tr("topics.checkingWhatWillBeDeleted")} />}
           {error && (
             <p className="error" role="alert">
               {error}

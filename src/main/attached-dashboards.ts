@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { randomUUID } from "node:crypto";
 import {
   dashboardOwnerSchema,
@@ -10,21 +11,21 @@ import {
   readDashboardStatus,
 } from "../shared/dashboard-connection";
 
-const unavailable = () => Error("Подключённая панель недоступна.");
+const unavailable = () => Error(t("native.attachedUnavailable"));
 const wrongOwner = () =>
-  Error("Адрес панели уже подключён в другом контексте.");
+  Error(t("native.attachedElsewhere"));
 const replaced = () =>
   Error(
-    "Порт теперь принадлежит другому запуску. Закройте прежнюю вкладку и подключите нужный запуск явно.",
+    t("native.portReassigned"),
   );
 
 function explicitOrigin(input: string): string {
   if (typeof input !== "string" || input.length > 160)
-    throw Error("Введите локальный dashboard URL с портом.");
+    throw Error(t("native.enterLocalURL"));
   const value = input.trim().replace(/^(?:➜\s*)?dashboard:\s*/i, "");
   if (!allowedDashboardURL(value))
     throw Error(
-      "Введите адрес вида http://localhost:52456 без пути и параметров.",
+      t("native.enterRootURL"),
     );
   return new URL(value).origin;
 }
@@ -114,7 +115,7 @@ export class AttachedDashboards {
       if (current && current.runId !== metadata.runId) throw replaced();
       if (!expectedId && terminal)
         throw Error(
-          "Этот конвейер уже завершён. Укажите адрес работающего запуска.",
+          t("native.attachLiveRun"),
         );
       const item = {
         id: current?.id ?? "attached:" + randomUUID(),

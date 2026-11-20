@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import {
@@ -26,7 +27,7 @@ import {
 import { assertReadActive } from "./read-scope";
 const changed = () =>
   Error(
-    "Файл или каталог изменился. Обновите список и подтвердите действие заново.",
+    tr("host.theFileOrDirectoryChangedRefreshTheListAndConfirm"),
   );
 const absent = (e: unknown) => (e as NodeJS.ErrnoException).code === "ENOENT";
 const same = (a: Stats, b: Stats) =>
@@ -152,12 +153,12 @@ const result = (
   completedPaths,
   message:
     status === "done"
-      ? "Действие выполнено."
+      ? tr("host.actionCompleted")
       : status === "partial"
-        ? "Выполнена только часть действия. Остальные файлы сохранены; обновите список."
+        ? tr("host.onlyPartOfTheActionCompletedTheRemainingFilesWere")
         : status === "uncertain"
-          ? "Результат не подтверждён. Проверьте каталог и Корзину; автоматического повтора не будет."
-          : "Действие не выполнено. Обновите список и подтвердите его заново.",
+          ? tr("host.theResultCouldNotBeVerifiedCheckTheDirectoryAnd")
+          : tr("host.theActionWasNotCompletedRefreshTheListAndConfirm"),
 });
 export async function prepareOverviewAction(
   root: string,
@@ -183,7 +184,7 @@ export async function prepareOverviewAction(
     )
       throw changed();
     if (!(await missing(path.join(root, request.destination))))
-      throw Error("Файл или папка с таким именем уже существует.");
+      throw Error(tr("host.aFileOrFolderWithThisNameAlreadyExists"));
   }
   for (const entry of entries) await entry.verify();
   return {

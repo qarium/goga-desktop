@@ -1,11 +1,12 @@
 "use strict";
+const { text: t } = require("./messages.cjs");
 
 const { randomUUID } = require("node:crypto");
 
 // One private CDP subscription per selected page, shared by its Desktop and
 // browser viewers. Demand is a bounded long poll; images are not a FIFO.
 function createScreencast(connect, snapshot) {
-  const unavailable = () => Error("Поток кадров страницы недоступен.");
+  const unavailable = () => Error(t("hostTerminal.streamUnavailable"));
   const WAIT_MS = 800,
     IDLE_MS = 1600,
     FIRST_MS = 3500;
@@ -155,7 +156,7 @@ function createScreencast(connect, snapshot) {
   async function nextFrame(after) {
     if (closed) throw unavailable();
     const s = active || begin();
-    if (s.waiters.size >= 8) throw Error("Слишком много запросов кадра.");
+    if (s.waiters.size >= 8) throw Error(t("hostTerminal.tooManyFrameRequests"));
     clearTimeout(s.idle);
     s.idle = setTimeout(() => retire(s), IDLE_MS);
     s.idle.unref?.();

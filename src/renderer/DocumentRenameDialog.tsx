@@ -1,3 +1,6 @@
+import { PopupClose } from "./PopupClose";
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useId, useRef, useState } from "react";
 
 export function DocumentRenameDialog({
@@ -11,6 +14,7 @@ export function DocumentRenameDialog({
   rename: (name: string) => Promise<void>;
   onClose: () => void;
 }) {
+  useLocale();
   const dialog = useRef<HTMLDialogElement>(null),
     input = useRef<HTMLInputElement>(null);
   const [name, setName] = useState(original),
@@ -66,25 +70,15 @@ export function DocumentRenameDialog({
         }}
       >
         <div className="document-rename-heading">
-          <h2 id={title}>Переименовать файл</h2>
-          <button
-            type="button"
-            className="quiet"
-            aria-label="Закрыть переименование"
-            disabled={busy}
-            onClick={close}
-          >
-            ✕
-          </button>
+          <h2 id={title}>{msg("project.renameFile")}</h2>
+          <PopupClose label={msg("project.closeRenameDialog")} onClick={close} disabled={busy} />
         </div>
-        <label>
-          Новое имя
-          <span className="document-rename-name">
+        <label>{msg("project.newName")}<span className="document-rename-name">
             <input
               ref={input}
               value={name}
               disabled={busy}
-              aria-label="Новое имя"
+              aria-label={msg("project.newName")}
               aria-describedby={hint}
               autoComplete="off"
               spellCheck={false}
@@ -96,25 +90,20 @@ export function DocumentRenameDialog({
             {suffix && <code>{suffix}</code>}
           </span>
         </label>
-        <p id={hint} className="hint">
-          Содержимое файла не изменится. Ссылки на прежнее имя нужно обновить
-          вручную.
-        </p>
+        <p id={hint} className="hint">{msg("project.fileContentsWillNotChangeUpdateReferencesToTheOld")}</p>
         {error && (
           <p role="alert" className="error">
             {error}
           </p>
         )}
         <div className="form-actions">
-          <button type="button" onClick={close} disabled={busy}>
-            Отмена
-          </button>
+          <button type="button" onClick={close} disabled={busy}>{msg("project.cancel")}</button>
           <button
             className="primary"
             type="submit"
             disabled={busy || !name || name === original}
           >
-            {busy ? "Переименовываем…" : "Переименовать"}
+            {busy ? msg("project.renaming") : msg("project.rename")}
           </button>
         </div>
       </form>

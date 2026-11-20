@@ -247,7 +247,7 @@ async function fixture() {
       await new Promise((r) => setTimeout(r, 80));
       const layout = await ev(`(()=>{
         const rect=e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height}};
-        const tabs=[...document.querySelectorAll('.section-tabs button')].filter(e=>e.getClientRects().length).map(e=>({...rect(e),text:e.textContent,unclipped:e.scrollWidth<=e.clientWidth+1}));
+        const tabs=[...document.querySelectorAll('[data-settings-tabs] button')].filter(e=>e.getClientRects().length).map(e=>({...rect(e),text:e.textContent,unclipped:e.scrollWidth<=e.clientWidth+1}));
         const dialog=document.querySelector('dialog[open]');
         const controls=document.querySelector('.tool-controls');
         return {tabs,dialog:dialog?rect(dialog):null,gap:controls?controls.nextElementSibling.getBoundingClientRect().top-controls.getBoundingClientRect().bottom:null,

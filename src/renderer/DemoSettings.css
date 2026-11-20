@@ -53,7 +53,7 @@
   user-select: all;
 }
 .demo-settings [data-error="true"] {
-  color: var(--red, #ffadb5);
+  color: var(--feedback-error-fg);
 }
 .demo-settings .demo-settings-note {
   font-size: 12px;

@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import { withNativeGitCompletion } from "./git-native-completion";
 import { randomBytes } from "node:crypto";
 import path from "node:path";
@@ -263,7 +264,7 @@ export class NativeGitUpdateHandoff extends GitMergeSafety {
             (saved.candidate.backend
               ? `Rebase backend: ${saved.candidate.backend}. `
               : "") +
-            "Будет отдельно начата штатная Git-операция в текущей ветке. Git может завершить её или остановиться на конфликте; конфликтные файлы определяются после запуска. Хуки отключены. Это не повтор и не завершение всей операции Goga, публикации нет.",
+            gitMessage("gitHost.aNativeGitOperationWillStartSeparatelyOnThe"),
           expiresAt: saved.candidate.expiresAt,
         };
       for (const [id, t] of this.tickets)
@@ -331,10 +332,10 @@ export class NativeGitUpdateHandoff extends GitMergeSafety {
         uncheckedLocks,
         message:
           native.outcome === "completed"
-            ? "Git завершил локальную операцию. Это не подтверждает выполнение всей операции Goga или публикацию."
+            ? gitMessage("gitHost.gitFinishedTheLocalOperationThisDoesNotConfirm")
             : native.outcome === "conflicts"
-              ? "Git остановился на конфликте. Защитный снимок сохранён; продолжение требует отдельного подтверждения."
-              : "Результат Git не подтверждён. Автоматического повтора нет.",
+              ? gitMessage("gitHost.gitStoppedAtAConflictAProtectiveSnapshotWas")
+              : gitMessage("gitHost.theGitResultCouldNotBeVerifiedNoAutomatic"),
       };
     });
   }

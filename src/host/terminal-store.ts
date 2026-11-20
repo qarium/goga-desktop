@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { randomUUID } from "node:crypto";
 import {
   terminalRegistrySchema,
@@ -5,10 +6,9 @@ import {
 } from "../shared/terminal";
 import { PrivateFileError, TerminalPrivateFile } from "./terminal-private-file";
 const messages = {
-  invalid: "Список вкладок терминала повреждён или несовместим.",
-  conflict:
-    "Список вкладок терминала изменён. Обновите данные перед сохранением.",
-  unavailable: "Не удалось прочитать или сохранить список вкладок терминала.",
+  get invalid() { return t("hostTerminal.tabsInvalid"); },
+  get conflict() { return t("hostTerminal.tabsChanged"); },
+  get unavailable() { return t("hostTerminal.tabsSaveFailed"); },
 };
 function validate(v: unknown): TerminalRegistry {
   try {

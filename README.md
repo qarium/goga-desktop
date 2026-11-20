@@ -1,77 +1,64 @@
 # Goga Desktop
 
-Настольный интерфейс для локальных конвейеров Goga: выбор Git-проекта и топика, подготовка рабочих копий, запуск конвейеров и сборок, просмотр результатов и журналов.
+Goga Desktop is a macOS app for running [Goga](https://github.com/qarium/goga) pipelines in local projects. Open a folder, choose a pipeline and its stages, then follow the run without leaving the app. Desktop provides the interface; the Goga CLI runs the pipeline using Docker.
 
-## Статус выпуска
+<picture>
+  <source media="(prefers-reduced-motion: reduce)" srcset="guides/media/desktop-tour-poster.png">
+  <img src="guides/media/desktop-tour.gif" alt="Goga Desktop tour: add Field Notes to the project list, move it into the Studio group, open the Launch menu, and run the refinement pipeline with sample output.">
+</picture>
 
-Первый тег — `v0.0.0`. Наличие тега не означает готовность установщиков: выпуск требует успешных проверок обеих архитектур. Будущие выпуски: [GitHub Releases](https://github.com/qarium/goga-desktop/releases). Сборки для macOS arm64 и x64 планируются, но их работоспособность и установка пока не подтверждены. Версия `0.1.51` в текущем локальном снимке не означает опубликованный релиз.
+*Sample projects, simulated run. Recorded in English with a disposable project. [How the tour is recorded](guides/readme-tour.md).*
 
-Текущая схема упаковки использует **ad-hoc-подпись**, а не Developer ID; нотариализация Apple отсутствует. Gatekeeper может блокировать приложение. Не отключайте защиту macOS; при блокировке дождитесь подходящего проверенного выпуска.
+## What you can do
 
-После появления проверенного релиза выберите DMG для своего Mac: `arm64` для Apple Silicon или `x64` для Intel. Сверьте SHA-256 загруженного файла с `SHA256SUMS` этого релиза; при совпадении откройте DMG и перенесите приложение в «Программы» (Applications). Это порядок будущей установки, а не подтверждение доступности сборок или успешного запуска.
+- **Work with code and specifications.** Browse the file tree, edit project files, inspect the architecture graph and read project documentation in **Project → Usages**.
+- **Keep work separate.** Use the original project folder, or give a Git topic its own working copy. Track topics in a table or on a board.
+- **Run pipelines and builds.** Choose a workflow, profile and stages; follow progress in the run tab and revisit logs in **Runs**.
+- **Work across projects.** Add projects to the sidebar, group them by team or product, and see their active runs on **Home**.
+- **Show a prototype.** Open a web page in an isolated demonstration tab and optionally let a trusted local agent control it.
 
-## Начало работы
+## 1. Install Goga Desktop
 
-Goga, Git и Docker устанавливаются отдельно и не входят в Goga Desktop. Для запуска нужен работающий Docker и локальная папка с конфигурацией Goga. В настройках проекта можно указать исполняемый файл Goga и профиль. Для конвейера в режиме **«Без топика»** Desktop не требует Git и не инициализирует его автоматически; топики и рабочие копии требуют Git-репозитория.
+1. Open [GitHub Releases](https://github.com/qarium/goga-desktop/releases/latest). Download the DMG for your Mac and the accompanying `SHA256SUMS`. Choose **arm64** for Apple Silicon or **x64** for Intel; **About This Mac** shows which chip you have.
+2. In Terminal, run `shasum -a 256` followed by a space and the downloaded DMG's path (you can drag the file into Terminal). The result must match the hash next to that filename in `SHA256SUMS`. If it doesn't, don't open the file.
+3. Open the DMG, drag **Goga Desktop** to **Applications**, and open it from there.
 
-1. Откройте локальную папку проекта.
-2. Оставьте **«Без топика»** для запуска в исходной папке или выберите топик в шапке/разделе **«Топики»**. Если для него есть несколько рабочих копий, выберите конкретную проверенную копию.
-3. Откройте меню **«Запустить»** и выберите конвейер или сборку. Приложение подготовит рабочую копию выбранного топика и форму запуска. Подготовка сама по себе не запускает конвейер.
-4. Проверьте задачу, конвейер и параметры, затем подтвердите запуск в форме. Результаты и журналы доступны среди запусков выбранного топика.
+The builds are ad hoc signed, not signed with an Apple Developer ID or notarized. Gatekeeper may block the download. If your Mac does not allow the app to open, do not disable its security protections.
 
-## Перенос результатов
+English is the default interface language. To use Russian, open **Settings → General → Language** and choose **Русский**. The change takes effect immediately and is remembered across projects and restarts. It does not change project files or command output.
 
-Список для таблицы и доски **Топики** загружается при выборе проекта и обновляется в фоне только для выбранного проекта и года. Повторно открывая раздел, вы видите последний загруженный список. Для немедленной проверки нажмите **Обновить список**. На Главной и в скрытом окне фоновая проверка приостанавливается.
+## 2. Prepare to run a pipeline
 
-В разделе **Топики** отметьте нужные топики и нажмите **Удалить выбранные топики**. До подтверждения проверку можно отменить крестиком или Esc — ничего не удалится. После подтверждения Goga удаляет выбранные топики, а Desktop переносит их рабочие копии целиком в системную Корзину, включая незакоммиченные файлы, игнорируемые файлы и непереданные коммиты. Если команда не подтвердила успех, копии остаются на месте. **Очистить топики** — отдельное действие: набор определяет Goga по году и базовой ветке, поэтому копии с локальными данными по-прежнему защищены.
+Desktop does not bundle the Goga CLI or Docker. Install [pipx](https://pipx.pypa.io/stable/how-to/install-pipx.html) if needed, then run:
 
-**«Синхронизировать»** переносит только коммиты рабочей копии в служебные Git-ссылки основной папки проекта. Незакоммиченные файлы остаются в копии; это не слияние в базовую ветку и не публикация на сервер.
+```sh
+pipx install goga
+goga --version
+```
 
-**«Применить в базу…»** — отдельное действие с предварительной проверкой и подтверждением. Оно сливает коммиты в текущую ветку основной папки, показанную в подтверждении; приложение не переключает эту ветку автоматически. Локальные изменения, конфликты или активные операции могут заблокировать применение. Статус «Синхронизировано» не означает «Применено в базу».
+Install and start [Docker Desktop for Mac](https://docs.docker.com/desktop/setup/install/mac-install/) or use your existing Docker installation. Run `docker info` in Terminal: it should show **Server** information, not a connection error. If your pipeline uses an AI agent, [configure the agent's credentials for the container](https://qarium.github.io/goga/features/pipelines/runtime/#credentials); a login on the host is not automatically available inside it.
 
-## Демонстрации
+**Git is optional for a run without a topic.** You need it to clone a repository or use topic working copies.
 
-В проекте выберите **Запустить → Начать демонстрацию**. По умолчанию показ работает на Chromium из комплекта Goga Desktop: устанавливать Chrome, Git, Docker или Goga CLI для локального показа не нужно. В **Настройки → Демонстрации → Браузер демонстрации** можно выбрать прежний режим **Системный браузер** (на macOS — Chrome, Chromium или Edge из каталога приложений). Движок выбирается при старте показа: открытые страницы и агент остаются на прежнем движке. При ошибке запуска встроенного Chromium есть явное действие **Запустить в системном браузере** для одной попытки; это не меняет настройку. Введите полный HTTP(S)-адрес рядом с кнопкой обновления и нажмите **Enter**. Адресная строка следует за переходами страницы и агента; **Esc** отменяет незавершённый ввод. Иконка справа от поля копирует URL открытой страницы (не черновик адреса); номер порта доступен в настройках, а не в строке статуса. Крестик верхней вкладки **«Демонстрация»** завершает весь показ, а сворачивание развёрнутого вида — нет.
+## 3. Open and configure a project
 
-Каждый проект и топик получает свой браузер с отдельным временным профилем. Список вкладок показывает только страницы этого рабочего контекста: **＋** создаёт и выбирает пустую вкладку, клик переключает страницу, её собственный крестик закрывает только эту страницу. При закрытии активной показывается соседняя, при закрытии последней появляется новая пустая — демонстрация и порт продолжают работать. Доступны стрелки, Home/End и горизонтальная прокрутка списка; те же действия есть в развёрнутом показе и внешнем просмотре. Вкладки разных проектов, топиков и заменённых рабочих копий не смешиваются, чужие идентификаторы хост отклоняет.
+Click **+** next to **Projects** in the sidebar:
 
-Для Desktop и внешнего просмотра браузер передаёт поток PNG-кадров **активной страницы**. Зритель получает последний доступный кадр, а не очередь снимков. Скрытый просмотр перестаёт запрашивать изображения; если зрителей больше нет, захват останавливается. При смене показа или вкладки запоздалые кадры и жесты не перенаправляются в другую страницу. Порт агента для работы просмотра не нужен.
+- **Already have a Goga project?** Choose **Open existing…** and select the project root. To start from a remote Git repository, choose **Create new… → From a Git repository** instead.
+- **Starting in an empty folder?** Choose **Create new… → From scratch**. Git initialization is on by default; turn it off if you don't need topics. In the new project's **Terminal** tab, run `goga init` and follow the prompts. This creates the Goga configuration; creating a folder or Git repository alone does not. Skip this step for an already configured project. See the [Goga quick start](https://github.com/qarium/goga#quick-start) for details.
 
-Поток сохраняет пропорции и ограничивает кадр до 2250×1300 физических пикселей, чтобы даже сложное изображение помещалось в защищённый канал. Изображение большего размера уменьшается **только для просмотра**: размер страницы агента не меняется. Если браузер не поддерживает поток или перестал передавать кадры для фоновой вкладки, используется резервный режим периодических снимков этой же страницы; он менее плавный.
+To keep related projects together, use the folder-with-plus button beside **Projects** to create a group. Open a project’s **…** menu and choose the group to move it there. Grouping changes the sidebar, not the folder on disk.
 
-В Desktop вкладки, порт, адрес и управление объединены в одну компактную строку — как в обычном, так и в развёрнутом показе. Вкладки оформлены как в терминале: плоские, с бирюзовым текстом и нижней линией у активной, одинаковыми крестиком и плюсом. Длинный список вкладок прокручивается горизонтально, в том числе обычным колесом мыши; панель не переносится на второй ряд. У кнопок-иконок сохранены подсказки и доступные названия. В очень узком показе адрес можно раскрыть через иконку ссылки, **Escape** закрывает поле без перехода. Полное состояние агента и владелец порта доступны в подсказке индикатора.
+Open **Project → Launch**. Under **Goga → Executable**, keep `goga` if it is on your path. If it works in Terminal but Desktop cannot find it, run `command -v goga` in Terminal and paste the absolute path to the executable into the field, without arguments. Leave **Default profile** on **Automatic** unless the project calls for a specific profile. Save any changes.
 
-В **Настройки → Демонстрации** можно заранее выбрать порт (по умолчанию `45123`). Для Playwright передайте в `chromium.connectOverCDP` адрес `http://127.0.0.1:45123`, а из Docker Desktop — `http://host.docker.internal:45123` (подставьте настроенный номер). Открытие второго показа не переключает агента: для этого есть **Переключить порт сюда**. Чтобы новый агент продолжил ту же страницу, используйте **Передать управление** и отключите автоматическое переподключение прежнего клиента. При переносе порта прежние клиентские сессии отзываются; соединение не получает доступ ко всем браузерам Desktop.
+## 4. Launch your first pipeline
 
-В Desktop можно выделять текст страницы мышью и копировать через **⌘C / Ctrl+C** или **правую кнопку → Копировать**. Поддерживаются обычный текст, текстовые поля, textarea, contenteditable и доступные вложенные документы. Копируется только выделенный текст активной вкладки; поля пароля исключены. Пустое выделение не очищает буфер. Уход в другую вкладку/проект отменяет незавершённый жест и запрос копирования. Содержимое системного буфера агенту не предоставляется. Вложенная страница другого домена, если её выделение нельзя безопасно прочитать, даёт явную ошибку вместо текста родительской страницы.
+1. For a first try, use a sample project and leave the header selector on **No topic**. The pipeline will work in the original folder, not in a disposable copy.
+2. Open **Launch** in the top right. **Pipeline** runs a set of stages, **Build** runs a build plan, and **Start demonstration** opens a web page. Choose **Pipeline**, then select `refinement` if available. The tour shows its four stages: `define`, `discover`, `specify`, and `review`. Check the workflow, profile, and stages for your own run. Opening the form does not start it.
+3. Click **Launch** at the bottom of the form. Follow progress in the run tab. To come back later, open **Runs** in the same project and topic context.
 
-Агент может использовать существующую страницу или создать новую вкладку и явно показать её через CDP `Target.activateTarget` (`page.bringToFront()` в Playwright). Показ, адресная строка, ввод и обновление следуют этому выбору только внутри браузера данного контекста. Само создание дополнительной вкладки показ не переключает. После отключения агента выбранная страница остаётся видимой; статус ожидания означает ожидание подключения, а не отсутствие результата.
+If no pipelines appear, check that you opened the project root, that Goga is configured there, and that the executable in **Project → Launch** matches the one you tested. If a pipeline fails after launch, start with its output log.
 
-Встроенный режим предназначен для веб-страниц. Чтобы показать локальный прототип, поднимите для него локальный HTTP-сервер и откройте его адрес. Показ не открывает документы по `file://`, не разрешает агенту подставлять пути к файлам компьютера в поля загрузки и не выдаёт странице системные разрешения. Дополнительные вкладки и обычные контексты Playwright поддерживаются; если сценарию нужны специальные параметры контекста, например собственный прокси, используйте системный браузер.
+## Guides
 
-Порт без ключа предназначен **только для доверенных локальных агентов и контейнеров**: право управления получает первый подключившийся клиент. Не публикуйте порт в сеть. Профили браузера раздельны, но это не защита файлов компьютера от недоверенного клиента CDP. Чтобы просто смотреть страницу в обычном браузере, используйте **Открыть в браузере** в самом показе, а не порт агента.
-
-Инструкции для разработки и контракт выпуска — в [AGENTS.md](AGENTS.md).
-
-
-### Подключение к уже работающему конвейеру
-
-В выбранном проекте или топике откройте **Запуски → Подключить конвейер**. Вставьте локальный адрес из строки `dashboard:` (например, `http://localhost:52456`). Это подключение к опубликованному на компьютере порту, не запуск Docker или Goga. Desktop проверяет ответ панели и ID запуска. Совпадение имени или номера порта само по себе не связывает панель с процессом.
-
-Для известного Desktop запуска с подтверждённой привязкой открывается его вкладка. Внешняя панель отображается отдельно, только для просмотра и только в текущем сеансе Desktop. Имя берётся из `flow_name`, а если оно пусто — из `run_id`. Место подключения определяет, где искать вкладку, а не ветку, профиль или топик внешнего процесса. Крестик отключает внешний просмотр и не завершает конвейер.
-
-Кнопка **Обновить страницу панели**, F5 или ⌘R/Ctrl+R обновляет открытую страницу, а не запускает конвейер повторно. У сборки без веб-панели остаётся журнал вывода.
-
-### Редактор файлов проекта
-
-В разделе **Проект** действия с открытым файлом расположены в шапке редактора:
-
-- **Переименовать файл** — для рабочих процессов, конвейеров, проектных профилей и YAML-файлов инструментов. Файл останется в той же папке, а несохранённый текст останется в редакторе под новым именем. Если имя используется в других файлах, обновите эти ссылки вручную.
-- **Обновить с диска** — перечитать файл, например после изменения другим редактором. Если есть несохранённый текст, Desktop сначала попросит подтверждение.
-- **Развернуть документ** — увеличить редактор до рабочей области окна. Кнопка сворачивания или Esc возвращает прежнюю компоновку, сохраняя выделение и историю правок.
-
-При выходе из **Обзора** или **Проекта** Desktop спрашивает «Сохранить правки?». Между файлами одного раздела можно переключаться без вопроса. Перед сменой рабочей области или подготовкой запуска Desktop учитывает правки в обоих редакторах текущего проекта и топика. **Без сохранения** оставляет черновики в редакторах; конвейер увидит версии на диске.
-
-Чтобы сохранять автоматически, отметьте **Больше не спрашивать и сохранять автоматически** и нажмите **Сохранить и продолжить**. Вернуть напоминание можно в **Настройки → Рабочая область → Автосохранение при переходе**. Если версия файла на диске конфликтует с черновиком, Desktop остановит переход и предложит открыть файл, не перезаписывая чужие правки.
-
-Общие настройки и личные профили по-прежнему открываются только по явному действию.
+[Workspaces, topics, files and runs](guides/workspaces.md) · [Demonstrations and agent connections](guides/demonstrations.md) · [Working on Goga Desktop](AGENTS.md)

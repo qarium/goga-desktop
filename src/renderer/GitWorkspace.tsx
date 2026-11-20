@@ -1,3 +1,7 @@
+import { HintButton } from "./ActionHint";
+import type { MessageKey } from "../shared/locale-packs.generated";
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { GitDiffView as DiffPart, PageControls } from "./GitDiffView";
 import { useGitSummary } from "./useGitSummary";
 import {
@@ -66,6 +70,7 @@ export interface GitWorkspaceProps {
 }
 /** App retains this owner; the key also protects consumers that replace scope in place. */
 export function GitWorkspace(props: GitWorkspaceProps) {
+  useLocale();
   const scope = props.scope;
   // Freshness is not ownership: keep drafts when the same context is refreshed.
   const key =
@@ -80,14 +85,13 @@ export function GitWorkspace(props: GitWorkspaceProps) {
         ]);
   return <GitWorkspaceOwner key={key} {...props} />;
 }
-const operations: Record<GitWorkspaceSnapshot["operation"], string> = {
-  none: "",
-  merge: "Незавершённое слияние",
-  rebase: "Незавершённый rebase",
-  "cherry-pick": "Незавершённый cherry-pick",
-  revert: "Незавершённый revert",
-  unknown: "Незавершённая операция Git",
-};
+const operations = {
+  merge: "git.unfinishedMerge",
+  rebase: "git.unfinishedRebase",
+  "cherry-pick": "git.unfinishedCherryPick",
+  revert: "git.unfinishedRevert",
+  unknown: "git.unfinishedGitOperation",
+} as const satisfies Record<Exclude<GitWorkspaceSnapshot["operation"], "none">, MessageKey>;
 const FILE_PAGE_SIZE = 200;
 function GitWorkspaceOwner({
   scope,
@@ -106,6 +110,7 @@ function GitWorkspaceOwner({
   onBranchBusyChange,
   disabled = false,
 }: GitWorkspaceProps) {
+  useLocale();
   const active = useViewActive();
   const summarySupported = typeof window.goga.readGitSummary === "function";
   const owner = documentScopeId(scope);
@@ -373,7 +378,7 @@ function GitWorkspaceOwner({
       .then((value) => {
         if (controller.signal.aborted) return;
         if (documentScopeId(value.scope) !== owner)
-          throw Error("Ответ Git относится к другому контексту.");
+          throw Error(msg("git.theGitResponseBelongsToAnotherContext"));
         setSnapshot(value);
         if (open) commit.initializeSelection(value);
         setReadVersion(requestReadVersion);
@@ -438,7 +443,7 @@ function GitWorkspaceOwner({
           value.path !== file ||
           value.revision !== snapshot.revision
         )
-          throw Error("Ответ Git устарел. Обновите изменения.");
+          throw Error(msg("git.theGitResponseIsOutOfDateRefreshChanges"));
         setDiff(value);
       })
       .catch((error) => {
@@ -472,10 +477,10 @@ function GitWorkspaceOwner({
   const conflicts =
     snapshot?.files.filter((f) => f.kind === "conflict").length ?? 0;
   const branch = gitMissing
-    ? "Git не инициализирован"
+    ? msg("git.gitIsNotInitialized")
     : summarySupported
       ? summary.value
-        ? (summary.value.branch ?? "HEAD (без ветки)")
+        ? (summary.value.branch ?? msg("git.headNoBranch"))
         : typeof scope === "string"
           ? "—"
           : scope.branch
@@ -570,9 +575,9 @@ function GitWorkspaceOwner({
             }
             mutationBlockedReason={
               rebase.needsRefresh || sequencer.needsRefresh
-                ? "Обновите изменения Git перед изменением веток."
+                ? msg("git.refreshGitChangesBeforeModifyingBranches")
                 : discard.uncertain
-                  ? "Проверьте состояние прежней отмены в Изменениях."
+                  ? msg("git.checkThePreviousDiscardStateInChanges")
                   : undefined
             }
             onChanged={(id, change) => {
@@ -585,7 +590,7 @@ function GitWorkspaceOwner({
           <span
             className="git-workspace-branch"
             title={branch}
-            aria-label={gitMissing ? branch : `Ветка: ${branch}`}
+            aria-label={gitMissing ? branch : msg("git.branch", { branch: String(branch) })}
           >
             <span aria-hidden="true">⑂</span> {branch}
           </span>
@@ -597,24 +602,24 @@ function GitWorkspaceOwner({
           tabProps={{ "aria-pressed": open }}
           label={
             gitMissing
-              ? "Изменения, Git не инициализирован"
+              ? msg("git.changesGitIsNotInitialized")
               : summarySupported
-                ? `Изменения, ${summary.error ? "не удалось обновить данные" : summary.value ? `файлов: ${summary.value.changedFiles}${summary.value.conflicts ? `, конфликтов: ${summary.value.conflicts}` : ""}` : "проверяем данные"}`
+                ? msg("git.changes", { value1: String(summary.error ? msg("git.couldNotRefresh") : summary.value ? msg("git.files2", { changedFiles: String(summary.value.changedFiles), value2: String(summary.value.conflicts ? msg("git.conflicts", { conflicts: String(summary.value.conflicts) }) : "") }) : msg("git.checking")) })
                 : conflicts
-                  ? `Конфликты · ${conflicts}`
-                  : "Изменения"
+                  ? msg("git.conflicts2", { conflicts: String(conflicts) })
+                  : msg("git.changes2")
           }
-          tooltipLabel="Изменения рабочей папки"
+          tooltipLabel={msg("git.workingDirectoryChanges")}
           description={
             gitMissing
-              ? "Git не инициализирован. Файлы и редактор доступны в Обзоре."
+              ? msg("git.gitIsNotInitializedFilesAndTheEditorAreAvailable")
               : summarySupported
                 ? summary.error
-                  ? "Не удалось обновить данные. Количество изменений неизвестно. Откройте раздел для диагностики."
+                  ? msg("git.couldNotRefreshTheNumberOfChangesIsUnknownOpen")
                   : summary.value
-                    ? `Изменённых файлов: ${summary.value.changedFiles}. Конфликтов: ${summary.value.conflicts}. Счётчик обновляется автоматически.`
-                    : "Проверяем изменения. Раздел можно открыть, не дожидаясь счётчика."
-                : "Посмотреть изменения выбранного контекста"
+                    ? msg("git.changedFilesConflictsTheCountUpdatesAutomatically", { changedFiles: String(summary.value.changedFiles), conflicts: String(summary.value.conflicts) })
+                    : msg("git.checkingChangesYouCanOpenTheSectionWithoutWaitingFor")
+                : msg("git.viewChangesForTheSelectedContext")
           }
           tooltipEnabled={active}
           onClick={() => (open ? onClose() : onOpen())}
@@ -631,7 +636,7 @@ function GitWorkspaceOwner({
             <path d="M6 3H3v12a2 2 0 0 0 2 2h1M16 3H9v18h12V8zM16 3v5h5" />
           </svg>
           <span className="git-control-label">
-            {!summarySupported && conflicts ? "Конфликты" : "Изменения"}
+            {!summarySupported && conflicts ? msg("git.conflicts3") : msg("git.changes2")}
           </span>
           <span
             className={`git-changes-count${(summarySupported ? summary.error || !summary.value || summary.value.changedFiles === 0 : !snapshot || snapshotFailed || snapshot.files.length === 0) ? " quiet" : ""}`}
@@ -661,9 +666,9 @@ function GitWorkspaceOwner({
             disabled={disabled || gitMissing}
             busy={false}
             tabProps={{ "aria-pressed": historyOpen }}
-            label="Коммиты"
-            tooltipLabel="История коммитов"
-            description="Посмотреть коммиты, файлы и различия. Без переключения рабочей ветки."
+            label={msg("git.commits")}
+            tooltipLabel={msg("git.commitHistory")}
+            description={msg("git.viewCommitsFilesAndDiffsWithoutSwitchingTheWorkingBranch")}
             tooltipEnabled={active}
             onClick={() => (historyOpen ? onHistoryClose?.() : onHistoryOpen())}
           >
@@ -678,7 +683,7 @@ function GitWorkspaceOwner({
             >
               <path d="M3 12a9 9 0 1 0 3-6.7M3 3v6h6M12 7v5l3 2" />
             </svg>
-            <span className="git-control-label">Коммиты</span>
+            <span className="git-control-label">{msg("git.commits")}</span>
           </TooltipButton>
         )}
       </div>
@@ -687,7 +692,7 @@ function GitWorkspaceOwner({
         createPortal(
           <section
             className={`git-workspace${isConflict ? " git-workspace-conflicts" : ""}`}
-            aria-label="Изменения Git"
+            aria-label={msg("git.gitChanges")}
             hidden={!body}
             inert={!body}
             onKeyDown={(event) => {
@@ -709,14 +714,14 @@ function GitWorkspaceOwner({
           >
             <header className="git-workspace-heading">
               <div>
-                <h2>Изменения</h2>
-                <p>От последнего коммита до текущего состояния файлов</p>
+                <h2>{msg("git.changes2")}</h2>
+                <p>{msg("git.fromTheLastCommitToTheCurrentWorkingFiles")}</p>
               </div>
               <div className="git-workspace-heading-actions">
                 <TooltipButton
-                  label="Обновить изменения"
-                  tooltipLabel="Обновить изменения"
-                  description="Перечитать изменения локальных файлов"
+                  label={msg("git.refreshChanges")}
+                  tooltipLabel={msg("git.refreshChanges")}
+                  description={msg("git.rereadLocalFileChanges")}
                   busy={snapshotPending}
                   disabled={
                     snapshotPending ||
@@ -743,7 +748,7 @@ function GitWorkspaceOwner({
                   ref={closeButton}
                   type="button"
                   className="icon-button"
-                  aria-label="Закрыть изменения"
+                  aria-label={msg("git.closeChanges")}
                   onClick={onClose}
                 >
                   ×
@@ -753,65 +758,51 @@ function GitWorkspaceOwner({
             {snapshot?.operation !== undefined &&
               snapshot.operation !== "none" && (
                 <div className="git-workspace-notice" role="note">
-                  {operations[snapshot.operation]}.{" "}
-                  {conflicts ? `Конфликтов: ${conflicts}. ` : ""}Закрытие
-                  просмотра не отменяет операцию. Каждый разрешённый файл
-                  сохраняется отдельно.
-                  {snapshot.operation !== "merge" &&
+                  {msg(operations[snapshot.operation])}.{" "}
+                  {conflicts ? msg("git.conflicts4", { conflicts: String(conflicts) }) : ""}{msg("git.closingTheViewDoesNotAbortTheOperationSaveEach")}{snapshot.operation !== "merge" &&
                     (snapshot.operation !== "rebase" || !rebase.supported) &&
                     (!["cherry-pick", "revert"].includes(snapshot.operation) ||
                       !sequencer.supported) &&
-                    " Продолжение и отмена этой операции здесь не поддерживаются."}
+                    msg("git.thisViewDoesNotSupportContinuingOrAbortingThisOperation")}
                 </div>
               )}
             <div className="git-workspace-content">
               {disabled ? (
-                <div className="git-workspace-empty">
-                  Выбранный контекст недоступен. Основная папка не используется
-                  вместо него.
-                </div>
+                <div className="git-workspace-empty">{msg("git.theSelectedContextIsUnavailableTheOriginalFolderWillNot")}</div>
               ) : gitMissing ? (
-                <div className="git-workspace-empty">
-                  Git не инициализирован. Файлы и редактор доступны в Обзоре.
-                </div>
+                <div className="git-workspace-empty">{msg("git.gitIsNotInitializedFilesAndTheEditorAreAvailable")}</div>
               ) : snapshotPending ? (
-                <LoadingState label="Загрузка изменений" />
+                <LoadingState label={msg("git.loadingChanges")} />
               ) : snapshotFailed ? (
-                <div className="git-workspace-empty">
-                  Не удалось загрузить изменения. Можно обновить список или
-                  закрыть просмотр.
-                </div>
+                <div className="git-workspace-empty">{msg("git.couldNotLoadChangesRefreshTheListOrCloseThis")}</div>
               ) : !files.length ? (
                 <div className="git-workspace-empty">
-                  <strong>Нет изменений для просмотра</strong>
-                  <span>
-                    Изменений обычных файлов не найдено. Рабочие копии
-                    подмодулей не проверяются.
-                  </span>
+                  <strong>{msg("git.noChangesToView")}</strong>
+                  <span>{msg("git.noChangesToRegularFilesWereFoundSubmoduleWorkingCopies")}</span>
                 </div>
               ) : (
                 <>
                   <nav
                     className="git-workspace-files"
-                    aria-label="Изменённые файлы"
+                    aria-label={msg("git.changedFiles")}
                   >
                     <PageControls
                       total={files.length}
                       page={visibleFilePage}
                       size={FILE_PAGE_SIZE}
-                      label="Файлы"
-                      previous="Предыдущие файлы"
-                      next="Следующие файлы"
+                      label={msg("git.files3")}
+                      previous={msg("git.previousFiles")}
+                      next={msg("git.nextFiles")}
                       onPage={setFilePage}
                     />
                     {(commit.supported || discard.supported) && !isConflict && (
                       <label
                         className="git-file-select-all"
-                        title="Выбрать или снять выбор доступных файлов во всём списке, на всех страницах."
+                        title={msg("git.selectOrDeselectAllAvailableFilesAcrossAllPages")}
                       >
                         <input
                           type="checkbox"
-                          aria-label="Выбрать все файлы"
+                          aria-label={msg("git.selectAllFiles")}
                           checked={
                             selectableFiles.length > 0 &&
                             selectedFileCount === selectableFiles.length
@@ -828,7 +819,7 @@ function GitWorkspaceOwner({
                               commit.toggleAll(snapshot);
                           }}
                         />
-                        <span>Выбрать все файлы</span>
+                        <span>{msg("git.selectAllFiles")}</span>
                       </label>
                     )}
                     {files
@@ -839,7 +830,7 @@ function GitWorkspaceOwner({
                             !isConflict && (
                               <input
                                 type="checkbox"
-                                aria-label={`Выбрать файл: ${entry.path}`}
+                                aria-label={msg("git.selectFile", { path: String(entry.path) })}
                                 checked={selectedPaths.has(entry.path)}
                                 disabled={
                                   selectionBlocked ||
@@ -886,16 +877,16 @@ function GitWorkspaceOwner({
                             >
                               {entry.path}
                               {entry.originalPath && (
-                                <small>из {entry.originalPath}</small>
+                                <small>{msg("git.originalFilePath", { path: entry.originalPath })}</small>
                               )}
                             </span>
                           </button>
                           {isConflict && file === entry.path && (
-                            <button
+                            <HintButton
                               type="button"
                               className="git-file-close"
-                              aria-label={`Закрыть файл: ${entry.path}`}
-                              title="Закрыть файл"
+                              aria-label={msg("git.closeFile2", { path: String(entry.path) })}
+                              hint={msg("git.closeFile3")}
                               disabled={
                                 conflictState.locked ||
                                 merge.locked ||
@@ -905,7 +896,7 @@ function GitWorkspaceOwner({
                               onClick={() => setFile("")}
                             >
                               ×
-                            </button>
+                            </HintButton>
                           )}
                         </div>
                       ))}
@@ -918,7 +909,7 @@ function GitWorkspaceOwner({
                   ) : (
                     <div className="git-workspace-file">
                       <div className="git-workspace-file-heading">
-                        <strong title={file}>{file || "Выберите файл"}</strong>
+                        <strong title={file}>{file || msg("git.selectAFile")}</strong>
                       </div>
                       <div
                         className="git-diff-preview"
@@ -929,20 +920,13 @@ function GitWorkspaceOwner({
                         }}
                       >
                         {!file ? (
-                          <div className="git-workspace-empty">
-                            Выберите файл слева для просмотра изменений.
-                          </div>
+                          <div className="git-workspace-empty">{msg("git.selectAFileOnTheLeftToViewItsChanges")}</div>
                         ) : diffPending ? (
-                          <LoadingState label="Загрузка различий" />
+                          <LoadingState label={msg("git.loadingDiff")} />
                         ) : diffFailed ? (
-                          <div className="git-workspace-empty">
-                            Не удалось прочитать файл. Обновите изменения.
-                          </div>
+                          <div className="git-workspace-empty">{msg("git.couldNotReadTheFileRefreshChanges")}</div>
                         ) : currentDiff?.changes.kind === "empty" ? (
-                          <div className="git-workspace-empty">
-                            Итоговых изменений относительно последнего коммита
-                            нет.
-                          </div>
+                          <div className="git-workspace-empty">{msg("git.noNetChangesSinceTheLastCommit")}</div>
                         ) : currentDiff ? (
                           <DiffPart
                             part={currentDiff.changes}
@@ -992,7 +976,7 @@ function GitWorkspaceOwner({
                   visible={body}
                 />
               ) : (
-                "Просмотр не изменяет файлы, индекс, ветки и удалённый репозиторий."
+                msg("git.viewingDoesNotModifyFilesTheIndexBranchesOrThe")
               )}
               {discard.supported &&
                 !isConflict &&
@@ -1059,8 +1043,8 @@ function GitWorkspaceOwner({
             {body && <GitConflictDialogs conflicts={conflictState} />}
             {body && showFailure && (
               <TopicModal
-                title="Не удалось прочитать изменения"
-                closeLabel="Закрыть ошибку Git"
+                title={msg("git.couldNotReadChanges")}
+                closeLabel={msg("git.dismissGitError")}
                 className="git-workspace-error"
                 onClose={() => setShowFailure(false)}
               >

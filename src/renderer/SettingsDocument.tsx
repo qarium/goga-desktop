@@ -1,9 +1,13 @@
+import { HintButton } from "./ActionHint";
+import { t } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { DocumentRenameDialog } from "./DocumentRenameDialog";
 import { Maximize2, Minimize2, RefreshCw, Pencil } from "lucide-react";
 import { useProjectDocumentExpansion } from "./useProjectDocumentExpansion";
 import { ProjectDocumentStatus } from "./ProjectDocumentStatus";
 import { useDocumentSaveStatus } from "./useDocumentSaveStatus";
 import "./ProjectDocumentExpansion.css";
+import "./WorkspaceTabs.css";
 import { useViewActive } from "./RetainedViews";
 import { useSettingsEditorViewport } from "./useSettingsEditorViewport";
 import { LoadingBoundary } from "./LoadingBoundary";
@@ -24,8 +28,6 @@ import {
   type DocumentDraft,
   type SettingsDocuments,
 } from "./settings-documents";
-const missingFileHint =
-  "Файл отсутствует и будет создан только после нажатия «Сохранить».";
 
 export function SettingsDocument({
   store,
@@ -44,6 +46,7 @@ export function SettingsDocument({
   saveDisabled?: boolean;
   postSaveRefresh?: boolean;
 }) {
+  useLocale();
   const dockerfile =
     source.scope === "project" && source.target.kind === "dockerfile";
   const pipeline =
@@ -51,12 +54,12 @@ export function SettingsDocument({
   const workflow =
     source.scope === "project" && source.target.kind === "workflow";
   const saveHelp = dockerfile
-    ? "Dockerfile сохраняется как исходный текст без проверки YAML и преобразований. Перед атомарной записью проверяются файл и конфигурация."
+    ? t("general.theDockerfileIsSavedAsSourceTextDesktopChecks")
     : workflow
-      ? "Исходный YAML / Jinja сохраняется без рендеринга, подстановок и проверки структуры. Goga проверяет рабочий процесс после рендеринга в контексте профиля и конвейера. Перед записью проверяются внешние изменения файла; запись атомарная."
+      ? t("general.yamlJinjaIsSavedAsWrittenWithoutRenderingSubstitution")
       : pipeline
-        ? "Исходный YAML конвейера сохраняется без рендеринга, подстановок и проверки структуры: заголовок, разделитель --- и тело остаются исходным текстом. Сохранение не гарантирует возможность запуска. Перед записью проверяются внешние изменения файла; запись атомарная."
-        : "Исходный YAML сохраняет комментарии и неизвестные поля. Перед записью проверяются структура и внешние изменения файла; запись атомарная.";
+        ? t("general.pipelineYamlIsSavedAsWrittenIncludingTheHeader")
+        : t("general.theSourceYamlRetainsCommentsAndUnrecognizedFieldsDesktop");
   const format = (
     <small
       className="format"
@@ -135,7 +138,7 @@ export function SettingsDocument({
       disabled={draft.busy || !!draft.deletion}
       onClick={() => void store.prepareDeletion(source)}
     >
-      {draft.memoryOnly ? "Удалить черновик" : "Удалить"}
+      {draft.memoryOnly ? t("general.deleteDraft") : t("general.delete")}
     </button>
   ) : null;
   const feedback = (
@@ -146,9 +149,7 @@ export function SettingsDocument({
         </p>
       )}
       {draft.error && !draft.document && (
-        <button type="button" onClick={() => void store.open(source)}>
-          Повторить загрузку
-        </button>
+        <button type="button" onClick={() => void store.open(source)}>{t("general.retryLoading")}</button>
       )}
       {project && status.tone === "warning" && status.detail && (
         <p className="hint document-save-warning">{status.detail}</p>
@@ -189,7 +190,7 @@ export function SettingsDocument({
           !draft.reloading &&
           !draft.renaming
         }
-        label="Загружаем документ…"
+        label={t("general.loadingDocument")}
       >
         <div
           className={
@@ -214,27 +215,27 @@ export function SettingsDocument({
               )}
               {format}
               {renamable && (
-                <button
+                <HintButton
                   type="button"
                   className="document-heading-icon"
-                  aria-label="Переименовать файл"
-                  title="Переименовать файл"
+                  aria-label={t("general.renameFile")}
+                  hint={t("general.renameFile")}
                   disabled={draft.busy || !!draft.deletion}
                   onClick={() => setRenameKey(key)}
                 >
                   <Pencil size={16} aria-hidden />
-                </button>
+                </HintButton>
               )}
               {draft.document && !draft.memoryOnly && (
-                <button
+                <HintButton
                   type="button"
                   className="document-heading-icon"
-                  aria-label="Обновить с диска"
+                  aria-label={t("general.reloadFromDisk")}
                   aria-busy={!!draft.reloading}
-                  title={
+                  hint={
                     draft.reloading
-                      ? "Читаем файл с диска…"
-                      : "Обновить с диска"
+                      ? t("general.readingFileFromDisk")
+                      : t("general.reloadFromDisk")
                   }
                   disabled={draft.busy || !!draft.deletion}
                   onClick={() =>
@@ -242,9 +243,9 @@ export function SettingsDocument({
                   }
                 >
                   <RefreshCw size={16} aria-hidden />
-                </button>
+                </HintButton>
               )}
-              <button
+              <HintButton
                 type="button"
                 className="document-size-toggle document-heading-icon"
                 disabled={!draft.document}
@@ -252,13 +253,13 @@ export function SettingsDocument({
                 aria-expanded={expansion.expanded}
                 aria-label={
                   expansion.expanded
-                    ? "Свернуть документ"
-                    : "Развернуть документ"
+                    ? t("general.collapseDocument")
+                    : t("general.expandDocument")
                 }
-                title={
+                hint={
                   expansion.expanded
-                    ? "Свернуть документ (Esc)"
-                    : "Развернуть на рабочую область"
+                    ? t("general.collapseDocumentEsc")
+                    : t("general.expandToWorkspace")
                 }
                 onClick={expansion.toggle}
               >
@@ -267,7 +268,7 @@ export function SettingsDocument({
                 ) : (
                   <Maximize2 size={16} aria-hidden />
                 )}
-              </button>
+              </HintButton>
             </div>
           ) : (
             format
@@ -291,9 +292,10 @@ export function SettingsDocument({
         )}
         {active && reloadConsent === draft && (
           <ReloadConfirmation
-            title="Обновить файл с диска?"
-            description={`Несохранённые изменения в «${path}» будут заменены версией с диска. Если файл не удастся прочитать, черновик останется в редакторе.`}
-            confirmLabel="Загрузить с диска"
+            destructive
+            title={t("general.reloadFileFromDisk")}
+            description={t("general.unsavedEditsInWillBeReplacedByTheVersion", { path })}
+            confirmLabel={t("general.loadFromDisk")}
             onCancel={() => setReloadConsent(null)}
             onConfirm={() => {
               setReloadConsent(null);
@@ -313,18 +315,14 @@ export function SettingsDocument({
         {!draft.document ? (
           source.scope === "home" ? (
             <div className="privacy-note">
-              <h3>Содержимое пока скрыто</h3>
-              <p className="hint">
-                Файл может содержать секретные переменные окружения. Открывайте
-                редактор только там, где экран не виден посторонним. Значения не
-                отправляются в телеметрию.
-              </p>
+              <h3>{t("general.contentsAreHidden")}</h3>
+              <p className="hint">{t("general.thisFileMayContainSecretEnvironmentVariablesOpenThe")}</p>
               <div className="document-reveal-actions">
                 <button
                   disabled={draft.busy}
                   onClick={() => void store.open(source)}
                 >
-                  {draft.busy ? "Читаем…" : "Открыть редактор"}
+                  {draft.busy ? t("general.reading") : t("general.openEditor")}
                 </button>
                 {deleteButton}
               </div>
@@ -333,7 +331,7 @@ export function SettingsDocument({
         ) : (
           <>
             {!project && draft.document.exists === false && (
-              <p className="hint">{missingFileHint}</p>
+              <p className="hint">{t("general.thisFileDoesNotExistYetChooseSaveTo")}</p>
             )}
             <YamlEditor
               key={editorKey}
@@ -351,7 +349,7 @@ export function SettingsDocument({
               <div className="savebar">
                 {!project && (
                   <span className={dirty ? "draft-status" : "saved-status"}>
-                    {dirty ? "Есть несохранённый черновик" : "Нет изменений"}
+                    {dirty ? t("general.unsavedDraft") : t("general.noChanges")}
                   </span>
                 )}
                 <div className="document-save-actions">
@@ -366,8 +364,8 @@ export function SettingsDocument({
                       }
                     >
                       {source.scope === "project"
-                        ? "Отменить изменения"
-                        : "Скрыть без сохранения"}
+                        ? t("general.discardChanges")
+                        : t("general.hideWithoutSaving")}
                     </button>
                     <button
                       className="primary"
@@ -377,7 +375,7 @@ export function SettingsDocument({
                       disabled={draft.busy || saveDisabled}
                       onClick={() => void store.save(source)}
                     >
-                      {!project && draft.busy ? "Сохраняем…" : "Сохранить"}
+                      {!project && draft.busy ? t("general.saving") : t("general.save")}
                     </button>
                   </div>
                 </div>
@@ -397,27 +395,35 @@ export function SettingsTabs({
   current,
   onChange,
   disabled = false,
+  workspace = false,
 }: {
   label: string;
   tabs: readonly (readonly [string, string])[];
   current: string;
   onChange: (tab: string) => void;
   disabled?: boolean;
+  workspace?: boolean;
 }) {
   return (
-    <nav className="section-tabs" aria-label={label}>
-      {tabs.map(([id, title]) => (
-        <button
-          key={id}
-          type="button"
-          disabled={disabled}
-          aria-current={current === id ? "page" : undefined}
-          className={current === id ? "selected" : ""}
-          onClick={() => onChange(id)}
-        >
-          {title}
-        </button>
-      ))}
+    <nav data-settings-tabs="" className={workspace ? "workspace-section-tabs" : "section-tabs"} aria-label={label}>
+      {tabs.map(([id, title]) => {
+        const selected = current === id;
+        const button = (
+          <button
+            key={id}
+            type="button"
+            disabled={disabled}
+            aria-current={selected ? "page" : undefined}
+            className={workspace ? "workspace-tab-select" : selected ? "selected" : ""}
+            onClick={() => onChange(id)}
+          >
+            {title}
+          </button>
+        );
+        return workspace ? (
+          <span key={id} className="workspace-tab" data-selected={selected}>{button}</span>
+        ) : button;
+      })}
     </nav>
   );
 }

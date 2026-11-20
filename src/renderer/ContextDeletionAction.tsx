@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useContextDeletionExecutor } from "./ContextDeletionController";
 import type { DeletionPreview } from "./context-deletion-flow";
 import { useEffect, useId, useRef, useState } from "react";
@@ -22,6 +24,7 @@ export function ContextDeletionAction({
   onBusy?: (value: boolean) => void;
   onCancel?: () => void;
 }) {
+  useLocale();
   const executor = useContextDeletionExecutor();
   const [allowAhead, setAllowAhead] = useState(false);
   const [plan, setPlan] = useState<Plan | null>(null),
@@ -56,7 +59,7 @@ export function ContextDeletionAction({
         if (!alive) return;
         if (recovered) {
           if (recovered.contextId !== owner.contextId)
-            throw Error("Журнал удаления относится к другой рабочей копии.");
+            throw Error(msg("workspace.theDeletionLogBelongsToAnotherWorkingCopy"));
           setPlan(recovered);
           setRetry(true);
           setConfirmationOpen(true);
@@ -76,7 +79,7 @@ export function ContextDeletionAction({
     };
   }, [read, recoveryAvailable, recoveryAttempt]);
   const reason = active
-    ? "Недоступно во время активного запуска в этой рабочей копии."
+    ? msg("workspace.unavailableWhileARunIsActiveInThisWorkingCopy")
     : "";
   const needsAheadConfirmation =
     plan?.stage === "prepared" && plan.requiresAheadConfirmation;
@@ -136,7 +139,7 @@ export function ContextDeletionAction({
     try {
       if (!executor)
         throw Error(
-          "Контроллер удаления недоступен. Откройте карточку заново.",
+          msg("workspace.theDeletionControllerIsUnavailableReopenTheTopicCard"),
         );
       const result = await executor(owner, plan, allowAhead);
       if (!mounted.current) return;
@@ -147,7 +150,7 @@ export function ContextDeletionAction({
             previous ? { ...previous, stage: result.stage! } : previous,
           );
         setError(
-          `${result.message}${result.stage ? ` · этап: ${result.stage}` : ""}`,
+          `${result.message}${result.stage ? msg("workspace.step", { stage: String(result.stage) }) : ""}`,
         );
         return;
       }
@@ -168,10 +171,10 @@ export function ContextDeletionAction({
   return (
     <section
       className="topic-card-section"
-      aria-label="Удаление топика и копии"
+      aria-label={msg("workspace.deleteTopicAndWorkingCopy")}
     >
       {completed ? (
-        <p role="status">Топик и копия удалены</p>
+        <p role="status">{msg("workspace.topicAndWorkingCopyDeleted")}</p>
       ) : (
         <>
           {reason && (
@@ -188,10 +191,10 @@ export function ContextDeletionAction({
               onClick={() => void prepare()}
             >
               {recoveryLoading
-                ? "Проверяем незавершённое удаление…"
+                ? msg("workspace.checkingUnfinishedDeletion")
                 : plan
-                  ? "Продолжить удаление…"
-                  : "Удалить топик и копию…"}
+                  ? msg("workspace.resumeDeletion")
+                  : msg("workspace.deleteTopicAndWorkingCopy2")}
             </button>
           )}
           {recoveryFailed && (
@@ -202,37 +205,30 @@ export function ContextDeletionAction({
                 setError("");
                 setRecoveryAttempt((n) => n + 1);
               }}
-            >
-              Проверить незавершённое удаление
-            </button>
+            >{msg("workspace.checkUnfinishedDeletion")}</button>
           )}
           {plan && confirmationOpen && (
             <div
               className="topic-confirmation"
               role="region"
-              aria-label="Подтверждение удаления топика и копии"
+              aria-label={msg("workspace.confirmTopicAndWorkingCopyDeletion")}
             >
               <h3>
                 {retry
-                  ? "Продолжить незавершённое удаление?"
-                  : "Удалить топик вместе с его автономным клоном?"}
+                  ? msg("workspace.resumeUnfinishedDeletion")
+                  : msg("workspace.deleteTheTopicAndItsStandaloneClone")}
               </h3>
               {retry && (
-                <p className="topic-warning">
-                  Незавершённая операция · этап: {plan.stage}. Повтор использует
-                  прежний подтверждённый план, не создаёт новую операцию.
-                </p>
+                <p className="topic-warning">{msg("workspace.unfinishedOperationStep")}{plan.stage}{msg("workspace.retryingUsesTheOriginalConfirmedPlanRatherThanCreatingA")}</p>
               )}
               {plan.stage === "choose-branch" && (
-                <label>
-                  Перейти в ветку
-                  <select
-                    aria-label="Перейти в ветку"
+                <label>{msg("workspace.switchToBranch")}<select
+                    aria-label={msg("workspace.switchToBranch")}
                     value={switchBranch}
                     disabled={busy}
                     onChange={(e) => setSwitchBranch(e.target.value)}
                   >
-                    <option value="">Выберите локальную ветку</option>
+                    <option value="">{msg("workspace.selectALocalBranch")}</option>
                     {plan.switchBranches?.map((branch) => (
                       <option key={branch} value={branch}>
                         {branch}
@@ -243,23 +239,16 @@ export function ContextDeletionAction({
               )}
               {plan.stage === "choose-branch" &&
                 !plan.switchBranches?.length && (
-                  <p className="hint">
-                    Нет другой локальной ветки. Создайте её в основной папке и
-                    откройте подтверждение заново.
-                  </p>
+                  <p className="hint">{msg("workspace.noOtherLocalBranchIsAvailableCreateOneInThe")}</p>
                 )}
               <ul>
                 {plan.details.map((detail) => (
                   <li key={detail}>{detail}</li>
                 ))}
               </ul>
-              <p className="hint">
-                Основная папка проекта не удаляется. Перед выполнением повторно
-                проверяются запуски, локальные изменения и состав коммитов.
-              </p>
+              <p className="hint">{msg("workspace.theOriginalProjectFolderWillNotBeDeletedRunsLocal")}</p>
               {plan.clonePath && (
-                <p className="hint">
-                  В Корзину: <code>{plan.clonePath}</code>
+                <p className="hint">{msg("workspace.moveToTrash")}<code>{plan.clonePath}</code>
                 </p>
               )}
               {needsAheadConfirmation && (
@@ -269,11 +258,7 @@ export function ContextDeletionAction({
                     checked={allowAhead}
                     disabled={busy}
                     onChange={(e) => setAllowAhead(e.target.checked)}
-                  />
-                  В клоне есть коммиты, не переданные в исходный проект
-                  {plan.aheadCount !== undefined ? ` (${plan.aheadCount})` : ""}
-                  . Всё равно удалить клон вместе с его Git-историей.
-                </label>
+                  />{msg("workspace.theCloneContainsCommitsNotTransferredToTheOriginalProject")}{plan.aheadCount !== undefined ? ` (${plan.aheadCount})` : ""}{msg("workspace.deleteTheCloneAndItsGitHistoryAnyway")}</label>
               )}
               <div className="form-actions">
                 <button
@@ -283,9 +268,7 @@ export function ContextDeletionAction({
                     setConfirmationOpen(false);
                     onCancel?.();
                   }}
-                >
-                  Отмена
-                </button>
+                >{msg("workspace.cancel")}</button>
                 <button
                   type="button"
                   className="danger"
@@ -302,10 +285,10 @@ export function ContextDeletionAction({
                   }
                 >
                   {plan.stage === "choose-branch"
-                    ? "Проверить выбранную ветку"
+                    ? msg("workspace.checkSelectedBranch")
                     : retry
-                      ? "Повторить удаление"
-                      : "Подтвердить удаление"}
+                      ? msg("workspace.retryDeletion")
+                      : msg("workspace.confirmDeletion")}
                 </button>
               </div>
             </div>

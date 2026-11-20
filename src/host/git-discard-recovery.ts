@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import { createHash, randomBytes } from "node:crypto";
 import path from "node:path";
 import {
@@ -25,7 +26,7 @@ const same = (a: unknown, b: unknown) =>
   JSON.stringify(a) === JSON.stringify(b);
 const stale = () =>
   Error(
-    "Состояние восстановления изменилось. Проверьте его заново перед подтверждением.",
+    gitMessage("gitHost.recoveryStateChangedCheckItAgainBeforeConfirming"),
   );
 type Context = ConstructorParameters<typeof GitDiscardActions>[0]["context"];
 const git = (c: GitCommitContext, args: string[]) =>
@@ -250,7 +251,7 @@ export class GitDiscardRecoveryActions {
           value: {
             ...base,
             state: "clear",
-            message: "Незавершённой отмены изменений нет.",
+            message: gitMessage("gitHost.noUnfinishedDiscardOperation"),
           },
         };
       if (
@@ -262,7 +263,7 @@ export class GitDiscardRecoveryActions {
             ...base,
             state: "blocked",
             message:
-              "В Git выполняется другая операция. Завершите её перед восстановлением отмены; просмотр файлов доступен.",
+              gitMessage("gitHost.anotherGitOperationIsInProgressFinishItBefore"),
           },
         };
       await assertNoNativeGitLocks(c.root);
@@ -295,8 +296,8 @@ export class GitDiscardRecoveryActions {
           paths,
           state: unchanged ? "unchanged" : "partial",
           message: unchanged
-            ? "Текущее состояние совпадает со снимком до предыдущей отмены. Можно отменить изменения обычным способом; служебный снимок прежней отмены будет удалён после подтверждения."
-            : "Состояние отличается от снимка предыдущей отмены. Можно сохранить текущее состояние файлов и завершить восстановление без повторной отмены.",
+            ? gitMessage("gitHost.theCurrentStateMatchesTheSnapshotTakenBeforeDiscard")
+            : gitMessage("gitHost.theCurrentStateDiffersFromThePreviousDiscardSnapshot"),
         },
         proof: {
           record,
@@ -313,7 +314,7 @@ export class GitDiscardRecoveryActions {
           ...base,
           state: "blocked",
           message:
-            "Не удалось безопасно проверить незавершённую операцию. Файлы не изменены. Проверьте, что другие Git-операции завершены и рабочая папка доступна; просмотр проекта остаётся доступным.",
+            gitMessage("gitHost.couldNotVerifyTheUnfinishedOperationSafelyNoFiles"),
         },
       };
     }
@@ -394,7 +395,7 @@ export class GitDiscardRecoveryActions {
         paths: a.value.paths,
         expiresAt,
         message:
-          "Файлы, индекс, ветка и коммиты останутся в текущем состоянии. Предыдущая отмена не повторяется. Служебный снимок предыдущей отмены будет удалён без создания архива, после чего её блокировка будет снята.",
+          gitMessage("gitHost.filesIndexBranchAndCommitsWillStayAsThey"),
       };
     });
   }
@@ -425,7 +426,7 @@ export class GitDiscardRecoveryActions {
         scope: c.scope,
         status: "recovered",
         message:
-          "Файлы оставлены в текущем состоянии. Служебный снимок предыдущей отмены удалён без создания архива; работу с Git можно продолжить.",
+          gitMessage("gitHost.filesWereKeptAsTheyAreThePreviousDiscard"),
       };
     });
   }

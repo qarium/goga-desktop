@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import {
   deletionSwitchSchema,
   type DeletionSwitch,
@@ -37,21 +38,21 @@ import { readRebaseBinding } from "./git-rebase-read-binding";
 import { assertClonePublicationOrigin } from "./context-exchange";
 const unavailable = () =>
   Error(
-    "Клон топика недоступен или конфликтует. Обновите контекст; основная папка не используется вместо клона.",
+    tr("host.theTopicCloneIsUnavailableOrInConflictRefreshThe"),
   );
 const changed = () =>
-  Error("Контекст изменён или его ревизия устарела. Выберите топик заново.");
+  Error(tr("host.theContextChangedOrItsRevisionIsStaleSelectThe"));
 const deleted = () =>
   Error(
-    "Клон этого топика удалён. Для повторного создания требуется новая идентичность.",
+    tr("host.theCloneForThisTopicWasDeletedRecreatingItRequires"),
   );
 const ambiguous = () =>
   Error(
-    "Подготовка клона неоднозначна. Нужна проверка; автоматический повтор запрещён.",
+    tr("host.clonePreparationHasAnUncertainOutcomeVerifyItBeforeRetrying"),
   );
 const legacy = () =>
   Error(
-    "Прежняя linked-копия требует явной миграции в автономный клон (legacy-linked).",
+    tr("host.thisLinkedCopyRequiresExplicitMigrationToAnIndependentClone"),
   );
 const sameIdentity = (a: TopicContextIdentity, b: TopicContextIdentity) =>
   a.projectId === b.projectId &&
@@ -77,7 +78,7 @@ export async function ensureCloneTopicDirectory(owner: WorktreeRecord) {
     owner.topic !== normalize(owner.branch)
   )
     throw Error(
-      "Нельзя подготовить каталог истории: топик не соответствует ветке рабочей копии.",
+      tr("host.cannotPrepareTheHistoryFolderTheTopicDoesNotMatch"),
     );
 
   let dir = owner.path;
@@ -90,7 +91,7 @@ export async function ensureCloneTopicDirectory(owner: WorktreeRecord) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
     }
     if (!(await lstat(dir)).isDirectory())
-      throw Error("Путь истории топика не является каталогом.");
+      throw Error(tr("host.theTopicHistoryPathIsNotADirectory"));
   }
   await noSymlinks(dir);
 }
@@ -322,7 +323,7 @@ export class CloneManager {
     );
     const values = raw.replace(/\n$/, "").split("\n");
     if (values.length !== 3 || values.some((value) => !path.isAbsolute(value)))
-      throw Error("Не удалось проверить пути Git-репозитория.");
+      throw Error(tr("host.couldNotVerifyTheGitRepositoryPaths"));
     return { top: values[0]!, common: values[1]!, git: values[2]! };
   }
   private async repository(
@@ -334,13 +335,13 @@ export class CloneManager {
     await noSymlinks(canonical);
     const paths = await this.gitPaths(canonical, undefined, store);
     if ((await realpath(paths.top)) !== canonical)
-      throw Error("Выберите корневую папку Git-проекта.");
+      throw Error(tr("host.selectTheRootFolderOfTheGitProject"));
     const common = await realpath(paths.common);
     const git = await realpath(paths.git);
     await noSymlinks(common);
     if (common !== git)
       throw Error(
-        "Проект указывает на внешнюю linked-копию, а не основную папку.",
+        tr("host.theProjectPointsToAnExternalLinkedWorktreeInsteadOf"),
       );
     return { projectPath: canonical, sourceCommonDir: common };
   }
@@ -725,7 +726,7 @@ export class CloneManager {
     const request = createSchema.parse(input),
       topic = normalize(request.branch);
     if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(topic) || topic.length > 180)
-      throw Error("Имя ветки не образует допустимый топик.");
+      throw Error(tr("host.theBranchNameDoesNotFormAValidTopic"));
     const identity = {
       projectId: project.id,
       year: request.year,
@@ -763,7 +764,7 @@ export class CloneManager {
         )
       )
         throw Error(
-          "Топик с совпадающим нормализованным именем уже существует.",
+          tr("host.aTopicWithTheSameNormalizedNameAlreadyExists"),
         );
       await this.git(
         ["check-ref-format", `refs/heads/${request.branch}`],
@@ -791,7 +792,7 @@ export class CloneManager {
               normalize(ref.slice(ref.indexOf("/") + 1)) === topic),
         )
       )
-        throw Error("Топик или ветка уже существует.");
+        throw Error(tr("host.theTopicOrBranchAlreadyExists"));
       const history = path.join(
         repository.projectPath,
         ".goga/history",
@@ -801,7 +802,7 @@ export class CloneManager {
       await noSymlinks(history);
       try {
         await lstat(history);
-        throw Error("Каталог топика уже существует.");
+        throw Error(tr("host.theTopicDirectoryAlreadyExists"));
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
@@ -1113,9 +1114,9 @@ export class CloneManager {
   private deletionGuards(input: { active: boolean; current: boolean }) {
     const guards = guardsSchema.parse(input);
     if (guards.active)
-      throw Error("В клоне работает активный процесс; удаление запрещено.");
+      throw Error(tr("host.cannotDeleteTheCloneWhileAProcessIsRunningIn"));
     if (guards.current)
-      throw Error("Сначала выберите другой топик; текущий удалять нельзя.");
+      throw Error(tr("host.selectAnotherTopicFirstTheCurrentTopicCannotBeDeleted"));
   }
   private async inode(target: string) {
     await noSymlinks(target);
@@ -1137,7 +1138,7 @@ export class CloneManager {
     );
     if (status.trim())
       throw Error(
-        "В клоне есть локальные изменения или ценные файлы, включая ignored. Удаление запрещено.",
+        tr("host.theCloneContainsLocalChangesOrFilesToPreserveIncluding"),
       );
     const head = oidSchema.parse(
       (
@@ -1325,7 +1326,7 @@ export class CloneManager {
         if (plan.stage === "completed")
           return result(
             "success",
-            "Клон перемещён в корзину; все Git tips сохранены в архивных refs.",
+            tr("host.theCloneWasMovedToTrashAllGitTipsAre"),
           );
         if (plan.stage === "prepared" && Date.now() >= plan.expiresAt)
           throw changed();
@@ -1334,12 +1335,12 @@ export class CloneManager {
             await this.finishDeletion(plan, row);
             return result(
               "success",
-              "Клон перемещён в корзину; архивные refs проверены.",
+              tr("host.theCloneWasMovedToTrashArchiveRefsWereVerified"),
             );
           } catch {
             return result(
               "partial",
-              "Перемещение подтверждено, но согласование реестра не завершено. Сохранён журнал для повтора.",
+              tr("host.theMoveWasConfirmedButTheRegistryUpdateDidNot"),
             );
           }
         }
@@ -1361,7 +1362,7 @@ export class CloneManager {
             if ((error as NodeJS.ErrnoException).code === "ENOENT")
               return result(
                 "partial",
-                "Результат перемещения в корзину неоднозначен. Нужна ручная проверка; архивные refs сохранены.",
+                tr("host.theMoveToTrashHasAnUncertainOutcomeVerifyIt"),
               );
             throw error;
           }
@@ -1456,7 +1457,7 @@ export class CloneManager {
             await callbacks.trashItem(row.path);
             try {
               await lstat(row.path);
-              throw Error("Корзина не убрала исходный каталог.");
+              throw Error(tr("host.trashDidNotRemoveTheOriginalDirectory"));
             } catch (error) {
               if ((error as NodeJS.ErrnoException).code !== "ENOENT")
                 throw error;
@@ -1468,13 +1469,13 @@ export class CloneManager {
           }
           return result(
             "success",
-            "Клон перемещён в корзину; все Git tips сохранены в архивных refs.",
+            tr("host.theCloneWasMovedToTrashAllGitTipsAre"),
           );
         } catch {
           assertReadActive();
           return result(
             "partial",
-            "Удаление выполнено частично. Сохранён журнал этапа и архивные refs; данные не очищались принудительно.",
+            tr("host.deletionWasPartiallyCompletedTheStepLogAndArchiveRefs"),
           );
         }
       },
@@ -1595,7 +1596,7 @@ export class CloneManager {
     const parts: unknown[] = [];
     const visit = async (target: string, depth = 0): Promise<void> => {
       if (depth > 32 || parts.length > 100000)
-        throw Error("Каталог топика слишком велик для безопасной проверки.");
+        throw Error(tr("host.theTopicDirectoryIsTooLargeToCheckSafely"));
       await noSymlinks(target);
       const info = await lstat(target);
       if (!info.isDirectory() && !info.isFile()) throw unavailable();
@@ -1710,7 +1711,7 @@ export class CloneManager {
         }
       }
       throw Error(
-        `Копия используется другой рабочей папкой${locked ? " (защищённой Git)" : ""}: ${directory}. Удаление копии повредит её Git-данные. Эта папка не входит в выбранное удаление.`,
+        tr("host.anotherWorkingDirectoryValue1UsesThisCopyDirectoryRemovingIt", { value1: locked ? tr("host.gitLocked") : "", directory: directory }),
       );
     }
     const identity = await this.git(
@@ -2063,13 +2064,13 @@ export class CloneManager {
           return this.contextDeletionResult(
             plan,
             "success",
-            "Рабочая копия уже перемещена в Корзину. Осталось завершить удаление топика.",
+            tr("host.theWorkingCopyHasAlreadyBeenMovedToTrashFinish"),
           );
         } catch {
           return this.contextDeletionResult(
             plan,
             "partial",
-            "Корзина подтверждена; согласование реестра не завершено. Повторите завершение удаления.",
+            tr("host.theMoveToTrashWasConfirmedButRegistryReconciliationDid"),
           );
         }
       }
@@ -2077,7 +2078,7 @@ export class CloneManager {
         throw changed();
       if (plan.stage === "prepared" && plan.aheadCount && allowAhead !== true)
         throw Error(
-          "Подтвердите удаление коммитов, отсутствующих в одноимённой ветке основной папки.",
+          tr("host.confirmRemovalOfCommitsThatAreNotInTheMatching"),
         );
       // Lost acknowledgement is not evidence of a recoverable move.
       if (plan.stage === "trashing") {
@@ -2088,7 +2089,7 @@ export class CloneManager {
           return this.contextDeletionResult(
             plan,
             "partial",
-            "Результат перемещения в Корзину неоднозначен. Нужна ручная проверка.",
+            tr("host.theMoveToTrashHasAnUncertainOutcomeVerifyIt2"),
           );
         }
         if (row.state === "deleting" && row.revision === plan.deletionRevision)
@@ -2123,7 +2124,7 @@ export class CloneManager {
         await callbacks.trashItem(row.path);
         try {
           await lstat(row.path);
-          throw Error("Корзина не убрала исходный каталог.");
+          throw Error(tr("host.trashDidNotRemoveTheOriginalDirectory"));
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
@@ -2134,14 +2135,14 @@ export class CloneManager {
         return this.contextDeletionResult(
           plan,
           "success",
-          "Рабочая копия целиком, включая .git, перемещена в Корзину. Переключитесь в основную папку для завершения.",
+          tr("host.theEntireWorkingCopyIncludingGitWasMovedToTrash"),
         );
       } catch (error) {
         assertReadActive();
         return this.contextDeletionResult(
           plan,
           plan.stage === "prepared" ? "failed" : "partial",
-          `${error instanceof Error ? error.message : "Удаление не завершено."} Сохранён журнал для безопасного повтора.`,
+          tr("host.value1ALogWasSavedForASafeRetry", { value1: error instanceof Error ? error.message : tr("host.removalDidNotFinish") }),
         );
       }
     });
@@ -2174,7 +2175,7 @@ export class CloneManager {
         return this.contextDeletionResult(
           plan,
           "success",
-          "Топик удалён. Рабочая копия сохранена в Корзине.",
+          tr("host.theTopicWasRemovedItsWorkingCopyIsInTrash"),
         );
       try {
         if (plan.flow === "clone-after-topic") {
@@ -2193,7 +2194,7 @@ export class CloneManager {
           return this.contextDeletionResult(
             plan,
             "success",
-            "Топик уже удалён. Рабочая копия перемещена в Корзину; повторная команда Goga не выполнялась.",
+            tr("host.theTopicWasAlreadyDeletedTheCopyWasMovedTo"),
           );
         }
         const validatePrimarySnapshot = async () => {
@@ -2220,7 +2221,7 @@ export class CloneManager {
               ).length
             )
               throw Error(
-                "В истории основной папки есть ignored-файлы. Удаление остановлено; файлы сохранены.",
+                tr("host.theOriginalFolderSHistoryContainsIgnoredFilesRemovalStopped"),
               );
           }
           const history = await this.primaryHistoryFingerprint(row);
@@ -2232,7 +2233,7 @@ export class CloneManager {
               plan.primarySurvivorsFingerprint
           )
             throw Error(
-              "Данные основной папки изменились после подтверждения удаления. Новые данные не удалены.",
+              tr("host.theOriginalFolderChangedAfterYouConfirmedRemovalNewData"),
             );
           if (plan.primarySwitch?.state === "applied")
             await verifyAppliedDeletionSwitch(
@@ -2242,7 +2243,7 @@ export class CloneManager {
         };
         if (plan.primarySwitch?.state === "switching")
           throw Error(
-            "Предыдущее переключение ветки не подтверждено. Требуется ручная проверка основной папки; повторное переключение не выполняется.",
+            tr("host.thePreviousBranchSwitchCouldNotBeVerifiedCheckThe"),
           );
         await validatePrimarySnapshot();
         plan.stage = "removing-topic";
@@ -2314,7 +2315,7 @@ export class CloneManager {
             ).length
           )
             throw Error(
-              "В истории основной папки есть ignored-файлы. Удаление остановлено; файлы сохранены.",
+              tr("host.theOriginalFolderSHistoryContainsIgnoredFilesRemovalStopped"),
             );
           plan.primarySurvivorsFingerprint =
             await this.primaryDeletionFingerprint(row, true);
@@ -2332,7 +2333,7 @@ export class CloneManager {
         return this.contextDeletionResult(
           plan,
           "success",
-          "Топик удалён. Рабочая копия целиком сохранена в Корзине.",
+          tr("host.topicDeletedTheEntireWorkingCopyWasMovedToTrash"),
         );
       } catch (error) {
         assertReadActive();
@@ -2340,8 +2341,8 @@ export class CloneManager {
           plan,
           "partial",
           plan.flow === "clone-after-topic"
-            ? "Рабочая копия в Корзине, но завершение её очистки требует проверки. Goga повторно не запускается."
-            : `Рабочая копия в Корзине, но топик не удалён: ${error instanceof Error ? error.message : "ошибка"}. Повторите завершение.`,
+            ? tr("host.theWorkingCopyIsInTrashButCleanupNeedsVerification")
+            : tr("host.theWorkingCopyIsInTrashButTheTopicWas", { value1: error instanceof Error ? error.message : tr("host.error") }),
         );
       }
     });

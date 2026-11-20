@@ -345,3 +345,15 @@ it("detects yesterday's partial discard when Changes opens and completes explici
   );
   expect(screen.queryByRole("dialog")).toBeNull();
 });
+
+it("localizes diff chrome without translating repository content", async () => {
+  const {setLocale} = await import("../src/shared/i18n");
+  const {GitDiffView} = await import("../src/renderer/GitDiffView");
+  try {
+    setLocale("en");
+    const view=render(<GitDiffView part={{kind:"empty",text:""}} page={0} onPage={vi.fn()}/>);
+    expect(screen.getByText("No changes in this version.")).toBeTruthy();
+    view.rerender(<GitDiffView part={{kind:"text",text:"Проект"}} page={0} onPage={vi.fn()}/>);
+    expect(screen.getByText("Проект")).toBeTruthy();
+  } finally {act(()=>{setLocale("ru")});}
+});

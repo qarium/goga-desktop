@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { randomUUID } from "node:crypto";
 import {
   topicRemovalRequestSchema,
@@ -62,7 +63,7 @@ interface Prepared {
 }
 const stale = () =>
   Error(
-    "Подтверждение удаления устарело: проект или контексты изменились. Проверьте данные заново.",
+    tr("host.removalConfirmationIsStaleTheProjectOrContextsChangedCheck"),
   );
 export function removalInventoryKey(i: RemovalInventory) {
   return JSON.stringify([
@@ -142,7 +143,7 @@ export class TopicRemovalDomain {
             reason:
               error instanceof Error
                 ? error.message
-                : "Не удалось проверить владельца рабочей копии.",
+                : tr("host.couldNotVerifyWorkingCopyOwnership"),
           });
       }
     }
@@ -163,11 +164,11 @@ export class TopicRemovalDomain {
       ),
       details: [
         ...(native?.details ?? [
-          "В основной папке нет собственной ветки выбранного топика. История других веток сохраняется.",
+          tr("host.theOriginalFolderHasNoBranchOwnedByTheSelected"),
         ]),
         ...(request.action === "clear"
           ? [
-              "Копии с локальными изменениями, активными процессами или неподтверждёнными коммитами сохраняются. Ошибка команды не запускает очистку копий.",
+              tr("host.copiesWithLocalChangesActiveProcessesOrUnverifiedCommitsAre"),
             ]
           : []),
       ],
@@ -200,7 +201,7 @@ export class TopicRemovalDomain {
   ): Promise<TopicRemovalResult> {
     if (p.plan.blocked?.length)
       throw Error(
-        "Не все выбранные топики доступны. Исключите их явно или устраните причины.",
+        tr("host.someSelectedTopicsAreUnavailableExcludeThemExplicitlyOrResolve"),
       );
     const current = await access.inventory();
     if (removalInventoryKey(current) !== removalInventoryKey(p.before))
@@ -222,14 +223,14 @@ export class TopicRemovalDomain {
             projectId: p.request.projectId,
             status: "success",
             message:
-              "В основной папке удалять нечего; проверяем выбранные копии.",
+              tr("host.thereIsNothingToRemoveInTheOriginalFolderChecking"),
           };
     } catch {
       native = {
         projectId: p.request.projectId,
         status: "partial",
         message:
-          "Результат команды не подтверждён. Возможны частичные изменения; копии сохранены. Не повторяйте удаление автоматически.",
+          tr("host.theCommandResultCouldNotBeVerifiedPartialChangesAre"),
       };
     }
     const result: TopicRemovalResult = {
@@ -240,7 +241,7 @@ export class TopicRemovalDomain {
     };
     if (native.status !== "success") {
       result.copies = owners.map((o) =>
-        kept(o, "Удаление топиков не подтверждено. Копия сохранена."),
+        kept(o, tr("host.topicRemovalWasNotConfirmedTheCopyWasKept")),
       );
       return result;
     }
@@ -248,7 +249,7 @@ export class TopicRemovalDomain {
     const unconfirmed = (message: string) => {
       result.topics = { status: "partial", message };
       result.copies = owners.map((o) =>
-        kept(o, "Удаление не подтверждено. Копия сохранена."),
+        kept(o, tr("host.removalWasNotConfirmedTheCopyWasKept")),
       );
       return result;
     };
@@ -262,7 +263,7 @@ export class TopicRemovalDomain {
         );
         if (remaining.length)
           return unconfirmed(
-            "Удаление не подтверждено: в основной папке остались топики " +
+            tr("host.removalNotConfirmedTheFollowingTopicsRemainInTheOriginal") +
               remaining.join(", ") +
               ".",
           );
@@ -270,12 +271,12 @@ export class TopicRemovalDomain {
     } catch {
       if (p.request.action === "delete")
         return unconfirmed(
-          "Команда завершилась, но проверить удаление выбранных топиков не удалось.",
+          tr("host.theCommandFinishedButRemovalOfTheSelectedTopicsCould"),
         );
       result.copies = owners.map((o) =>
         kept(
           o,
-          "Команда выполнена, но проверка результата не завершена. Копия сохранена.",
+          tr("host.theCommandCompletedButVerificationDidNotFinishTheCopy"),
         ),
       );
       return result;
@@ -315,7 +316,7 @@ export class TopicRemovalDomain {
         result.copies.push(
           kept(
             owner,
-            "Владелец или состояние копии не подтверждены. Копия сохранена.",
+            tr("host.copyOwnershipOrStateCouldNotBeVerifiedTheCopy"),
           ),
         );
         continue;
@@ -332,7 +333,7 @@ export class TopicRemovalDomain {
             owner,
             error instanceof Error
               ? error.message
-              : "Не удалось проверить копию. Она оставлена на диске.",
+              : tr("host.theCopyCouldNotBeVerifiedItWasLeftOn"),
           ),
         );
       }

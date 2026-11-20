@@ -1,3 +1,6 @@
+import { HintButton } from "./ActionHint";
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useViewActive } from "./RetainedViews";
 import type { TopicContextRef } from "../shared/worktrees";
 import { contextRef } from "./topic-context";
@@ -23,6 +26,7 @@ export function ProjectFlatDocuments({
   store: SettingsDocuments;
   savedSettingsVersion?: string;
 }) {
+  useLocale();
   const viewActive = useViewActive();
   const scope = owner ? contextRef(owner) : project.id;
   const scopeKey = documentScopeId(scope);
@@ -171,7 +175,7 @@ export function ProjectFlatDocuments({
   return (
     <LoadingBoundary
       pending={refreshing && !catalogLoaded}
-      label="Загружаем каталог проекта…"
+      label={msg("project.loadingProjectCatalog")}
     >
       <div className="tool-controls workflow-controls">
         <button
@@ -185,20 +189,15 @@ export function ProjectFlatDocuments({
           }}
         >
           {profile
-            ? "Создать профиль"
+            ? msg("project.createProfile")
             : pipeline
-              ? "Создать конвейер"
-              : "Создать рабочий процесс"}
+              ? msg("project.createPipeline")
+              : msg("project.createWorkflow")}
         </button>
         <small className="tool-root">{folder}/</small>
       </div>
       {profile && (
-        <p className="description">
-          Проектный профиль имеет приоритет перед одноимённым глобальным
-          (личным). Даже некорректный проектный файл не заменяется глобальным
-          автоматически. Глобальные профили остаются в общих настройках; новый
-          профиль не назначается по умолчанию.
-        </p>
+        <p className="description">{msg("project.aProjectProfileTakesPrecedenceOverAGlobalPersonalProfile")}</p>
       )}
       {state.creating && (
         <form
@@ -210,7 +209,7 @@ export function ProjectFlatDocuments({
         >
           {pipeline || profile ? (
             <label>
-              {profile ? "Имя профиля" : "Имя конвейера"}
+              {profile ? msg("project.profileName") : msg("project.pipelineName")}
               <input
                 value={state.name}
                 onChange={(e) => {
@@ -240,13 +239,8 @@ export function ProjectFlatDocuments({
             type="submit"
             data-post-save-refresh={postSaveRefresh || undefined}
             disabled={refreshing || !!error}
-          >
-            Создать черновик
-          </button>
-          <p className="hint">
-            Имя без расширения .yml. Черновик остаётся в памяти до нажатия
-            «Сохранить».
-          </p>
+          >{msg("project.createDraft")}</button>
+          <p className="hint">{msg("project.enterTheNameWithoutTheYmlExtensionTheDraftStays")}</p>
         </form>
       )}
       {nameError && (
@@ -259,24 +253,19 @@ export function ProjectFlatDocuments({
           <p className="error" role="alert">
             {error}
           </p>
-          <button onClick={() => setAttempt((value) => value + 1)}>
-            Повторить загрузку
-          </button>
+          <button onClick={() => setAttempt((value) => value + 1)}>{msg("project.retryLoading")}</button>
         </div>
       )}
       {catalogLoaded && !error && !hasDocuments && (
         <div className="empty-file">
           <h3>
             {profile
-              ? "В проекте пока нет профилей"
+              ? msg("project.noProfilesInThisProjectYet")
               : pipeline
-                ? "В проекте пока нет конвейеров"
-                : "В проекте пока нет рабочих процессов"}
+                ? msg("project.noPipelinesInThisProjectYet")
+                : msg("project.noWorkflowsInThisProjectYet")}
           </h3>
-          <p>
-            Папка {folder} может отсутствовать. Файлы и папки создаются только
-            при сохранении.
-          </p>
+          <p>{msg("project.catalogFolderMayNotExist", { folder })}</p>
         </div>
       )}
       {hasDocuments && (
@@ -284,31 +273,31 @@ export function ProjectFlatDocuments({
           <div className="item-list tree-pane">
             <span className="eyebrow">
               {profile
-                ? "ПРОФИЛИ"
+                ? msg("project.profiles2")
                 : pipeline
-                  ? "КОНВЕЙЕРЫ"
-                  : "РАБОЧИЕ ПРОЦЕССЫ"}
+                  ? msg("project.pipelines2")
+                  : msg("project.workflows2")}
             </span>
             <nav
               className="file-tree"
               aria-label={
                 profile
-                  ? "Профили проекта"
+                  ? msg("project.projectProfiles")
                   : pipeline
-                    ? "Конвейеры проекта"
-                    : "Рабочие процессы проекта"
+                    ? msg("project.projectPipelines")
+                    : msg("project.projectWorkflows")
               }
             >
               <ul>
                 {files.map((file) => (
                   <li key={file.path}>
-                    <button
+                    <HintButton
                       type="button"
                       className={`file-row ${selectedPath === file.path ? "selected" : ""}`}
-                      aria-label={`Файл ${file.path}`}
+                      aria-label={msg("project.file2", { path: String(file.path) })}
                       aria-pressed={selectedPath === file.path}
                       disabled={!file.editable && !hasLoadedDraft(file)}
-                      title={file.reason}
+                      hint={file.reason}
                       onClick={() => update(scope, { selected: file.name })}
                     >
                       <span className="file-mark" aria-hidden="true" />
@@ -317,11 +306,11 @@ export function ProjectFlatDocuments({
                         {!file.editable && (
                           <small>
                             {file.reason ??
-                              "Файл недоступен для редактирования"}
+                              msg("project.thisFileCannotBeEdited2")}
                           </small>
                         )}
                       </span>
-                    </button>
+                    </HintButton>
                   </li>
                 ))}
               </ul>
@@ -338,18 +327,18 @@ export function ProjectFlatDocuments({
               }}
               path={`${folder}/${state.selected}.yml`}
               title={`${state.selected}.yml`}
-              description={`${selected && !selected.editable ? `Черновик сохранён в памяти. ${selected.reason ?? "Файл недоступен для редактирования"}. Сохранение по-прежнему проверяется на стороне приложения. ` : ""}Исходный ${profile ? "профиль" : pipeline ? "конвейер" : "рабочий процесс"} проекта. Сохраняется только выбранный файл. ${profile ? "При сохранении проверяется YAML mapping; исходный текст не форматируется." : "Проверки Goga выполняются при подготовке запуска."}`}
+              description={msg("project.projectSourceOnlyTheSelectedFileIsSaved", { value1: String(selected && !selected.editable ? msg("project.theDraftIsKeptInMemoryTheApplicationStillValidates", { value1: String(selected.reason ?? msg("project.thisFileCannotBeEdited2")) }) : ""), value2: String(profile ? msg("project.profile") : pipeline ? msg("project.pipeline") : msg("project.workflow")), value3: String(profile ? msg("project.savingChecksTheYAMLMappingWithoutReformattingTheSource") : msg("project.gogaValidatesThisWhenPreparingARun")) })}
             />
           ) : (
             <div className="empty-file">
               <h3>
                 {profile
-                  ? "Выберите профиль"
+                  ? msg("project.chooseAProfile")
                   : pipeline
-                    ? "Выберите конвейер"
-                    : "Выберите рабочий процесс"}
+                    ? msg("project.chooseAPipeline")
+                    : msg("project.chooseAWorkflow")}
               </h3>
-              <p>Выберите существующий файл или создайте пустой черновик.</p>
+              <p>{msg("project.selectAnExistingFileOrCreateAnEmptyDraft")}</p>
             </div>
           )}
         </div>

@@ -1,3 +1,5 @@
+import { t as msg } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import {
   useEffect,
   useLayoutEffect,
@@ -69,6 +71,7 @@ export function OverviewFileActions({
     destination?: string,
   ) => void;
 }) {
+  useLocale();
   const active = useViewActive(),
     key = JSON.stringify(scope);
   const activityCallback = useRef(onPasteActivity),
@@ -208,7 +211,7 @@ export function OverviewFileActions({
       )
     )
       throw Error(
-        "Дождитесь завершения сохранения или обновления выбранных файлов.",
+        msg("overview.waitForTheSelectedFilesToFinishSavingOrRefreshing"),
       );
   };
   const execute = async (ticket: OverviewFileActionPreview) => {
@@ -229,7 +232,7 @@ export function OverviewFileActions({
     if (result.status !== "done")
       throw Error(
         result.message ||
-          "Операция выполнена не полностью. Обновите дерево и проверьте выбранные пути.",
+          msg("overview.theOperationWasOnlyPartiallyCompletedRefreshTheTreeAnd"),
       );
   };
   const trash = () => {
@@ -255,7 +258,7 @@ export function OverviewFileActions({
       name === "." ||
       name === ".."
     ) {
-      setError("Введите имя без пути.");
+      setError(msg("overview.enterANameWithoutAPath"));
       return;
     }
     const destination = (parent(source) ? parent(source) + "/" : "") + name;
@@ -263,7 +266,7 @@ export function OverviewFileActions({
       ready([source]);
       if (store.getSnapshot().order.some((p) => inside(p, destination)))
         throw Error(
-          "Это имя уже открыто во вкладке. Сначала сохраните копию или закройте её: черновик не будет перезаписан.",
+          msg("overview.aTabWithThisNameIsAlreadyOpenSaveA"),
         );
       const ticket = await prepare({
         kind: "rename",
@@ -316,7 +319,7 @@ export function OverviewFileActions({
       .map((d) => d.path);
     if (replacements.some(blockedPasteTarget))
       throw Error(
-        "Файл содержит несохранённые изменения или сохраняется. Черновик не перезаписан. Сохраните его или повторите вставку, пропустив файл.",
+        msg("overview.theFileHasUnsavedChangesOrIsBeingSavedThe"),
       );
     reportPasteActivity(pending.activity, "copying");
     try {
@@ -447,10 +450,10 @@ export function OverviewFileActions({
   const items = menu
     ? [
         ...(selected.length && entry?.kind !== "unsupported"
-          ? [{ label: "Копировать", action: () => copyEntries(selected) }]
+          ? [{ label: msg("overview.copy"), action: () => copyEntries(selected) }]
           : []),
         {
-          label: "Вставить",
+          label: msg("overview.paste"),
           action: () =>
             pasteEntries(
               pasteTarget(
@@ -463,7 +466,7 @@ export function OverviewFileActions({
         ...(selected.length <= 1
           ? [
               {
-                label: "Создать файл",
+                label: msg("overview.createFile"),
                 action: () =>
                   onCreate(
                     "file",
@@ -471,7 +474,7 @@ export function OverviewFileActions({
                   ),
               },
               {
-                label: "Создать папку",
+                label: msg("overview.createFolder"),
                 action: () =>
                   onCreate(
                     "directory",
@@ -483,13 +486,13 @@ export function OverviewFileActions({
         ...(one && entry?.kind === "directory"
           ? [
               {
-                label: "Показать на схеме",
+                label: msg("overview.showOnGraph2"),
                 action: () => onNavigate(entry.path),
               },
             ]
           : []),
         {
-          label: "Обновить",
+          label: msg("overview.refresh"),
           action: () =>
             void guarded(async () => {
               await store.refreshAll();
@@ -498,7 +501,7 @@ export function OverviewFileActions({
         ...(one && entry?.kind !== "unsupported"
           ? [
               {
-                label: "Переименовать",
+                label: msg("overview.rename"),
                 action: () => {
                   setRename(selected[0]);
                   setName(selected[0].split("/").at(-1)!);
@@ -511,8 +514,8 @@ export function OverviewFileActions({
               {
                 label:
                   selected.length > 1
-                    ? "Скопировать полные пути"
-                    : "Скопировать полный путь",
+                    ? msg("overview.copyFullPaths")
+                    : msg("overview.copyFullPath"),
                 action: () =>
                   void guarded(async () => {
                     await api.copyOverviewPaths(
@@ -525,8 +528,8 @@ export function OverviewFileActions({
               {
                 label:
                   selected.length > 1
-                    ? "Скопировать относительные пути"
-                    : "Скопировать относительный путь",
+                    ? msg("overview.copyRelativePaths")
+                    : msg("overview.copyRelativePath"),
                 action: () =>
                   void guarded(async () => {
                     await api.copyOverviewPaths(
@@ -541,7 +544,7 @@ export function OverviewFileActions({
         ...(one
           ? [
               {
-                label: "Показать в Finder",
+                label: msg("overview.showInFinder"),
                 action: () =>
                   void guarded(async () => {
                     await api.revealOverviewEntry(scope, selected[0]);
@@ -572,7 +575,7 @@ export function OverviewFileActions({
           <div
             ref={menuRef}
             role="menu"
-            aria-label="Действия с файлами"
+            aria-label={msg("overview.fileActions")}
             className="ov-file-menu"
             style={{ left: point.x, top: point.y }}
             onKeyDown={(e) => {
@@ -616,9 +619,7 @@ export function OverviewFileActions({
                 className="ov-danger-text"
                 disabled={busy}
                 onClick={trash}
-              >
-                Переместить в Корзину
-                {selected.length > 1 ? ` (${selected.length})` : ""}
+              >{msg("overview.moveToTrash")}{selected.length > 1 ? ` (${selected.length})` : ""}
               </button>
             )}
           </div>,
@@ -627,7 +628,7 @@ export function OverviewFileActions({
       {error && !preview && !rename && (
         <p className="ov-file-action-error ov-notice" role="alert">
           {error}
-          <button onClick={() => setError("")}>Закрыть</button>
+          <button onClick={() => setError("")}>{msg("overview.close")}</button>
         </p>
       )}
       {(preview || rename) &&
@@ -638,7 +639,7 @@ export function OverviewFileActions({
               ref={dialogRef}
               role="dialog"
               aria-modal="true"
-              aria-label={preview ? "Переместить в Корзину?" : "Переименовать"}
+              aria-label={preview ? msg("overview.moveToTrash2") : msg("overview.rename")}
               className="ov-modal"
               onKeyDown={(e) => {
                 if (e.key === "Escape") {
@@ -671,33 +672,25 @@ export function OverviewFileActions({
               }}
             >
               <header>
-                <h2>{preview ? "Переместить в Корзину?" : "Переименовать"}</h2>
+                <h2>{preview ? msg("overview.moveToTrash2") : msg("overview.rename")}</h2>
               </header>
               {preview ? (
                 <>
-                  <p>
-                    Выбранные файлы и папки будут перемещены в системную
-                    Корзину. Вложенное содержимое папок также перемещается.
-                  </p>
+                  <p>{msg("overview.theSelectedFilesAndFoldersWillBeMovedToThe")}</p>
                   <ul className="ov-action-paths">
                     {preview.paths.map((p) => (
                       <li key={p}>{p}</li>
                     ))}
                   </ul>
                   {dirty.length > 0 && (
-                    <p className="ov-hint">
-                      Несохранённый текст останется в открытых вкладках — его
-                      можно сохранить в копию.
-                    </p>
+                    <p className="ov-hint">{msg("overview.unsavedTextWillStayInTheOpenTabsYouCan")}</p>
                   )}
                 </>
               ) : (
                 <>
                   <p className="ov-hint">{rename}</p>
-                  <label>
-                    Новое имя
-                    <input
-                      aria-label="Новое имя"
+                  <label>{msg("overview.newName")}<input
+                      aria-label={msg("overview.newName")}
                       value={name}
                       disabled={busy}
                       onChange={(e) => setName(e.target.value)}
@@ -706,10 +699,7 @@ export function OverviewFileActions({
                       }}
                     />
                   </label>
-                  <p className="ov-hint">
-                    Открытые черновики сохранятся. Существующий файл или папка
-                    не заменяются.
-                  </p>
+                  <p className="ov-hint">{msg("overview.openDraftsWillBeKeptExistingFilesAndFoldersWill")}</p>
                 </>
               )}
               {error && (
@@ -725,9 +715,7 @@ export function OverviewFileActions({
                     setRename(null);
                     setError("");
                   }}
-                >
-                  Отмена
-                </button>
+                >{msg("overview.cancel")}</button>
                 <button
                   className={preview ? "danger" : "primary"}
                   disabled={busy}
@@ -738,10 +726,10 @@ export function OverviewFileActions({
                   }
                 >
                   {busy
-                    ? "Выполняем…"
+                    ? msg("overview.working")
                     : preview
-                      ? "Переместить в Корзину"
-                      : "Переименовать"}
+                      ? msg("overview.moveToTrash")
+                      : msg("overview.rename")}
                 </button>
               </footer>
             </section>

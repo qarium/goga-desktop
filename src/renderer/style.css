@@ -1,3 +1,5 @@
+@import "../shared/overlay-theme.css";
+
 :root {
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   color: #e4ebf6;
@@ -515,7 +517,7 @@ small {
   gap: 18px;
 }
 .hint {
-  color: #8397b2;
+  color: var(--feedback-hint-fg);
   font-size: 11px;
   line-height: 1.7;
 }
@@ -610,12 +612,8 @@ small {
   border-top: 1px solid var(--line);
 }
 .error {
-  border: 1px solid #684033;
-  background: #2c1d24;
-  color: #efb1a0;
   padding: 13px 15px;
   margin: 16px 0;
-  border-radius: 6px;
   font-size: 12px;
   line-height: 1.7;
   white-space: pre-wrap;
@@ -625,7 +623,7 @@ small {
   margin: 16px 25px;
 }
 .success {
-  color: #75d7c6;
+  color: var(--feedback-ok-fg);
   margin-top: 16px;
 }
 .loading {
@@ -840,13 +838,6 @@ code {
 .task-reload-dialog {
   width: min(480px, calc(100vw - 32px));
   padding: 24px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface);
-  color: #e4ebf6;
-}
-.task-reload-dialog::backdrop {
-  background: rgb(0 0 0 / 60%);
 }
 .task-reload-dialog p {
   line-height: 1.6;
@@ -1446,10 +1437,6 @@ code {
   width: 310px;
   max-width: calc(100vw - 32px);
   padding: 6px;
-  border: 1px solid #526781;
-  border-radius: 8px;
-  background: #182239;
-  box-shadow: 0 8px 28px #0008;
 }
 .launch-menu button {
   width: 100%;
@@ -1520,6 +1507,7 @@ code {
   overflow-wrap: anywhere;
 }
 .context-board-error p {
+  color: var(--feedback-error-fg);
   flex: 1 1 320px;
   min-width: 0;
   margin: 0;

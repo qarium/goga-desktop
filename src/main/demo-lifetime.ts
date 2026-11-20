@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import type { PreparedShutdown } from "../host/shutdown";
 import type { DemoShow } from "../shared/demonstrations";
 /** Only track operations that can change the inventory. A slow document or a
@@ -10,7 +11,7 @@ export class DemoLifetime {
     private readonly stopShow: (id: string) => Promise<void>,
   ) {}
   async admit<T>(action: () => Promise<T>): Promise<T> {
-    if (this.frozen) throw Error("Приложение готовится к выходу.");
+    if (this.frozen) throw Error(t("native.appQuitting"));
     const flight = action();
     this.pending.add(flight);
     try {
@@ -20,18 +21,18 @@ export class DemoLifetime {
     }
   }
   async prepare(): Promise<PreparedShutdown> {
-    if (this.frozen) throw Error("Подготовка к выходу уже выполняется.");
+    if (this.frozen) throw Error(t("native.quitAlreadyPreparing"));
     this.frozen = true;
     try {
       await Promise.allSettled([...this.pending]);
       const items = this.shows().map((s) => ({
         id: s.showId,
-        label: "Демонстрация · " + s.label,
+        label: t("native.demoItem", {name: s.label}),
       }));
       const planned = new Set(items.map((x) => x.id));
       const validate = () => {
         if (!this.frozen || this.shows().some((s) => !planned.has(s.showId)))
-          throw Error("Состав показов изменился.");
+          throw Error(t("native.demosChanged"));
       };
       return {
         items,

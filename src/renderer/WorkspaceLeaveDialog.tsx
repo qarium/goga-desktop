@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { FileText } from "lucide-react";
 import "./TopicsBoard.css";
@@ -14,15 +16,6 @@ type Props = {
   onReveal?: () => void;
 };
 
-function fileCount(n: number) {
-  const category = new Intl.PluralRules("ru").select(n);
-  return (
-    n +
-    " " +
-    (category === "one" ? "файл" : category === "few" ? "файла" : "файлов")
-  );
-}
-
 export function WorkspaceLeaveDialog({
   files,
   launching,
@@ -33,6 +26,7 @@ export function WorkspaceLeaveDialog({
   onSave,
   onReveal,
 }: Props) {
+  useLocale();
   const node = useRef<HTMLDialogElement>(null),
     safe = useRef<HTMLButtonElement>(null);
   const title = useId(),
@@ -79,19 +73,19 @@ export function WorkspaceLeaveDialog({
     >
       <div className="workspace-leave-content">
         <h2 id={title}>
-          {failure ? "Переход приостановлен" : "Сохранить правки?"}
+          {failure ? msg("project.navigationPaused") : msg("project.saveEdits")}
         </h2>
         {!failure && launching && (
-          <p>При запуске конвейер прочитает сохранённые версии файлов.</p>
+          <p>{msg("project.thePipelineWillReadTheSavedVersionsOfTheFiles")}</p>
         )}
         <div className="workspace-leave-files">
           {paths.length > 1 && (
-            <p className="hint">{fileCount(paths.length)} с правками</p>
+            <p className="hint">{msg("project.editedFileCount", { count: paths.length })}</p>
           )}
           <ul
             hidden={!paths.length}
             id={fileList}
-            aria-label="Файлы с правками"
+            aria-label={msg("project.editedFiles")}
           >
             {(expanded ? paths : paths.slice(0, 3)).map((path, i) => {
               const pos = path.lastIndexOf("/") + 1;
@@ -115,8 +109,8 @@ export function WorkspaceLeaveDialog({
               onClick={() => setExpanded((v) => !v)}
             >
               {expanded
-                ? "Свернуть список"
-                : "Ещё " + fileCount(paths.length - 3)}
+                ? msg("project.collapseList")
+                : msg("project.showMoreFiles", { count: paths.length - 3 })}
             </button>
           )}
         </div>
@@ -128,8 +122,8 @@ export function WorkspaceLeaveDialog({
           <>
             <p id={description} className="hint">
               {remember
-                ? "Автосохранение включится после «Сохранить и продолжить»."
-                : "Без сохранения правки останутся в редакторе."}
+                ? msg("project.autosaveWillBeEnabledAfterYouChooseSaveAndContinue")
+                : msg("project.ifYouContinueWithoutSavingYourEditsWillStayIn")}
             </p>
             <label className="workspace-leave-remember">
               <input
@@ -138,9 +132,7 @@ export function WorkspaceLeaveDialog({
                 checked={remember}
                 disabled={busy}
                 onChange={(e) => setRemember(e.target.checked)}
-              />
-              Больше не спрашивать и сохранять автоматически
-            </label>
+              />{msg("project.donTAskAgainSaveAutomatically")}</label>
           </>
         )}
         <footer className="workspace-leave-actions">
@@ -151,7 +143,7 @@ export function WorkspaceLeaveDialog({
               ref={safe}
               onClick={failure.path && onReveal ? onReveal : onStay}
             >
-              {onReveal && failure.path ? "К файлу" : "Остаться"}
+              {onReveal && failure.path ? msg("project.goToFile") : msg("project.stayHere")}
             </button>
           ) : (
             <>
@@ -161,19 +153,15 @@ export function WorkspaceLeaveDialog({
                 type="button"
                 disabled={busy}
                 onClick={onStay}
-              >
-                Остаться
-              </button>
-              <button type="button" disabled={busy} onClick={onKeep}>
-                Без сохранения
-              </button>
+              >{msg("project.stayHere")}</button>
+              <button type="button" disabled={busy} onClick={onKeep}>{msg("project.continueWithoutSaving2")}</button>
               <button
                 type="button"
                 disabled={busy}
                 className="primary"
                 onClick={() => onSave(remember)}
               >
-                {busy ? "Сохраняем…" : "Сохранить и продолжить"}
+                {busy ? msg("project.saving") : msg("project.saveAndContinue2")}
               </button>
             </>
           )}

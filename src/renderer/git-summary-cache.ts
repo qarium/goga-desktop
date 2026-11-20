@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import { z } from "zod";
 import { scopeRefSchema, type ScopeRef } from "../shared/context";
 import type { GitWorkspaceSummary } from "../shared/git-workspace";
@@ -161,7 +162,7 @@ export class GitSummaryCache {
         ...e.state,
         stale: true,
         loading: false,
-        error: "Предыдущие чтения Git ещё не завершились. Повторите позже.",
+        error: msg("git.previousGitReadsAreStillRunningTryAgainLater"),
       });
       this.trim();
     }, FRESH_MS);
@@ -193,7 +194,7 @@ export class GitSummaryCache {
         await ("result" in request ? request.result : request),
       );
       if (documentScopeId(value.scope) !== documentScopeId(e.scope))
-        throw Error("Получена сводка другой рабочей области.");
+        throw Error(msg("git.theSummaryBelongsToAnotherWorkspace"));
       if (job.generation === e.generation && !job.controller.signal.aborted)
         this.publish(e, {
           lastGood: value,

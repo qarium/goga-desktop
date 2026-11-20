@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import {
   withNativeGitCompletion,
   deferNativeGitRecovery,
@@ -117,7 +118,7 @@ function startCommand(start: NativeSequenceStart): NativeGitRequest {
 
 const external = () =>
   Error(
-    "Происхождение операции не подтверждено журналом Desktop. Продолжите внешнюю операцию в терминале.",
+    gitMessage("gitHost.theDesktopJournalCannotVerifyTheOriginOfThe2"),
   );
 const equal = (a: unknown, b: unknown) =>
   JSON.stringify(a) === JSON.stringify(b);
@@ -178,7 +179,7 @@ export class NativeGitSequence extends GitMergeSafety {
     for (const [key, value] of this.tickets)
       if (value.expires <= this.now()) this.tickets.delete(key);
     if (this.tickets.size >= 64)
-      throw Error("Слишком много незавершённых предпросмотров Git.");
+      throw Error(gitMessage("gitHost.tooManyPendingGitPreviews"));
     const token = randomBytes(32).toString("hex");
     this.tickets.set(token, structuredClone(ticket));
     return {
@@ -210,7 +211,7 @@ export class NativeGitSequence extends GitMergeSafety {
       ).stdout.trim() === "true"
     )
       throw Error(
-        "Подписание коммитов требует отдельного допуска; продолжите операцию в терминале.",
+        gitMessage("gitHost.signingCommitsRequiresSeparateAuthorizationContinueInTerminal"),
       );
     // Rewriting notes would mutate refs outside the confirmed branch.
     // Signature verification may invoke an external signer not shown here.
@@ -227,11 +228,11 @@ export class NativeGitSequence extends GitMergeSafety {
       ).stdout.trim() === "true"
     )
       throw Error(
-        "Операция с переписыванием notes или проверкой подписей требует терминала.",
+        gitMessage("gitHost.rewritingNotesOrVerifyingSignaturesRequiresTerminal"),
       );
     if (state.config.some(([key]) => /^include(?:if\..*)?\.path$/i.test(key)))
       throw Error(
-        "Внешние include конфигурации не допускаются для штатной последовательности Git.",
+        gitMessage("gitHost.externalConfigurationIncludesAreNotAllowedDuringThisNative"),
       );
     if (
       state.config.some(([key]) =>
@@ -241,14 +242,14 @@ export class NativeGitSequence extends GitMergeSafety {
       )
     )
       throw Error(
-        "Внешние filters/merge drivers не допускаются для штатной последовательности Git.",
+        gitMessage("gitHost.externalFiltersAndMergeDriversAreNotAllowedDuring"),
       );
     if (
       (await this.git(ctx, ["ls-files", "-v", "-z"])).stdout
         .split("\0")
         .some((s) => /^[a-z] |^S /.test(s))
     )
-      throw Error("Индекс скрывает изменения; операция не разрешена.");
+      throw Error(gitMessage("gitHost.theIndexHidesChangesTheOperationIsNotAllowed"));
     if (await stat(path.join(ctx.root, ".git/BISECT_START"))) throw external();
   }
   private async others(ctx: GitMergeContext) {
@@ -308,7 +309,7 @@ export class NativeGitSequence extends GitMergeSafety {
           (await stat(path.join(ctx.root, parent)))?.isDirectory()
         )
           throw Error(
-            "Существующий каталог занимает будущий путь операции; сохраните его отдельно.",
+            gitMessage("gitHost.aDirectoryOccupiesAPathTheOperationWillNeed"),
           );
         parent = path.posix.dirname(parent);
       }
@@ -333,7 +334,7 @@ export class NativeGitSequence extends GitMergeSafety {
         state.snapshot.files.some((f) => f.kind !== "untracked")
       )
         throw Error(
-          "Начало операции требует чистые отслеживаемые файлы и текущую локальную ветку.",
+          gitMessage("gitHost.startingThisOperationRequiresCleanTrackedFilesAndA"),
         );
       const head = oid(state.snapshot.head!),
         branch = state.snapshot.branch;
@@ -366,7 +367,7 @@ export class NativeGitSequence extends GitMergeSafety {
           .map(oid);
       } else commits = start.commits;
       if (commits.length > 256)
-        throw Error("Последовательность превышает безопасный предел проверки.");
+        throw Error(gitMessage("gitHost.theSequenceExceedsTheSafeVerificationLimit"));
       const trees = new Set([
         head,
         ...("source" in start ? [start.source] : []),
@@ -380,7 +381,7 @@ export class NativeGitSequence extends GitMergeSafety {
           .split(" ");
         if (parents.length > 2)
           throw Error(
-            "Merge-коммиты требуют отдельного выбора mainline; используйте терминал.",
+            gitMessage("gitHost.mergeCommitsRequireAMainlineSelectionUseTerminal"),
           );
         parents.slice(1).forEach((v) => trees.add(oid(v)));
       }
@@ -396,7 +397,7 @@ export class NativeGitSequence extends GitMergeSafety {
         )
       )
         throw Error(
-          "Изменение .gitattributes в последовательности пока требует терминала.",
+          gitMessage("gitHost.thisSequenceChangesGitattributesUseTerminal"),
         );
       // Validate every source-tree prefix, not only paths already materialized
       // on this volume. Native checkout must not collapse case/Unicode aliases.
@@ -410,13 +411,13 @@ export class NativeGitSequence extends GitMergeSafety {
             previous = spellings.get(key);
           if (previous !== undefined && previous !== prefix)
             throw Error(
-              "Неоднозначные имена файлов или каталогов требуют терминала.",
+              gitMessage("gitHost.ambiguousFileOrDirectoryNamesRequireTerminal"),
             );
           spellings.set(key, prefix);
           const parent = path.posix.dirname(prefix);
           if (fileNames.has(portable(parent)))
             throw Error(
-              "Замена файла каталогом в последовательности требует терминала.",
+              gitMessage("gitHost.replacingAFileWithADirectoryInThisSequence"),
             );
           prefix = parent;
         }
@@ -429,7 +430,7 @@ export class NativeGitSequence extends GitMergeSafety {
           )
         )
           throw Error(
-            "Неотслеживаемый или игнорируемый файл занимает путь операции.",
+            gitMessage("gitHost.anUntrackedOrIgnoredFileOccupiesAnOperationPath"),
           );
       const paths = [...new Set([...envelope, ...untracked])].sort();
       const guard =
@@ -444,7 +445,7 @@ export class NativeGitSequence extends GitMergeSafety {
       for (const p of envelope)
         if (!originalIndex.has(p) && protectedFiles.get(p)?.data !== null)
           throw Error(
-            "Неотслеживаемый или игнорируемый файл занимает будущий путь операции.",
+            gitMessage("gitHost.anUntrackedOrIgnoredFileOccupiesAPathThe"),
           );
       await this.protectEmptyParents(ctx, [...envelope], originalIndex);
       if ((await this.capture(ctx, scope)).fingerprint !== state.fingerprint)
@@ -545,7 +546,7 @@ export class NativeGitSequence extends GitMergeSafety {
     for (const p of new Set([...beforeIndex.keys(), ...nowIndex.keys()]))
       if (!equal(beforeIndex.get(p), nowIndex.get(p)) && !conflicts.has(p))
         throw Error(
-          "Посторонние staged изменения не принадлежат исходному конфликту.",
+          gitMessage("gitHost.unrelatedStagedChangesDoNotBelongToTheOriginal2"),
         );
     const previous = files(record.checkpoint),
       actual = files(current),
@@ -553,7 +554,7 @@ export class NativeGitSequence extends GitMergeSafety {
     for (const p of beforeIndex.keys())
       if (!conflicts.has(p) && !dataEqual(previous.get(p), actual.get(p)))
         throw Error(
-          "Посторонние рабочие изменения необходимо сохранить перед продолжением или отменой.",
+          gitMessage("gitHost.saveUnrelatedWorkingChangesBeforeContinuingOrAborting"),
         );
     // Conflict text/staging may be a user resolution; permission changes are
     // independent edits and must not be discarded by a native checkout/abort.
@@ -568,7 +569,7 @@ export class NativeGitSequence extends GitMergeSafety {
         !record.resolvedModes?.some((f) => f.path === p && f.mode === now.mode)
       )
         throw Error(
-          "Изменены права конфликтного файла; сохраните их перед продолжением или отменой.",
+          gitMessage("gitHost.thePermissionsOfTheConflictedFileChangedPreserveThem"),
         );
     }
     const originalIndex = entries(record.recovery);
@@ -578,12 +579,12 @@ export class NativeGitSequence extends GitMergeSafety {
         actual.get(f.path)?.data !== null &&
         (originalIndex.has(f.path) || f.data === null)
       )
-        throw Error("Неотслеживаемый файл занимает будущий путь операции.");
+        throw Error(gitMessage("gitHost.anUntrackedFileOccupiesAPathTheOperationWill"));
     if (
       action === "continue" &&
       state.snapshot.files.some((f) => f.kind === "conflict")
     )
-      throw Error("Сначала разрешите все конфликты.");
+      throw Error(gitMessage("gitHost.resolveAllConflictsFirst"));
     return {
       guard,
       current,
@@ -715,7 +716,7 @@ export class NativeGitSequence extends GitMergeSafety {
             await ctx.verify();
             if (ticket.expires <= this.now())
               throw Error(
-                "Подтверждение истекло после записи намерения. Журнал сохранён для проверки.",
+                gitMessage("gitHost.confirmationExpiredAfterTheOperationIntentWasRecordedThe"),
               );
             if (ticket.start?.operation === "merge") {
               // Native merge-tree's destination discovery occurs AFTER durable

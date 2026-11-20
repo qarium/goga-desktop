@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import path from "node:path";
 import { opendir } from "node:fs/promises";
 import { isOverviewPath } from "../shared/project-overview";
@@ -45,7 +46,7 @@ export async function listProjectSpecifications(
       assertReadActive();
       if (++visited > SPECIFICATIONS_MAX_ENTRIES)
         throw Error(
-          "Слишком много файлов в .goga/usages для одного чтения. Уменьшите объём каталога и повторите загрузку.",
+          tr("host.tooManyFilesInGogaUsagesForASingleRead"),
         );
       const child = `${relative}/${entry.name}`;
       if (!isOverviewPath(child) || entry.isSymbolicLink()) {

@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import type {
   GitCommitDetails as Details,
   GitCommitDiff,
@@ -37,17 +39,18 @@ export function GitCommitDetails({
   onClose(): void;
   onError(error: unknown): void;
 }) {
+  useLocale();
   return (
-    <section className="git-history-details" aria-label="Детали коммита">
+    <section className="git-history-details" aria-label={msg("git.commitDetails")}>
       <header className="git-history-detail-heading">
-        <span>Детали коммита</span>
+        <span>{msg("git.commitDetails")}</span>
         {value && (
           <TooltipButton
             disabled={false}
             busy={false}
-            tooltipLabel="Просмотр коммита"
-            description="Только просмотр: файлы и рабочая ветка не изменяются."
-            label="Скопировать полный хеш коммита"
+            tooltipLabel={msg("git.viewCommit")}
+            description={msg("git.readOnlyFilesAndTheWorkingBranchWillNotChange")}
+            label={msg("git.copyFullCommitHash")}
             buttonClassName="git-history-oid"
             onClick={() => {
               void (async () => {
@@ -65,29 +68,28 @@ export function GitCommitDetails({
         {value &&
           (value.commit.parents.length > 1 ? (
             <select
-              aria-label="Родитель для сравнения"
+              aria-label={msg("git.parentToCompareAgainst")}
               value={value.parentIndex}
               onChange={(e) => onParent(Number(e.target.value))}
             >
               {value.commit.parents.map((oid, index) => (
-                <option value={index} key={`${index}-${oid}`}>
-                  Родитель {index + 1} · {oid.slice(0, 8)}
+                <option value={index} key={`${index}-${oid}`}>{msg("git.parent")}{index + 1} · {oid.slice(0, 8)}
                 </option>
               ))}
             </select>
           ) : (
             <small>
               {value.parent
-                ? `С родителем ${value.parent.slice(0, 8)}`
-                : "Начальный коммит"}
+                ? msg("git.compareWithParent", { value1: String(value.parent.slice(0, 8)) })
+                : msg("git.initialCommit")}
             </small>
           ))}
         <TooltipButton
           disabled={false}
           busy={false}
-          tooltipLabel="Просмотр коммита"
-          description="Только просмотр: файлы и рабочая ветка не изменяются."
-          label="Закрыть детали коммита"
+          tooltipLabel={msg("git.viewCommit")}
+          description={msg("git.readOnlyFilesAndTheWorkingBranchWillNotChange")}
+          label={msg("git.closeCommitDetails")}
           buttonClassName="git-history-close"
           onClick={onClose}
         >
@@ -95,26 +97,24 @@ export function GitCommitDetails({
         </TooltipButton>
       </header>
       {pending ? (
-        <LoadingState label="Загрузка деталей коммита" />
+        <LoadingState label={msg("git.loadingCommitDetails")} />
       ) : !value ? (
-        <div className="git-workspace-empty">
-          Не удалось загрузить детали. Выберите коммит ещё раз.
-        </div>
+        <div className="git-workspace-empty">{msg("git.couldNotLoadDetailsSelectTheCommitAgain")}</div>
       ) : (
         <>
           <details className="git-history-message">
-            <summary>{value.commit.subject || "Без сообщения"}</summary>
+            <summary>{value.commit.subject || msg("git.noMessage")}</summary>
             <pre>{value.message}</pre>
           </details>
           <div className="git-history-detail-content">
-            <aside className="git-history-files" aria-label="Файлы коммита">
+            <aside className="git-history-files" aria-label={msg("git.commitFiles")}>
               {!value.files.length && (
-                <p className="hint">В этом сравнении изменений нет.</p>
+                <p className="hint">{msg("git.noChangesInThisComparison")}</p>
               )}
               {value.files.map((file) => (
                 <button
                   type="button"
-                  aria-label={`Файл ${file.path}`}
+                  aria-label={msg("git.file", { path: String(file.path) })}
                   key={file.path}
                   className={selectedFile?.path === file.path ? "active" : ""}
                   onClick={() => onFile(file)}
@@ -143,13 +143,13 @@ export function GitCommitDetails({
                   disabled={filesPending}
                   onClick={onMoreFiles}
                 >
-                  {filesPending ? "…" : "Ещё файлы"}
+                  {filesPending ? "…" : msg("git.moreFiles")}
                 </button>
               )}
             </aside>
             <section
               className="git-history-file-pane"
-              aria-label="Сравнение файла коммита"
+              aria-label={msg("git.commitFileDiff")}
             >
               {selectedFile && (
                 <div className="git-history-file-heading">
@@ -158,9 +158,9 @@ export function GitCommitDetails({
                     <TooltipButton
                       disabled={false}
                       busy={false}
-                      tooltipLabel="Просмотр коммита"
-                      description="Только просмотр: файлы и рабочая ветка не изменяются."
-                      label={`Закрыть файл ${selectedFile.path}`}
+                      tooltipLabel={msg("git.viewCommit")}
+                      description={msg("git.readOnlyFilesAndTheWorkingBranchWillNotChange")}
+                      label={msg("git.closeFile", { path: String(selectedFile.path) })}
                       onClick={onCloseFile}
                     >
                       ×
@@ -173,7 +173,7 @@ export function GitCommitDetails({
                 data-testid="git-history-diff-scroll"
               >
                 {diffPending ? (
-                  <LoadingState label="Загрузка различий коммита" />
+                  <LoadingState label={msg("git.loadingCommitDiff")} />
                 ) : diff ? (
                   <GitDiffView
                     part={diff.part}
@@ -183,8 +183,8 @@ export function GitCommitDetails({
                 ) : (
                   <div className="git-workspace-empty">
                     {selectedFile
-                      ? "Сравнение не загружено. Выберите файл ещё раз."
-                      : "Выберите файл для просмотра изменений."}
+                      ? msg("git.couldNotLoadTheComparisonSelectTheFileAgain")
+                      : msg("git.selectAFileToViewChanges")}
                   </div>
                 )}
               </div>

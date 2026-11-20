@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { getLocale, setLocale } from "../src/shared/i18n";
 import React, { createRef, useRef } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import {
@@ -664,6 +665,25 @@ it("removes only Overview's whole-editor focus outline while retaining caret, se
   expect(view.dom.querySelector(".yaml-boolean")?.textContent).toBe("true");
 });
 
+it("updates an open search panel in place when language changes, preserving the query", () => {
+  const previous = getLocale();
+  const { getByRole } = render(<EditorWithExternalActions path="file.txt" value="часть текста" onChange={vi.fn()} />);
+  fireEvent.click(getByRole("button", { name: "Найти в файле" }));
+  const root = editor().dom;
+  const input = root.querySelector<HTMLInputElement>('input[name="search"]')!;
+  fireEvent.input(input, { target: { value: "часть" } });
+  const clear = root.querySelector('button[name="clear"]')!;
+  fireEvent.mouseEnter(clear);
+  try {
+    act(() => setLocale("en"));
+    expect(root.querySelector('[role="tooltip"]:not([hidden])')?.textContent).toBe("Clear search");
+    expect(root.querySelector('input[aria-label="Find"]')).toBe(input);
+    expect(input.value).toBe("часть");
+    expect(root.querySelector('button[name="next"]')?.textContent).toBe("Next");
+    expect(root.querySelector('button[name="clear"] svg')).not.toBeNull();
+  } finally { act(() => setLocale(previous)); }
+});
+
 it("supports external search and replacement, scopes shortcuts to this editor and keeps exact source with Undo", () => {
   // jsdom lacks the browser method used by CodeMirror when restoring focus.
   (document as any).execCommand = vi.fn(() => false);
@@ -883,7 +903,13 @@ it("clears the query and actual highlights without changing replacement, source,
   expect(clear).not.toBe(close);
   expect(query.parentElement!.contains(clear)).toBe(true);
   expect(query.parentElement!.contains(close)).toBe(false);
-  expect(clear.title).toBe("Очистить поиск");
+  expect(clear.title).toBe("");
+  fireEvent.mouseEnter(clear);
+  const hint = panel.querySelector<HTMLElement>('[role="tooltip"]:not([hidden])')!;
+  expect(hint.textContent).toBe("Очистить поиск");
+  expect(clear.getAttribute("aria-describedby")).toBe(hint.id);
+  fireEvent.mouseLeave(clear);
+  expect(clear.hasAttribute("aria-describedby")).toBe(false);
   expect(clear.textContent).toBe("");
   expect(clear.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
   act(() => clear.focus());
@@ -997,11 +1023,12 @@ it("closes with a separate rightmost accessible icon and remembers the query thr
     target: { value: "two" },
   });
   const close = within(panel).getByRole("button", { name: "Закрыть поиск" });
-  expect(close.title).toBe("Закрыть поиск");
+  expect(close.title).toBe("");
   expect(close.textContent).toBe("");
   expect(close.querySelector('svg[aria-hidden="true"]')).not.toBeNull();
   expect(panel.firstElementChild!.lastElementChild).toBe(close);
   act(() => close.focus());
+  expect(panel.querySelector('[role="tooltip"]:not([hidden])')?.textContent).toBe("Закрыть поиск");
   fireEvent.click(close);
   expect(view.dom.querySelector('[role="search"]')).toBeNull();
   expect(view.root.activeElement).toBe(view.contentDOM);

@@ -1,3 +1,5 @@
+import { t as msg } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import { useState } from "react";
 import type {
   OverviewPasteConflict,
@@ -15,6 +17,7 @@ export function PasteConflictDialog({
   onConfirm: (decisions: OverviewPasteDecision[]) => void;
   onCancel: () => void;
 }) {
+  useLocale();
   const [decisions, setDecisions] = useState<OverviewPasteDecision[]>([]);
   const [all, setAll] = useState(false);
   const remaining = conflicts.filter(
@@ -37,34 +40,25 @@ export function PasteConflictDialog({
   };
   return (
     <TopicModal
-      title="Файл уже существует"
-      closeLabel="Закрыть подтверждение вставки"
+      title={msg("overview.fileAlreadyExists")}
+      closeLabel={msg("overview.closePasteConfirmation")}
       className="ov-paste-dialog"
       onClose={onCancel}
     >
       <div className="ov-paste-text">
         <div className="ov-paste-intro">
-          <p>Объект с таким именем уже есть в папке назначения:</p>
+          <p>{msg("overview.anItemWithThisNameAlreadyExistsInTheDestination")}</p>
           <p className="ov-paste-conflict-path">
             <strong>{current.path}</strong>
           </p>
         </div>
-        <p className="ov-hint">
-          Осталось совпадений: {remaining.length}. Папки объединяются, остальные
-          файлы сохраняются.
-        </p>
+        <p className="ov-hint">{msg("overview.pasteConflictsRemaining", { count: remaining.length })}</p>
         {dirty ? (
-          <p role="status">
-            В этом файле есть несохранённые изменения или выполняется
-            сохранение. Можно пропустить его; черновик останется в редакторе.
-          </p>
+          <p role="status">{msg("overview.thisFileHasUnsavedChangesOrIsBeingSavedYou")}</p>
         ) : !current.replaceable ? (
-          <p role="status">
-            Этот объект нельзя безопасно заменить файлом другого типа. Можно
-            пропустить его.
-          </p>
+          <p role="status">{msg("overview.thisItemCannotBeSafelyReplacedWithAFileOf")}</p>
         ) : (
-          <p>Заменить существующий файл скопированным?</p>
+          <p>{msg("overview.replaceTheExistingFileWithTheCopiedFile")}</p>
         )}
       </div>
       <label className="ov-paste-apply-all">
@@ -72,19 +66,15 @@ export function PasteConflictDialog({
           type="checkbox"
           checked={all}
           onChange={(e) => setAll(e.target.checked)}
-        />
-        Применить ко всем
-      </label>
+        />{msg("overview.applyToAll")}</label>
       <footer>
-        <button onClick={onCancel}>Отменить вставку</button>
-        <button onClick={() => choose("skip")}>Пропустить</button>
+        <button onClick={onCancel}>{msg("overview.cancelPaste")}</button>
+        <button onClick={() => choose("skip")}>{msg("overview.skip")}</button>
         <button
           className="primary"
           disabled={!current.replaceable || dirty}
           onClick={() => choose("replace")}
-        >
-          Заменить
-        </button>
+        >{msg("overview.replace")}</button>
       </footer>
     </TopicModal>
   );

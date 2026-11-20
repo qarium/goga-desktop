@@ -1,3 +1,5 @@
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useState, type CSSProperties, type ReactNode } from "react";
 import { DragDropProvider, useDraggable, useDroppable } from "@dnd-kit/react";
 import { isSortable, useSortable } from "@dnd-kit/react/sortable";
@@ -40,6 +42,7 @@ interface Props {
   renderMeta?: (row: TopicBoardRecord) => ReactNode;
 }
 export function TopicsBoard(props: Props) {
+  useLocale();
   const { preferences: prefs, onPreferences } = props;
   const board = projectTopicsBoard(props.rows, props.allRows, prefs);
   const [expanded, setExpanded] = useState(false),
@@ -58,7 +61,7 @@ export function TopicsBoard(props: Props) {
       setMessage(text);
       setEditing(null);
     } catch (e) {
-      setError(e instanceof Error ? e.message : "Не удалось изменить доску.");
+      setError(e instanceof Error ? e.message : tr("topics.couldNotUpdateTheBoard"));
     }
   }
   const moveStatus = (status: string, from: string, direction: number) => {
@@ -67,7 +70,7 @@ export function TopicsBoard(props: Props) {
     if (next)
       apply(
         () => assignStatus(prefs, status, next === "unassigned" ? null : next),
-        `Статус ${status} перемещён.`,
+        tr("topics.statusStatusMoved", { status: status }),
       );
   };
   const editor = (id: string) => (
@@ -80,14 +83,14 @@ export function TopicsBoard(props: Props) {
             id === "new"
               ? addBoardColumn(prefs, name, crypto.randomUUID())
               : renameBoardColumn(prefs, id, name),
-          "Колонка сохранена.",
+          tr("topics.columnSaved"),
         );
       }}
     >
       <input
         autoFocus
         aria-label={
-          id === "new" ? "Название новой колонки" : "Название колонки"
+          id === "new" ? tr("topics.newColumnName") : tr("topics.columnName")
         }
         value={name}
         maxLength={64}
@@ -95,13 +98,13 @@ export function TopicsBoard(props: Props) {
       />
       <button
         type="submit"
-        aria-label={id === "new" ? "Создать колонку" : "Сохранить название"}
+        aria-label={id === "new" ? tr("topics.createColumn") : tr("topics.saveName")}
       >
         <Check />
       </button>
       <button
         type="button"
-        aria-label="Отменить редактирование колонки"
+        aria-label={tr("topics.cancelEditingColumn")}
         onClick={() => {
           setEditing(null);
           setError("");
@@ -126,7 +129,7 @@ export function TopicsBoard(props: Props) {
           />
         ))}
         {!column.statuses.length && (
-          <span className="topic-board-drop-hint">Перетащите сюда статусы</span>
+          <span className="topic-board-drop-hint">{tr("topics.dragStatusesHere")}</span>
         )}
       </div>
       {(!unassigned || expanded) && (
@@ -150,7 +153,7 @@ export function TopicsBoard(props: Props) {
                 <div className="topic-board-title-row">
                   <input
                     type="checkbox"
-                    aria-label={`Выбрать топик ${row.topic}`}
+                    aria-label={tr("topics.selectTopicTopic", { topic: row.topic })}
                     checked={checked}
                     onChange={() => {
                       const next = new Set(props.selected);
@@ -161,7 +164,7 @@ export function TopicsBoard(props: Props) {
                   <button
                     type="button"
                     className="topic-board-title"
-                    aria-label={`Открыть топик ${row.topic}`}
+                    aria-label={tr("topics.openTopicTopic", { topic: row.topic })}
                     onClick={() => props.onOpen(row)}
                   >
                     {row.topic}
@@ -177,9 +180,7 @@ export function TopicsBoard(props: Props) {
                   ))}
                 </div>
                 {row.statusError && (
-                  <p className="hint" title={row.statusError}>
-                    Статусы требуют проверки
-                  </p>
+                  <p className="hint" title={row.statusError}>{tr("topics.statusesNeedReview")}</p>
                 )}
                 <div className="topic-board-footer">
                   {props.renderMeta && (
@@ -197,7 +198,7 @@ export function TopicsBoard(props: Props) {
             );
           })}
           {!column.rows.length && (
-            <p className="topic-board-empty">Нет топиков</p>
+            <p className="topic-board-empty">{tr("topics.noTopics")}</p>
           )}
         </div>
       )}
@@ -210,7 +211,7 @@ export function TopicsBoard(props: Props) {
     return (
       <input
         type="checkbox"
-        aria-label={`Выбрать топики колонки ${column.name}`}
+        aria-label={tr("topics.selectTopicsInName", { name: column.name })}
         disabled={!keys.length}
         checked={columnChecked(keys, props.selected)}
         onChange={() => props.onSelection(toggleColumn(keys, props.selected))}
@@ -220,7 +221,7 @@ export function TopicsBoard(props: Props) {
   return (
     <div className="topics-board-workspace">
       <div className="topic-board-help">
-        <span>Перетаскивайте статусы между колонками, колонки — за ручку.</span>
+        <span>{tr("topics.dragStatusesBetweenColumnsDragAColumnBy")}</span>
         <button
           type="button"
           onClick={() => {
@@ -230,9 +231,7 @@ export function TopicsBoard(props: Props) {
           }}
           disabled={prefs.columns.length >= 50}
         >
-          <Plus />
-          Добавить колонку
-        </button>
+          <Plus />{tr("topics.addColumn")}</button>
       </div>
       {message && (
         <div className="topic-board-message">
@@ -240,16 +239,14 @@ export function TopicsBoard(props: Props) {
           {undo && (
             <button
               type="button"
-              aria-label="Отменить изменение доски"
+              aria-label={tr("topics.undoBoardChange")}
               onClick={() => {
                 onPreferences(undo);
                 setUndo(null);
-                setMessage("Последнее изменение отменено.");
+                setMessage(tr("topics.lastChangeUndone"));
               }}
             >
-              <Undo2 />
-              Отменить
-            </button>
+              <Undo2 />{tr("topics.undo")}</button>
           )}
         </div>
       )}
@@ -276,7 +273,7 @@ export function TopicsBoard(props: Props) {
                     String(source.data.status),
                     column === "unassigned" ? null : column,
                   ),
-                `Статус ${source.data.status} перемещён.`,
+                tr("topics.statusStatusMoved", { status: source.data.status }),
               );
             } else if (source.data.kind === "column" && isSortable(source)) {
               apply(
@@ -286,7 +283,7 @@ export function TopicsBoard(props: Props) {
                     String(source.data.column),
                     source.index,
                   ),
-                "Порядок колонок изменён.",
+                tr("topics.columnOrderUpdated"),
               );
             }
           }
@@ -298,23 +295,22 @@ export function TopicsBoard(props: Props) {
           <section
             className="topic-board-unassigned"
             role="region"
-            aria-label="Без категории"
+            aria-label={tr("topics.unassigned")}
           >
             <div className="topic-board-column-heading">
               {selectColumn(board.unassigned)}
-              <strong>Без категории</strong>
-              <span className="hint">
-                Статусов: {board.unassigned.statuses.length}
+              <strong>{tr("topics.unassigned")}</strong>
+              <span className="hint">{tr("topics.statuses2")}{board.unassigned.statuses.length}
               </span>
               <button
                 type="button"
                 className="topic-board-disclosure"
-                aria-label={expanded ? "Скрыть топики" : "Показать топики"}
+                aria-label={expanded ? tr("topics.hideTopics") : tr("topics.showTopics")}
                 aria-expanded={expanded}
                 onClick={() => setExpanded(!expanded)}
               >
                 {expanded ? <ChevronDown /> : <ChevronRight />}
-                {expanded ? "Скрыть топики" : "Показать топики"} (
+                {expanded ? tr("topics.hideTopics") : tr("topics.showTopics")} (
                 {board.unassigned.rows.length})
               </button>
             </div>
@@ -340,7 +336,7 @@ export function TopicsBoard(props: Props) {
                 if (next >= 0 && next < prefs.columns.length)
                   apply(
                     () => reorderBoardColumn(prefs, column.id, next),
-                    "Порядок колонок изменён.",
+                    tr("topics.columnOrderUpdated"),
                   );
               }}
             >
@@ -352,7 +348,7 @@ export function TopicsBoard(props: Props) {
                   <button
                     className="topic-board-column-name"
                     type="button"
-                    aria-label={`Переименовать колонку ${column.name}`}
+                    aria-label={tr("topics.renameColumnName", { name: column.name })}
                     onClick={() => {
                       setEditing(column.id);
                       setName(column.name);
@@ -367,11 +363,11 @@ export function TopicsBoard(props: Props) {
                   <button
                     className="topic-board-remove"
                     type="button"
-                    aria-label={`Удалить колонку ${column.name}`}
+                    aria-label={tr("topics.deleteColumnName", { name: column.name })}
                     onClick={() =>
                       apply(
                         () => removeBoardColumn(prefs, column.id),
-                        `Колонка «${column.name}» удалена. Топики сохранены.`,
+                        tr("topics.columnNameDeletedTopicsWereKept", { name: column.name }),
                       )
                     }
                   >
@@ -387,10 +383,7 @@ export function TopicsBoard(props: Props) {
       <span className="sr-only" aria-live="polite">
         {message}
       </span>
-      <p className="topic-board-footnote">
-        Категории меняют только представление доски, не статусы топиков. Для
-        клавиатуры: Alt + ← / → на статусе или ручке колонки.
-      </p>
+      <p className="topic-board-footnote">{tr("topics.categoriesChangeOnlyTheBoardLayoutNotTopic")}</p>
     </div>
   );
 }
@@ -405,6 +398,7 @@ function StatusChip({
   unassigned: boolean;
   onMove: (direction: number) => void;
 }) {
+  useLocale();
   const { ref, isDragging } = useDraggable({
     id: `status:${status}`,
     type: "status",
@@ -415,7 +409,7 @@ function StatusChip({
       type="button"
       ref={ref}
       className={`topic-board-status${unassigned ? " unmapped" : ""}`}
-      aria-label={`Перетащить статус ${status}, топиков: ${count}`}
+      aria-label={tr("topics.dragStatusStatusTopicsCount", { status: status, count: count })}
       style={{ opacity: isDragging ? 0.4 : 1 }}
       onKeyDown={(e) => {
         if (e.altKey && ["ArrowLeft", "ArrowRight"].includes(e.key)) {
@@ -431,6 +425,7 @@ function StatusChip({
   );
 }
 function StatusSlot({ id, children }: { id: string; children: ReactNode }) {
+  useLocale();
   const { ref, isDropTarget } = useDroppable({
     id: `status-slot:${id}`,
     accept: "status",
@@ -458,6 +453,7 @@ function SortableColumn({
   onMove: (direction: number) => void;
   children: ReactNode;
 }) {
+  useLocale();
   const { ref, handleRef, isDragging } = useSortable({
     id: `column:${column.id}`,
     index,
@@ -479,7 +475,7 @@ function SortableColumn({
           className="topic-board-column-handle"
           ref={handleRef}
           type="button"
-          aria-label={`Переместить колонку ${column.name}`}
+          aria-label={tr("topics.moveColumnName", { name: column.name })}
           onKeyDown={(e) => {
             if (e.altKey && ["ArrowLeft", "ArrowRight"].includes(e.key)) {
               e.preventDefault();

@@ -445,7 +445,9 @@ it("keeps the live status as text and all run toolbar actions as compact labeled
     expect(action.classList.contains("run-action-button")).toBe(true);
     expect(action.textContent).toBe("");
     expect(action.getAttribute("aria-label")).toBeTruthy();
-    expect(action.title).toBeTruthy();
+    fireEvent.mouseEnter(action);
+    expect(action.ownerDocument.getElementById(action.getAttribute("aria-describedby")!)?.textContent).toBeTruthy();
+    fireEvent.keyDown(action, {key: "Escape"});
     expect(action.querySelector("svg")).toBeTruthy();
   }
   fireEvent.click(screen.getByRole("button",{name:"Обновить страницу панели"}));
@@ -467,4 +469,19 @@ it("keeps the working tone even when only its journal is available, but leaves u
   const status=document.querySelector(".run-actions .run-state")!;
   expect(status.classList.contains("run-state-live")).toBe(false);
   expect(status.classList.contains("run-state-ended")).toBe(false);
+});
+
+it("updates a Desktop run failure live without translating the pipeline's output", async () => {
+  const { setLocale } = await import("../src/shared/i18n");
+  const { RunOutput } = await import("../src/renderer/RunOutput");
+  const raw = "Внешний вывод: Goga exited with code 7";
+  const run = makeRun({
+    status: "failed", error: "Старый текст",
+    failureReason: { kind: "pipeline-exit", code: 7 }, output: { text: raw, truncated: false },
+  });
+  render(<RunOutput run={run} />);
+  expect(screen.getByText("Goga завершилась с кодом 7")).toBeTruthy();
+  act(() => setLocale("en"));
+  expect(screen.getByText("Goga exited with code 7")).toBeTruthy();
+  expect(screen.getByLabelText("Run output lines").textContent).toBe(raw);
 });

@@ -1,3 +1,4 @@
+import type { MessageKey } from "../../shared/locale-packs.generated";
 import type { ChildProcess } from "node:child_process";
 export interface TargetInfo {
   targetId: string;
@@ -54,3 +55,5 @@ export declare function createAgentBroker(options: {
   release(showId: string): Promise<void>;
   close(): Promise<void>;
 };
+
+export function installDemoFormatter(format: (key: Extract<MessageKey, `hostTerminal.${string}`>) => string): void;

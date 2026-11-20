@@ -217,7 +217,7 @@ it("offers a one-time system launch only after embedded startup failure and neve
   await openFirstProject();
   api.demoExecute.mockRejectedValueOnce(
     Error(
-      "Error invoking remote method 'goga:demo-execute': Error: Не удалось запустить встроенный Chromium: нет связи.",
+      "Error invoking remote method 'goga:demo-execute': Error: [GOGA_DEMO_EMBEDDED_START] Не удалось запустить встроенный Chromium: нет связи.",
     ),
   );
   fireEvent.click(screen.getByRole("button", { name: "Запустить" }));

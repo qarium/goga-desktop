@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { constants } from "node:fs";
 import {
   lstat,
@@ -27,7 +28,7 @@ const privateMode = (s: { mode: number; uid: number }) =>
 export class DesktopStateLockBusyError extends Error {
   constructor() {
     super(
-      "Хранилище Desktop занято: владелец блокировки работает или не может быть подтверждён. Повторите позже.",
+      tr("host.desktopStorageIsBusyTheLockOwnerIsRunningOr"),
     );
   }
 }
@@ -42,7 +43,7 @@ export class LegacyDesktopStateLockError extends DesktopStateLockBusyError {
   constructor(readonly snapshot: LegacyLockSnapshot) {
     super();
     this.message =
-      "Обнаружена блокировка хранилища Desktop от предыдущей версии. Требуется подтверждённое восстановление.";
+      tr("host.desktopFoundAStorageLockFromAPreviousVersionConfirm");
   }
 }
 const busy = () => new DesktopStateLockBusyError();

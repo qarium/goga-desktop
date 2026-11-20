@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useLayoutEffect, useId, useRef, useState } from "react";
 
 import "./SearchablePicker.css";
@@ -40,6 +42,7 @@ export function SearchablePicker({
   disabled: boolean;
   onChange(value: string): void;
 }) {
+  useLocale();
   const [open, setOpen] = useState(false),
     [query, setQuery] = useState(""),
     [cursor, setCursor] = useState(-1);
@@ -160,7 +163,7 @@ export function SearchablePicker({
           {selected?.label ??
             (value ||
               (loading
-                ? "Загружаем…"
+                ? msg("workspace.loading")
                 : entries.length
                   ? placeholder
                   : emptyLabel))}
@@ -246,9 +249,9 @@ export function SearchablePicker({
             ))}
           </div>
           {loading ? (
-            <p role="status">Загружаем…</p>
+            <p role="status">{msg("workspace.loading")}</p>
           ) : (
-            !filtered.length && <p>Ничего не найдено</p>
+            !filtered.length && <p>{msg("workspace.noMatches")}</p>
           )}
         </div>
       )}

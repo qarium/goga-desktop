@@ -341,7 +341,7 @@ it("shows an import error accessibly and retries exact row without selection", a
   const retry = screen.getByRole<HTMLButtonElement>("button", {
     name: quickName(),
   });
-  expect(retry.title).toContain("Повторить");
+  expect(retry.getAttribute("aria-description")).toContain("Повторить");
   fireEvent.click(retry);
   await screen.findByText("Синхронизировано");
   expect(api.retryContextSync).toHaveBeenCalledExactlyOnceWith(contextRef(a));
@@ -439,7 +439,7 @@ it.each([
       name: quickName(),
     });
     expect(button.disabled).toBe(true);
-    expect(button.title).not.toBe(quickName());
+    expect(button.getAttribute("aria-description")).toBeTruthy();
     fireEvent.click(button);
     expect(api.syncTopicContext).not.toHaveBeenCalled();
     expect(api.ensureTopicContext).not.toHaveBeenCalled();

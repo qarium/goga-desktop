@@ -1,4 +1,6 @@
-import { memo } from "react";
+import { t as msg } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
+import { memo, useMemo } from "react";
 import {
   Activity,
   ArrowRight,
@@ -13,21 +15,18 @@ import {
   WifiOff,
 } from "lucide-react";
 import type { Project } from "../../shared/types";
-import { type DisplayRun, plural } from "./model";
+import { type DisplayRun } from "./model";
 import type { HomeTarget, WorkspaceAddress } from "./types";
 
-const timeFormatter = new Intl.DateTimeFormat("ru-RU", {
-  hour: "2-digit",
-  minute: "2-digit",
-});
+
 function elapsed(start: number, now: number) {
   if (!Number.isFinite(start)) return "—";
   const sec = Math.max(0, Math.floor((now - start) / 1000));
   return sec < 60
-    ? `${sec} сек`
+    ? msg("shell.s", { sec: String(sec) })
     : sec < 3600
-      ? `${Math.floor(sec / 60)} мин`
-      : `${Math.floor(sec / 3600)} ч ${Math.floor(sec / 60) % 60} мин`;
+      ? msg("shell.m", { value1: String(Math.floor(sec / 60)) })
+      : msg("shell.hM", { value1: String(Math.floor(sec / 3600)), value2: String(Math.floor(sec / 60) % 60) });
 }
 const RunTile = memo(function RunTile({
   run,
@@ -40,12 +39,14 @@ const RunTile = memo(function RunTile({
   onNavigate: (t: HomeTarget) => void;
   onReconnect?: (id: string) => void;
 }) {
+  const locale = useLocale();
+  const formatter = useMemo(() => new Intl.DateTimeFormat(locale, {hour: "2-digit", minute: "2-digit"}), [locale]);
   const start = Date.parse(run.startedAt),
     status = run.unverified
-      ? "Состояние не подтверждено"
+      ? msg("shell.statusUnverified")
       : run.status === "starting"
-        ? "Запускается"
-        : "Работает";
+        ? msg("shell.starting")
+        : msg("shell.running");
   const open = () =>
     onNavigate({ kind: "run", runId: run.id, owner: run.owner });
   return (
@@ -56,7 +57,7 @@ const RunTile = memo(function RunTile({
           <strong>{run.name}</strong>
           <ArrowUpRight size={14} />
         </button>
-        <span className="d-duration" title="Время с запуска процесса">
+        <span className="d-duration" title={msg("shell.timeSinceTheProcessStarted")}>
           <Clock3 size={12} />
           {elapsed(start, now)}
         </span>
@@ -65,28 +66,27 @@ const RunTile = memo(function RunTile({
         className="d-owner"
         title={
           run.owner.kind === "topic"
-            ? "Копия топика: " + run.topic
-            : "Исходный проект"
+            ? msg("shell.topicWorkingCopy") + run.topic
+            : msg("shell.originalProject")
         }
       >
         <Layers size={12} />
-        <span>{run.topic || "Без топика"}</span>
+        <span>{run.topic || msg("shell.noTopic")}</span>
       </div>
       <div className="d-state-line">
         <span
           className={
-            "d-status " + (status === "Работает" ? "d-running" : "d-neutral")
+            "d-status " + ((!run.unverified && run.status === "running") ? "d-running" : "d-neutral")
           }
         >
-          {status === "Работает" ? (
+          {(!run.unverified && run.status === "running") ? (
             <Activity size={14} />
           ) : (
             <Clock3 size={14} />
           )}{" "}
           {status}
         </span>
-        <time className="d-started" dateTime={run.startedAt}>
-          Старт в {Number.isFinite(start) ? timeFormatter.format(start) : "—"}
+        <time className="d-started" dateTime={run.startedAt}>{msg("shell.startedAt")}{Number.isFinite(start) ? formatter.format(start) : "—"}
         </time>
       </div>
       <div className="d-launch-info">
@@ -94,19 +94,19 @@ const RunTile = memo(function RunTile({
           <dl className="d-run-facts">
             {run.planPath && (
               <div className="d-plan-fact">
-                <dt>План сборки</dt>
+                <dt>{msg("shell.buildPlan")}</dt>
                 <dd title={run.planPath}>{run.planPath}</dd>
               </div>
             )}
             {run.workflow && (
               <div>
-                <dt>Рабочий процесс</dt>
+                <dt>{msg("shell.workflow")}</dt>
                 <dd title={run.workflow}>{run.workflow}</dd>
               </div>
             )}
             {run.profile && (
               <div className="d-profile-fact">
-                <dt>Профиль</dt>
+                <dt>{msg("shell.profile")}</dt>
                 <dd title={run.profile}>{run.profile}</dd>
               </div>
             )}
@@ -116,10 +116,9 @@ const RunTile = memo(function RunTile({
           <div className="d-launch-flags">
             {run.update && (
               <span>
-                <RotateCcw size={11} />С пересборкой
-              </span>
+                <RotateCcw size={11} />{msg("shell.withRebuild2")}</span>
             )}
-            {run.clean && <span>С чистого состояния</span>}
+            {run.clean && <span>{msg("shell.cleanStart")}</span>}
           </div>
         )}
       </div>
@@ -128,24 +127,20 @@ const RunTile = memo(function RunTile({
           <WifiOff size={13} />
           <span>
             {run.panelError}
-            <small>Процесс не перезапускается</small>
+            <small>{msg("shell.theProcessWillNotBeRestarted")}</small>
           </span>
         </div>
       )}
       <div className="d-run-bottom">
-        <span title={"Ветка на момент запуска: " + run.branch}>
+        <span title={msg("shell.branchAtLaunch") + run.branch}>
           <GitBranch size={13} />
           {run.branch || "—"}
         </span>
         {run.canReconnect && onReconnect ? (
-          <button onClick={() => onReconnect(run.id)} data-reconnect={run.id}>
-            Восстановить панель
-            <RotateCcw size={12} />
+          <button onClick={() => onReconnect(run.id)} data-reconnect={run.id}>{msg("shell.reconnectPanel")}<RotateCcw size={12} />
           </button>
         ) : (
-          <button onClick={open} data-run={run.id}>
-            Открыть
-            <ArrowRight size={12} />
+          <button onClick={open} data-run={run.id}>{msg("shell.open")}<ArrowRight size={12} />
           </button>
         )}
       </div>
@@ -171,6 +166,7 @@ export const ActiveProjectCard = memo(function ActiveProjectCard({
   onNavigate: (t: HomeTarget) => void;
   onReconnect?: (id: string) => void;
 }) {
+  useLocale();
   const n = runs.filter((r) => !r.unverified).length;
   return (
     <section
@@ -189,13 +185,13 @@ export const ActiveProjectCard = memo(function ActiveProjectCard({
           </span>
           <span>
             <strong>{project.name}</strong>
-            <small>{group || "Вне групп"}</small>
+            <small>{group || msg("shell.ungrouped")}</small>
           </span>
         </button>
         <div className="d-card-counters">
           <span
             className="d-card-count"
-            title="Подтверждённые активные запуски в этом фильтре"
+            title={msg("shell.verifiedActiveRunsInThisFilter")}
           >
             <Terminal size={12} />
             {n}
@@ -203,8 +199,8 @@ export const ActiveProjectCard = memo(function ActiveProjectCard({
           {!!unread && (
             <span
               className="d-project-unread"
-              aria-label={`${unread} ${plural(unread, ["непрочитанное уведомление", "непрочитанных уведомления", "непрочитанных уведомлений"])} проекта ${project.name}`}
-              title="Непрочитанные уведомления проекта, включая завершённые запуски"
+              aria-label={msg("shell.projectUnreadCount", { count: unread, project: project.name })}
+              title={msg("shell.unreadProjectNotificationsIncludingCompletedRuns")}
             >
               <Bell size={13} />
               <span className="unread-badge" data-project-unread={project.id}>

@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useViewActive } from "./RetainedViews";
 import { useEffect, useState, useSyncExternalStore } from "react";
 import type { Project } from "../shared/types";
@@ -21,6 +23,7 @@ export function ProjectDockerfile({
   owner?: TopicContextRef;
   store: SettingsDocuments;
 }) {
+  useLocale();
   const viewActive = useViewActive();
   const scope = owner ? contextRef(owner) : project.id,
     key = documentScopeId(scope);
@@ -113,22 +116,17 @@ export function ProjectDockerfile({
   return (
     <LoadingBoundary
       pending={refreshing && !metadataLoaded}
-      label="Проверяем путь Dockerfile…"
+      label={msg("project.checkingDockerfilePath")}
     >
       {error && (
         <>
           <p role="alert">{error}</p>
-          <button onClick={() => setAttempt((value) => value + 1)}>
-            Повторить загрузку
-          </button>
+          <button onClick={() => setAttempt((value) => value + 1)}>{msg("project.retryLoading")}</button>
         </>
       )}
       {stale && (
         <div role="alert">
-          <p>
-            Конфигурация Dockerfile изменилась. Старый черновик сохранён и не
-            будет перенаправлен в другой файл.
-          </p>
+          <p>{msg("project.theDockerfileConfigurationChangedYourOldDraftWasKeptAnd")}</p>
           <button
             disabled={draft?.busy || refreshing || !!error}
             onClick={() => {
@@ -138,9 +136,7 @@ export function ProjectDockerfile({
               store.selectDockerfile(scope, latest!);
               void store.open(sourceFor(latest!));
             }}
-          >
-            Отбросить черновик и открыть актуальный файл
-          </button>
+          >{msg("project.discardDraftAndOpenCurrentFile")}</button>
         </div>
       )}
       {active && (
@@ -148,13 +144,13 @@ export function ProjectDockerfile({
           store={store}
           source={sourceFor(active)}
           path={active.relativePath}
-          title="Образ"
+          title={msg("project.image")}
           saveDisabled={refreshing || stale || !!error}
           postSaveRefresh={postSaveRefresh && !stale}
           description={
             active.configured
-              ? "Dockerfile выбранного контекста. Отсутствующий файл можно создать сохранением. Docker и сборка не запускаются."
-              : "Путь Dockerfile не настроен. Можно открыть существующий или создать .goga/Dockerfile при сохранении. Затем файл необходимо подключить вручную в конфигурации Goga. Конфигурация здесь не изменяется."
+              ? msg("project.dockerfileForTheSelectedContextSaveToCreateAMissing")
+              : msg("project.noDockerfilePathIsConfiguredOpenAnExistingFileOr")
           }
         />
       )}

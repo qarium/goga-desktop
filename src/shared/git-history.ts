@@ -1,3 +1,4 @@
+import { t as gitMessage } from "./i18n";
 import { z } from "zod";
 import { gitFilePathSchema, type GitDiffPart } from "./git-workspace";
 import { scopeRefSchema, type ScopeRef } from "./context";
@@ -25,7 +26,7 @@ export const gitHistoryRefSchema = z
             (part) =>
               part !== "" && !part.startsWith(".") && !part.endsWith(".lock"),
           )),
-    "Недопустимая ветка просмотра Git.",
+    { error: () => gitMessage("gitHost.invalidHistoryBranch") },
   );
 export type GitHistoryRef = z.infer<typeof gitHistoryRefSchema>;
 export const gitHistoryRequestSchema = z
@@ -38,7 +39,7 @@ export const gitHistoryRequestSchema = z
   .strict()
   .refine(
     (request) => request.offset === 0 || request.tip !== undefined,
-    "Следующая страница требует закреплённого снимка истории.",
+    { error: () => gitMessage("gitHost.historyPageNeedsSnapshot") },
   );
 export type GitHistoryRequest = z.infer<typeof gitHistoryRequestSchema>;
 export interface GitHistoryRefs {

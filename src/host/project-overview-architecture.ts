@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { CommandExitError, type Runner } from "./process";
 import { basename } from "node:path";
 export { buildArchitectureIndex } from "../shared/project-architecture";
@@ -37,8 +38,8 @@ async function readJson(
     const command = [basename(executable), ...args].map(word).join(" ");
     throw new CommandExitError(
       error.exitCode === null
-        ? `Команда «${command}» прервана сигналом.`
-        : `Команда «${command}» завершилась с кодом ${error.exitCode}.`,
+        ? tr("host.theCommandCommandWasInterruptedByASignal", { command: command })
+        : tr("host.theCommandCommandExitedWithCodeExitcode", { command: command, exitCode: error.exitCode }),
       error.exitCode,
       error.stdout,
       error.stderr,
@@ -48,11 +49,11 @@ async function readJson(
   if (
     Buffer.byteLength(stdout, "utf8") > OVERVIEW_ARCHITECTURE_LIMITS.outputBytes
   )
-    throw Error("Ответ Goga превышает лимит размера обзора.");
+    throw Error(tr("host.theGogaResponseExceedsTheOverviewSizeLimit"));
   try {
     return JSON.parse(stdout);
   } catch {
-    throw Error("Goga вернула некорректный JSON обзора.");
+    throw Error(tr("host.gogaReturnedInvalidOverviewJson"));
   }
 }
 
@@ -66,7 +67,7 @@ export async function readOverviewSchema(
   assertOverviewSchemaBounds(raw);
   const parsed = overviewSchemaSchema.safeParse(raw);
   if (!parsed.success)
-    throw Error("Goga вернула некорректную структуру схемы.");
+    throw Error(tr("host.gogaReturnedAnInvalidSchemaStructure"));
   return parsed.data;
 }
 
@@ -78,7 +79,7 @@ export async function readOverviewContract(
   env?: NodeJS.ProcessEnv,
 ): Promise<CellContract> {
   if (!isNavigableArchitecturePath(cell))
-    throw Error("Недопустимый путь контракта.");
+    throw Error(tr("host.invalidContractPath"));
   const raw = await readJson(
     runner,
     executable,
@@ -89,7 +90,7 @@ export async function readOverviewContract(
   const parsed = overviewContractSchema.safeParse(raw);
   if (!parsed.success || !Object.hasOwn(parsed.data, cell))
     throw Error(
-      "Goga вернула некорректную структуру контракта выбранного пути.",
+      tr("host.gogaReturnedAnInvalidContractStructureForTheSelectedPath"),
     );
   return parsed.data[cell];
 }

@@ -1,3 +1,5 @@
+import { CommandOutputLimitError } from "./process";
+import { t as gitMessage } from "../shared/i18n";
 import { scopeRefSchema, type ScopeRef } from "../shared/context";
 import {
   gitCommitReadRequestSchema,
@@ -122,11 +124,11 @@ function comparisonFiles(raw: string): GitHistoryFile[] {
 }
 const READ_LIMIT = 2 * 1024 * 1024;
 const stale = () =>
-  Error("Снимок истории Git устарел. Обновите историю коммитов.");
-const invalid = () => Error("Некорректный ответ истории Git.");
+  Error(gitMessage("gitHost.gitHistorySnapshotExpiredRefreshCommitHistory"));
+const invalid = () => Error(gitMessage("gitHost.invalidGitHistoryResponse"));
 function bounded(raw: string) {
   if (Buffer.byteLength(raw, "utf8") > READ_LIMIT)
-    throw Error("История Git превышает предел одного ответа.");
+    throw Error(gitMessage("gitHost.gitHistoryExceedsTheSingleResponseLimit"));
   return raw;
 }
 interface RefEntry {
@@ -150,7 +152,7 @@ export class GitHistoryReader {
   }
   private owner(scope: ScopeRef) {
     if (JSON.stringify(scope) !== JSON.stringify(this.scope))
-      throw Error("Контекст истории Git изменился.");
+      throw Error(gitMessage("gitHost.theGitHistoryContextChanged"));
   }
   private async inventory(context: PrivateGitRead): Promise<Inventory> {
     const raw = bounded(
@@ -211,7 +213,7 @@ export class GitHistoryReader {
     expected?: string,
   ) {
     if (ref !== "HEAD" && !inventory.entries.some((entry) => entry.ref === ref))
-      throw Error("Ветка просмотра Git недоступна. Обновите список веток.");
+      throw Error(gitMessage("gitHost.theSelectedBranchIsUnavailableRefreshTheBranchList"));
     let tip: string | null;
     try {
       tip = gitOidSchema.parse(
@@ -309,7 +311,7 @@ export class GitHistoryReader {
       } catch (error) {
         if (!(error instanceof CommandExitError) || error.exitCode !== 1)
           throw error;
-        throw Error("Коммит не принадлежит выбранной истории Git.");
+        throw Error(gitMessage("gitHost.theCommitDoesNotBelongToTheSelectedGit"));
       }
     }
     // %P from log deliberately hides shallow parents. Read the real header so a
@@ -325,7 +327,7 @@ export class GitHistoryReader {
       .filter((line) => line.startsWith("parent "))
       .map((line) => gitOidSchema.parse(line.slice(7)));
     if (request.parentIndex >= Math.max(1, parents.length))
-      throw Error("Выбранный родитель коммита недоступен.");
+      throw Error(gitMessage("gitHost.theSelectedParentCommitIsUnavailable"));
     const parent = parents[request.parentIndex] ?? null;
     if (parent !== null) {
       try {
@@ -333,7 +335,7 @@ export class GitHistoryReader {
       } catch (error) {
         if (!(error instanceof CommandExitError)) throw error;
         throw Error(
-          "Родитель коммита недоступен в локальной истории Git. Сравнение не загружено.",
+          gitMessage("gitHost.theParentCommitIsNotAvailableInLocalHistory"),
         );
       }
     }
@@ -398,12 +400,12 @@ export class GitHistoryReader {
           entry.path === request.path &&
           entry.originalPath === request.originalPath,
       );
-      if (!file) throw Error("Файла нет в выбранном сравнении коммита.");
+      if (!file) throw Error(gitMessage("gitHost.thisFileIsNotInTheSelectedCommitComparison"));
       let part: GitDiffPart;
       if (file.additions === null || file.deletions === null) {
         part = {
           kind: "binary",
-          text: "Двоичный файл: текстовый предпросмотр недоступен.",
+          text: gitMessage("gitHost.binaryFileTextPreviewIsUnavailable"),
         };
       } else {
         let output: string | null;
@@ -422,8 +424,7 @@ export class GitHistoryReader {
           ]);
         } catch (error) {
           if (
-            !(error instanceof Error) ||
-            error.message !== "Ответ команды слишком большой"
+            !(error instanceof CommandOutputLimitError)
           )
             throw error;
           output = null;
@@ -432,12 +433,12 @@ export class GitHistoryReader {
           output === null || Buffer.byteLength(output) > DIFF_LIMIT
             ? {
                 kind: "unavailable",
-                text: "Изменения превышают предел предпросмотра 1 МиБ.",
+                text: gitMessage("gitHost.theChangesExceedThe1MibPreviewLimit"),
               }
             : output.includes("\ufffd")
               ? {
                   kind: "unavailable",
-                  text: "Текст содержит неподдерживаемую кодировку.",
+                  text: gitMessage("gitHost.theTextUsesAnUnsupportedEncoding"),
                 }
               : { kind: output ? "patch" : "empty", text: output };
       }

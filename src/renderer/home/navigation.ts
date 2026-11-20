@@ -1,3 +1,4 @@
+import { t as msg } from "../../shared/i18n";
 import type { Project } from "../../shared/types";
 import {
   worktreeRecordSchema,
@@ -16,12 +17,12 @@ export async function resolveHomeOwner(
 ): Promise<WorktreeRecord | null> {
   if (owner.kind === "primary") {
     if (owner.projectId !== project.id)
-      throw Error("Проект этой карточки недоступен.");
+      throw Error(msg("shell.theProjectForThisCardIsUnavailable"));
     return null;
   }
   const ref = owner.ref;
   if (ref.projectId !== project.id)
-    throw Error("Рабочая копия принадлежит другому проекту.");
+    throw Error(msg("shell.theWorkingCopyBelongsToADifferentProject"));
   const validate = (input: WorktreeRecord, expected: TopicContextRef) => {
     const row = worktreeRecordSchema.parse(input);
     if (
@@ -36,7 +37,7 @@ export async function resolveHomeOwner(
       row.preparation
     )
       throw Error(
-        "Рабочая копия недоступна. Основная папка не выбрана вместо неё.",
+        msg("shell.theWorkingCopyIsUnavailableTheOriginalFolderWasNot"),
       );
     return row;
   };

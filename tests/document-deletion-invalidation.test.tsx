@@ -213,8 +213,8 @@ it("successful last tool-file deletion clears only its selection without changin
 it("profiles refresh after success without selecting another profile or dropping unrelated draft", async () => {
   store.createProfile("draft");
   render(<Settings documents={store} />);
-  await waitFor(() => expect(api.listSettings).toHaveBeenCalled());
   click("Профили");
+  await waitFor(() => expect(api.listSettings).toHaveBeenCalled());
   api.listSettings.mockResolvedValue({ profiles: ["other"] });
   await remove();
   await waitFor(() => expect(api.listSettings).toHaveBeenCalledTimes(2));
@@ -412,8 +412,8 @@ it.each(["profile", "pipeline", "workflow"] as const)(
       api.listSettings.mockResolvedValue({ profiles: [] });
       store.createProfile("new");
       render(<Settings documents={store} />);
-      await waitFor(() => expect(api.listSettings).toHaveBeenCalledTimes(1));
       click("Профили");
+      await waitFor(() => expect(api.listSettings).toHaveBeenCalledTimes(1));
       click("new");
     } else {
       api[
@@ -536,8 +536,8 @@ it("App preserves explicit profile through global settings deletion with the lau
   selectCatalog(screen.getByLabelText("Профиль"), "personal");
   await ready();
   click("Настройки");
-  await waitFor(() => expect(api.listSettings).toHaveBeenCalled());
   click("Профили");
+  await waitFor(() => expect(api.listSettings).toHaveBeenCalled());
   api.listSettings.mockResolvedValue({ profiles: ["other"] });
   // The file is absent when deletion publishes its revision. A retained hidden
   // launch can refresh immediately; do not change the mock catalog afterwards.
@@ -561,8 +561,8 @@ it("App preserves explicit profile through global settings deletion with the lau
 });
 it("fresh profile catalog can expose an externally restored profile for explicit selection", async () => {
   render(<Settings documents={store} />);
-  await waitFor(() => expect(api.listSettings).toHaveBeenCalled());
   click("Профили");
+  await waitFor(() => expect(api.listSettings).toHaveBeenCalled());
   await remove();
   await waitFor(() => expect(api.listSettings).toHaveBeenCalledTimes(2));
   const restored = await screen.findByRole("button", { name: "personal" });

@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import { scopeProjectId, type ScopeRef } from "../shared/context";
 import { preparationErrorMessage } from "./preparation-error";
 import { readRequest } from "./read-request";
@@ -31,10 +32,10 @@ export function getProjectLeaveFiles(
           current.document?.version !== captured.document?.version
         )
           throw new Error(
-            "Черновик изменился. Проверьте правки перед сохранением.",
+            msg("workspace.theDraftChangedReviewYourEditsBeforeSaving"),
           );
         if (current.busy || current.deletion)
-          throw new Error("Дождитесь окончания операции с файлом.");
+          throw new Error(msg("workspace.waitForTheFileOperationToFinish"));
       }
       return [
         {
@@ -50,7 +51,7 @@ export function getProjectLeaveFiles(
               );
               if (disk.version !== captured.document?.version)
                 throw new Error(
-                  "Файл изменился на диске. Черновик остался в редакторе.",
+                  msg("workspace.theFileChangedOnDiskYourDraftRemainsInThe"),
                 );
             } catch (error) {
               const reason = preparationErrorMessage(error);
@@ -70,7 +71,7 @@ export function getProjectLeaveFiles(
             if (!(await store.save(source)))
               throw new Error(
                 store.get(source).error ||
-                  "Не удалось сохранить файл. Правки остались в редакторе.",
+                  msg("workspace.couldNotSaveTheFileYourEditsRemainInThe"),
               );
           },
           reveal() {

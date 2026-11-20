@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import type { Run } from "./types";
 /** Deliberately narrower than URL's permissive host normalization. */
 export function allowedDashboardURL(value: string): boolean {
@@ -45,11 +46,11 @@ export async function readDashboardStatus(
   fetcher: typeof fetch = fetch,
 ): Promise<DashboardStatus> {
   if (!allowedDashboardURL(origin))
-    throw Error("Недопустимый адрес панели конвейера.");
+    throw Error(tr("host.invalidPipelineDashboardAddress"));
   const controller = new AbortController();
   const unavailable = () =>
     Error(
-      "Не удалось подтвердить панель этого запуска. Процесс не перезапускался.",
+      tr("host.couldNotVerifyTheDashboardForThisRunTheProcess"),
     );
   let timer: ReturnType<typeof setTimeout> | undefined;
   let abort: () => void = () => {};

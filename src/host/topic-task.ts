@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { childEnvironment } from "./process-environment";
 import path from "node:path";
 import { constants } from "node:fs";
@@ -17,7 +18,7 @@ export function validateTaskText(text: unknown): asserts text is string {
     Buffer.from(text).toString("utf8") !== text
   )
     throw new Error(
-      "Некорректное описание задачи (UTF-8, не более 100000 символов)",
+      tr("host.invalidTaskDescriptionUtf8UpTo100000Characters"),
     );
 }
 function decode(bytes: Uint8Array) {
@@ -36,13 +37,13 @@ export function taskPath(
     !/^\d{4}$/.test(String(year)) ||
     !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(topic)
   )
-    throw new Error("Некорректный топик");
+    throw new Error(tr("host.invalidTopic"));
   return `.goga/history/${year}/${topic}/todo.md`;
 }
 export async function guardedProject(root: string) {
   await noSymlinks(root);
   if ((await realpath(root)) !== root || !(await lstat(root)).isDirectory())
-    throw new Error("Путь проекта изменился. Добавьте проект заново.");
+    throw new Error(tr("host.theProjectPathChangedAddTheProjectAgain"));
 }
 export async function readWorkingTask(
   root: string,
@@ -64,7 +65,7 @@ export async function readWorkingTask(
   }
   if (!info.isFile() || info.nlink !== 1 || info.size > MAX_BYTES)
     throw new Error(
-      "todo.md должен быть обычным UTF-8 файлом допустимого размера",
+      tr("host.todoMdMustBeARegularUtf8FileWithin"),
     );
   const handle = await open(
     file,
@@ -79,7 +80,7 @@ export async function readWorkingTask(
       actual.ino !== info.ino ||
       actual.dev !== info.dev
     )
-      throw new Error("Недопустимый файл todo.md");
+      throw new Error(tr("host.invalidTodoMdFile"));
     const bytes = Buffer.alloc(MAX_BYTES + 1);
     let bytesRead = 0;
     while (bytesRead < bytes.length) {
@@ -106,8 +107,8 @@ export async function readWorkingTask(
       current.ino !== actual.ino ||
       current.dev !== actual.dev
     )
-      throw new Error("Задача изменилась во время чтения. Откройте её заново.");
-    if (bytesRead > MAX_BYTES) throw new Error("todo.md слишком велик");
+      throw new Error(tr("host.theTaskChangedWhileBeingReadOpenItAgain"));
+    if (bytesRead > MAX_BYTES) throw new Error(tr("host.todoMdIsTooLarge"));
     await noSymlinks(file);
     observe?.(
       JSON.stringify([
@@ -148,12 +149,12 @@ export async function readCommittedTask(
         : !["100644", "100755"].includes(match[1]!) || match[2] !== "blob")
     )
       throw new Error(
-        "Ссылки и нестандартные объекты в пути todo.md не поддержаны",
+        tr("host.linksAndNonStandardEntriesInTheTodoMdPath"),
       );
     if (i === parts.length) {
       const size = Number((await git(["cat-file", "-s", match[3]!])).trim());
       if (!Number.isSafeInteger(size) || size < 0 || size > MAX_BYTES)
-        throw new Error("todo.md слишком велик");
+        throw new Error(tr("host.todoMdIsTooLarge"));
       const { stdout } = await execute("git", ["cat-file", "blob", match[3]!], {
         cwd: root,
         env: childEnvironment(process.env, {}, env),
@@ -164,7 +165,7 @@ export async function readCommittedTask(
       return { text: decode(stdout), exists: true };
     }
   }
-  throw new Error("Не удалось прочитать todo.md");
+  throw new Error(tr("host.couldNotReadTodoMd"));
 }
 export function taskDocument(
   root: string,

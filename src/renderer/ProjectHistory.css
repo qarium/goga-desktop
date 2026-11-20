@@ -308,7 +308,7 @@
   overflow-wrap: anywhere;
 }
 .history-prune-warning {
-  color: #efb8a5;
+  color: var(--feedback-warning-fg);
 }
 .history-prune-log {
   max-height: 220px;

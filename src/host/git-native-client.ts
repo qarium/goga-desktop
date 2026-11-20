@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import path from "node:path";
 import os from "node:os";
 import { constants } from "node:fs";
@@ -82,7 +83,7 @@ export async function createNativeGitClient(
     options.executable.includes("\0") ||
     options.root.includes("\0")
   )
-    throw Error("Исполнитель штатного Git недоступен или контекст недопустим.");
+    throw Error(gitMessage("gitHost.theNativeGitExecutorIsUnavailableOrTheContext"));
   const executable = options.executable,
     root = options.root,
     env = Object.freeze({ ...options.env }),
@@ -103,7 +104,7 @@ export async function createNativeGitClient(
       version.stdout.toString("utf8"),
     )?.[1];
   if (version.exitCode !== 0 || !gitVersion)
-    throw Error("Не удалось определить версию штатного Git.");
+    throw Error(gitMessage("gitHost.couldNotDetermineTheNativeGitVersion"));
   const report = (
     request: NativeGitRequest,
     started: number,
@@ -146,7 +147,7 @@ export async function createNativeGitClient(
     ): Promise<T> {
       const temp = await fs.realpath(os.tmpdir());
       if (temp === root || temp.startsWith(root + path.sep))
-        throw Error("Временный индекс не может находиться внутри проекта.");
+        throw Error(gitMessage("gitHost.theTemporaryIndexCannotBeInsideTheProject"));
       const directory = await fs.mkdtemp(path.join(temp, "goga-native-index-"));
       const index = path.join(directory, "index");
       const owned = await fs.lstat(directory);
@@ -158,7 +159,7 @@ export async function createNativeGitClient(
           current.dev !== owned.dev ||
           current.ino !== owned.ino
         )
-          throw Error("Владелец временного индекса Git изменился.");
+          throw Error(gitMessage("gitHost.theTemporaryGitIndexOwnerChanged"));
       };
       let settled = true;
       const base = this;
@@ -197,7 +198,7 @@ export async function createNativeGitClient(
           actual.dev !== metadataIdentity?.dev ||
           actual.ino !== metadataIdentity?.ino
         )
-          throw Error("Временные метаданные Git изменились.");
+          throw Error(gitMessage("gitHost.temporaryGitMetadataChanged"));
       };
       const invoke = async (
         request: NativeGitRequest,
@@ -221,7 +222,7 @@ export async function createNativeGitClient(
                 actual.dev !== objectIdentity?.dev ||
                 actual.ino !== objectIdentity?.ino
               )
-                throw Error("Хранилище объектов Git изменилось.");
+                throw Error(gitMessage("gitHost.theGitObjectStoreChanged"));
             }
             result = await withNativeGitPolicy(request.policy, () =>
               command({
@@ -255,7 +256,7 @@ export async function createNativeGitClient(
           await noSymlinks(objects);
           const identity = await fs.lstat(objects);
           if (!identity.isDirectory())
-            throw Error("Недопустимое хранилище объектов Git.");
+            throw Error(gitMessage("gitHost.invalidGitObjectStorage"));
           objectIdentity = identity;
           const format = await base.run({
             policy: "local-read",
@@ -265,7 +266,7 @@ export async function createNativeGitClient(
           requireSettled(format);
           const value = format.stdout.toString("utf8").trim();
           if (format.exitCode !== 0 || !["sha1", "sha256"].includes(value))
-            throw Error("Неизвестный формат объектов Git.");
+            throw Error(gitMessage("gitHost.unknownGitObjectFormat"));
           const init = await invoke(
             {
               policy: "local-write",
@@ -280,7 +281,7 @@ export async function createNativeGitClient(
           );
           requireSettled(init);
           if (init.exitCode !== 0)
-            throw Error("Не удалось подготовить временный индекс Git.");
+            throw Error(gitMessage("gitHost.couldNotPrepareTheTemporaryGitIndex"));
           await assertDirectory();
           await noSymlinks(gitdir);
           metadataIdentity = await fs.lstat(gitdir);
@@ -302,7 +303,7 @@ export async function createNativeGitClient(
             try {
               const stat = await handle.stat();
               if (!stat.isFile() || stat.size > 8 * 1024 * 1024)
-                throw Error("Недопустимые attributes Git.");
+                throw Error(gitMessage("gitHost.invalidGitAttributesConfiguration"));
               const bytes = Buffer.alloc(stat.size + 1);
               const read = await handle.read(bytes, 0, bytes.length, 0);
               const after = await handle.stat();
@@ -312,7 +313,7 @@ export async function createNativeGitClient(
                 after.mtimeMs !== stat.mtimeMs ||
                 after.ctimeMs !== stat.ctimeMs
               )
-                throw Error("Attributes Git изменились.");
+                throw Error(gitMessage("gitHost.gitAttributesChanged"));
               await assertMetadata();
               const infoDirectory = path.join(gitdir, "info");
               await noSymlinks(infoDirectory);
@@ -321,7 +322,7 @@ export async function createNativeGitClient(
               });
               await noSymlinks(infoDirectory);
               if (!(await fs.lstat(infoDirectory)).isDirectory())
-                throw Error("Небезопасный каталог attributes Git.");
+                throw Error(gitMessage("gitHost.unsafeGitAttributesDirectory"));
               await fs.writeFile(
                 path.join(infoDirectory, "attributes"),
                 bytes.subarray(0, stat.size),
@@ -340,14 +341,14 @@ export async function createNativeGitClient(
             refreshSourceIndex: async () => {
               if (!frozen)
                 throw Error(
-                  "Обновление индекса требует изолированной конфигурации.",
+                  gitMessage("gitHost.updatingTheIndexRequiresIsolatedConfiguration"),
                 );
               await assertMetadata();
               const sourceIndex = path.join(root, ".git/index");
               await noSymlinks(sourceIndex);
               const info = await fs.lstat(sourceIndex);
               if (!info.isFile() || info.nlink !== 1)
-                throw Error("Небезопасный индекс Git.");
+                throw Error(gitMessage("gitHost.unsafeGitIndex"));
               return withNativeGitIndexRefresh(root, () =>
                 withNativeGitObjects(objects, () =>
                   invoke({
@@ -366,7 +367,7 @@ export async function createNativeGitClient(
                 throw error;
               });
               if (info && (!info.isFile() || info.nlink !== 1))
-                throw Error("Небезопасный временный индекс Git.");
+                throw Error(gitMessage("gitHost.unsafeTemporaryGitIndex"));
               try {
                 const result = await withNativeGitIndex(index, () =>
                   frozen
@@ -450,7 +451,7 @@ export async function createNativeGitClient(
         const objectFormat = format.stdout.toString("utf8").trim();
         if (format.exitCode !== 0 || !["sha1", "sha256"].includes(objectFormat))
           throw Error(
-            "Не удалось определить формат объектов Git для проверки.",
+            gitMessage("gitHost.couldNotDetermineTheGitObjectFormatForVerification"),
           );
         const initialized = await isolated.run({
           policy: "local-write",
@@ -463,7 +464,7 @@ export async function createNativeGitClient(
         });
         requireSettled(initialized);
         if (initialized.exitCode !== 0)
-          throw Error("Не удалось подготовить изолированную проверку Git.");
+          throw Error(gitMessage("gitHost.couldNotPrepareIsolatedGitVerification"));
         const objects = path.join(root, ".git", "objects");
         await noSymlinks(objects);
         // Git's documented alternates file uses C-quoted paths. Octal encoding
@@ -488,7 +489,7 @@ export async function createNativeGitClient(
           await noSymlinks(attributes);
           const stat = await fs.lstat(attributes);
           if (!stat.isFile() || stat.size > 1024 * 1024)
-            throw Error("Недопустимые атрибуты Git.");
+            throw Error(gitMessage("gitHost.invalidGitAttributes"));
           await fs.copyFile(
             attributes,
             path.join(scratch, ".git/info/attributes"),
@@ -543,6 +544,6 @@ export function gitLiteralPaths(paths: readonly string[]): Buffer {
         name.split("/").some((part) => !part || part === "." || part === ".."),
     )
   )
-    throw Error("Недопустимый путь файла Git.");
+    throw Error(gitMessage("gitHost.invalidGitFilePath"));
   return Buffer.from(paths.join("\0") + "\0", "utf8");
 }

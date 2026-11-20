@@ -33,7 +33,7 @@
   overflow-wrap: anywhere;
 }
 .run-output-hero p.error {
-  color: #ed8995;
+  color: var(--feedback-error-fg);
   white-space: pre-wrap;
 }
 .run-output-hero .run-output-budget {

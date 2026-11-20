@@ -1,3 +1,4 @@
+import { t as msg } from "../../shared/i18n";
 import { canRestoreRunDashboard } from "../run-dashboard-state";
 import type { Run, Project } from "../../shared/types";
 import { contextRef, relativeRunPlanPath } from "../topic-context";
@@ -14,7 +15,7 @@ export interface OrganizationView {
 export const ownerProject = (o: WorkspaceAddress) =>
   o.kind === "primary" ? o.projectId : o.ref.projectId;
 export const ownerLabel = (o: WorkspaceAddress) =>
-  o.kind === "primary" ? "Без топика" : o.ref.topic;
+  o.kind === "primary" ? msg("shell.noTopic") : o.ref.topic;
 export function contextSuffix(a: WorkspaceAddress, b: WorkspaceAddress) {
   if (ownerProject(a) !== ownerProject(b))
     return ownerLabel(b) + " · " + ownerProject(b);
@@ -23,7 +24,7 @@ export function contextSuffix(a: WorkspaceAddress, b: WorkspaceAddress) {
   if (a.kind === "topic" && b.kind === "topic") {
     if (a.ref.year !== b.ref.year) return ownerLabel(b) + " · " + b.ref.year;
     if (a.ref.contextId !== b.ref.contextId)
-      return ownerLabel(b) + " · другая копия";
+      return ownerLabel(b) + msg("shell.differentWorkingCopy");
     if (a.ref.branch !== b.ref.branch)
       return ownerLabel(b) + " · " + b.ref.branch;
   }
@@ -32,22 +33,22 @@ export function contextSuffix(a: WorkspaceAddress, b: WorkspaceAddress) {
 export const targetLabel = (t: HomeTarget) =>
   t.kind === "section"
     ? {
-        overview: "Обзор",
-        "project-settings": "Проект",
-        terminal: "Терминал",
-        topics: "Топики",
-        commits: "Коммиты",
-        "context-runs": "Запуски",
+        overview: msg("shell.overview"),
+        "project-settings": msg("shell.project2"),
+        terminal: msg("shell.terminal"),
+        topics: msg("shell.topics"),
+        commits: msg("shell.commits"),
+        "context-runs": msg("shell.runs"),
       }[t.section]
     : t.kind === "run"
-      ? "Запуск"
+      ? msg("shell.launch")
       : t.kind === "changes"
-        ? "Изменения"
+        ? msg("shell.changes")
         : t.kind === "draft"
           ? t.draftKind === "build"
-            ? "Черновик сборки"
-            : "Черновик конвейера"
-          : "Редактор";
+            ? msg("shell.buildDraft")
+            : msg("shell.pipelineDraft")
+          : msg("shell.editor");
 function projectRun(r: Run, viewError?: string) {
   const c = r.context;
   const bound = !!(
@@ -192,14 +193,3 @@ export function groupActive(
       : [];
   });
 }
-export const plural = (
-  n: number,
-  [one, few, many]: [string, string, string],
-) =>
-  n % 100 >= 11 && n % 100 <= 14
-    ? many
-    : n % 10 === 1
-      ? one
-      : n % 10 >= 2 && n % 10 <= 4
-        ? few
-        : many;

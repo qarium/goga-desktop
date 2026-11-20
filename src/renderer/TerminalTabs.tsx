@@ -1,3 +1,5 @@
+import { t } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { ScopeRef } from "../shared/context";
 import type {
@@ -19,10 +21,10 @@ import "./WorkspaceTabs.css";
 
 export const terminalArea = (tab: TerminalTab) =>
   tab.scope.kind === "common"
-    ? "Общий терминал"
+    ? t("general.sharedTerminal")
     : tab.scope.context.kind === "primary"
-      ? "Терминал проекта"
-      : "Терминал топика";
+      ? t("general.projectTerminal")
+      : t("general.topicTerminal");
 type Capture = { tabId: string; revision: string };
 type Props = {
   scope: ScopeRef;
@@ -50,6 +52,7 @@ export function TerminalTabs({
   onPresetSettings,
   onError,
 }: Props) {
+  useLocale();
   const active = useViewActive();
   const [adding, setAdding] = useState(false),
     [menu, setMenu] = useState<Capture | null>(null);
@@ -130,7 +133,7 @@ export function TerminalTabs({
       setMenu(kind === "actions" ? target! : null);
     } catch (e) {
       if (alive.current)
-        onError(e instanceof Error ? e.message : "Не удалось открыть меню.");
+        onError(e instanceof Error ? e.message : t("general.couldNotOpenTheMenu"));
     }
   }
   const focusTab = (id: string) =>
@@ -204,7 +207,7 @@ export function TerminalTabs({
     <div className="terminal-tabs-row">
       <div
         role="tablist"
-        aria-label="Вкладки терминала"
+        aria-label={t("general.terminalTabs")}
         className="terminal-tabs"
         ref={tabsRoot}
       >
@@ -279,7 +282,7 @@ export function TerminalTabs({
                 }}
               >
                 <input
-                  aria-label="Имя терминала"
+                  aria-label={t("general.terminalName")}
                   autoFocus
                   maxLength={120}
                   value={rename.name}
@@ -405,7 +408,7 @@ export function TerminalTabs({
             <button
               type="button"
               className="workspace-tab-close"
-              aria-label={`Закрыть терминал ${tab.name}`}
+              aria-label={t("general.closeTerminal", { name: tab.name })}
               disabled={unavailable}
               onClick={() => {
                 closeMenus();
@@ -422,13 +425,13 @@ export function TerminalTabs({
           buttonClassName="workspace-tab-create terminal-add-button"
           disabled={unavailable}
           busy={busy}
-          label="Добавить терминал"
+          label={t("general.addTerminal")}
           tooltipLabel={
             state?.context.kind === "topic"
-              ? "Новый терминал топика"
-              : "Новый терминал проекта"
+              ? t("general.newTopicTerminal")
+              : t("general.newProjectTerminal")
           }
-          description="Создать вкладку текущего контекста"
+          description={t("general.createATabInTheCurrentContext")}
           onClick={() => create("context")}
         >
           <TerminalActionIcon kind="plus" />
@@ -437,7 +440,7 @@ export function TerminalTabs({
           ref={addAnchor}
           type="button"
           className="terminal-type-button"
-          aria-label="Выбрать тип терминала"
+          aria-label={t("general.chooseTerminalType")}
           aria-haspopup="menu"
           aria-expanded={adding}
           disabled={unavailable}
@@ -449,9 +452,9 @@ export function TerminalTabs({
       <div className="terminal-tabtools">
         <TooltipButton
           buttonClassName="terminal-icon-button"
-          label="Обновить сессию"
-          tooltipLabel="Обновить сессию"
-          description="Применить текущее окружение; работающие команды потребуют подтверждения"
+          label={t("general.restartSession")}
+          tooltipLabel={t("general.restartSession")}
+          description={t("general.applyTheCurrentEnvironmentRunningCommandsWillRequireConfirmation")}
           busy={busy}
           disabled={unavailable || refreshDisabled}
           onClick={() => {
@@ -466,30 +469,25 @@ export function TerminalTabs({
         <TopicPickerPopup
           anchor={addAnchor}
           width={286}
-          label="Добавить терминал"
+          label={t("general.addTerminal")}
           domPortal
           onClose={() => setAdding(false)}
         >
           <div
             ref={menuRoot}
             role="menu"
-            aria-label="Тип терминала"
+            aria-label={t("general.terminalType")}
             className="terminal-add-menu"
             onKeyDown={menuKeys}
           >
             <button
               type="button"
               role="menuitem"
-              aria-label="Общий терминал"
+              aria-label={t("general.sharedTerminal")}
               onClick={() => create("common")}
             >
               <TerminalActionIcon kind="common" />
-              <span>
-                Общий терминал
-                <small>
-                  Во всех топиках проекта.
-                  <br />В каждом — своя сессия.
-                </small>
+              <span>{t("general.sharedTerminal")}<small>{t("general.availableInEveryProjectTopic")}<br />{t("general.eachHasItsOwnSession")}</small>
               </span>
             </button>
             <button
@@ -497,8 +495,8 @@ export function TerminalTabs({
               role="menuitem"
               aria-label={
                 state.context.kind === "topic"
-                  ? "Терминал топика"
-                  : "Терминал проекта"
+                  ? t("general.topicTerminal")
+                  : t("general.projectTerminal")
               }
               onClick={() => create("context")}
             >
@@ -507,12 +505,12 @@ export function TerminalTabs({
               />
               <span>
                 {state.context.kind === "topic"
-                  ? "Терминал топика"
-                  : "Терминал проекта"}
+                  ? t("general.topicTerminal")
+                  : t("general.projectTerminal")}
                 <small>
                   {state.context.kind === "topic"
-                    ? "Только для выбранного топика."
-                    : "Только для основной папки проекта."}
+                    ? t("general.onlyForTheSelectedTopic")
+                    : t("general.onlyForTheOriginalProjectFolder")}
                 </small>
               </span>
             </button>
@@ -544,31 +542,29 @@ export function TerminalTabs({
         <TopicPickerPopup
           anchor={actionAnchor}
           width={254}
-          label="Действия с вкладкой"
+          label={t("general.tabActions")}
           onClose={() => setMenu(null)}
         >
           <div
             ref={menuRoot}
             role="menu"
-            aria-label="Действия с вкладкой"
+            aria-label={t("general.tabActions")}
             className="terminal-actions-menu"
             onKeyDown={menuKeys}
           >
             <button
               type="button"
               role="menuitem"
-              aria-label="Переименовать терминал"
+              aria-label={t("general.renameTerminal")}
               onClick={() => beginRename(actionTab, menu.revision)}
             >
-              <TerminalActionIcon kind="rename" />
-              Переименовать
-            </button>
+              <TerminalActionIcon kind="rename" />{t("general.rename")}</button>
             {(["left", "right"] as const).map((direction) => (
               <button
                 type="button"
                 key={direction}
                 role="menuitem"
-                aria-label={`Переместить терминал ${direction === "left" ? "влево" : "вправо"}`}
+                aria-label={t("general.moveTerminal", { value1: direction === "left" ? t("general.left") : t("general.right") })}
                 disabled={
                   state!.tabs.indexOf(actionTab) ===
                   (direction === "left" ? 0 : state!.tabs.length - 1)
@@ -584,8 +580,7 @@ export function TerminalTabs({
                   });
                 }}
               >
-                <TerminalActionIcon kind={direction} />
-                Переместить {direction === "left" ? "влево" : "вправо"}
+                <TerminalActionIcon kind={direction} />{t("general.move")} {direction === "left" ? t("general.left") : t("general.right")}
               </button>
             ))}
             <div className="terminal-menu-divider" role="separator" />
@@ -598,9 +593,7 @@ export function TerminalTabs({
                 onClose(id);
               }}
             >
-              <TerminalActionIcon kind="close" />
-              Закрыть вкладку
-            </button>
+              <TerminalActionIcon kind="close" />{t("general.closeTab")}</button>
           </div>
         </TopicPickerPopup>
       )}

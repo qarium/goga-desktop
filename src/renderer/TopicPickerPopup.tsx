@@ -1,3 +1,5 @@
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import {
   createContext,
   useContext,
@@ -29,8 +31,8 @@ export function hasNativeTopicPopup() {
     typeof window.goga?.onTopicPopupClosed === "function"
   );
 }
-const failureMessage =
-  "Не удалось открыть меню поверх панели. Закройте меню и попробуйте снова.";
+const failureMessage = () =>
+  tr("topics.couldNotOpenTheMenuOverThePanel");
 
 // A native layer is necessary only above another native surface, not above
 // completed-run output or ordinary React pages. Standalone hosts keep it on.
@@ -63,7 +65,7 @@ export function TopicPickerPopup({
   anchor,
   onClose,
   children,
-  label = "Выбор топика",
+  label = tr("topics.topicPicker"),
   width: preferredWidth = 436,
   domPortal = false,
 }: {
@@ -74,6 +76,7 @@ export function TopicPickerPopup({
   width?: number;
   domPortal?: boolean;
 }) {
+  useLocale();
   const native = useNativeTopicPopup();
   const close = useRef(onClose);
   close.current = onClose;
@@ -129,7 +132,7 @@ export function TopicPickerPopup({
         off();
         void release().catch(() => {});
         setContainer(null);
-        setError(failureMessage);
+        setError(failureMessage());
       },
     };
     layer.current = state;
@@ -305,9 +308,7 @@ export function TopicPickerPopup({
     return createPortal(
       <div className="topic-popup-error" role="alert">
         <p>{error}</p>
-        <button type="button" onClick={onClose}>
-          Закрыть меню
-        </button>
+        <button type="button" onClick={onClose}>{tr("topics.closeMenu")}</button>
       </div>,
       document.body,
     );
@@ -325,6 +326,7 @@ function DomTopicPickerPopup({
   width: number;
   children: ReactNode;
 }) {
+  useLocale();
   const [bounds, setBounds] = useState(() => popupBounds(anchor, width));
   useLayoutEffect(() => {
     const place = () => {

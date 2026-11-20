@@ -1,3 +1,4 @@
+import { HintButton } from "./ActionHint";
 import type { ButtonHTMLAttributes } from "react";
 import "./RunActions.css";
 
@@ -8,6 +9,6 @@ export function RunActionButton({
   className = "",
   ...props
 }: ButtonHTMLAttributes<HTMLButtonElement> & { label: string }) {
-  return <button {...props} type="button" aria-label={label} title={title}
+  return <HintButton {...props} type="button" aria-label={label} hint={title}
     className={`run-action-button ${className}`.trim()} />;
 }

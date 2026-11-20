@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { constants } from "node:fs";
 import {
   lstat,
@@ -27,9 +28,9 @@ const hash = (value: string) =>
 const absent = (error: unknown) =>
   (error as NodeJS.ErrnoException).code === "ENOENT";
 const invalid = () =>
-  new Error("Реестр рабочих копий повреждён или несовместим.");
+  new Error(tr("host.theWorkingCopyRegistryIsDamagedOrIncompatible"));
 const conflict = () =>
-  new Error("Реестр рабочих копий изменён. Обновите данные и повторите.");
+  new Error(tr("host.theWorkingCopyRegistryChangedRefreshAndRetry"));
 const boundedPath = (value: string) =>
   path.isAbsolute(value) &&
   path.resolve(value) === value &&
@@ -434,7 +435,7 @@ export class CloneStore {
   private assertWritable() {
     if (this.access === "read-only")
       throw Error(
-        "Реестр открыт только для чтения; изменение и блокировки запрещены.",
+        tr("host.theRegistryIsReadOnlyChangesAndLocksAreNot"),
       );
   }
   async read(): Promise<WorktreeRegistry> {

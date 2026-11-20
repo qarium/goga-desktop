@@ -1,3 +1,4 @@
+import { t as msg } from "../../shared/i18n";
 import { preparationErrorMessage, documentSaveErrorMessage } from "../preparation-error";
 import type { DesktopAPI } from "../../shared/bridge";
 import type { ScopeRef } from "../../shared/context";
@@ -286,7 +287,7 @@ export function createOverviewStore(
             return "failed";
           if (!document.exists)
             throw new Error(
-              "Файл удалён или недоступен. Черновик сохранён в открытой вкладке.",
+              msg("overview.theFileWasDeletedOrIsUnavailableTheDraftIs"),
             );
           runtime.available = true;
           runtime.trashed = false;
@@ -448,7 +449,7 @@ export function createOverviewStore(
       const document = await api.createOverviewEntry(owner, path, kind, text);
       if (!inScope(requestEpoch)) return false;
       if (kind === "file") {
-        if (!document?.exists) throw new Error("Не удалось создать файл");
+        if (!document?.exists) throw new Error(msg("overview.couldNotCreateFile"));
         addFile(path, document);
       }
       await changed(path);
@@ -468,7 +469,7 @@ export function createOverviewStore(
       if (typeof owner === "string" || typeof scope === "string") {
         if (owner !== scope)
           throw new Error(
-            "Другой контекст требует отдельного состояния обзора",
+            msg("overview.aDifferentContextRequiresASeparateOverviewState"),
           );
         return;
       }
@@ -479,7 +480,7 @@ export function createOverviewStore(
             scope[key as keyof typeof scope],
         )
       )
-        throw new Error("Другой контекст требует отдельного состояния обзора");
+        throw new Error(msg("overview.aDifferentContextRequiresASeparateOverviewState"));
       if (owner.revision === scope.revision) return;
       owner = { ...scope };
       epoch++;
@@ -552,13 +553,13 @@ export function createOverviewStore(
         null,
         async (runtime) => {
           if (!runtime.available || !state.files[path].document.exists)
-            throw Error("Файл недоступен. Правки остались в редакторе.");
+            throw Error(msg("overview.theFileIsUnavailableYourEditsRemainInTheEditor"));
           const checked = state.files[path],
             edits = runtime.edits;
           const disk = await api.readOverviewFile(owner, path);
           if (!current(path, runtime) || runtime.edits !== edits)
             throw Error(
-              "Файл изменился во время проверки. Правки остались в редакторе.",
+              msg("overview.theFileChangedDuringVerificationYourEditsRemainInThe"),
             );
           const identical = disk.exists && disk.text === checked.text;
           if (
@@ -567,7 +568,7 @@ export function createOverviewStore(
             !disk.exists
           )
             throw Error(
-              "Конфликт сохранения: файл изменился на диске. Файл не перезаписан.",
+              msg("overview.saveConflictTheFileChangedOnDiskTheFileWas"),
             );
           if (adopt)
             updateFile(path, runtime, {
@@ -581,7 +582,7 @@ export function createOverviewStore(
       );
       if (result === null)
         throw Error(
-          "Файл или его рабочий контекст изменился. Правки не сохранены.",
+          msg("overview.theFileOrItsWorkspaceChangedYourEditsWereNot"),
         );
       return result;
     },
@@ -591,7 +592,7 @@ export function createOverviewStore(
         const file = state.files[path];
         if (confirmedText !== undefined && file.text !== confirmedText) {
           updateFile(path, runtime, {
-            error: "Появились новые правки. Проверьте их перед сохранением.",
+            error: msg("overview.thereAreNewEditsReviewThemBeforeSaving"),
           });
           return false;
         }
@@ -599,7 +600,7 @@ export function createOverviewStore(
           updateFile(path, runtime, {
             error:
               file.error ||
-              "Файл недоступен. Обновите его или сохраните копию.",
+              msg("overview.theFileIsUnavailableReloadItOrSaveACopy"),
           });
           return false;
         }
@@ -772,7 +773,7 @@ export function createOverviewStore(
               document: { ...file.document, exists: false, version: "missing" },
               busy: false,
               changedExternally: true,
-              error: `Файл переименован в ${target}, но это имя уже открыто. Оба черновика сохранены; используйте «Сохранить копию».`,
+              error: msg("overview.theFileWasRenamedToButThatNameIsAlready", { target: String(target) }),
             };
             continue;
           }
@@ -802,7 +803,7 @@ export function createOverviewStore(
             busy: false,
             error: document.exists
               ? undefined
-              : "Файл переименован, но не удалось прочитать его заново. Черновик сохранён; обновите файл или сохраните копию.",
+              : msg("overview.theFileWasRenamedButCouldNotBeReadAgain"),
             changedExternally: !document.exists,
           };
           order = order.map((v) => (v === p ? target : v));
@@ -821,7 +822,7 @@ export function createOverviewStore(
             busy: false,
             changedExternally: true,
             error:
-              "Файл перемещён в Корзину. Несохранённый текст сохранён во вкладке — используйте «Сохранить копию».",
+              msg("overview.theFileWasMovedToTheTrashUnsavedTextWas"),
           };
         } else {
           files.delete(p);
@@ -872,7 +873,7 @@ export function createOverviewStore(
       await refreshAll();
       if (collisions.length)
         throw Error(
-          "Файл переименован, но совпавшие открытые черновики оставлены отдельно. Сохраните их копии перед закрытием вкладок.",
+          msg("overview.theFileWasRenamedConflictingOpenDraftsWereKeptSeparately"),
         );
     },
     create,

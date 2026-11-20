@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import { createHash } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -42,7 +43,7 @@ export interface CommitProtectedDigest {
   readonly mode: number | null;
   readonly sha256: string | null;
 }
-const stale = () => Error("Источники подтверждения Git изменились.");
+const stale = () => Error(gitMessage("gitHost.theGitStateUsedForConfirmationHasChanged"));
 const sha = (bytes: Buffer | string) =>
   createHash("sha256").update(bytes).digest("hex");
 const identity = (s: BigIntStats) => [s.dev, s.ino, s.mode, s.nlink].join(":");

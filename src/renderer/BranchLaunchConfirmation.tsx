@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useId, useRef } from "react";
 export function BranchLaunchConfirmation({
   creating,
@@ -16,6 +18,7 @@ export function BranchLaunchConfirmation({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  useLocale();
   const dialog = useRef<HTMLDialogElement>(null),
     cancel = useRef<HTMLButtonElement>(null);
   const title = useId(),
@@ -39,37 +42,32 @@ export function BranchLaunchConfirmation({
     >
       <h2 id={title}>
         {creating
-          ? "Создать топик в отдельной копии и запустить?"
-          : `Переключиться на ветку «${branch}» и запустить?`}
+          ? msg("workspace.createATopicInASeparateWorkingCopyAndLaunch")
+          : msg("workspace.switchToBranchAndLaunch", { branch: String(branch) })}
       </h2>
       <div id={description}>
         <p>
-          {creating ? "Новая ветка" : "Выбранная ветка"}:{" "}
+          {creating ? msg("workspace.newBranch") : msg("workspace.selectedBranch")}:{" "}
           <strong>{branch}</strong>
         </p>
         <p>
-          {creating ? "Исходная ветка" : "Текущая ветка"}:{" "}
+          {creating ? msg("workspace.startingBranch") : msg("workspace.currentBranch")}:{" "}
           <strong>{from}</strong>
         </p>
-        {saveTask && <p>Изменённая задача будет сохранена перед запуском.</p>}
+        {saveTask && <p>{msg("workspace.theEditedTaskWillBeSavedBeforeLaunch")}</p>}
         {update && (
-          <p>
-            Перед запуском Goga обновит образ: выполнит сборку из настроенного
-            Dockerfile либо загрузку образа по своей конфигурации.
-          </p>
+          <p>{msg("workspace.beforeLaunchingGogaWillUpdateTheImageByBuildingFrom")}</p>
         )}
         <p>
           {creating
-            ? "Будет создана отдельная рабочая копия топика. Ветка и файлы исходного проекта не изменятся. Конвейер запустится в новой копии."
-            : "После подтверждения Goga подготовит ветку и запустит конвейер."}
+            ? msg("workspace.aSeparateTopicWorkingCopyWillBeCreatedTheOriginal")
+            : msg("workspace.afterConfirmationGogaWillPrepareTheBranchAndLaunchThe")}
         </p>
       </div>
       <div className="form-actions">
-        <button type="button" ref={cancel} autoFocus onClick={onCancel}>
-          Отмена
-        </button>
+        <button type="button" ref={cancel} autoFocus onClick={onCancel}>{msg("workspace.cancel")}</button>
         <button type="button" className="primary" onClick={onConfirm}>
-          {creating ? "Создать и запустить" : "Переключиться и запустить"}
+          {creating ? msg("workspace.createAndLaunch") : msg("workspace.switchAndLaunch")}
         </button>
       </div>
     </dialog>

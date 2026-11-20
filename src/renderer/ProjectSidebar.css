@@ -57,6 +57,21 @@
   min-height: 28px;
   color: var(--muted);
 }
+.ps-group-heading {
+  background: var(--raised);
+  border-radius: 6px;
+}
+.ps-group-icon {
+  color: var(--muted);
+}
+.ps-members {
+  margin-block-start: 4px;
+  margin-inline-start: 7px;
+  padding-inline-start: 6px;
+  border-inline-start: 1px solid var(--line);
+  /* Prevent the first/last project margins from collapsing past the guide. */
+  display: flow-root;
+}
 .ps-loose-heading {
   gap: 6px;
   font-size: 11px;
@@ -87,6 +102,7 @@
   background: none;
   text-align: left;
   font-size: 12px;
+  font-weight: 600;
   padding: 3px 9px 3px 0;
   min-height: 28px;
 }
@@ -236,7 +252,7 @@
 .ps-warning {
   font-size: 11px;
   line-height: 1.4;
-  color: #edc384;
+  color: var(--feedback-warning-fg);
   padding: 5px;
 }
 .ps-warning button {

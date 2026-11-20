@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import { topicContextRefSchema, type TopicContextRef } from "./worktrees";
 export interface BuildOptions {
   workflow?: string;
@@ -29,7 +30,7 @@ export interface BuildContext {
   branches: string[];
   workflows: string[];
   profiles: { name: string; source: "home" | "project" }[];
-  historyPlan: { path: string; error?: string };
+  historyPlan: { path: string; error?: string; errorCode?: BuildPlanErrorCode };
 }
 export interface BuildPlanDocument {
   path: string;
@@ -176,7 +177,7 @@ export const buildRequestSchema = z
 export function validateBuildOptions(options: BuildOptions): void {
   if (!buildOptionsSchema.safeParse(options).success)
     throw new Error(
-      "Некорректные параметры сборки. Проверьте время, числа, окружение, адреса и имена.",
+      tr("host.invalidBuildSettingsCheckTimesNumbersEnvironmentAddressesAndNames"),
     );
   assertEnvironmentTransport(
     (options.env ?? []).map((e) => ({ ...e, runtime: true })),
@@ -184,31 +185,20 @@ export function validateBuildOptions(options: BuildOptions): void {
 }
 
 /** Stable, non-secret errors survive Electron's remote-error wrapping. */
-export const buildPlanMessages = {
-  missing: "Файл плана не найден. Выберите другой файл.",
-  denied:
-    "Нет доступа к файлу плана. Проверьте права или выберите другой файл.",
-  outside: "План находится за пределами проекта. Выберите файл внутри проекта.",
-  invalid: "Недопустимый путь плана. Выберите файл внутри проекта.",
-  format: "План должен быть обычным текстовым UTF-8 файлом размером до 1 МиБ.",
-  changed: "План изменился во время чтения. Откройте его заново.",
-  read: "Не удалось прочитать план. Проверьте файл или выберите другой.",
-  history:
-    "Не удалось получить путь плана из Goga. Проверьте исполняемый файл и конфигурацию или выберите файл вручную.",
-} as const;
-export type BuildPlanErrorCode = keyof typeof buildPlanMessages;
+const planCodes = new Set(["missing", "denied", "outside", "invalid", "format", "changed", "read", "history"] as const);
+export type BuildPlanErrorCode = typeof planCodes extends Set<infer T> ? T : never;
+export function buildPlanMessage(code: BuildPlanErrorCode, history = false) {
+  return tr(`launch.plan.${code === "missing" && history ? "historyMissing" : code}` as const);
+}
 export function buildPlanProblem(error: unknown, history = false) {
   const raw = error instanceof Error ? error.message : "";
   const match = raw.match(/(?:^|Error: )\[build-plan:([a-z]+)\]$/);
   const code: BuildPlanErrorCode =
-    match && Object.hasOwn(buildPlanMessages, match[1])
+    match && planCodes.has(match[1] as BuildPlanErrorCode)
       ? (match[1] as BuildPlanErrorCode)
       : "read";
   return {
     code,
-    message:
-      code === "missing" && history
-        ? "План для текущего топика ещё не создан. Выберите другой файл."
-        : buildPlanMessages[code],
+    message: buildPlanMessage(code, history),
   };
 }

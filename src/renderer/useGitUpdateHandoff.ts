@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import { useEffect, useRef, useState } from "react";
 import type { ScopeRef } from "../shared/context";
 import type { GitUpdateHandoffCandidate } from "../shared/git-update-handoff";
@@ -50,7 +51,7 @@ export function useGitUpdateHandoff(options: {
             () =>
               reject(
                 Error(
-                  "Не удалось закрыть меню за 5 секунд. Закройте меню и попробуйте снова.",
+                  msg("git.couldNotCloseTheMenuWithin5SecondsCloseIt"),
                 ),
               ),
             5000,

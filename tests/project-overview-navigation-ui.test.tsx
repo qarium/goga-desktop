@@ -149,16 +149,25 @@ it.each(["py", "js", "ts", "go", "kt", "swift"])(
     const back = button(backName),
       go = button(goName);
     expect(back.disabled).toBe(true);
-    expect(go.title).toContain("F12");
-    expect(go.title).toMatch(/Ctrl/);
-    expect(go.title).toMatch(/⌘|Cmd/);
-    expect(back.title).toContain(backName);
+    fireEvent.mouseEnter(go);
+    const tip = await screen.findByRole("tooltip");
+    expect(tip.classList.contains("repository-action-tooltip")).toBe(true);
+    expect(tip.textContent).toContain("F12");
+    expect(tip.textContent).toMatch(/Ctrl/);
+    expect(tip.textContent).toMatch(/⌘|Cmd/);
+    expect(go.getAttribute("aria-describedby")).toBe(tip.id);
+    expect(go.title).toBe("");
+    fireEvent.keyDown(document, { key: "Escape" });
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    fireEvent.focus(back.parentElement!);
+    expect((await screen.findByRole("tooltip")).textContent).toContain(backName);
+    fireEvent.blur(back.parentElement!);
     expect(back.querySelector("svg.lucide-arrow-left")).not.toBeNull();
     expect(go.querySelector("svg.lucide-corner-down-right")).not.toBeNull();
-    expect(go.parentElement).toBe(back.parentElement);
-    expect(go.parentElement?.className).toBe("ov-file-actions");
+    const toolbar = go.closest(".ov-file-actions")!;
+    expect(toolbar).toBe(back.closest(".ov-file-actions"));
     expect(
-      [...go.parentElement!.querySelectorAll("button")]
+      [...toolbar.querySelectorAll("button")]
         .slice(0, 4)
         .map((node) => node.getAttribute("aria-label")),
     ).toEqual([backName, goName, "Найти в файле", "Заменить в файле"]);

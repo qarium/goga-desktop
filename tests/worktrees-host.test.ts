@@ -471,11 +471,11 @@ describe("mock-only cancellation safety", () => {
     const f = fixture();
     vi.spyOn(f.internals, "repository").mockImplementation(async () => {
       f.controller.abort();
-      throw Error(readCancelledMessage);
+      throw Error(readCancelledMessage());
     });
     await expect(
       withReadScope(f.controller.signal, () => f.internals.refresh(f.row)),
-    ).rejects.toThrow(readCancelledMessage);
+    ).rejects.toThrow(readCancelledMessage());
     expect(f.update).not.toHaveBeenCalled();
     expect(f.runner.command).not.toHaveBeenCalled();
   });
@@ -487,7 +487,7 @@ describe("mock-only cancellation safety", () => {
     });
     await expect(
       withReadScope(f.controller.signal, () => f.internals.refresh(f.row)),
-    ).rejects.toThrow(readCancelledMessage);
+    ).rejects.toThrow(readCancelledMessage());
     expect(f.update).not.toHaveBeenCalled();
     expect(f.runner.command).not.toHaveBeenCalled();
   });
@@ -499,7 +499,7 @@ describe("mock-only cancellation safety", () => {
     });
     await expect(
       withReadScope(f.controller.signal, () => f.internals.refresh(f.row)),
-    ).rejects.toThrow(readCancelledMessage);
+    ).rejects.toThrow(readCancelledMessage());
     expect(f.update).not.toHaveBeenCalled();
     expect(f.runner.command).not.toHaveBeenCalled();
   });

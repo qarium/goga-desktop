@@ -634,7 +634,7 @@ describe("workflow name suggestions", () => {
         <div className="scroll-area">
           <nav className="section-tabs" data-testid="unrelated-tabs" />
           <section className="project-settings-panel">
-            <SettingsTabs
+            <SettingsTabs workspace
               label="Разделы настроек проекта"
               tabs={tabs}
               current="workflows"

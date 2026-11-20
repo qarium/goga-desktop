@@ -1,3 +1,4 @@
+import { t as msg } from "../../shared/i18n";
 import { useEffect, useSyncExternalStore } from "react";
 import type { ScopeRef } from "../../shared/context";
 import {
@@ -12,7 +13,7 @@ export const demoError = (e: unknown) =>
         /^Error invoking remote method 'goga:demo-(?:state|execute|frame|next-frame|browser|copy-url|copy-selection|cancel-selection-copy)': (?:Error: )?/,
         "",
       )
-    : "Не удалось выполнить операцию с показом.";
+    : msg("workspace.couldNotPerformTheDemonstrationOperation");
 type Listener = () => void;
 export class DemoDirectory {
   state: DemoState | null = null;
@@ -91,7 +92,7 @@ export class DemoDirectory {
     })
       .then(() => {
         if (!this.showFor(key))
-          throw Error("Не удалось подтвердить запуск показа.");
+          throw Error(msg("workspace.couldNotConfirmDemonstrationStartup"));
       })
       .finally(() => {
         this.starting.delete(key);

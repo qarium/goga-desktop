@@ -1,3 +1,6 @@
+import { HintButton } from "./ActionHint";
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import {
   useEffect,
   useLayoutEffect,
@@ -82,6 +85,7 @@ export function ProjectSidebar({
   onError,
   onModalChange,
 }: ProjectSidebarProps) {
+  useLocale();
   const org = controller.organization,
     byId = new Map(projects.map((p) => [p.id, p]));
   const nav = useRef<HTMLElement>(null),
@@ -211,7 +215,7 @@ export function ProjectSidebar({
         side = d === -1 ? "before" : "after";
       return {
         key: "sort" + d,
-        label: d === -1 ? "Выше" : "Ниже",
+        label: d === -1 ? msg("shell.moveUp") : msg("shell.moveDown"),
         icon: d === -1 ? <ArrowUp size={16} /> : <ArrowDown size={16} />,
         disabled: !anchor || reorderBlocked,
         run: menuCommand(
@@ -235,7 +239,7 @@ export function ProjectSidebar({
         .filter((g) => g !== owner)
         .map((g) => ({
           key: "to:" + g.id,
-          label: "В группу «" + g.name + "»",
+          label: msg("shell.moveIntoGroup", {group: g.name}),
           disabled: reorderBlocked,
           icon: <Folder size={16} />,
           run: menuCommand({ type: "moveProject", id, groupId: g.id }),
@@ -244,7 +248,7 @@ export function ProjectSidebar({
         ? [
             {
               key: "ungroup",
-              label: "Вне групп",
+              label: msg("shell.ungrouped"),
               disabled: reorderBlocked,
               icon: <Layers size={16} />,
               run: menuCommand({ type: "moveProject", id, groupId: null }),
@@ -263,14 +267,14 @@ export function ProjectSidebar({
       ),
       {
         key: "rename",
-        label: "Переименовать группу…",
+        label: msg("shell.renameGroup"),
         disabled: reorderBlocked,
         icon: <Pencil size={16} />,
         run: () => showDialog({ kind: "rename", id: g.id }, g.name),
       },
       {
         key: "dissolve",
-        label: "Расформировать группу…",
+        label: msg("shell.ungroup"),
         disabled: reorderBlocked,
         icon: <Ungroup size={16} />,
         run: () => showDialog({ kind: "dissolve", id: g.id }),
@@ -303,19 +307,19 @@ export function ProjectSidebar({
         onKeyDown={(e) => context("project", id, e)}
       >
         {!collapsed && (
-          <button
+          <HintButton
             className="ps-grip"
             tabIndex={-1}
             disabled={reorderBlocked}
             type="button"
-            title="Перетащить проект"
-            aria-label={"Перетащить проект " + p.name}
+            hint={msg("shell.dragProject")}
+            aria-label={msg("shell.dragProject2Named", { name: p.name })}
             onPointerDown={(e) =>
               drag.start(e, { kind: "project", id, label: p.name })
             }
           >
             <GripVertical size={14} />
-          </button>
+          </HintButton>
         )}
         <TooltipButton
           label={p.name}
@@ -339,30 +343,30 @@ export function ProjectSidebar({
           </span>
         </TooltipButton>
         {unread > 0 && (
-          <button
+          <HintButton
             type="button"
             className="project-notification-badge"
-            aria-label={"Уведомления проекта " + p.name + ": " + unread}
-            title="Уведомления"
+            aria-label={msg("shell.projectUnreadLabel", { project: p.name, unread })}
+            hint={msg("shell.notifications")}
             onClick={onNotifications}
           >
             <span className="notification-count">
               {unread > 99 ? "99+" : unread}
             </span>
-          </button>
+          </HintButton>
         )}
         {!collapsed && (
-          <button
+          <HintButton
             className="ps-more"
             disabled={disabled}
             type="button"
-            title="Действия с проектом"
-            aria-label={"Действия проекта " + p.name}
+            hint={msg("shell.projectActions")}
+            aria-label={msg("shell.projectActions2Named", { name: p.name })}
             aria-haspopup="menu"
             onClick={(e) => launchMenu("project", id, e.currentTarget)}
           >
             <MoreHorizontal size={15} />
-          </button>
+          </HintButton>
         )}
       </div>
     );
@@ -389,72 +393,72 @@ export function ProjectSidebar({
   };
   const title =
     dialog?.kind === "create"
-      ? "Создать группу"
+      ? msg("shell.createGroup")
       : dialog?.kind === "rename"
-        ? "Переименовать группу"
+        ? msg("shell.renameGroup2")
         : dialog?.kind === "dissolve"
-          ? "Расформировать группу?"
-          : "Заменить сохранённую раскладку?";
+          ? msg("shell.ungroupProjects")
+          : msg("shell.replaceSavedLayout");
   return (
     <>
-      <button
+      <HintButton
         type="button"
         className={"ps-home" + (homeActive ? " ps-home-active" : "")}
         aria-current={homeActive ? "page" : undefined}
-        aria-label="Главная"
-        title="Главная"
+        aria-label={msg("shell.home")}
+        hint={msg("shell.home")}
         disabled={disabled}
         onClick={onHome}
       >
         <House size={18} />
-        {!collapsed && <span>Главная</span>}
-      </button>
+        {!collapsed && <span>{msg("shell.home")}</span>}
+      </HintButton>
       <div className="sidebar-heading ps-heading">
-        <span className="eyebrow">ПРОЕКТЫ</span>
+        <span className="eyebrow">{msg("shell.projects")}</span>
         <div>
           {!collapsed && (
-            <button
+            <HintButton
               type="button"
               ref={newGroupButton}
               className="icon-button"
-              aria-label="Создать группу"
-              title="Создать группу"
+              aria-label={msg("shell.createGroup")}
+              hint={msg("shell.createGroup")}
               disabled={reorderBlocked}
               onClick={() => {
                 if (canOpenMenu()) showDialog({ kind: "create" });
               }}
             >
               <FolderPlus size={16} />
-            </button>
+            </HintButton>
           )}
-          <button
+          <HintButton
             type="button"
             className="icon-button"
-            title="Добавить проект"
-            aria-label="Добавить проект"
+            hint={msg("shell.addProject")}
+            aria-label={msg("shell.addProject")}
             aria-haspopup="menu"
             aria-expanded={addMenuOpen}
             onClick={(e) => onAdd(e.currentTarget)}
           >
             <Plus size={18} />
-          </button>
+          </HintButton>
         </div>
       </div>
       <nav
         className="project-list ps-list"
         ref={nav}
-        aria-label="Список проектов"
+        aria-label={msg("shell.projectList")}
       >
         {controller.issue && (
           <div className="ps-warning" role="status">
             {!collapsed && controller.issue.message}
-            <button
+            <HintButton
               type="button"
-              title={controller.issue.message}
+              hint={controller.issue.message}
               aria-label={
                 controller.issue.kind === "protected"
-                  ? "Восстановить раскладку"
-                  : "Повторить сохранение"
+                  ? msg("shell.restoreLayout")
+                  : msg("shell.retrySaving")
               }
               onClick={() => {
                 if (controller.issue?.kind === "protected") {
@@ -465,9 +469,9 @@ export function ProjectSidebar({
               {collapsed
                 ? "!"
                 : controller.issue.kind === "protected"
-                  ? "Восстановить…"
-                  : "Повторить"}
-            </button>
+                  ? msg("shell.restore")
+                  : msg("shell.retry")}
+            </HintButton>
           </div>
         )}
         {collapsed ? (
@@ -499,23 +503,24 @@ export function ProjectSidebar({
                   onContextMenu={(e) => context("group", g.id, e)}
                   onKeyDown={(e) => context("group", g.id, e)}
                 >
-                  <button
+                  <HintButton
                     type="button"
                     tabIndex={-1}
                     className="ps-grip"
                     disabled={reorderBlocked}
-                    title="Перетащить группу"
-                    aria-label={"Перетащить группу " + g.name}
+                    hint={msg("shell.dragGroup")}
+                    aria-label={msg("shell.dragGroup2Named", { name: g.name })}
                     onPointerDown={(e) =>
                       drag.start(e, { kind: "group", id: g.id, label: g.name })
                     }
                   >
                     <GripVertical size={14} />
-                  </button>
+                  </HintButton>
                   <button
                     type="button"
                     className="ps-group-toggle"
-                    aria-label={"Группа " + g.name}
+                    aria-label={msg("shell.groupNamed", { name: g.name })}
+                    title={g.name}
                     aria-expanded={!g.collapsed}
                     disabled={!controller.ready}
                     onClick={() =>
@@ -531,13 +536,18 @@ export function ProjectSidebar({
                     ) : (
                       <ChevronDown size={15} />
                     )}
+                    <Layers
+                      size={13}
+                      className="ps-group-icon"
+                      aria-hidden="true"
+                    />
                     <span>{g.name}</span>
                     <small>{g.projectIds.length}</small>
                   </button>
                   <button
                     type="button"
                     className="ps-more"
-                    aria-label={"Действия группы " + g.name}
+                    aria-label={msg("shell.groupActionsNamed", { name: g.name })}
                     aria-haspopup="menu"
                     onClick={(e) => launchMenu("group", g.id, e.currentTarget)}
                   >
@@ -548,7 +558,7 @@ export function ProjectSidebar({
                   <div className="ps-members" data-drop-group={g.id}>
                     {g.projectIds.map((id) => row(id, g.id))}
                     {!g.projectIds.length && (
-                      <p className="ps-empty">Перетащите сюда проект</p>
+                      <p className="ps-empty">{msg("shell.dropAProjectHere")}</p>
                     )}
                   </div>
                 )}
@@ -557,7 +567,7 @@ export function ProjectSidebar({
             <section
               className="ps-loose"
               data-drop-group=""
-              aria-label="Вне групп"
+              aria-label={msg("shell.ungrouped")}
             >
               <div
                 className="ps-loose-heading"
@@ -569,15 +579,15 @@ export function ProjectSidebar({
                 }
               >
                 <Layers size={13} />
-                <span>Вне групп</span>
+                <span>{msg("shell.ungrouped")}</span>
                 <small>{org.ungroupedProjectIds.length}</small>
               </div>
               {org.ungroupedProjectIds.map((id) => row(id, null))}
               {!org.ungroupedProjectIds.length && controller.ready && (
                 <p className="ps-empty">
                   {projects.length
-                    ? "Перетащите сюда проект"
-                    : "Добавьте первый проект"}
+                    ? msg("shell.dropAProjectHere")
+                    : msg("shell.addYourFirstProject")}
                 </p>
               )}
             </section>
@@ -586,8 +596,7 @@ export function ProjectSidebar({
       </nav>
       {!collapsed && projects.length > 0 && (
         <small className="ps-help">
-          <GripVertical size={12} /> Перетащите за ручку для сортировки
-        </small>
+          <GripVertical size={12} />{msg("shell.dragTheHandleToReorder")}</small>
       )}
       {menuProject && menu && (
         <ProjectListMenu
@@ -603,7 +612,7 @@ export function ProjectSidebar({
         <SidebarActionMenu
           key={menu.kind + menu.id}
           target={menu}
-          label="Действия с группой"
+          label={msg("shell.groupActions2")}
           actions={groupActions(menuGroup)}
           onClose={closeMenu}
           onError={onError}
@@ -614,7 +623,7 @@ export function ProjectSidebar({
           <TopicModal
             title={title}
             className="ps-dialog"
-            closeLabel="Закрыть"
+            closeLabel={msg("shell.close")}
             onClose={() => setDialog(null)}
           >
             <form
@@ -624,9 +633,7 @@ export function ProjectSidebar({
               }}
             >
               {dialog.kind === "create" || dialog.kind === "rename" ? (
-                <label>
-                  Название группы
-                  <input
+                <label>{msg("shell.groupName")}<input
                     autoFocus
                     value={name}
                     onChange={(e) => {
@@ -637,16 +644,9 @@ export function ProjectSidebar({
                   />
                 </label>
               ) : dialog.kind === "dissolve" ? (
-                <p>
-                  Проекты группы «{dialogGroup?.name}» перейдут в конец «Вне
-                  групп» в прежнем порядке. Файлы и запуски не изменятся.
-                </p>
+                <p>{msg("shell.ungroupProjects", { group: dialogGroup?.name ?? "" })}</p>
               ) : (
-                <p>
-                  Сохранить раскладку этого окна вместо прежней? Исходные
-                  настройки групп и порядка будут заменены. Файлы проектов не
-                  изменятся.
-                </p>
+                <p>{msg("shell.replaceTheSavedLayoutWithThisWindowSLayoutGroup")}</p>
               )}
               {dialogError && (
                 <p role="alert" className="error">
@@ -654,9 +654,7 @@ export function ProjectSidebar({
                 </p>
               )}
               <footer className="form-actions">
-                <button type="button" onClick={() => setDialog(null)}>
-                  Отмена
-                </button>
+                <button type="button" onClick={() => setDialog(null)}>{msg("shell.cancel")}</button>
                 <button
                   type="submit"
                   className="primary"
@@ -666,12 +664,12 @@ export function ProjectSidebar({
                   }
                 >
                   {dialog.kind === "create"
-                    ? "Создать"
+                    ? msg("shell.create")
                     : dialog.kind === "rename"
-                      ? "Сохранить"
+                      ? msg("shell.save")
                       : dialog.kind === "dissolve"
-                        ? "Расформировать"
-                        : "Заменить"}
+                        ? msg("shell.ungroup2")
+                        : msg("shell.replace")}
                 </button>
               </footer>
             </form>

@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import { randomBytes } from "node:crypto";
 import { readdirSync } from "node:fs";
 import path from "node:path";
@@ -35,7 +36,7 @@ const collisionKey = (name: string) =>
   name.normalize("NFC").toUpperCase().toLowerCase().normalize("NFC");
 const stale = () =>
   Error(
-    "Предпросмотр отката Git устарел или изменился владелец. Обновите список и подтвердите заново.",
+    gitMessage("gitHost.theDiscardPreviewExpiredOrItsOwnerChangedRefresh"),
   );
 interface Entry {
   mode: string;
@@ -89,10 +90,10 @@ function audit(root: string) {
   ])
     if (stat(path.join(gd, name)))
       throw Error(
-        "Внешнее хранилище или sparse checkout Git не поддерживается безопасным откатом.",
+        gitMessage("gitHost.safeDiscardDoesNotSupportExternalGitStorageOr"),
       );
   if (readdirSync(gd).some((n) => n.toLowerCase().startsWith("sharedindex.")))
-    throw Error("Split-index Git не поддерживается безопасным откатом.");
+    throw Error(gitMessage("gitHost.safeDiscardDoesNotSupportGitSplitIndexes"));
   for (const name of [
     "MERGE_HEAD",
     "CHERRY_PICK_HEAD",
@@ -104,19 +105,19 @@ function audit(root: string) {
   ])
     if (stat(path.join(gd, name)))
       throw Error(
-        "Сначала завершите текущую операцию Git: откат выбранных файлов сейчас недоступен.",
+        gitMessage("gitHost.finishTheCurrentGitOperationBeforeDiscardingSelectedFiles"),
       );
   let count = 0;
   const visit = (filename: string, depth: number) => {
     if (++count > 100000 || depth > 16)
-      throw Error("Слишком много метаданных Git.");
+      throw Error(gitMessage("gitHost.tooMuchGitMetadata"));
     const s = stat(filename);
     if (!s) return;
     if (
       s.isSymbolicLink() ||
       (!s.isDirectory() && (!s.isFile() || s.nlink !== 1n))
     )
-      throw Error("Небезопасная ссылка в метаданных Git.");
+      throw Error(gitMessage("gitHost.unsafeLinkInGitMetadata"));
     if (s.isDirectory()) {
       directory(filename);
       for (const n of readdirSync(filename))
@@ -174,7 +175,7 @@ function assertRawRestore(p: Policy) {
       p.values.crlf === "set")
   )
     throw Error(
-      "Откат с преобразованием CRLF пока не поддерживается. Файлы не изменены.",
+      gitMessage("gitHost.discardWithCrlfConversionIsNotSupportedYetFiles"),
     );
 }
 
@@ -231,7 +232,7 @@ export abstract class GitDiscardActions {
       const normalized = collisionKey(name);
       if (normalizedPaths.has(normalized))
         throw Error(
-          "Выбранные пути совпадают после нормализации или изменения регистра; безопасный откат не поддерживается.",
+          gitMessage("gitHost.selectedPathsCollideAfterNormalizationOrCaseFoldingSafe"),
         );
       normalizedPaths.add(normalized);
       let rows: [string, string][];
@@ -239,7 +240,7 @@ export abstract class GitDiscardActions {
         rows = parents(root, name);
       } catch {
         throw Error(
-          "Родительская папка отсутствует, заменена или содержит ссылку; безопасный откат недоступен.",
+          gitMessage("gitHost.aParentDirectoryIsMissingWasReplacedOrContains"),
         );
       }
       for (const [p, id] of rows) ps.set(p, id);
@@ -253,7 +254,7 @@ export abstract class GitDiscardActions {
         const inode = file.identity.split(":").slice(0, 2).join(":");
         if (inodes.has(inode))
           throw Error(
-            "Выбранные пути указывают на один файл (переименование с изменением регистра); безопасный откат не поддерживается.",
+            gitMessage("gitHost.selectedPathsPointToTheSameFileCaseOnly"),
           );
         inodes.add(inode);
       }
@@ -261,12 +262,12 @@ export abstract class GitDiscardActions {
       total += file?.bytes.length ?? 0;
       if (total > TOTAL_LIMIT)
         throw Error(
-          "Выбранные файлы превышают предел безопасного отката 32 МиБ.",
+          gitMessage("gitHost.selectedFilesExceedThe32MibSafeDiscardLimit"),
         );
     }
     const index = regular(path.join(root, ".git/index"));
     if (!index)
-      throw Error("Индекс Git отсутствует; безопасный откат недоступен.");
+      throw Error(gitMessage("gitHost.theGitIndexIsMissingSafeDiscardIsUnavailable"));
     assertParents([...ps]);
     return {
       parents: [...ps] as [string, string][],
@@ -318,7 +319,7 @@ export abstract class GitDiscardActions {
         const selected = selectedNames.get(collisionKey(name));
         if (selected !== undefined && selected !== name)
           throw Error(
-            "Выбранный путь совпадает с другим путём Git после нормализации или изменения регистра; откат не поддерживается.",
+            gitMessage("gitHost.aSelectedPathCollidesWithAnotherGitPathAfter"),
           );
       }
     }
@@ -332,7 +333,7 @@ export abstract class GitDiscardActions {
         );
       if (!m || !names.includes(m[3]) || entries.has(m[3]))
         throw Error(
-          "Выбранная версия HEAD является ссылкой, подмодулем или каталогом; откат не поддерживается.",
+          gitMessage("gitHost.theSelectedHeadVersionIsALinkSubmoduleOr"),
         );
       entries.set(m[3], { mode: m[1], oid: m[2] });
     }
@@ -342,7 +343,7 @@ export abstract class GitDiscardActions {
     for (const row of staged.split("\0").filter(Boolean))
       if (!/^(100644|100755) [a-f0-9]{40,64} 0\t/.test(row))
         throw Error(
-          "Конфликт, ссылка или подмодуль в индексе: откат не поддерживается.",
+          gitMessage("gitHost.theIndexContainsAConflictLinkOrSubmoduleDiscard"),
         );
     const flags = (await this.git(c, ["ls-files", "-v", "-z", "--", ...names]))
       .stdout;
@@ -353,7 +354,7 @@ export abstract class GitDiscardActions {
         .some((row) => !row.startsWith("H "))
     )
       throw Error(
-        "Специальные флаги выбранного индекса Git не поддерживаются.",
+        gitMessage("gitHost.specialFlagsOnTheSelectedIndexEntriesAreNot"),
       );
     const policies = new Map<string, Policy>();
     for (const name of names) {
@@ -394,7 +395,7 @@ export abstract class GitDiscardActions {
         (total += Number(size)) > TOTAL_LIMIT
       )
         throw Error(
-          "Версии HEAD превышают безопасный предел размера (8 МиБ на файл, 32 МиБ всего).",
+          gitMessage("gitHost.headVersionsExceedTheSafeSizeLimit8Mib"),
         );
       const bytes = Buffer.from(
         (await this.git(c, ["cat-file", "blob", e.oid])).stdout,
@@ -406,7 +407,7 @@ export abstract class GitDiscardActions {
         identity(bytes, e.oid.length) !== e.oid
       )
         throw Error(
-          "Версия HEAD содержит non-UTF8 байты; безопасный откат такого файла пока не поддерживается.",
+          gitMessage("gitHost.theHeadVersionContainsNonUtf8BytesSafe"),
         );
       result.set(name, bytes);
     }
@@ -423,10 +424,10 @@ export abstract class GitDiscardActions {
         throw stale();
       if (!snapshot.head)
         throw Error(
-          "В репозитории ещё нет HEAD (первого коммита); откат выбранных файлов пока не поддерживается.",
+          gitMessage("gitHost.thisRepositoryHasNoHeadFirstCommitYetDiscarding"),
         );
       if (snapshot.operation !== "none")
-        throw Error("Сначала завершите текущую операцию Git.");
+        throw Error(gitMessage("gitHost.finishTheCurrentGitOperationFirst"));
       const paths = new Set(req.paths);
       for (const name of req.paths)
         if (
@@ -435,7 +436,7 @@ export abstract class GitDiscardActions {
           )
         )
           throw Error(
-            "Выбранный файл отсутствует в актуальном списке изменений.",
+            gitMessage("gitHost.theSelectedFileIsNoLongerInTheCurrent"),
           );
       for (const f of snapshot.files)
         if (
@@ -459,7 +460,7 @@ export abstract class GitDiscardActions {
         items.some((i) => i.action === "trash" && s.work.get(i.path))
       )
         throw Error(
-          "Системная Корзина недоступна; новые файлы не будут удалены.",
+          gitMessage("gitHost.systemTrashIsUnavailableNewFilesWillNotBe"),
         );
       await this.sources(c, s);
       if (fingerprint(await this.capture(c, names)) !== fingerprint(s))
@@ -490,7 +491,7 @@ export abstract class GitDiscardActions {
       ticket = this.tickets.get(token);
     this.tickets.delete(token);
     if (!ticket || ticket.preview.expiresAt <= this.now())
-      throw Error("Подтверждение истекло или уже использовано.");
+      throw Error(gitMessage("gitHost.thisConfirmationHasExpiredOrWasAlreadyUsed"));
     let completed: GitDiscardResult | undefined;
     let cleanupRecovery: (() => Promise<void>) | undefined;
     try {
@@ -519,8 +520,8 @@ export abstract class GitDiscardActions {
             ...result,
             status: "uncertain",
             message:
-              "Завершение очистки служебных материалов не подтверждено. Не повторяйте отмену автоматически; материалы восстановления сохранены.",
-            log: `${result.log}\nНе удалось очистить служебные материалы; диагностика окружения скрыта.`,
+              gitMessage("gitHost.cleanupCouldNotBeVerifiedDoNotRetryDiscard"),
+            log: gitMessage("gitHost.couldNotCleanUpTemporaryDataEnvironmentDiagnosticsAre", { log: result.log }),
           };
         }
       }
@@ -534,9 +535,9 @@ export abstract class GitDiscardActions {
             ? "uncertain"
             : "not-discarded",
         message:
-          "Завершение служебной блокировки не подтверждено. Не повторяйте откат автоматически; проверьте результат и журнал.",
+          gitMessage("gitHost.lockReleaseCouldNotBeVerifiedDoNotRetry"),
         // The throwing context never returned its sanitized result copy.
-        log: "Завершающая проверка отмены изменений или освобождение контекста завершились ошибкой. Диагностика окружения скрыта.",
+        log: gitMessage("gitHost.finalDiscardVerificationOrContextReleaseFailedEnvironmentDiagnostics"),
       };
     }
   }

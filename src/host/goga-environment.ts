@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import path from "node:path";
 import { userInfo } from "node:os";
 import type { Runner } from "./process";
@@ -20,7 +21,7 @@ export function createGogaPathReader(
         !path.isAbsolute(shell) ||
         !["zsh", "bash"].includes(path.basename(shell))
       )
-        throw Error("Не удалось прочитать PATH оболочки.");
+        throw Error(tr("host.couldNotReadTheShellPath"));
       const env: NodeJS.ProcessEnv = { HOME: home, SHELL: shell, TERM: "dumb" };
       for (const key of ["PATH", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR"])
         if (process.env[key] !== undefined) env[key] = process.env[key];
@@ -62,10 +63,10 @@ export function createGogaPathReader(
           ? ""
           : result.stdout.slice(start + marker.length).split("\0")[0];
       if (!value || value.length > 65536 || /[\0\r\n]/.test(value))
-        throw Error("Не удалось прочитать PATH оболочки.");
+        throw Error(tr("host.couldNotReadTheShellPath"));
       // Never search a project-controlled current/relative directory implicitly.
       const absolute = value.split(":").filter((p) => path.isAbsolute(p));
-      if (!absolute.length) throw Error("Не удалось прочитать PATH оболочки.");
+      if (!absolute.length) throw Error(tr("host.couldNotReadTheShellPath"));
       return absolute.join(":");
     };
     cached = load().catch((error) => {

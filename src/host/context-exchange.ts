@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { constants } from "node:fs";
 import { open, readFile, realpath } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
@@ -37,10 +38,9 @@ export interface ContextExchangeDependencies {
 }
 const hash = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
+class ExchangeValidationError extends Error {}
 const changed = () =>
-  new Error(
-    "Контекст, база или подтверждение изменены/устарели. Обновите данные и создайте новый предпросмотр.",
-  );
+  new ExchangeValidationError(tr("host.theContextBaseOrConfirmationChangedOrExpiredRefreshAnd"));
 const oid = (value: string) => {
   const result = value.trim();
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(result)) throw changed();
@@ -99,7 +99,7 @@ export interface PublicationSnapshot {
 }
 const policyError = () =>
   new Error(
-    "Origin/upstream отсутствует, неоднозначен или изменён. Проверьте origin основной папки и политику клона; публикация не выполнялась.",
+    tr("host.theOriginOrUpstreamIsMissingAmbiguousOrChangedCheck"),
   );
 const digestSchema = z.string().regex(/^[a-f0-9]{64}$/);
 const policySchema = z
@@ -511,9 +511,7 @@ export class ContextExchangeManager {
       this.deps.isActive(owner.contextId) ||
       this.deps.isProjectActive?.(owner.projectId)
     )
-      throw new Error(
-        "Контекст или основная папка заняты активной операцией. Повторите после завершения.",
-      );
+      throw new ExchangeValidationError(tr("host.theContextOrOriginalFolderIsBusyRetryAfterThe"));
     if (
       cleanRequired &&
       (
@@ -523,9 +521,7 @@ export class ContextExchangeManager {
         )
       ).trim()
     )
-      throw new Error(
-        "В клоне есть локальные изменения. Нужна чистая рабочая копия; сохраните изменения и повторите.",
-      );
+      throw new ExchangeValidationError(tr("host.theCloneHasLocalChangesSaveThemAndRetryWith"));
   }
   private async resolveBase(owner: WorktreeRecord, baseRef: string) {
     if (
@@ -544,7 +540,7 @@ export class ContextExchangeManager {
       );
     } catch {
       throw new Error(
-        "Выбранная база основной папки отсутствует или изменена. Выберите существующий ref и повторите.",
+        tr("host.theSelectedBaseInTheOriginalFolderIsMissingOr"),
       );
     }
   }
@@ -625,7 +621,7 @@ export class ContextExchangeManager {
         throw changed();
     } catch {
       throw new Error(
-        "Не удалось получить неизменяемый снимок базы: контекст или база изменены. Повторите подготовку; основная папка не изменялась.",
+        tr("host.couldNotCaptureAStableBaseSnapshotBecauseTheContext"),
       );
     }
     await this.owner(worktreeContextRef(owner), owner);
@@ -717,18 +713,14 @@ export class ContextExchangeManager {
       ) ||
       name === owner.branch
     )
-      throw new Error(
-        "Для propagate нужна настоящая базовая ветка, отличная от текущего топика, а не tag/hash/service ref.",
-      );
+      throw new ExchangeValidationError(tr("host.propagationRequiresABaseBranchDistinctFromTheCurrentTopic"));
     await this.git(["check-ref-format", `refs/heads/${name}`], owner.path);
     const worktrees = await this.git(
       ["worktree", "list", "--porcelain", "-z"],
       owner.path,
     );
     if (worktrees.split("\0").includes(`branch refs/heads/${name}`))
-      throw new Error(
-        "Базовая ветка занята рабочей копией. Переключитесь с базы и повторите.",
-      );
+      throw new ExchangeValidationError(tr("host.theBaseBranchIsCheckedOutInAWorkingCopy"));
     const sourceOid = await this.resolveBase(owner, selected);
     const refs = (
       await this.git(
@@ -766,7 +758,7 @@ export class ContextExchangeManager {
       );
       if (!currentOrigin || currentOrigin.url === owner.projectPath)
         throw new Error(
-          "Origin копии предназначен для исходного локального проекта. Используйте синхронизацию для push в локальный origin; внешняя публикация через этот origin не поддерживается.",
+          tr("host.theCopySOriginPointsToTheOriginalLocalProject"),
         );
       let policy: UpstreamPolicy;
       try {
@@ -822,9 +814,7 @@ export class ContextExchangeManager {
                 owner.path,
               );
             } catch {
-              throw new Error(
-                "База клона и выбранная база расходятся. Согласуйте ветки вручную; reset/force не выполнялись.",
-              );
+              throw new ExchangeValidationError(tr("host.theCloneBaseAndSelectedBaseHaveDivergedReconcileThem"));
             }
           }
           await this.verifyCapturedBase(base, owner);
@@ -857,7 +847,7 @@ export class ContextExchangeManager {
             ),
           ),
           details: [
-            `Публикация: origin → ${maskedEndpoint(actual[1])}. Проверенный upstream основной папки, не основная рабочая папка.`,
+            tr("host.publishOriginValue1ThisIsTheOriginalFolderSVerified", { value1: maskedEndpoint(actual[1]) }),
           ],
         };
         if (propagation) {
@@ -876,7 +866,7 @@ export class ContextExchangeManager {
             );
           snapshot.baseRef = propagation.name;
           snapshot.details.push(
-            `База клона ${propagation.name}: ${propagation.previous ? "безопасный fast-forward" : "создана из основной папки"} до ${propagation.sourceOid.slice(0, 12)}; native propagate обновит эту настоящую ветку и отправит её в upstream origin.`,
+            tr("host.cloneBaseNameValue2ToValue3NativePropagationWillUpdate", { name: propagation.name, value2: propagation.previous ? tr("host.safeFastForward") : tr("host.createdFromTheOriginalFolder"), value3: propagation.sourceOid.slice(0, 12) }),
           );
         }
         await this.clones.assertOwned(owner);
@@ -886,10 +876,7 @@ export class ContextExchangeManager {
       } catch (error) {
         // Never surface child argv/stderr or remote credentials through Desktop journals.
         if (
-          error instanceof Error &&
-          /расход|настоящая базовая|Базовая ветка занята|чистая рабочая|заняты активной|изменены\/устарели/.test(
-            error.message,
-          )
+          error instanceof ExchangeValidationError
         )
           throw error;
         throw policyError();

@@ -1,0 +1,7 @@
+{
+  "language": "Language",
+  "languageHint": "Applies to Goga Desktop on this computer.",
+  "languageSaveError": "Could not save the language preference.",
+  "unsavedFiles_one": "{count} unsaved file",
+  "unsavedFiles_other": "{count} unsaved files"
+}

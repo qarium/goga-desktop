@@ -1,3 +1,4 @@
+import { getLocale } from "../shared/i18n";
 export interface SpecificationNode {
   path: string;
   name: string;
@@ -10,10 +11,6 @@ export interface SpecificationTree {
   children: Map<string, SpecificationNode[]>;
   files: SpecificationNode[];
 }
-const collator = new Intl.Collator("ru", {
-  numeric: true,
-  sensitivity: "base",
-});
 export function parents(path: string): string[] {
   const result: string[] = [],
     parts = path.split("/");
@@ -24,7 +21,8 @@ export function parents(path: string): string[] {
   }
   return result;
 }
-export function buildTree(paths: string[]): SpecificationTree {
+export function buildTree(paths: string[], locale = getLocale()): SpecificationTree {
+  const collator = new Intl.Collator(locale, {numeric: true, sensitivity: "base"});
   const nodes = new Map<string, SpecificationNode>(),
     children = new Map<string, SpecificationNode[]>([["", []]]),
     files: SpecificationNode[] = [];

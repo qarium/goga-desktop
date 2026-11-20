@@ -1,17 +1,18 @@
+import { PopupClose } from "./PopupClose";
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import type { GitUpdateHandoffCandidate } from "../shared/git-update-handoff";
 import { documentScopeId } from "./settings-documents";
 import {
   useEffect,
-  useId,
   useLayoutEffect,
   useRef,
   useState,
   type RefObject,
-  type ReactNode,
-  type ButtonHTMLAttributes,
 } from "react";
 import { createPortal } from "react-dom";
-import { useViewActive } from "./RetainedViews";
+import { TooltipButton } from "./ActionHint";
+export { TooltipButton } from "./ActionHint";
 import type { Project } from "../shared/types";
 import type { WorktreeRecord } from "../shared/worktrees";
 import type { RepositoryActionRequest } from "../shared/repository-actions";
@@ -34,6 +35,7 @@ export function RepositoryIcon({
 }: {
   action: RepositoryActionRequest["action"];
 }) {
+  useLocale();
   if (action === "update-remote") return <span aria-hidden="true">↻</span>;
   return (
     <svg
@@ -85,6 +87,7 @@ export function RepositoryActions({
   onlySync?: boolean;
   onStarted?: () => void;
 }) {
+  useLocale();
   const controller = useRepositoryActionController();
   const context = selected ? contextRef(selected) : undefined;
   const request = { projectId: project.id, ...(context ? { context } : {}) };
@@ -92,7 +95,7 @@ export function RepositoryActions({
   const busy = !!active;
   const unavailable = selected
     ? selected.projectId !== project.id
-      ? "Контекст другого проекта."
+      ? tr("topics.contextBelongsToAnotherProject")
       : topicSyncUnavailable(selected)
     : "";
   const available = typeof window.goga.runRepositoryAction === "function";
@@ -104,42 +107,42 @@ export function RepositoryActions({
   const labels = {
     sync:
       onlySync && selected
-        ? `Синхронизировать коммиты · ${selected.topic}/${selected.year}/${selected.branch}`
+        ? tr("topics.syncCommitsTopicYearBranch", { topic: selected.topic, year: selected.year, branch: selected.branch })
         : selected
-          ? "Синхронизировать топик"
-          : "Синхронизировать текущую ветку",
-    publish: selected ? "Опубликовать топик" : "Опубликовать текущую ветку",
-    "update-remote": "Обновить топик из remote",
-    "update-base": "Обновить из base",
-    propagate: "Перенести топик в base и опубликовать",
+          ? tr("topics.syncTopic")
+          : tr("topics.syncCurrentBranch"),
+    publish: selected ? tr("topics.publishTopic") : tr("topics.publishCurrentBranch"),
+    "update-remote": tr("topics.updateTopicFromRemote"),
+    "update-base": tr("topics.updateFromBase"),
+    propagate: tr("topics.propagateToBaseAndPublish"),
   };
   const tooltipLabels = {
-    sync: "Синхронизировать",
-    publish: "Опубликовать",
-    "update-remote": "Обновить топик из remote",
-    "update-base": "Обновить из base",
-    propagate: "Перенести топик в base и опубликовать",
+    sync: tr("topics.sync"),
+    publish: tr("topics.publish"),
+    "update-remote": tr("topics.updateFromRemoteTooltip"),
+    "update-base": tr("topics.updateFromBase"),
+    propagate: tr("topics.propagateTooltip"),
   };
   const descriptions = {
     "update-remote":
-      "Коммиты: origin (если ветка опубликована) → исходный проект → копия; только fast-forward, без публикации",
+      tr("topics.commitsOriginIfPublishedOriginalProjectCopyFast"),
     sync: selected
-      ? "Коммиты одноимённой ветки: исходный проект → копия → исходный проект; без публикации"
-      : "Обновить текущую ветку из upstream (fast-forward)",
+      ? tr("topics.commitsOnTheMatchingBranchOriginalProjectCopy")
+      : tr("topics.updateTheCurrentBranchFromUpstreamFastForward"),
     publish: selected
-      ? "Коммиты: копия → исходный проект → origin"
-      : "Опубликовать текущую ветку в origin",
+      ? tr("topics.commitsCopyOriginalProjectOrigin")
+      : tr("topics.publishTheCurrentBranchToOrigin"),
     propagate:
-      "Синхронизировать копию; перенести топик в base и опубликовать base в origin",
+      tr("topics.syncTheCopyPropagateTheTopicToBase"),
     "update-base":
-      "Обновить base из remote, если ветка опубликована; получить локальную базу в копию и выполнить goga topics update",
+      tr("topics.updateBaseFromRemoteIfPublishedFetchThe"),
   };
   const progressLabels: Record<RepositoryActionRequest["action"], string> = {
-    sync: "Синхронизация…",
-    publish: "Публикация…",
-    "update-base": "Обновление из базы…",
-    propagate: "Перенос в базу…",
-    "update-remote": "Обновление из remote…",
+    sync: tr("topics.syncing"),
+    publish: tr("topics.publishing"),
+    "update-base": tr("topics.updatingFromBase"),
+    propagate: tr("topics.propagatingToBase"),
+    "update-remote": tr("topics.updatingFromRemote"),
   };
   return (
     <>
@@ -150,7 +153,7 @@ export function RepositoryActions({
             : "repository-actions"
         }
         role="group"
-        aria-label="Действия с веткой"
+        aria-label={tr("topics.branchActions")}
         onClick={(e) => e.stopPropagation()}
         onPointerDown={(e) => e.stopPropagation()}
         onKeyDown={(e) => {
@@ -172,17 +175,17 @@ export function RepositoryActions({
             description={
               unavailable ||
               (!available
-                ? "Действие недоступно в этой версии хоста"
+                ? tr("topics.thisActionIsUnavailableInThisHostVersion")
                 : busy
-                  ? "Операция выполняется…"
+                  ? tr("topics.operationInProgress")
                   : disabled
-                    ? "Действие временно недоступно"
+                    ? tr("topics.actionTemporarilyUnavailable")
                     : descriptions[action])
             }
             onClick={() => {
               void controller.run(
                 { ...request, action },
-                `${project.name} · ${selected ? `${selected.topic} · ${selected.year} · ${selected.branch}` : "Без топика · исходный проект"}`,
+                `${project.name} · ${selected ? `${selected.topic} · ${selected.year} · ${selected.branch}` : tr("topics.noTopicOriginalProject")}`,
               );
               onStarted?.();
             }}
@@ -201,243 +204,6 @@ export function RepositoryActions({
   );
 }
 
-/** A DOM tooltip above the header, never over the native pipeline view. */
-// Subscribe only while a tooltip is open: thousands of idle row buttons need
-// not rerender on navigation. A body portal does not inherit its anchor's inert.
-function ActiveTooltip({
-  close,
-  children,
-}: {
-  close: () => void;
-  children: ReactNode;
-}) {
-  const active = useViewActive();
-  useLayoutEffect(() => {
-    if (!active) close();
-  }, [active, close]);
-  return active ? children : null;
-}
-
-export function TooltipButton({
-  disabled,
-  label,
-  tooltipLabel,
-  busy,
-  description,
-  onClick,
-  children,
-  buttonClassName = "repository-action-button",
-  sidebar = false,
-  tooltipEnabled = true,
-  tabProps,
-}: {
-  tabProps?: Pick<
-    ButtonHTMLAttributes<HTMLButtonElement>,
-    | "role"
-    | "aria-selected"
-    | "aria-pressed"
-    | "tabIndex"
-    | "onKeyDown"
-    | "onDoubleClick"
-    | "onContextMenu"
-  >;
-  buttonClassName?: string;
-  sidebar?: boolean;
-  tooltipEnabled?: boolean;
-  disabled: boolean;
-  label: string;
-  tooltipLabel: string;
-  busy: boolean;
-  description: string;
-  onClick: () => void;
-  children: ReactNode;
-}) {
-  const id = useId();
-  const anchor = useRef<HTMLSpanElement>(null);
-  const tooltip = useRef<HTMLDivElement>(null);
-  const [open, setOpen] = useState(false);
-  const [overflowing, setOverflowing] = useState(false);
-  const leaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(
-    undefined,
-  );
-  const cancelLeave = () => {
-    clearTimeout(leaveTimer.current);
-  };
-  const show = () => {
-    cancelLeave();
-    if (tooltipEnabled) setOpen(true);
-  };
-  useEffect(() => {
-    if (!tooltipEnabled) setOpen(false);
-  }, [tooltipEnabled]);
-  const leave = () => {
-    cancelLeave();
-    leaveTimer.current = setTimeout(() => {
-      if (anchor.current?.ownerDocument.activeElement !== tooltip.current)
-        setOpen(false);
-    }, 180);
-  };
-  const contains = (target: EventTarget | null) => {
-    const NodeType = anchor.current?.ownerDocument.defaultView?.Node;
-    return (
-      !!NodeType &&
-      target instanceof NodeType &&
-      (!!anchor.current?.contains(target) ||
-        !!tooltip.current?.contains(target))
-    );
-  };
-  const returnFocus = () => {
-    const control = disabled
-      ? anchor.current
-      : anchor.current?.querySelector("button");
-    control?.focus();
-  };
-  useEffect(() => () => clearTimeout(leaveTimer.current), []);
-  const [position, setPosition] = useState({
-    left: 8,
-    top: 8,
-    maxWidth: 640,
-    maxHeight: 0,
-  });
-  const document = anchor.current?.ownerDocument;
-  useLayoutEffect(() => {
-    if (!open || !document?.defaultView) return;
-    const view = document.defaultView;
-    const place = () => {
-      const rect = anchor.current!.getBoundingClientRect();
-      // Native pipeline content is a separate view; keep sidebar hints above it.
-      const top = sidebar
-        ? Math.min(
-            rect.top,
-            document.querySelector(".project-bar")?.getBoundingClientRect()
-              .bottom ?? 52,
-          )
-        : rect.top;
-      const width = Math.min(640, Math.max(0, view.innerWidth - 16));
-      const height = tooltip.current?.getBoundingClientRect().height ?? 0;
-      const actualWidth =
-        tooltip.current?.getBoundingClientRect().width || width;
-      setOverflowing(
-        !!tooltip.current &&
-          tooltip.current.scrollHeight > tooltip.current.clientHeight,
-      );
-      setPosition({
-        left: Math.max(
-          8,
-          Math.min(
-            rect.left + (rect.width - actualWidth) / 2,
-            view.innerWidth - actualWidth - 8,
-          ),
-        ),
-        top: Math.max(8, top - height - 8),
-        maxWidth: width,
-        maxHeight: Math.max(0, top - 16),
-      });
-    };
-    const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
-        event.stopPropagation();
-        cancelLeave();
-        if (document.activeElement === tooltip.current) returnFocus();
-        setOpen(false);
-      }
-    };
-    place();
-    view.addEventListener("resize", place);
-    document.addEventListener("scroll", place, true);
-    document.addEventListener("keydown", escape, true);
-    return () => {
-      view.removeEventListener("resize", place);
-      document.removeEventListener("scroll", place, true);
-      document.removeEventListener("keydown", escape, true);
-    };
-  }, [
-    open,
-    sidebar,
-    document,
-    description,
-    disabled,
-    position.maxWidth,
-    position.maxHeight,
-  ]);
-  return (
-    <span
-      ref={anchor}
-      className={
-        sidebar
-          ? "repository-action-anchor sidebar-project-anchor"
-          : "repository-action-anchor"
-      }
-      tabIndex={disabled ? 0 : undefined}
-      aria-describedby={disabled && open ? id : undefined}
-      onMouseEnter={show}
-      onMouseLeave={leave}
-      onFocus={show}
-      onBlur={(event) => {
-        if (!contains(event.relatedTarget)) setOpen(false);
-      }}
-      onKeyDown={(event) => {
-        if (open && overflowing && event.key === "Tab") {
-          if (event.target === tooltip.current) {
-            if (event.shiftKey) {
-              event.preventDefault();
-              returnFocus();
-            } else {
-              // Resume native Tab navigation from the control, not the portal
-              // at the end of body. Do not prevent the browser's default Tab.
-              returnFocus();
-              setOpen(false);
-            }
-          } else if (!event.shiftKey) {
-            event.preventDefault();
-            tooltip.current?.focus();
-          }
-        }
-      }}
-    >
-      <button
-        {...tabProps}
-        type="button"
-        className={buttonClassName}
-        title={sidebar && !tooltipEnabled ? description : undefined}
-        disabled={disabled}
-        aria-label={label}
-        aria-busy={busy}
-        aria-describedby={open ? id : undefined}
-        onClick={onClick}
-      >
-        {children}
-      </button>
-      {open &&
-        document &&
-        createPortal(
-          <ActiveTooltip close={() => setOpen(false)}>
-            <div
-              ref={tooltip}
-              id={id}
-              role="tooltip"
-              tabIndex={overflowing ? 0 : -1}
-              onMouseEnter={show}
-              onMouseLeave={leave}
-              className="repository-action-tooltip"
-              style={{
-                position: "fixed",
-                ...position,
-                overflowY: "auto",
-                pointerEvents: "auto",
-              }}
-            >
-              <strong>{tooltipLabel}</strong>
-              {": "}
-              <span>{description}</span>
-            </div>
-          </ActiveTooltip>,
-          document.body,
-        )}
-    </span>
-  );
-}
-
 /** Same-origin native overlay stays above Electron's pipeline WebContentsView. */
 export function RepositoryOperationPopup({
   anchor,
@@ -446,6 +212,7 @@ export function RepositoryOperationPopup({
   anchor: RefObject<HTMLDivElement | null>;
   onHandoff?: (candidate: GitUpdateHandoffCandidate) => void;
 }) {
+  useLocale();
   const nativePopup = useNativeTopicPopup();
   const controller = useRepositoryActionController();
   const failure = controller.failures[0];
@@ -492,7 +259,7 @@ export function RepositoryOperationPopup({
       <RepositoryFailureDialog
         label={failure.label}
         log={failure.result.log}
-        error={failure.result.error || "Операция не выполнена"}
+        error={failure.result.error || tr("topics.operationWasNotCompleted")}
         onClose={controller.close}
         onHandoff={handoff}
       />
@@ -501,12 +268,12 @@ export function RepositoryOperationPopup({
     <TopicPickerPopup
       anchor={anchor}
       onClose={controller.close}
-      label="Ошибка операции"
+      label={tr("topics.operationFailed")}
     >
       <OperationFailure
         label={failure.label}
         log={failure.result.log}
-        error={failure.result.error || "Операция не выполнена"}
+        error={failure.result.error || tr("topics.operationWasNotCompleted")}
         onClose={controller.close}
         onHandoff={handoff}
       />
@@ -522,6 +289,7 @@ function RepositoryFailureDialog(props: {
   onClose: () => void;
   onHandoff?: () => void;
 }) {
+  useLocale();
   const node = useRef<HTMLDialogElement>(null);
   useLayoutEffect(() => {
     const el = node.current!;
@@ -532,7 +300,7 @@ function RepositoryFailureDialog(props: {
     <dialog
       ref={node}
       className="repository-operation-dialog"
-      aria-label="Ошибка операции"
+      aria-label={tr("topics.operationFailed")}
       onCancel={(e) => {
         e.preventDefault();
         props.onClose();
@@ -558,6 +326,7 @@ function OperationFailure({
   nested?: boolean;
   onHandoff?: () => void;
 }) {
+  useLocale();
   const button = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -570,7 +339,7 @@ function OperationFailure({
     <section
       className="repository-operation-popup"
       role={nested ? undefined : "dialog"}
-      aria-label={nested ? undefined : "Ошибка операции"}
+      aria-label={nested ? undefined : tr("topics.operationFailed")}
       onKeyDown={(e) => {
         if (e.key === "Escape") {
           e.stopPropagation();
@@ -580,24 +349,14 @@ function OperationFailure({
     >
       <header>
         <div>
-          <h2>Ошибка операции</h2>
+          <h2>{tr("topics.operationFailed")}</h2>
           <p>{label}</p>
         </div>
-        <button
-          ref={button}
-          type="button"
-          className="icon-button"
-          aria-label="Закрыть попап"
-          onClick={onClose}
-        >
-          ×
-        </button>
+        <PopupClose label={tr("topics.closePopup")} onClick={onClose} buttonRef={button} />
       </header>
-      <pre aria-label="Лог операции">{log}</pre>
+      <pre aria-label={tr("topics.operationLog")}>{log}</pre>
       {onHandoff && (
-        <button type="button" onClick={onHandoff}>
-          Разрешить конфликт вручную…
-        </button>
+        <button type="button" onClick={onHandoff}>{tr("topics.resolveConflictManually")}</button>
       )}
       <p className="repository-operation-error" role="alert">
         {error}

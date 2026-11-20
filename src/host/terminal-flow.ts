@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { randomUUID } from "node:crypto";
 import {
   terminalSessionRefSchema,
@@ -77,7 +78,7 @@ export class TerminalFlow {
       typeof text !== "string" ||
       Buffer.byteLength(text) > TERMINAL_SOURCE_BYTES
     )
-      throw Error("Недопустимый размер события терминального транспорта.");
+      throw Error(t("hostTerminal.badEventSize"));
     if (!text) return true;
     // Build at most a few bounded frames before accepting the event atomically.
     const parts: { text: string; bytes: number }[] = [];

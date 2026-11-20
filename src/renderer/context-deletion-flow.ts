@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import type { TopicContextRef } from "../shared/worktrees";
 import type {
   ContextDeletionPreview,
@@ -25,24 +26,24 @@ export async function performContextDeletion(
   progress?: (line: string, cloneRemoved: boolean) => void,
 ): Promise<DeletionResult> {
   if (plan.contextId !== owner.contextId)
-    throw Error("Подтверждение другого контекста.");
+    throw Error(msg("workspace.theConfirmationBelongsToADifferentContext"));
   if (
     plan.stage === "prepared" &&
     plan.requiresAheadConfirmation &&
     !allowAhead
   )
-    throw Error("Подтвердите удаление клона с непереданными коммитами.");
-  progress?.("Проверяем состояние и перемещаем клон в Корзину…", false);
+    throw Error(msg("workspace.confirmDeletionOfTheCloneWithUntransferredCommits"));
+  progress?.(msg("workspace.checkingStateAndMovingTheCloneToTrash"), false);
   const result = await api.deleteContext({
     projectId: owner.projectId,
     token: plan.token,
     ...(allowAhead ? { allowAhead: true as const } : {}),
   });
   if (!result.cloneRemoved) return result;
-  progress?.("Клон перемещён в Корзину. Переключаем контекст…", true);
+  progress?.(msg("workspace.cloneMovedToTrashSwitchingContext"), true);
   await leave(owner);
   if (result.status !== "success") return result;
-  progress?.(plan.purpose === "clone-after-topic" ? "Контекст переключён. Завершаем очистку копии без повторной команды Goga…" : "Контекст переключён. Удаляем топик в основном проекте…", true);
+  progress?.(plan.purpose === "clone-after-topic" ? msg("workspace.contextSwitchedFinishingWorkingCopyCleanupWithoutRepeatingTheGoga") : msg("workspace.contextSwitchedDeletingTheTopicInTheOriginalProject"), true);
   return api.finishContextDeletion({
     projectId: owner.projectId,
     token: plan.token,

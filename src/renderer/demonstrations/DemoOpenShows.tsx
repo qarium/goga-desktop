@@ -1,3 +1,6 @@
+import { HintButton } from "../ActionHint";
+import { t } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { DemoShow } from "../../shared/demonstrations";
@@ -17,6 +20,7 @@ function OpenShow({
   label: string;
   stop: StopShow;
 }) {
+  useLocale();
   const [confirm, setConfirm] = useState(false),
     [closing, setClosing] = useState(false);
   const [error, setError] = useState("");
@@ -36,15 +40,15 @@ function OpenShow({
       setError(demoError(e));
     }
   }
-  const title = "Завершить показ: " + label;
+  const title = t("general.endShowNamed", {name: label});
   return (
     <li>
       <span>{label}</span>{" "}
-      <button
+      <HintButton
         type="button"
         className="close-tab"
         aria-label={title}
-        title={title}
+        hint={title}
         disabled={closing}
         aria-busy={closing}
         onClick={() => {
@@ -53,7 +57,7 @@ function OpenShow({
         }}
       >
         ×
-      </button>
+      </HintButton>
       {error && (
         <p className="error" role="alert">
           {error}
@@ -64,12 +68,10 @@ function OpenShow({
           <DemoConfirm
             q={{
               action: "stop",
-              title: "Завершить показ?",
-              submit: "Завершить показ",
+              title: t("general.endDemonstration2"),
+              submit: t("general.endDemonstration3"),
               detail:
-                "Показ «" +
-                label +
-                "» закроется вместе с несохранёнными изменениями. Агент потеряет доступ к этой странице.",
+                t("general.endShowDetail", {name:label}),
             }}
             cancel={() => setConfirm(false)}
             submit={() => void finish()}
@@ -87,6 +89,7 @@ export function DemoOpenShows({
   shows: DemoShow[];
   stop: StopShow;
 }) {
+  useLocale();
   if (!shows.length) return null;
   // Two revisions of the same checkout can have identical human-readable names.
   // Preserve inventory order; disambiguate only colliding labels, not with URLs.
@@ -96,9 +99,9 @@ export function DemoOpenShows({
     counts.set(label, (counts.get(label) ?? 0) + 1);
   return (
     <details>
-      <summary>Открытые показы ({shows.length})</summary>
+      <summary>{t("general.openShowsSummary",{count:shows.length})}</summary>
       {[...counts.values()].some((n) => n > 1) && (
-        <small>Одноимённые показы пронумерованы в порядке открытия.</small>
+        <small>{t("general.demonstrationsWithTheSameNameAreNumberedInThe")}</small>
       )}
       <ul>
         {shows.map(({ showId, label }) => {

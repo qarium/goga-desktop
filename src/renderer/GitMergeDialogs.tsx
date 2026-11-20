@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useState } from "react";
 import type {
   GitBranchInventory,
@@ -19,6 +21,7 @@ export function GitMergeSource({
   onClose(): void;
   onSelect(ref: string): void;
 }) {
+  useLocale();
   const [group, setGroup] = useState<"local" | "remote">("local");
   const [selected, setSelected] = useState("");
   const [query, setQuery] = useState("");
@@ -32,18 +35,18 @@ export function GitMergeSource({
   return (
     <TopicModal
       className="git-merge-source-dialog"
-      title="Влить ветку в текущую"
+      title={msg("git.mergeBranchIntoCurrent2")}
       onClose={onClose}
     >
       <div className="git-branch-form git-merge-source">
         <div
           className="git-branch-groups"
           role="tablist"
-          aria-label="Источник слияния"
+          aria-label={msg("git.mergeSource")}
         >
           {(
             [
-              ["local", "Локальные"],
+              ["local", msg("git.local")],
               ["remote", "Remote"],
             ] as const
           ).map(([key, label]) => (
@@ -65,18 +68,17 @@ export function GitMergeSource({
         <input
           type="search"
           autoFocus
-          aria-label="Найти ветку-источник"
-          placeholder="Название ветки"
+          aria-label={msg("git.findSourceBranch")}
+          placeholder={msg("git.branchName")}
           value={query}
           onChange={(event) => setQuery(event.target.value)}
         />
-        <p className="hint">
-          Веток: {filtered.length} из {rows.length}
+        <p className="hint">{msg("git.branches")}{filtered.length}{msg("git.of2")}{rows.length}
         </p>
         <div
           className="git-merge-branch-list"
           role="listbox"
-          aria-label="Ветки для слияния"
+          aria-label={msg("git.branchesToMerge")}
         >
           {filtered.map((row, index) => (
             <button
@@ -114,46 +116,30 @@ export function GitMergeSource({
               {row.name}
             </button>
           ))}
-          {!filtered.length && <p className="hint">Нет доступных веток</p>}
+          {!filtered.length && <p className="hint">{msg("git.noBranchesAvailable")}</p>}
         </div>
-        <p className="git-merge-selection">
-          Из ветки <strong>{source?.name ?? "Не выбрана"}</strong>
+        <p className="git-merge-selection">{msg("git.fromBranch")}<strong>{source?.name ?? msg("git.notSelected")}</strong>
         </p>
-        <p className="git-merge-target">
-          В текущую ветку <strong>{inventory.branch}</strong>
+        <p className="git-merge-target">{msg("git.intoCurrentBranch")}<strong>{inventory.branch}</strong>
         </p>
         <details className="git-merge-conditions">
-          <summary>Условия слияния</summary>
-          <p>
-            Без переключения. Fast-forward, если возможен, иначе merge-коммит.
-            Без публикации.
-          </p>
+          <summary>{msg("git.mergeConditions")}</summary>
+          <p>{msg("git.noBranchSwitchFastForwardIfPossibleOtherwiseCreateA")}</p>
           {inventory.dirty && (
-            <p className="hint">
-              Незакоммиченные изменения сами по себе не блокируют слияние и не
-              должны попасть в merge-коммит. Если Git не может их сохранить,
-              операция остановится.
-            </p>
+            <p className="hint">{msg("git.uncommittedChangesDoNotAutomaticallyBlockAMergeAndMust")}</p>
           )}
           {group === "remote" && (
-            <p className="hint">
-              Используется уже полученная remote-ветка. Запрос к серверу не
-              выполняется.
-            </p>
+            <p className="hint">{msg("git.usesTheAlreadyFetchedRemoteBranchNoRequestIsSent")}</p>
           )}
         </details>
         <div className="git-branch-dialog-actions">
-          <button type="button" onClick={onClose}>
-            Отмена
-          </button>
+          <button type="button" onClick={onClose}>{msg("git.cancel")}</button>
           <button
             type="button"
             className="primary"
             disabled={!source}
             onClick={() => source && onSelect(source.ref)}
-          >
-            Продолжить
-          </button>
+          >{msg("git.continue")}</button>
         </div>
       </div>
     </TopicModal>
@@ -169,62 +155,46 @@ export function GitMergeConfirmation({
   onClose(): void;
   onConfirm(): void;
 }) {
+  useLocale();
   const abort = preview.action === "abort-merge";
   return (
     <TopicModal
-      title={abort ? "Отменить слияние?" : "Подтвердить слияние"}
+      title={abort ? msg("git.abortMerge") : msg("git.confirmMerge")}
       onClose={onClose}
     >
       <div className="git-branch-form">
         <p className="context-path">{preview.root}</p>
         <dl className="git-branch-summary">
-          <dt>{abort ? "Входящий коммит" : "Источник"}</dt>
+          <dt>{abort ? msg("git.incomingCommit") : msg("git.source")}</dt>
           <dd>
             {preview.sourceRef && `${short(preview.sourceRef)} · `}
             {preview.sourceOid?.slice(0, 8) ?? "—"}
           </dd>
-          <dt>{abort ? "Текущая ветка" : "В текущую ветку"}</dt>
+          <dt>{abort ? msg("git.currentBranch") : msg("git.intoCurrentBranch2")}</dt>
           <dd>
             {short(preview.toRef)} · {preview.toOid?.slice(0, 8) ?? "—"}
           </dd>
         </dl>
         {abort ? (
           <>
-            <p>
-              Ручные решения конфликтов будут потеряны. Git попробует штатно
-              отменить незавершённое слияние; текущая ветка не переключится.
-            </p>
-            <p>
-              Если отмена невозможна, появится лог, а состояние останется
-              доступным для восстановления. Принудительного сброса не будет.
-            </p>
+            <p>{msg("git.manualConflictResolutionsWillBeLostGitWillTryTo")}</p>
+            <p>{msg("git.ifTheMergeCannotBeAbortedALogWillAppear")}</p>
           </>
         ) : (
           <>
-            <p>
-              Fast-forward, если возможен, иначе Git автоматически создаст
-              merge-коммит. Без переключения ветки и публикации в remote.
-            </p>
-            <p>
-              Авторство и подпись — из настроек репозитория. Незакоммиченные
-              изменения не включаются в merge-коммит; при риске перезаписи Git
-              остановится.
-            </p>
+            <p>{msg("git.fastForwardIfPossibleOtherwiseGitCreatesAMergeCommit")}</p>
+            <p>{msg("git.authorshipAndSigningComeFromTheRepositoryConfigurationUncommittedChanges")}</p>
           </>
         )}
-        <p className="hint">
-          Без force, автоматического stash и сброса файлов. Git-хуки отключены.
-        </p>
+        <p className="hint">{msg("git.noForceAutomaticStashOrFileResetGitHooksAre")}</p>
         <div className="git-branch-dialog-actions">
-          <button type="button" onClick={onClose}>
-            Отмена
-          </button>
+          <button type="button" onClick={onClose}>{msg("git.cancel")}</button>
           <button
             type="button"
             className={abort ? "danger" : "primary"}
             onClick={onConfirm}
           >
-            {abort ? "Отменить слияние" : `Влить в ${short(preview.toRef)}`}
+            {abort ? msg("git.abortMerge3") : msg("git.mergeInto", { value1: String(short(preview.toRef)) })}
           </button>
         </div>
       </div>

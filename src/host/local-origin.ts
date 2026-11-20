@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import path from "node:path";
 import { realpath } from "node:fs/promises";
 import type { WorktreeRecord } from "../shared/worktrees";
@@ -6,7 +7,7 @@ import { noSymlinks } from "./settings";
 type Git = (args: string[], cwd: string) => Promise<string>;
 const invalid = () =>
   new Error(
-    "Origin копии должен указывать только на исходную локальную папку проекта. Origin отсутствует, изменён или содержит небезопасные настройки; существующий origin не перезаписывался.",
+    tr("host.theCopySOriginMustPointOnlyToTheOriginal"),
   );
 
 /** Read-only unless an explicitly requested operation opts into legacy migration. */

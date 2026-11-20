@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import {
   projectRemovalRequestSchema,
   type ProjectRemovalRequest,
@@ -40,11 +41,12 @@ const hash = (text: string) => createHash("sha256").update(text).digest("hex");
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === "object" && !Array.isArray(value);
 class StateError extends Error {}
-const invalid = () => new StateError("Недопустимые настройки проекта.");
+export class ProjectSettingsVersionConflict extends StateError {}
+const invalid = () => new StateError(tr("host.invalidProjectSettings"));
 const corrupt = () =>
-  new StateError("Состояние Desktop повреждено или несовместимо.");
+  new StateError(tr("host.desktopStateIsDamagedOrIncompatible"));
 const conflict = () =>
-  new StateError("Настройки изменены извне. Откройте их заново.");
+  new ProjectSettingsVersionConflict(tr("workspace.settingsChangedExternallyReopenThem"));
 const absent = (e: unknown) => (e as NodeJS.ErrnoException).code === "ENOENT";
 
 /** Return only validated primitives; never include caller-supplied data in errors. */
@@ -237,8 +239,8 @@ export class DesktopStateStore {
         throw e;
       throw new StateError(
         saving
-          ? "Не удалось сохранить настройки Desktop."
-          : "Не удалось прочитать состояние Desktop.",
+          ? tr("host.couldNotSaveDesktopSettings")
+          : tr("host.couldNotReadDesktopState"),
       );
     } finally {
       try {
@@ -246,7 +248,7 @@ export class DesktopStateStore {
       } catch {
         if (!failed)
           throw new StateError(
-            "Не удалось освободить блокировку хранилища Desktop. Повторите запуск приложения.",
+            tr("host.couldNotReleaseTheDesktopStorageLockRestartTheApplication"),
           );
       }
     }
@@ -354,7 +356,7 @@ export class DesktopStateStore {
       const project = projects.find((row) => row.id === target.id);
       if (!project || project.path !== target.path)
         throw new StateError(
-          "Проект уже убран из списка или его папка изменилась. Обновите список проектов.",
+          tr("host.theProjectWasAlreadyRemovedFromTheListOrIts"),
         );
       const remaining = projects.filter((row) => row.id !== target.id);
       await this.write(
@@ -367,11 +369,11 @@ export class DesktopStateStore {
   }
 
   private async settings(projectId: string) {
-    if (typeof projectId !== "string") throw new StateError("Неизвестный проект.");
+    if (typeof projectId !== "string") throw new StateError(tr("host.unknownProject"));
     const project = (await this.registry()).projects.find(
       (p) => p.id === projectId,
     );
-    if (!project) throw new StateError("Неизвестный проект.");
+    if (!project) throw new StateError(tr("host.unknownProject"));
     const directory = path.join(this.root, "settings");
     await this.directory(directory);
     const file = path.join(directory, `${hash(projectId)}.json`);

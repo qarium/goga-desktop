@@ -263,7 +263,7 @@ async function fixture() {
       report.screenshots.push({ file: screenshot, width, height, layout });
     };
     await ev("document.querySelector('.project-settings-action').click()");
-    await until("!!document.querySelector('.section-tabs')");
+    await until("!!document.querySelector('[data-settings-tabs]')");
     await clickText("Конвейеры");
     await until(
       "!!document.querySelector('[aria-label=\"Файл .goga/pipelines/target.yml\"]')",

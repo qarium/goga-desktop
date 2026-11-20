@@ -1,0 +1,23 @@
+# Desktop overlays and feedback
+
+Use the shared [overlay theme](../src/shared/overlay-theme.css) for the **surface**. The screen that owns an overlay still owns its contents, width, placement, keyboard navigation, scrolling, focus restoration, and native-view occlusion. Do not replace an action menu with a modal or a warning with a destructive button just to match their appearance.
+
+| Surface | Actual Desktop instances | Contract |
+| --- | --- | --- |
+| Modal questions, editors and error details | `TopicModal` (topics, Git operations, project management, history, run history); reload/reset, launch, rename, document deletion, save-on-leave and demonstration confirmations; attach-pipeline sheet; repository-operation failure dialog; Overview create, rename, trash and paste-conflict confirmations | Same surface, border, 12 px corners, shadow and backdrop. Primary action names the outcome. Keep cancel neutral; destructive discard, delete or stop uses danger. Use `PopupClose` when the header includes an explicit dismiss button; supply its accessible name and keep the owning busy/focus guards. Do not add a redundant close icon to every two-button question. |
+| Menus, searchable lists and anchored panels | Overview file tree and CodeMirror symbol candidates, project/group/add and recent-session menus; topic/branch selectors, workflow-name suggestions and launch selectors; launch split menus, terminal actions/presets, demonstration context menu, notifications and repository operation details | Same surface, border, 10 px corners and shadow. A multi-line option, dense command, search control and rich notification are intentionally different contents. Picker height, action interlocks and selected-item markers are local. Native-layer and DOM variants use the same shell stylesheet. |
+| Tooltips and transient hints | Toolbar, sidebar and action-button hints across Overview, Git, Topics, notifications, runs, terminals and demonstrations; demonstration selection and copy receipts | Compact surface, 6 px corners, smaller shadow and wrapping text. Passive receipts do not take focus. Long keyboard-accessible explanations retain their scroll/focus behavior. |
+| Errors and warnings | Failed operations, native-popup fallback, project creation and validation, topic catalog, notifications and Home, run history, terminal, Git notices, Usages links and refreshes | Error, warning and hint colors have distinct tokens. A compact field explanation or a full-width banner uses the same severity color without acquiring a modal layout. An unavailable optional refresh can show a warning while keeping previous content. An open error panel retains its selectable log and retry/close actions. |
+| Terminal-owned surfaces | Terminal stop/restart prompt; isolated terminal paste preview | Same dialog surface and dismiss/action hierarchy. Multi-line paste keeps the cancel button focused and never changes or submits the pasted data as a side effect of styling. The isolated terminal imports the theme itself. |
+
+## Deliberate boundaries
+
+- macOS file pickers, quit and recovery alerts, OS notifications and the system menu remain native. The Desktop can supply localized titles and actions but does not restyle system windows.
+- A fullscreen history/document reader, expanded editor or demonstration is a workspace, not a blocking question. The history reader deliberately leaves its parent backdrop transparent.
+- Text and pages supplied by Goga, AFM, the terminal or a demonstration site are content, not Desktop overlays. Do not inject Desktop CSS into them.
+- Inline hints, truncated path/name titles, progress indicators, error-state icons and badges do not become floating panels. A confirmation embedded in a split view can have a different layout while using the same colors.
+- Overview file overlays retain their file-operation form layout and share the same theme without changing their placement. The overlay stylesheet is not a global `dialog`, `[role="alert"]` or `button` reset.
+
+For actions use [HintButton or TooltipButton](../src/renderer/ActionHint.tsx) rather than an operating-system title bubble. HintButton keeps the button as the actual flex/grid item and ref target; keep a distinct accessible name for icon-only controls. Raw titles may still expose truncated document names or paths.
+
+The shell and the terminal layer share the same stylesheet; the CodeMirror list inherits its tokens across the editor shadow root. For a new popup, test a narrow and a regular window, both languages, keyboard dismissal/default focus, long messages, busy states and the native-layer variant when present. Never rely on color alone to explain a warning or an error.

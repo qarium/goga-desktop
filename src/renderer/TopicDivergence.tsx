@@ -1,12 +1,15 @@
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 const labels: Record<string, string> = {
-  base: "Совпадает с базой",
-  "up-to-date": "База актуальна",
-  propagated: "Перенесён в базу",
-  "need-update": "Требует обновления",
+  get base() { return tr("topics.matchesBase"); },
+  get "up-to-date"() { return tr("topics.baseUpToDate"); },
+  get propagated() { return tr("topics.propagatedToBase"); },
+  get "need-update"() { return tr("topics.updateNeeded"); },
 };
 
 /** Display the native value without assigning meaning to future codes. */
 export function TopicDivergence({ divergence }: { divergence: string | null }) {
+  useLocale();
   if (divergence === null) return <span className="hint">—</span>;
   const known = Object.hasOwn(labels, divergence);
   return (

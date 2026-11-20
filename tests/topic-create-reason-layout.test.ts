@@ -24,9 +24,11 @@ it("defines one shared amber badge with a button-height short state", () => {
   expect(badge).toMatch(/min-height: 36px/);
   expect(badge).toMatch(/line-height: 18px/);
   expect(badge).toMatch(/padding: 8px 10px/);
-  expect(badge).toMatch(/border: 1px solid rgba\(232, 168, 76/);
-  expect(badge).toMatch(/background: rgba\(232, 168, 76/);
-  expect(badge).toMatch(/color: #edc28a/);
+  const overlay = readFileSync(new URL("../src/shared/overlay-theme.css", import.meta.url), "utf8");
+  const warning = overlay.match(/:where\([^)]*\.action-reason[^)]*\)\s*\{([^}]+)\}/)?.[1];
+  expect(warning).toContain("border: 1px solid var(--feedback-warning-line)");
+  expect(warning).toContain("background: var(--feedback-warning-bg)");
+  expect(warning).toContain("color: var(--feedback-warning-fg)");
   expect(topics).not.toMatch(/\.topic-create-reason-(?:short|details)/);
   expect(build).not.toContain("topic-action-reason");
 });

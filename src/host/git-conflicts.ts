@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -38,9 +39,9 @@ const LIMIT = 1024 * 1024;
 const digest = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
 const stale = () =>
-  Error("Снимок конфликта Git устарел. Обновите список изменений.");
+  Error(gitMessage("gitHost.theConflictSnapshotIsStaleRefreshChanges"));
 class MappingUnavailable extends Error {}
-const invalid = () => Error("Некорректный ответ Git при чтении конфликта.");
+const invalid = () => Error(gitMessage("gitHost.invalidGitResponseWhileReadingTheConflict"));
 const safeArgs = [
   "--no-pager",
   "--literal-pathspecs",
@@ -98,7 +99,7 @@ async function regular(
     before.nlink !== 1n ||
     before.size > BigInt(limit)
   )
-    throw Error("Небезопасный тип или слишком большой размер файла Git.");
+    throw Error(gitMessage("gitHost.unsafeGitFileTypeOrFileTooLarge"));
   await checkParents?.();
   const handle = await fs.open(
     filename,
@@ -160,7 +161,7 @@ async function working(root: string, name: string) {
       };
     if (i < parts.length - 1) {
       if (!info.isDirectory() || info.isSymbolicLink())
-        throw Error("Небезопасный родитель пути конфликта Git.");
+        throw Error(gitMessage("gitHost.unsafeParentDirectoryForAGitConflictPath"));
       parents.push([current, await parentIdentity(current)]);
       continue;
     }
@@ -168,7 +169,7 @@ async function working(root: string, name: string) {
       return {
         value: {
           kind: "symlink",
-          reason: "Символические ссылки не открываются.",
+          reason: gitMessage("gitHost.symbolicLinksCannotBeOpened"),
         } as GitConflictDocument["working"],
         identity: stamp(info),
       };
@@ -177,7 +178,7 @@ async function working(root: string, name: string) {
         value: {
           kind: "unavailable",
           reason:
-            "Тип или размер рабочего файла не поддерживается (предел 1 МиБ).",
+            gitMessage("gitHost.unsupportedWorkingFileTypeOrSize1MibLimit"),
         } as GitConflictDocument["working"],
         identity: stamp(info),
       };
@@ -241,13 +242,13 @@ function sourceSections(
   const candidates = sections.map((section) => {
     if ((scanBudget -= input.length) < 0)
       throw new MappingUnavailable(
-        "Слишком много диапазонов для безопасного сопоставления; доступен ручной выбор версии.",
+        gitMessage("gitHost.tooManyRangesToMatchSafelyChooseAVersion"),
       );
     const rows: Candidate[] = [];
     const add = (from: number, text: string) => {
       if (--budget < 0)
         throw new MappingUnavailable(
-          "Слишком много неоднозначных диапазонов конфликта; доступен ручной выбор версии.",
+          gitMessage("gitHost.tooManyAmbiguousConflictRangesChooseAVersionManually"),
         );
       rows.push({ from, to: from + text.length, text });
     };
@@ -305,7 +306,7 @@ function sourceSections(
     if (!feasible.length) throw invalid();
     if (feasible.some((row) => row.text !== feasible[0].text))
       throw new MappingUnavailable(
-        "Окончание строки блока неоднозначно; доступен ручной выбор версии.",
+        gitMessage("gitHost.theBlockSLineEndingIsAmbiguousChooseA"),
       );
     return {
       text: feasible[0].text,
@@ -331,7 +332,7 @@ async function generate(
       !path.isAbsolute(relative))
   )
     throw Error(
-      "Небезопасная временная папка: файлы слияния не могут создаваться внутри репозитория.",
+      gitMessage("gitHost.unsafeTemporaryDirectoryMergeFilesCannotBeCreatedInside"),
     );
   const dir = await fs.mkdtemp(path.join(temporaryRoot, "goga-conflict-"));
   try {
@@ -388,7 +389,7 @@ async function generate(
         error.exitCode < 1 ||
         error.exitCode > 127
       )
-        throw Error("Не удалось построить трёхстороннюю модель конфликта Git.");
+        throw Error(gitMessage("gitHost.couldNotBuildAThreeWayModelOfThe"));
       code = error.exitCode;
       output = { stdout: error.stdout, stderr: error.stderr };
     }
@@ -471,7 +472,7 @@ export class GitConflictReader {
         !path.isAbsolute(root) ||
         path.resolve(root) !== root
       )
-        throw Error("Запрошен другой контекст конфликта Git.");
+        throw Error(gitMessage("gitHost.aDifferentGitConflictContextWasRequested"));
       await ctx.verify();
       const before = await ctx.snapshot();
       if (
@@ -482,7 +483,7 @@ export class GitConflictReader {
         throw stale();
       const entry = before.files.find((file) => file.path === request.path);
       if (!entry || entry.kind !== "conflict")
-        throw Error("Файла нет в списке неразрешённых конфликтов Git.");
+        throw Error(gitMessage("gitHost.thisFileIsNotInTheListOfUnresolved"));
       const git = (args: string[]) =>
         ctx.git([
           ...safeArgs,
@@ -514,14 +515,14 @@ export class GitConflictReader {
           return {
             ...row,
             kind: "submodule",
-            reason: "Конфликт подмодуля требует отдельного разрешения.",
+            reason: gitMessage("gitHost.resolveThisSubmoduleConflictSeparately"),
           };
         if (row.mode === "120000")
           return {
             ...row,
             kind: "symlink",
             reason:
-              "Конфликт символической ссылки требует отдельного разрешения.",
+              gitMessage("gitHost.resolveThisSymbolicLinkConflictSeparately"),
           };
         const type = (await git(["cat-file", "-t", row.oid])).stdout;
         const size = (await git(["cat-file", "-s", row.oid])).stdout;
@@ -531,7 +532,7 @@ export class GitConflictReader {
           return {
             ...row,
             kind: "unavailable",
-            reason: "Версия файла превышает предел 1 МиБ.",
+            reason: gitMessage("gitHost.thisFileVersionExceedsThe1MibLimit"),
           };
         const text = (await git(["cat-file", "blob", row.oid])).stdout,
           bytes = Buffer.from(text);
@@ -546,7 +547,7 @@ export class GitConflictReader {
             return {
               ...row,
               kind: "binary",
-              reason: "Файл не является точным текстом UTF-8.",
+              reason: gitMessage("gitHost.theFileIsNotValidUtf8Text"),
             };
           throw invalid();
         }
@@ -562,7 +563,7 @@ export class GitConflictReader {
       let generated: GitConflictGenerated = {
         kind: "unavailable",
         reason:
-          "Для этого типа конфликта требуется явный выбор версии или удаление; текстовые блоки недоступны.",
+          gitMessage("gitHost.explicitlyChooseAVersionOrDeleteThisFileText"),
       };
       if (
         [base, current, incoming].every(

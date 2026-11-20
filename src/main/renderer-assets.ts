@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { createHash } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
@@ -13,7 +14,7 @@ const maxFiles = 16_384;
 const maxBytes = 256 * 1024 * 1024;
 const changed = () =>
   new Error(
-    "Файлы интерфейса изменились во время запуска. Дождитесь завершения сборки и запустите приложение снова.",
+    t("native.assetsChanged"),
   );
 const identity = (stat: BigIntStats) =>
   [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeNs, stat.ctimeNs].join(
@@ -37,12 +38,12 @@ async function readTree(
   let entries = 0;
   async function visit(relative: string) {
     if (++entries > maxFiles * 2)
-      throw new Error("Превышен лимит файлов интерфейса.");
+      throw new Error(t("native.assetsTooMany"));
     const filename = path.join(root, relative);
     const stat = await fs.lstat(filename, { bigint: true });
     if (stat.isSymbolicLink())
       throw new Error(
-        "Символические ссылки в файлах интерфейса не поддерживаются.",
+        t("native.assetsNoSymlinks"),
       );
     if (stat.isDirectory()) {
       hash.update(JSON.stringify([relative, "directory", identity(stat)]));
@@ -53,11 +54,11 @@ async function readTree(
     }
     if (!stat.isFile())
       throw new Error(
-        "Интерфейс должен содержать только обычные файлы и папки.",
+        t("native.assetsFileTypes"),
       );
     if (++files > maxFiles || stat.size > BigInt(maxBytes - bytes))
       throw new Error(
-        "Превышен лимит размера или количества файлов интерфейса.",
+        t("native.assetsTooLarge"),
       );
     bytes += Number(stat.size);
     // Do not follow a last-moment symlink or block if a file became a FIFO.
@@ -105,7 +106,7 @@ export async function prepareRendererAssets(
 
   const before = await readTree(source, true);
   if (!before.files.some((file) => file.relative === "index.html"))
-    throw new Error("Не найден собранный интерфейс index.html.");
+    throw new Error(t("native.assetsMissing"));
   const temporary = await fs.mkdtemp(path.join(os.tmpdir(), "goga-renderer-"));
   let disposal: Promise<void> | undefined;
   const dispose = () =>

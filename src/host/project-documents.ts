@@ -1,3 +1,5 @@
+import { DOCUMENT_SAVE_CONFLICT_PREFIX } from "../shared/project-documents";
+import { t as tr } from "../shared/i18n";
 import { isOverviewPath } from "../shared/project-overview";
 import path from "node:path";
 import { validateYaml } from "./yaml-validation";
@@ -44,11 +46,11 @@ const yamlName = /\.ya?ml$/;
 const absent = (error: unknown) =>
   (error as NodeJS.ErrnoException).code === "ENOENT";
 const changed = () =>
-  new Error("Файл или его каталог изменён извне. Откройте документ заново.");
+  new Error(tr("host.theFileOrItsDirectoryChangedExternallyOpenTheDocument"));
 // Only pre-write version mismatches can guarantee that no replacement happened.
 // Keep identity/post-write uncertainty errors distinct rather than promising rollback.
 const saveConflict = () => new Error(
-  "Конфликт сохранения: файл изменился после открытия. Файл не перезаписан. Обновите файл перед повторным сохранением.",
+  DOCUMENT_SAVE_CONFLICT_PREFIX + tr("host.saveConflictTheFileChangedAfterItWasOpenedThe"),
 );
 class NotEditable extends Error {}
 interface DirectoryIdentity {
@@ -85,14 +87,14 @@ const flatDirectory = (kind: FlatDocumentKind) => `.goga/${kind}s`;
 
 function relativePath(target: SourceDocumentTarget): string {
   if (target?.kind === "source") {
-    if (!isOverviewPath(target.path)) throw Error("Недопустимый путь файла");
+    if (!isOverviewPath(target.path)) throw Error(tr("host.invalidFilePath"));
     return target.path;
   }
   if (!target || typeof target !== "object")
-    throw new Error("Недопустимый документ проекта");
+    throw new Error(tr("host.invalidProjectDocument"));
   if (target.kind === "dockerfile") {
     if (!isProjectDockerfilePath(target.path))
-      throw new Error("Недопустимый путь Dockerfile");
+      throw new Error(tr("host.invalidDockerfilePath"));
     return target.path;
   }
   if (target.kind === "config") return ".goga/config.yml";
@@ -103,7 +105,7 @@ function relativePath(target: SourceDocumentTarget): string {
         : isProjectWorkflowName(target.name))
     )
       throw new Error(
-        `Недопустимое имя ${target.kind === "profile" ? "профиля" : target.kind === "pipeline" ? "конвейера" : "рабочего процесса"}`,
+        tr("host.invalidValue1Name", { value1: target.kind === "profile" ? tr("host.profile") : target.kind === "pipeline" ? tr("host.pipeline") : tr("host.workflow") }),
       );
     return `${flatDirectory(target.kind)}/${target.name}.yml`;
   }
@@ -112,9 +114,9 @@ function relativePath(target: SourceDocumentTarget): string {
     !isProjectToolName(target.tool) ||
     !isProjectToolPath(target.path)
   )
-    throw new Error("Недопустимый путь документа инструмента");
+    throw new Error(tr("host.invalidToolDocumentPath"));
   if (!yamlName.test(target.path))
-    throw new NotEditable("Редактируются только .yaml и .yml файлы");
+    throw new NotEditable(tr("host.onlyYamlAndYmlFilesCanBeEdited"));
   return `.goga/tools/${target.tool}/${target.path}`;
 }
 const sameIdentity = (a: Stats, b: Stats) => a.dev === b.dev && a.ino === b.ino;
@@ -133,7 +135,7 @@ async function directories(
   allowMissing = false,
 ): Promise<{ identities: DirectoryIdentity[]; missing: boolean }> {
   if (!path.isAbsolute(root) || path.resolve(root) !== root)
-    throw new Error("Путь проекта изменился. Добавьте проект заново.");
+    throw new Error(tr("host.theProjectPathChangedAddTheProjectAgain"));
   const result: DirectoryIdentity[] = [];
   const destination = path.join(root, relative);
   let cursor = path.parse(destination).root;
@@ -148,9 +150,9 @@ async function directories(
       throw error;
     }
     if (info.isSymbolicLink())
-      throw new Error("Символические ссылки не разрешены");
+      throw new Error(tr("host.symbolicLinksAreNotAllowed"));
     if (!info.isDirectory())
-      throw new Error("Ожидался обычный каталог проекта");
+      throw new Error(tr("host.expectedARegularProjectDirectory"));
     result.push({ path: cursor, info });
   }
   if ((await realpath(root)) !== root) throw changed();
@@ -169,13 +171,13 @@ async function verifyDirectories(identities: DirectoryIdentity[]) {
 }
 function editable(info: Stats) {
   if (info.isSymbolicLink())
-    throw new NotEditable("Символические ссылки не разрешены");
+    throw new NotEditable(tr("host.symbolicLinksAreNotAllowed"));
   if (!info.isFile())
-    throw new NotEditable("Редактируются только обычные файлы");
+    throw new NotEditable(tr("host.onlyRegularFilesCanBeEdited"));
   if (info.nlink !== 1)
-    throw new NotEditable("Файлы с жёсткими ссылками не разрешены");
+    throw new NotEditable(tr("host.hardLinkedFilesAreNotAllowed"));
   if (info.size > MAX_BYTES)
-    throw new NotEditable("Файл превышает лимит 1 МиБ");
+    throw new NotEditable(tr("host.theFileExceedsThe1MibLimit"));
 }
 function decode(bytes: Uint8Array, rawSource = false) {
   let text: string;
@@ -184,12 +186,12 @@ function decode(bytes: Uint8Array, rawSource = false) {
       bytes,
     );
   } catch {
-    throw new NotEditable("Файл не является корректным UTF-8");
+    throw new NotEditable(tr("host.theFileIsNotValidUtf8"));
   }
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(text))
-    throw new NotEditable("Бинарные данные не редактируются");
+    throw new NotEditable(tr("host.binaryDataCannotBeEdited"));
   if (rawSource && /[\x80-\x9f]/.test(text))
-    throw new NotEditable("Недопустимые управляющие символы C1 в исходнике");
+    throw new NotEditable(tr("host.invalidC1ControlCharactersInSource"));
   return text;
 }
 function version(bytes: Buffer, info: Stats, ancestors: DirectoryIdentity[]) {
@@ -273,7 +275,7 @@ async function read(
       current.isSymbolicLink()
     )
       throw changed();
-    if (length > MAX_BYTES) throw new NotEditable("Файл превышает лимит 1 МиБ");
+    if (length > MAX_BYTES) throw new NotEditable(tr("host.theFileExceedsThe1MibLimit"));
     const contents = bytes.subarray(0, length);
     return {
       document: {
@@ -341,7 +343,7 @@ function validateText(
     Buffer.byteLength(text) > MAX_BYTES ||
     Buffer.from(text).toString("utf8") !== text
   )
-    throw new Error("Нужен UTF-8 документ не более 1 МиБ");
+    throw new Error(tr("host.aUtf8DocumentOfUpTo1MibIs"));
   decode(Buffer.from(text), isFlatDocument(target) || target.kind === "source");
   // Goga owns workflow rendering and pipeline header/body semantics. Never parse
   // or normalize either raw source format in Desktop.
@@ -357,12 +359,12 @@ function validateText(
     return;
   const docs = parseAllDocuments(text, { uniqueKeys: true });
   if (docs.some((doc) => doc.errors.length))
-    throw new Error("Некорректный синтаксис YAML");
+    throw new Error(tr("host.invalidYamlSyntax"));
   if (
     target.kind === "config" &&
     (docs.length !== 1 || !isMap(docs[0].contents))
   )
-    throw new Error("Конфигурация проекта должна содержать YAML mapping");
+    throw new Error(tr("host.theProjectConfigurationMustBeAYamlMapping"));
 }
 
 /**
@@ -567,7 +569,7 @@ async function flatEntries(
     // a pattern: external lookalike files must still count against the limit.
     if (entry.name === stagingName) continue;
     if (names.length >= MAX_ENTRIES)
-      throw new Error(`Превышен лимит числа ${kind} (2048)`);
+      throw new Error(tr("host.tooManyKindEntriesLimit2048", { kind: kind }));
     names.push(entry.name);
   }
   await verifyDirectories(guard.identities);
@@ -583,7 +585,7 @@ async function assertFlatSpelling(
   const entries = await flatEntries(root, kind, options.stagingName);
   const collision = () =>
     new NotEditable(
-      `Имя ${kind} конфликтует с существующим именем по регистру или Unicode`,
+      tr("host.aKindNameConflictsWithAnExistingNameByCase", { kind: kind }),
     );
   if (
     entries.some(
@@ -595,7 +597,7 @@ async function assertFlatSpelling(
     throw collision();
   if (!entries.includes(filename)) {
     if (options.creating && entries.length >= MAX_ENTRIES)
-      throw new Error(`Превышен лимит числа ${kind} (2048)`);
+      throw new Error(tr("host.tooManyKindEntriesLimit2048", { kind: kind }));
     // Filesystem case-folding may differ from Unicode comparison above.
     // Never address an existing leaf via another spelling.
     try {
@@ -637,15 +639,15 @@ async function listFlatDocuments(
       let reason: string | undefined;
       try {
         if (!filename.endsWith(".yml"))
-          throw new NotEditable("Поддерживаются только файлы .yml");
+          throw new NotEditable(tr("host.onlyYmlFilesAreSupported"));
         if (
           !(kind === "profile"
             ? isPersonalProfileName(name)
             : isProjectWorkflowName(name))
         )
-          throw new NotEditable(`Недопустимое имя ${kind}`);
+          throw new NotEditable(tr("host.invalidKindName", { kind: kind }));
         if (aliases.get(projectWorkflowAliasKey(filename))! > 1)
-          throw new NotEditable("Конфликт имён по регистру или Unicode");
+          throw new NotEditable(tr("host.namesConflictByCaseOrUnicodeNormalization"));
         await read(root, relative, false, true);
       } catch (error) {
         if (!(error instanceof NotEditable)) throw error;
@@ -679,7 +681,7 @@ export async function listProjectTools(root: string): Promise<ProjectTool[]> {
     for await (const entry of directory) {
       if (++count > MAX_ENTRIES)
         throw new Error(
-          "Превышен лимит числа записей каталога инструментов (2048)",
+          tr("host.toolDirectoryExceedsTheLimitOf2048Entries"),
         );
       names.push(entry.name);
     }
@@ -693,13 +695,13 @@ export async function listProjectTools(root: string): Promise<ProjectTool[]> {
     const info = await lstat(path.join(root, base));
     if (info.isSymbolicLink())
       throw new Error(
-        "Символические ссылки в каталоге инструментов не разрешены",
+        tr("host.symbolicLinksInTheToolDirectoryAreNotAllowed"),
       );
     if (!info.isDirectory()) continue;
     const entries: ProjectToolEntry[] = [];
     const walk = async (relative: string, depth: number): Promise<void> => {
       if (depth > MAX_DEPTH)
-        throw new Error("Превышен лимит глубины каталога инструментов (16)");
+        throw new Error(tr("host.toolDirectoryExceedsTheMaximumDepthOf16"));
       for (const item of await list(relative ? `${base}/${relative}` : base)) {
         const entryPath = relative ? `${relative}/${item}` : item;
         const itemRelative = `${base}/${entryPath}`;
@@ -709,7 +711,7 @@ export async function listProjectTools(root: string): Promise<ProjectTool[]> {
             path: entryPath,
             kind: info.isDirectory() ? "directory" : "file",
             editable: false,
-            reason: "Недопустимое имя или путь",
+            reason: tr("host.invalidNameOrPath"),
           });
         } else if (info.isDirectory()) {
           entries.push({ path: entryPath, kind: "directory", editable: false });
@@ -719,7 +721,7 @@ export async function listProjectTools(root: string): Promise<ProjectTool[]> {
           try {
             editable(info);
             if (!yamlName.test(item))
-              throw new NotEditable("Редактируются только .yaml и .yml файлы");
+              throw new NotEditable(tr("host.onlyYamlAndYmlFilesCanBeEdited"));
             await read(root, itemRelative, false);
           } catch (error) {
             if (!(error instanceof NotEditable)) throw error;
@@ -750,12 +752,12 @@ export interface GuardedDocumentDeletion {
 const notTrashed = (): DeletionResult => ({
   status: "not-trashed",
   message:
-    "Файл не перемещён в Корзину. Он мог измениться извне; обновите список и откройте документ заново.",
+    tr("host.theFileWasNotMovedToTrashItMayHave"),
 });
 const uncertainTrash = (): DeletionResult => ({
   status: "uncertain",
   message:
-    "Не удалось подтвердить перемещение в Корзину. Исходный файл отсутствует, изменён или недоступен для проверки. Проверьте Корзину и каталог; текст редактора сохранён.",
+    tr("host.theMoveToTrashCouldNotBeConfirmedTheSource"),
 });
 
 /** Check the exact spelling and Unicode/case aliases of every component under the trusted root. */
@@ -795,7 +797,7 @@ async function assertSourceSpelling(
           projectWorkflowAliasKey(name) === projectWorkflowAliasKey(newSibling),
       )
     )
-      throw Error("Файл или папка с таким именем уже существует.");
+      throw Error(tr("host.aFileOrFolderWithThisNameAlreadyExists"));
     cursor = path.join(cursor, part);
   }
 }
@@ -819,11 +821,11 @@ export async function renameProjectDocument(
     destination = path.join(root, next);
   const conflict = () =>
     Error(
-      "Файл изменился после открытия. Обновите его с диска перед переименованием.",
+      tr("host.theFileChangedAfterOpeningReloadItFromDiskBefore"),
     );
   const uncertain = () =>
     Error(
-      "Не удалось подтвердить результат переименования. Проверьте оба имени в папке. Автоматического повтора не будет.",
+      tr("host.couldNotVerifyTheRenameCheckBothNamesInThe"),
     );
   if (!/^[0-9a-f]{64}$/.test(expectedVersion)) throw conflict();
 
@@ -855,7 +857,7 @@ export async function renameProjectDocument(
       await link(file, destination);
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "EEXIST")
-        throw Error("Файл или папка с таким именем уже существует.");
+        throw Error(tr("host.aFileOrFolderWithThisNameAlreadyExists"));
       throw error;
     }
     // ctime/nlink necessarily change after linking, not contents or mtime.
@@ -926,7 +928,7 @@ export async function prepareSourceDeletion(
   expectedVersion?: string,
 ): Promise<GuardedDocumentDeletion> {
   if (target.kind === "config" || target.kind === "dockerfile")
-    throw new Error("Конфигурацию удалять нельзя");
+    throw new Error(tr("host.configurationCannotBeDeleted"));
   const relative = relativePath(target);
   const queued = await directories(
     root,
@@ -1044,7 +1046,7 @@ export async function readSourceFile(
   root: string,
   relative: string,
 ): Promise<ProjectDocument> {
-  if (!isOverviewPath(relative)) throw Error("Недопустимый путь файла");
+  if (!isOverviewPath(relative)) throw Error(tr("host.invalidFilePath"));
   return (await read(root, relative, false, true)).document;
 }
 export function saveSourceFile(

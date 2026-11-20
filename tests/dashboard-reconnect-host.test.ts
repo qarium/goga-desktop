@@ -145,7 +145,14 @@ function serviceFor(f: Fixture) {
   return { service, runner, recovery };
 }
 async function setup(
-  options: { rejectFinalize?: boolean; beforeAck?: boolean } = {},
+  options: {
+    rejectFinalize?: boolean;
+    beforeAck?: boolean;
+    duringAdmission?: (
+      service: HostService,
+      metadata: RunRecoveryMetadata,
+    ) => Promise<void>;
+  } = {},
 ) {
   const root = await mkdtemp("/private/tmp/goga-dashboard-reconnect-host-");
   const f: Fixture = {
@@ -165,6 +172,21 @@ async function setup(
   await mkdir(f.repo);
   await writeFile(f.pinFile, f.pin);
   const { service, runner, recovery } = serviceFor(f);
+  if (options.duringAdmission) {
+    const launch = recovery.launch.bind(recovery);
+    recovery.launch = async (input) => {
+      const result = await launch(input);
+      const meta = result.metadata;
+      // Put reconciliation exactly after supervisor admission, before Desktop
+      // installs observers for the just-launched process.
+      await eventually(
+        () => recovery.reconcile(meta, meta.ownerHash, f.repo),
+        (state) => state.state === "alive",
+      );
+      await options.duringAdmission!(service, meta);
+      return result;
+    };
+  }
   await runner.command("git", ["init", "-b", "main"], f.repo);
   // This commit exists only inside the disposable fixture. All hooks, signing
   // and global/system Git configuration are disabled for this runner.
@@ -567,3 +589,32 @@ it("publishes changed recovered panel identity immediately without relying on st
   expect(await service.dashboardLoaded(run.id,run.url)).toBe(true);
   expect(changes).toBe(1);
 });
+
+
+it("never treats a locally starting pipeline as recovered before installing its observer", async () => {
+  let during: Run | undefined;
+  const { f, service, original, metadata } = await setup({
+    beforeAck: true,
+    duringAdmission: async (host, meta) => {
+      during = await host.reconcileRun(meta.runId);
+    },
+  });
+  expect(during).toMatchObject({ id: original.id, status: "starting" });
+  expect(during?.recovery).toBeUndefined();
+  expect(during?.recoveryMessage).toBeUndefined();
+  expect(await service.dashboardLoaded(original.id, original.url!)).toBe(true);
+  expect(service.runs()[0]).toMatchObject({
+    status: "running",
+    dashboardOpened: true,
+    dashboardReconnect: true,
+    dashboardRunId: f.pin,
+  });
+  const recovery = f.recoveries[0]!;
+  expect(
+    await recovery.readDashboard(metadata, metadata.ownerHash, f.repo),
+  ).toEqual({ origin: new URL(original.url!).origin, serverRunId: f.pin });
+  expect(await service.prepareDashboardReconnect(original.id)).toBe(
+    new URL(original.url!).origin,
+  );
+  await expectOnePayload(f);
+}, 30000);

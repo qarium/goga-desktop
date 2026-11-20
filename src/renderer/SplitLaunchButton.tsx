@@ -1,3 +1,5 @@
+import { t } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useId, useRef, useState } from "react";
 export function SplitLaunchButton({
   disabled,
@@ -14,6 +16,7 @@ export function SplitLaunchButton({
   context: object;
   onLaunch: (update: boolean) => void;
 }) {
+  useLocale();
   const [open, setOpen] = useState(false);
   const root = useRef<HTMLDivElement>(null);
   const arrow = useRef<HTMLButtonElement>(null);
@@ -49,10 +52,10 @@ export function SplitLaunchButton({
         onClick={() => onLaunch(false)}
       >
         {busy
-          ? "Подготавливаем запуск…"
+          ? t("general.preparingRun")
           : dirty
-            ? "Сохранить и запустить"
-            : "Запустить"}
+            ? t("general.saveAndLaunch")
+            : t("general.launch")}
       </button>
       <button
         type="button"
@@ -60,7 +63,7 @@ export function SplitLaunchButton({
         ref={arrow}
         disabled={disabled}
         aria-describedby={describedBy}
-        aria-label="Варианты запуска"
+        aria-label={t("general.launchOptions")}
         aria-haspopup="menu"
         aria-expanded={open}
         aria-controls={open ? menuId : undefined}
@@ -81,7 +84,7 @@ export function SplitLaunchButton({
         <div
           role="menu"
           id={menuId}
-          aria-label="Варианты запуска"
+          aria-label={t("general.launchOptions")}
           className="launch-menu"
           onKeyDown={(e) => {
             if (e.key === "Escape") {
@@ -106,8 +109,8 @@ export function SplitLaunchButton({
             }}
           >
             {dirty
-              ? "Сохранить и запустить с обновлением образа"
-              : "Запустить с обновлением образа"}
+              ? t("general.saveAndLaunchWithImageRebuild")
+              : t("general.launchWithImageRebuild")}
           </button>
         </div>
       )}

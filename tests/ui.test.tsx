@@ -296,7 +296,8 @@ describe("Desktop shell", () => {
   });
   it("does not read personal secrets until explicitly revealed", async () => {
     render(<Settings />);
-    await screen.findByText("Общие настройки");
+  fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
+    await screen.findByRole("heading", { name: "Настройки", level: 2 });
     expect(api.readSettings).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole("button", { name: "Открыть редактор" }));
     await waitFor(() =>

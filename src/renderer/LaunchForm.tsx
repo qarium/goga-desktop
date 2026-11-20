@@ -1,3 +1,5 @@
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { pipelineDisplayMetadata } from "../shared/pipeline-display";
 import { preparationErrorMessage } from "./preparation-error";
 import type { TopicContextRef } from "../shared/worktrees";
@@ -73,6 +75,7 @@ export function LaunchForm({
     edit: (text: string) => void,
   ) => void;
 }) {
+  useLocale();
   const scope = owner ? contextRef(owner) : project.id;
   const ownerKey = owner ? contextRequestKey(owner) : project.id;
   const storageKey = owner ? draftKey(owner, "pipeline") : project.id;
@@ -254,7 +257,7 @@ export function LaunchForm({
           nextIndex < 0
         )
           throw new Error(
-            "Выбранный топик отсутствует в обновлённом каталоге. Черновик сохранён.",
+            tr("launch.theSelectedTopicIsMissingFromTheRefreshed"),
           );
         // Publish the new catalog even when selection validation or preview fails.
         setCatalogSettled(catalogKey);
@@ -267,7 +270,7 @@ export function LaunchForm({
           setCards([]);
           setError(
             missingProfile
-              ? `Профиль «${missingProfile}» не найден. Выберите другой профиль перед запуском.`
+              ? tr("launch.profileMissingprofileWasNotFoundSelectADifferent", { missingProfile: missingProfile })
               : "",
           );
           initialSettingsRevision.current = settingsRevision;
@@ -342,7 +345,7 @@ export function LaunchForm({
       setPending(false);
       setPreviewSettled(compositionKey);
       setError(
-        `Профиль «${missingProfile}» не найден. Выберите другой профиль перед запуском.`,
+        tr("launch.profileMissingprofileWasNotFoundSelectADifferent", { missingProfile: missingProfile }),
       );
       return;
     }
@@ -408,7 +411,7 @@ export function LaunchForm({
     setReadyKey("");
     setCards([]);
     setSkips([]);
-    setResetNote("Выбор пропуска стадий сброшен для нового состава.");
+    setResetNote(tr("launch.stageSelectionsWereResetForTheNewSet"));
     fn();
     if (settingsPreviewFailure) setSettingsRefreshAttempt((n) => n + 1);
   };
@@ -514,7 +517,7 @@ export function LaunchForm({
       !preparedTopic.target.remote;
     if ((owner && !exactOwner) || (!owner && index < 0)) {
       setResetNote(
-        "Выбранный топик отсутствует в каталоге запуска. Черновики сохранены; обновите каталог.",
+        tr("launch.theSelectedTopicIsMissingFromTheLaunch"),
       );
       return;
     }
@@ -538,7 +541,7 @@ export function LaunchForm({
     if (preparedTopic.text === undefined) return;
     if (editor.dirty && editor.draft?.text !== preparedTopic.text) {
       setResetNote(
-        "Черновик задачи в форме запуска сохранён. Текст из карточки его не заменил.",
+        tr("launch.yourLaunchTaskDraftWasKeptTheTopic"),
       );
       return;
     }
@@ -702,7 +705,7 @@ export function LaunchForm({
       if (nextMode === "existing") {
         if (data && !topic)
           throw new Error(
-            "Выбранный топик отсутствует. Выберите топик повторно.",
+            tr("launch.theSelectedTopicIsMissingSelectItAgain"),
           );
         const selectedContext = topic ?? (initial?.branch ? initial : null);
         if (selectedContext) {
@@ -716,8 +719,8 @@ export function LaunchForm({
           if (!owner && matches.length !== 1)
             throw new Error(
               matches.length
-                ? "Выбранный топик неоднозначен в обновлённом каталоге."
-                : "Выбранный топик отсутствует в обновлённом каталоге.",
+                ? tr("launch.theSelectedTopicIsAmbiguousInTheRefreshed")
+                : tr("launch.theSelectedTopicIsMissingFromTheRefreshed2"),
             );
           index = matches[0] ?? 0;
         } else {
@@ -733,7 +736,7 @@ export function LaunchForm({
       }
       const nextPipeline = fresh.pipelines[0]?.id;
       if (!nextPipeline)
-        throw new Error("Goga не вернула доступных конвейеров.");
+        throw new Error(tr("launch.gogaDidNotReturnAnyAvailablePipelines"));
       const selected = owner
         ? { topic: owner.topic, branch: owner.branch }
         : fresh.topics[index];
@@ -859,7 +862,7 @@ export function LaunchForm({
           if (alive && branch !== data.currentBranch) {
             updateBranch(branch);
             setError(
-              "Текущая ветка изменилась. Проверьте параметры и подтвердите запуск повторно.",
+              tr("launch.theCurrentBranchChangedReviewTheSettingsAnd"),
             );
           }
         },
@@ -1080,7 +1083,7 @@ export function LaunchForm({
         if (mounted.current && draftIntentRef.current === intent.draftContext)
           updateBranch(branch);
         throw new Error(
-          "Текущая ветка изменилась. Проверьте параметры и подтвердите запуск повторно.",
+          tr("launch.theCurrentBranchChangedReviewTheSettingsAnd"),
         );
       }
       const run = await window.goga.launch(intent.request);
@@ -1188,13 +1191,13 @@ export function LaunchForm({
     >
       <div className="section-heading">
         <div>
-          <span className="eyebrow">GOGA / НОВЫЙ ЗАПУСК</span>
-          <h2>Запустить конвейер</h2>
+          <span className="eyebrow">{tr("launch.gogaNewRun")}</span>
+          <h2>{tr("launch.launchPipeline")}</h2>
         </div>
         <button
           onClick={onCancel}
           disabled={launching || resetting}
-          aria-label="Закрыть форму"
+          aria-label={tr("launch.closeForm")}
           className="quiet"
         >
           ✕
@@ -1204,30 +1207,30 @@ export function LaunchForm({
         pending={formLoading || launching}
         label={
           launching
-            ? "Подготавливаем запуск…"
-            : "Загружаем параметры конвейера…"
+            ? tr("launch.preparingRun")
+            : tr("launch.loadingPipelineSettings")
         }
         error={loadFailure}
         retryLabel={
-          settingsRefreshError ? "Повторить обновление каталога" : undefined
+          settingsRefreshError ? tr("launch.retryCatalogRefresh") : undefined
         }
         onRetry={retryPreparation}
       >
         {!data ? (
           <div className="loading">
             {error
-              ? "Не удалось получить каталог."
-              : "Читаем каталог Goga… Это может занять время: команда использует Docker."}
+              ? tr("launch.couldNotLoadTheCatalog")
+              : tr("launch.readingTheGogaCatalogThisMayTakeA")}
           </div>
         ) : (
           <fieldset disabled={launching || suspended || settingsRefreshing}>
             <SearchablePicker
-              label="Конвейер"
-              placeholder="Выберите конвейер"
-              emptyLabel="Выберите конвейер"
-              searchLabel="Поиск конвейера"
-              searchPlaceholder="Найти конвейер…"
-              listLabel="Конвейеры"
+              label={tr("launch.pipeline")}
+              placeholder={tr("launch.selectAPipeline")}
+              emptyLabel={tr("launch.selectAPipeline")}
+              searchLabel={tr("launch.searchPipelines")}
+              searchPlaceholder={tr("launch.findPipeline")}
+              listLabel={tr("launch.pipelines2")}
               value={pipeline}
               disabled={launching || suspended || settingsRefreshing}
               onChange={(value) =>
@@ -1238,29 +1241,24 @@ export function LaunchForm({
                   ? [
                       {
                         value: pipeline,
-                        label: `${pipeline} · не найден — выберите другой конвейер`,
+                        label: tr("launch.pipelineNotFoundSelectAnotherPipeline", { pipeline: pipeline }),
                       },
                     ]
                   : []),
                 ...(!pipeline
-                  ? [{ value: "", label: "Выберите конвейер" }]
+                  ? [{ value: "", label: tr("launch.selectAPipeline") }]
                   : []),
                 ...data.pipelines.map((p) => ({
                   value: p.id,
-                  label: p.id + (p.project ? " · проектный" : ""),
+                  label: p.id + (p.project ? tr("launch.project") : ""),
                 })),
               ]}
             />
             {pipeline && !data.pipelines.some((p) => p.id === pipeline) && (
-              <p className="error" role="alert">
-                Выбранный конвейер отсутствует в обновлённом каталоге. Выберите
-                другой конвейер; черновик сохранён.
-              </p>
+              <p className="error" role="alert">{tr("launch.theSelectedPipelineIsMissingFromTheRefreshed")}</p>
             )}
             {!data.pipelines.length && (
-              <p className="error" role="alert">
-                Goga не вернула доступных конвейеров.
-              </p>
+              <p className="error" role="alert">{tr("launch.gogaDidNotReturnAnyAvailablePipelines")}</p>
             )}
             <p className="hint pipeline-description">
               {data.pipelines.find((p) => p.id === pipeline)?.description}
@@ -1268,16 +1266,14 @@ export function LaunchForm({
             {!owner && (
               <div className="topic-block">
                 <fieldset className="topic-mode">
-                  <legend>Где запустить</legend>
+                  <legend>{tr("launch.runIn")}</legend>
                   <label>
                     <input
                       type="radio"
                       name={topicModeName}
                       checked={mode === "none"}
                       onChange={() => setMode("none")}
-                    />
-                    Без топика
-                  </label>
+                    />{tr("launch.noTopic")}</label>
                   <label>
                     <input
                       type="radio"
@@ -1287,9 +1283,7 @@ export function LaunchForm({
                       onChange={() => {
                         setMode("existing");
                       }}
-                    />
-                    Существующий
-                  </label>
+                    />{tr("launch.existing")}</label>
                   <label>
                     <input
                       type="radio"
@@ -1299,20 +1293,14 @@ export function LaunchForm({
                       onChange={() => {
                         setMode("new");
                       }}
-                    />
-                    Создать новый
-                  </label>
+                    />{tr("launch.createNew")}</label>
                 </fieldset>
                 {mode === "none" ? (
                   <p className="hint">
                     {repositoryMissing ? (
-                      "Исходная папка проекта. Git не инициализирован: топики и рабочие копии недоступны. Конвейер запустится без топика и записи задачи."
+                      tr("launch.originalProjectFolderGitIsNotInitializedSo")
                     ) : (
-                      <>
-                        Исходный проект · текущая ветка{" "}
-                        {data.currentBranch || "HEAD без ветки"}. Без создания
-                        топика и копии, переключения ветки и записи задачи.
-                      </>
+                      tr("launch.originalBranchSummary", { branch: data.currentBranch || tr("launch.detachedHead") })
                     )}
                   </p>
                 ) : mode === "existing" ? (
@@ -1339,19 +1327,16 @@ export function LaunchForm({
                             editor.edit,
                           )
                         }
-                      >
-                        Выбрано для запуска: {topic.topic} ↗
+                      >{tr("launch.selectedTopicForLaunch", { topic: topic.topic })} ↗
                       </button>
                     )}
                     {!topic?.topic && (
-                      <p className="hint">Ветка без собственного топика.</p>
+                      <p className="hint">{tr("launch.thisBranchHasNoTopicOfItsOwn")}</p>
                     )}
                   </>
                 ) : (
                   <div className="topic-new-row">
-                    <label>
-                      Имя нового топика
-                      <input
+                    <label>{tr("launch.newTopicName")}<input
                         value={name}
                         onChange={(e) => {
                           setName(e.target.value);
@@ -1380,31 +1365,29 @@ export function LaunchForm({
                               editor.edit,
                             )
                           }
-                        >
-                          Новый топик · посмотреть задачу ↗
-                        </button>
+                        >{tr("launch.newTopicViewTask")}</button>
                       )}
                     </label>
                     <SearchablePicker
-                      label="Исходная ветка"
-                      placeholder="Выберите исходную ветку"
-                      emptyLabel="Нет доступных веток"
-                      searchLabel="Поиск исходной ветки"
-                      searchPlaceholder="Найти ветку…"
-                      listLabel="Исходные ветки"
+                      label={tr("launch.sourceBranch")}
+                      placeholder={tr("launch.selectASourceBranch")}
+                      emptyLabel={tr("launch.noBranchesAvailable")}
+                      searchLabel={tr("launch.searchSourceBranches")}
+                      searchPlaceholder={tr("launch.findBranch")}
+                      listLabel={tr("launch.sourceBranches")}
                       value={baseRef}
                       disabled={launching || suspended || settingsRefreshing}
                       onChange={setBaseRef}
                       entries={[
                         {
                           value: "HEAD",
-                          label: `${data.currentBranch || "HEAD без ветки"} — текущая`,
+                          label: tr("launch.value1Current", { value1: data.currentBranch || tr("launch.detachedHead") }),
                         },
                         ...(data.baseRef
                           ? [
                               {
                                 value: data.baseRef,
-                                label: `${data.baseRef} — базовая`,
+                                label: tr("launch.baserefBase", { baseRef: data.baseRef }),
                               },
                             ]
                           : []),
@@ -1414,7 +1397,7 @@ export function LaunchForm({
                             value: b,
                             label:
                               b +
-                              (b === data.currentBranch ? " — текущая" : ""),
+                              (b === data.currentBranch ? tr("launch.current") : ""),
                           })),
                       ]}
                     />
@@ -1423,50 +1406,39 @@ export function LaunchForm({
                 <div
                   className="topic-context"
                   aria-live="polite"
-                  aria-label={`Текущая ветка checkout: ${data.currentBranch || "HEAD без ветки"}`}
-                  title={`Текущая ветка checkout: ${data.currentBranch || "HEAD без ветки"}`}
+                  aria-label={tr("launch.currentCheckedOutBranchValue1", { value1: data.currentBranch || tr("launch.detachedHead") })}
+                  title={tr("launch.currentCheckedOutBranchValue1", { value1: data.currentBranch || tr("launch.detachedHead") })}
                 >
                   {mode === "new" ? (
-                    <span>
-                      Создадим «{name.trim() || "…"}» от{" "}
-                      {baseRef === "HEAD"
-                        ? data.currentBranch || "HEAD без ветки"
-                        : baseRef}{" "}
-                      в отдельной рабочей копии и запустим конвейер в ней.
-                      Исходный проект останется на своей ветке.
-                    </span>
+                    <span>{tr("launch.newTopicWorkingCopySummary", {
+                      topic: name.trim() || "…",
+                      base: baseRef === "HEAD" ? data.currentBranch || tr("launch.detachedHead") : baseRef,
+                    })}</span>
                   ) : mode === "none" ? (
-                    <span>Запуск в исходной папке проекта</span>
+                    <span>{tr("launch.runInTheOriginalProjectFolder")}</span>
                   ) : topic ? (
                     switchRequired ? (
-                      <span>
-                        Переключение: {data.currentBranch || "HEAD без ветки"} →{" "}
-                        {topic.branch}
-                      </span>
+                      <span>{tr("launch.switchBranchSummary", {
+                        from: data.currentBranch || tr("launch.detachedHead"), to: topic.branch,
+                      })}</span>
                     ) : (
-                      <span>Переключение не требуется</span>
+                      <span>{tr("launch.noSwitchRequired")}</span>
                     )
                   ) : (
-                    <span>Выберите топик</span>
+                    <span>{tr("launch.selectATopic")}</span>
                   )}
                 </div>
-                <p className="hint">
-                  Один активный запуск на проект; другие проекты работают
-                  независимо.
-                </p>
+                <p className="hint">{tr("launch.oneActiveRunPerProjectOtherProjectsRun")}</p>
               </div>
             )}
             {owner && (
-              <p className="hint">
-                Топик: {owner.topic}. Черновик закреплён за этой рабочей копией;
-                другие топики работают независимо.
-              </p>
+              <p className="hint">{tr("launch.workingCopyDraftSummary", { topic: owner.topic })}</p>
             )}
             {blocked && (
               <p className="error" role="status">
                 {typeof blocked === "string"
                   ? blocked
-                  : "Запуск в этой рабочей копии временно недоступен."}
+                  : tr("launch.runsAreTemporarilyUnavailableInThisWorkingCopy")}
               </p>
             )}
             {mode !== "none" && (
@@ -1488,11 +1460,9 @@ export function LaunchForm({
                     aria-hidden="true"
                   >
                     <path d="m9 6 6 6-6 6" />
-                  </svg>
-                  Что нужно сделать?
-                </summary>
+                  </svg>{tr("launch.whatNeedsToBeDone")}</summary>
                 <textarea
-                  aria-label="Что нужно сделать?"
+                  aria-label={tr("launch.whatNeedsToBeDone")}
                   rows={5}
                   value={task}
                   disabled={!editor.ready}
@@ -1502,37 +1472,33 @@ export function LaunchForm({
                     setConfirmEmpty(false);
                   }}
                   placeholder={
-                    mode === "new" ? "Опишите задачу для нового топика" : ""
+                    mode === "new" ? tr("launch.describeTheTaskForTheNewTopic") : ""
                   }
                 />
                 {editor.draft?.status === "loading" && (
-                  <p className="hint" role="status">
-                    Читаем задачу выбранного топика…
-                  </p>
+                  <p className="hint" role="status">{tr("launch.readingTheSelectedTopicSTask")}</p>
                 )}
                 {mode === "existing" && editor.ready && (
                   <p className="hint">
                     {owner &&
                     editor.draft?.document?.catalogState ===
                       "missing-local-metadata"
-                      ? "В этой копии данные топика ещё не созданы. Можно запустить без задачи или добавить её здесь; она сохранится только при запуске."
+                      ? tr("launch.topicDataHasNotBeenCreatedInThis")
                       : !editor.draft?.document?.exists
-                        ? "Файл задачи отсутствует."
+                        ? tr("launch.taskFileDoesNotExist")
                         : editor.draft.document.text === ""
-                          ? "Файл задачи пуст."
-                          : "Загружено полное содержимое задачи."}{" "}
+                          ? tr("launch.taskFileIsEmpty")
+                          : tr("launch.fullTaskContentLoaded")}{" "}
                     {topic?.branch !== data.currentBranch &&
-                      "Для другой ветки показана сохранённая в Git версия, без её незакоммиченных изменений."}
+                      tr("launch.forAnotherBranchThisIsTheVersionSaved")}
                   </p>
                 )}
                 <p className="hint">
                   {mode === "new"
-                    ? "Задача будет записана в todo.md нового топика только при запуске."
+                    ? tr("launch.theTaskWillBeWrittenToTheNew")
                     : editor.dirty
-                      ? "Есть несохранённые изменения. Они запишутся только кнопкой «Сохранить и запустить»."
-                      : "Без изменений: запуск не переписывает todo.md."}{" "}
-                  Черновики сохраняются в памяти до закрытия приложения.
-                </p>
+                      ? tr("launch.thereAreUnsavedChangesTheyWillBeWritten")
+                      : tr("launch.noChangesLaunchingWillNotOverwriteTodoMd")}{" "}{tr("launch.draftsStayInMemoryUntilYouCloseThe")}</p>
                 {mode === "existing" && (
                   <button
                     type="button"
@@ -1550,15 +1516,12 @@ export function LaunchForm({
                         void editor.reload();
                       }
                     }}
-                  >
-                    Перечитать задачу
-                  </button>
+                  >{tr("launch.reloadTask")}</button>
                 )}
               </details>
             )}
             {editor.draft?.error && editor.draft.status !== "error" && (
-              <p className="error" role="alert">
-                Не удалось прочитать задачу: {editor.draft.error}
+              <p className="error" role="alert">{tr("launch.couldNotReadTheTask")}{editor.draft.error}
               </p>
             )}
             {emptyReplacement && (
@@ -1567,19 +1530,17 @@ export function LaunchForm({
                   type="checkbox"
                   checked={confirmEmpty}
                   onChange={(e) => setConfirmEmpty(e.target.checked)}
-                />
-                Подтверждаю сохранение пустой задачи
-              </label>
+                />{tr("launch.iConfirmSavingAnEmptyTask")}</label>
             )}
             <div className="form-divider" />
             <div className="form-grid">
               <SearchablePicker
-                label="Рабочий процесс"
-                placeholder="Выберите рабочий процесс"
-                emptyLabel="Нет рабочих процессов"
-                searchLabel="Поиск рабочего процесса"
-                searchPlaceholder="Найти рабочий процесс…"
-                listLabel="Рабочие процессы"
+                label={tr("launch.workflow")}
+                placeholder={tr("launch.selectAWorkflow")}
+                emptyLabel={tr("launch.noWorkflows")}
+                searchLabel={tr("launch.searchWorkflows")}
+                searchPlaceholder={tr("launch.findWorkflow")}
+                listLabel={tr("launch.workflows")}
                 value={workflow}
                 disabled={launching || suspended || settingsRefreshing}
                 onChange={(value) =>
@@ -1588,9 +1549,9 @@ export function LaunchForm({
                 entries={[
                   {
                     value: "auto",
-                    label: "Автоматически — по имени конвейера",
+                    label: tr("launch.automaticByPipelineName"),
                   },
-                  { value: "none", label: "Без рабочего процесса" },
+                  { value: "none", label: tr("launch.noWorkflow") },
                   ...data.workflows.map((w) => ({
                     value: `file:${w}`,
                     label: w,
@@ -1598,12 +1559,12 @@ export function LaunchForm({
                 ]}
               />
               <SearchablePicker
-                label="Профиль"
-                placeholder="Выберите профиль"
-                emptyLabel="Нет профилей"
-                searchLabel="Поиск профиля"
-                searchPlaceholder="Найти профиль…"
-                listLabel="Профили"
+                label={tr("launch.profile")}
+                placeholder={tr("launch.selectAProfile")}
+                emptyLabel={tr("launch.noProfiles")}
+                searchLabel={tr("launch.searchProfiles")}
+                searchPlaceholder={tr("launch.findProfile")}
+                listLabel={tr("launch.profiles")}
                 value={profile}
                 disabled={launching || suspended || settingsRefreshing}
                 onChange={(value) =>
@@ -1614,67 +1575,63 @@ export function LaunchForm({
                     ? [
                         {
                           value: "",
-                          label: `По умолчанию проекта — ${data.projectSettings.profile || "автоматически"}${
-                            data.projectSettings.profile &&
+                          label: tr("launch.projectDefaultValue1Value2", { value1: data.projectSettings.profile || tr("launch.automatic2"), value2: data.projectSettings.profile &&
                             !data.profiles.some(
                               (item) =>
                                 item.name === data.projectSettings!.profile,
                             )
-                              ? " · не найден"
-                              : ""
-                          }`,
+                              ? tr("launch.missingProfileSuffix")
+                              : "" }),
                         },
                         {
                           value: "__auto__",
-                          label: "Автоматически — окружение / рабочий процесс",
+                          label: tr("launch.automaticEnvironmentWorkflow"),
                         },
                       ]
                     : [
                         {
                           value: "",
-                          label: "Автоматически — окружение / рабочий процесс",
+                          label: tr("launch.automaticEnvironmentWorkflow"),
                         },
                       ]),
                   ...(profile &&
                   profile !== "__auto__" &&
                   !data.profiles.some((p) => p.name === profile)
-                    ? [{ value: profile, label: `${profile} · не найден` }]
+                    ? [{ value: profile, label: tr("launch.profileNotFound", { profile: profile }) }]
                     : []),
                   ...data.profiles.map((p) => ({
                     value: p.name,
-                    label: `${p.name} · ${p.source === "project" ? "проектный" : "личный"}`,
+                    label: `${p.name} · ${p.source === "project" ? tr("launch.project2") : tr("launch.personal")}`,
                   })),
                 ]}
               />
             </div>
-            <p className="applied">
-              Рабочий процесс:{" "}
+            <p className="applied">{tr("launch.workflow2")}{" "}
               <strong>
                 {pending
-                  ? "проверяем…"
-                  : (preview?.workflow ?? "без рабочего процесса")}
+                  ? tr("launch.checking")
+                  : (preview?.workflow ?? tr("launch.noWorkflow2"))}
               </strong>
-              <span>
-                Профиль:{" "}
+              <span>{tr("launch.profile2")}{" "}
                 <strong>
                   {pending
-                    ? "проверяем…"
-                    : (preview?.profile ?? "не активирован")}
+                    ? tr("launch.checking")
+                    : (preview?.profile ?? tr("launch.notActive"))}
                 </strong>
               </span>
             </p>
-            <section className="pipeline-stages" aria-label="Стадии запуска">
+            <section className="pipeline-stages" aria-label={tr("launch.runStages")}>
               <div className="section-heading compact">
-                <h3>Стадии запуска</h3>
+                <h3>{tr("launch.runStages")}</h3>
                 <span className="hint" aria-live="polite">
                   {pending
-                    ? "Получаем состав у Goga…"
-                    : `${preview?.stages.length ?? 0} выбрано`}
+                    ? tr("launch.gettingStagesFromGoga")
+                    : tr("launch.value1Selected", { value1: preview?.stages.length ?? 0 })}
                 </span>
               </div>
               <LoadingBoundary
                 pending={stageLoading}
-                label="Загружаем стадии конвейера…"
+                label={tr("launch.loadingPipelineStages")}
                 error={stageError}
                 onRetry={retryPreparation}
               >
@@ -1707,15 +1664,10 @@ export function LaunchForm({
                     </label>
                   ))}
                 </div>
-                <p className="hint">
-                  Снятая галочка пропускает стадию только в этом запуске.
-                  Определения и рабочий процесс не изменяются.
-                </p>
+                <p className="hint">{tr("launch.uncheckAStageToSkipItForThis")}</p>
                 {resetNote && <p className="hint">{resetNote}</p>}
                 {!pending && preview && !preview.stages.length && (
-                  <p role="alert" className="error">
-                    Нельзя запустить пустой набор стадий.
-                  </p>
+                  <p role="alert" className="error">{tr("launch.selectAtLeastOneStageToLaunch")}</p>
                 )}
               </LoadingBoundary>
             </section>
@@ -1725,13 +1677,8 @@ export function LaunchForm({
                 checked={clean}
                 aria-describedby="clean-warning"
                 onChange={(e) => setClean(e.target.checked)}
-              />
-              Начать с чистого состояния
-            </label>
-            <p id="clean-warning" className="hint">
-              Сохранённое состояние этого конвейера будет удалено перед
-              запуском. Очистка не исправляет ошибки самого конвейера.
-            </p>
+              />{tr("launch.startWithACleanState")}</label>
+            <p id="clean-warning" className="hint">{tr("launch.theSavedStateOfThisPipelineWillBe")}</p>
           </fieldset>
         )}
         {data && correctionError && !loadFailure && !stageError && (
@@ -1742,8 +1689,8 @@ export function LaunchForm({
         {data && correctionError && !pending && !stageError && (
           <button type="button" onClick={retryPreparation}>
             {settingsRefreshError
-              ? "Повторить обновление каталога"
-              : "Повторить загрузку"}
+              ? tr("launch.retryCatalogRefresh")
+              : tr("launch.retryLoading")}
           </button>
         )}
       </LoadingBoundary>
@@ -1807,9 +1754,7 @@ export function LaunchForm({
             resetting ||
             editor.draft?.status === "loading"
           }
-        >
-          Сбросить
-        </button>
+        >{tr("launch.reset")}</button>
         <SplitLaunchButton
           disabled={!canLaunch}
           busy={launching}

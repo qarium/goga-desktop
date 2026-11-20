@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 // The 18 approved V1 navigation assertions, adapted only for the product API/ShadowRoot.
+import { getLocale, setLocale } from "../src/shared/i18n";
 import { test, beforeAll, vi } from "vitest";
 import assert from "node:assert/strict";
 import { Compartment, EditorState, StateEffect } from "@codemirror/state";
@@ -114,6 +115,12 @@ test("candidate popup does not move cursor; explicit selection jumps", () => {
     assert.match(list.textContent ?? "", /Кандидаты в этом файле/);
     assert.match(list.textContent ?? "", /def alpha/);
     assert.match(list.textContent ?? "", /стр. 4/);
+    const previous = getLocale();
+    try {
+      setLocale("en");
+      assert.equal(list.getAttribute("aria-label"), "Candidates in this file");
+      assert.match(list.textContent ?? "", /def alpha/);
+    } finally { setLocale(previous); }
     list.querySelectorAll<HTMLButtonElement>("[data-candidate]")[1].click();
     assert.equal(x.view.state.selection.main.from, beta.from);
     assert.equal(x.root.querySelector<HTMLElement>('[role="dialog"]'), null);

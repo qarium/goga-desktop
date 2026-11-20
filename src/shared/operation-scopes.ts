@@ -11,6 +11,8 @@ export type OperationScope =
   | "home"
   | "desktop-project";
 export const IPC_SCOPES: Readonly<Record<string, OperationScope>> = {
+  "get-interface-language": "home",
+  "set-interface-language": "home",
   "demo-state": "catalog",
   "demo-execute": "context-lifecycle",
   "demo-next-frame": "owner-ticket",

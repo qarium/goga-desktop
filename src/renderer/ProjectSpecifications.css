@@ -159,11 +159,7 @@
   align-items: center;
   gap: 10px;
   justify-content: space-between;
-  background: #302029;
-  border: 1px solid #77504d;
   padding: 10px 12px;
-  border-radius: 6px;
-  color: #f4b7b4;
   font-size: 12px;
   line-height: 1.6;
   margin-bottom: 16px;
@@ -229,6 +225,7 @@
   line-height: 1.6;
   margin-bottom: 14px;
 }
+.specifications-view .spec-refresh-error { color: var(--feedback-warning-fg); }
 .specifications-view .spec-tree {
   border-right: 1px solid var(--line);
 }

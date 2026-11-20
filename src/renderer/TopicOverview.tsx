@@ -1,3 +1,5 @@
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import type { GitUpdateHandoffCandidate } from "../shared/git-update-handoff";
 import { SearchablePicker } from "./SearchablePicker";
 import { HistoryArtifacts } from "./ProjectHistory";
@@ -65,6 +67,7 @@ function TopicOverviewView({
   onBusy?: (v: boolean) => void;
   onHandoff?: (candidate: GitUpdateHandoffCandidate) => void;
 }) {
+  useLocale();
   const target = {
     topic: source.topic,
     branch: source.branch,
@@ -83,9 +86,9 @@ function TopicOverviewView({
   type Tab = "task" | "artifacts" | "placements";
   const [tab, setTab] = useState<Tab>("task");
   const tabs: [Tab, string][] = [
-    ["task", "Задача"],
-    ...(showArtifacts ? [["artifacts", "Артефакты"] as [Tab, string]] : []),
-    ["placements", "Размещение по веткам"],
+    ["task", tr("topics.task")],
+    ...(showArtifacts ? [["artifacts", tr("topics.artifacts")] as [Tab, string]] : []),
+    ["placements", tr("topics.branchLocations")],
   ];
   const [task, setTask] = useState<TopicDetails | null>(null),
     [taskError, setTaskError] = useState("");
@@ -132,9 +135,9 @@ function TopicOverviewView({
       owner.branch !== target.branch ||
       target.remote);
   const ownershipError = ownerMismatch
-    ? "Контекст относится к другому топику."
+    ? tr("topics.theContextBelongsToAnotherTopic")
     : ownerReadState === "error"
-      ? ownerReadError || "Не удалось проверить контекст топика."
+      ? ownerReadError || tr("topics.couldNotVerifyTheTopicContext")
       : "";
   const waitingOwner = !owner && ownerReadState === "loading";
   const changed = () => {
@@ -169,7 +172,7 @@ function TopicOverviewView({
           value.target.branch !== target.branch ||
           value.target.remote !== target.remote
         )
-          throw Error("Задача относится к другому топику.");
+          throw Error(tr("topics.theTaskBelongsToAnotherTopic"));
         setTask(value);
       })
       .catch((e) => {
@@ -189,7 +192,7 @@ function TopicOverviewView({
     setBoardError("");
     const flight = read("readTopicBoard", scope, year).then((value) => {
       if (value.projectId !== project.id || value.year !== year)
-        throw Error("Размещения относятся к другому проекту или году.");
+        throw Error(tr("topics.locationsBelongToAnotherProjectOrYear"));
       if (mounted.current) setBoard(value);
       return value;
     });
@@ -217,7 +220,7 @@ function TopicOverviewView({
     const flight = read("readProjectBranches", project.id)
       .then((value) => {
         if (value.projectId !== project.id)
-          throw Error("Список веток относится к другому проекту.");
+          throw Error(tr("topics.theBranchListBelongsToAnotherProject"));
         if (mounted.current) {
           setBranches(value.branches);
           setLocalBranches(value.localBranches);
@@ -236,9 +239,9 @@ function TopicOverviewView({
   const unavailable =
     ownershipError ||
     (waitingOwner
-      ? "Проверяем контекст топика…"
+      ? tr("topics.checkingTopicContext")
       : target.remote
-        ? "Для изменения удалённого топика сначала переключитесь на него."
+        ? tr("topics.switchToTheRemoteTopicBeforeEditingIt")
         : "");
   const displayRow = (value: TopicBoardSnapshot | null) =>
     value?.projectId === project.id && value.year === year
@@ -261,7 +264,7 @@ function TopicOverviewView({
       .then((value) => {
         if (!alive) return;
         if (value.projectId !== project.id || value.year !== year)
-          throw Error("Состояние относится к другому проекту или году.");
+          throw Error(tr("topics.thisStateBelongsToAnotherProjectOrYear"));
         setDisplayBoard(value);
       })
       .catch((e) => {
@@ -333,7 +336,7 @@ function TopicOverviewView({
         onClose={onClose}
       >
         <div className="topic-overview-meta">
-          <span>Топик / {year}</span>
+          <span>{tr("topics.topic")}{year}</span>
           <div className="topic-statuses">
             {statuses.map((status) => (
               <span className="topic-status" key={status}>
@@ -342,7 +345,7 @@ function TopicOverviewView({
             ))}
             <span
               title={displayError || summary?.statusError}
-              aria-label="Относительно base"
+              aria-label={tr("topics.relativeToBase2")}
             >
               <TopicDivergence divergence={summary?.divergence ?? null} />
             </span>
@@ -351,7 +354,7 @@ function TopicOverviewView({
         <div
           className="topic-overview-tabs"
           role="tablist"
-          aria-label="Информация о топике"
+          aria-label={tr("topics.topicInformation")}
         >
           {tabs.map(([value, label]) => (
             <button
@@ -404,7 +407,7 @@ function TopicOverviewView({
           ) : tab === "task" ? (
             <LoadingBoundary
               pending={taskLoading || waitingOwner}
-              label="Загружаем задачу…"
+              label={tr("topics.loadingTask")}
               error={ownershipError || taskError}
               onRetry={() => {
                 setAttempt((n) => n + 1);
@@ -414,21 +417,21 @@ function TopicOverviewView({
               {task?.exists && task.text.trim() ? (
                 <TopicTaskText text={task.text} />
               ) : (
-                <p className="topic-empty">Задача не задана</p>
+                <p className="topic-empty">{tr("topics.noTaskSpecified")}</p>
               )}
             </LoadingBoundary>
           ) : tab === "placements" ? (
             <LoadingBoundary
               pending={boardLoading}
-              label="Загружаем размещение…"
+              label={tr("topics.loadingLocations")}
               error={ownershipError || boardError}
               onRetry={() => void loadBoard(true).catch(() => {})}
             >
               <table className="topic-placement-table">
                 <thead>
                   <tr>
-                    <th>Ветка</th>
-                    <th>Статусы</th>
+                    <th>{tr("topics.branch")}</th>
+                    <th>{tr("topics.statuses")}</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -436,7 +439,7 @@ function TopicOverviewView({
                     <tr key={JSON.stringify([row.branch, row.remote])}>
                       <td>
                         <code>{row.branch}</code>
-                        {row.remote && <small>Удалённая ветка</small>}
+                        {row.remote && <small>{tr("topics.remoteBranch")}</small>}
                       </td>
                       <td>
                         <div className="topic-statuses">
@@ -454,7 +457,7 @@ function TopicOverviewView({
                 </tbody>
               </table>
               {!boardLoading && !placements.length && (
-                <p className="topic-empty">Размещения не найдены</p>
+                <p className="topic-empty">{tr("topics.noLocationsFound")}</p>
               )}
             </LoadingBoundary>
           ) : null}
@@ -463,7 +466,7 @@ function TopicOverviewView({
               <LoadingBoundary
                 pending={waitingOwner}
                 error={ownershipError}
-                label="Загружаем артефакты…"
+                label={tr("topics.loadingArtifacts")}
                 onRetry={onChanged}
               >
                 <HistoryArtifacts
@@ -499,12 +502,12 @@ function TopicOverviewView({
               <SearchablePicker
                 className="topic-branch-picker"
                 hideLabel
-                label="Из ветки"
-                placeholder="Из ветки"
-                emptyLabel="Из ветки"
-                searchLabel="Найти ветку для обновления"
-                searchPlaceholder="Название ветки"
-                listLabel="Ветки для обновления"
+                label={tr("topics.fromBranch")}
+                placeholder={tr("topics.fromBranch")}
+                emptyLabel={tr("topics.fromBranch")}
+                searchLabel={tr("topics.findSourceBranchForUpdate")}
+                searchPlaceholder={tr("topics.branchName")}
+                listLabel={tr("topics.branchesForUpdate")}
                 entries={(branches ?? []).filter(
                   (branch) => branch !== target.branch,
                 )}
@@ -518,20 +521,18 @@ function TopicOverviewView({
                 type="button"
                 disabled={!base || busy || !!unavailable || !!operation.plan}
                 onClick={() => void update()}
-              >
-                Обновить
-              </button>
+              >{tr("topics.update")}</button>
             </div>
             <div className="topic-update-controls">
               <SearchablePicker
                 className="topic-branch-picker"
                 hideLabel
-                label="В ветку"
-                placeholder="В ветку"
-                emptyLabel="В ветку"
-                searchLabel="Найти ветку для публикации"
-                searchPlaceholder="Название ветки"
-                listLabel="Ветки для публикации"
+                label={tr("topics.toBranch")}
+                placeholder={tr("topics.toBranch")}
+                emptyLabel={tr("topics.toBranch")}
+                searchLabel={tr("topics.findDestinationBranchForPublishing")}
+                searchPlaceholder={tr("topics.branchName")}
+                listLabel={tr("topics.branchesForPublishing")}
                 entries={localBranches.filter(
                   (branch) => branch !== target.branch,
                 )}
@@ -552,7 +553,7 @@ function TopicOverviewView({
                 }
                 onClick={() => void publish()}
               >
-                {publicationBusy ? "Публикуем…" : "Опубликовать"}
+                {publicationBusy ? tr("topics.publishing2") : tr("topics.publish")}
               </button>
             </div>
           </div>
@@ -561,9 +562,7 @@ function TopicOverviewView({
             className="danger"
             disabled={busy || !!unavailable || !!operation.plan}
             onClick={() => setDeleting(true)}
-          >
-            Удалить топик…
-          </button>
+          >{tr("topics.deleteTopic")}</button>
           {unavailable && (
             <p className="hint topic-overview-reason">{unavailable}</p>
           )}
@@ -595,6 +594,7 @@ function TopicOverviewView({
 }
 
 export function TopicOverview(props: Parameters<typeof TopicOverviewView>[0]) {
+  useLocale();
   return (
     <TopicOverviewView
       key={JSON.stringify([

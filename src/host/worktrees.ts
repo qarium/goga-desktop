@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { lstat, realpath } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -22,11 +23,11 @@ interface GitWorktree {
 }
 const unavailable = () =>
   new Error(
-    "Рабочая копия недоступна или конфликтует с текущей веткой. Обновите контекст.",
+    tr("host.theWorkingCopyIsUnavailableOrConflictsWithTheCurrent"),
   );
 const changed = () =>
   new Error(
-    "Контекст изменён или его ревизия устарела. Выберите топик заново.",
+    tr("host.theContextChangedOrItsRevisionIsStaleSelectThe"),
   );
 const sameIdentity = (a: TopicContextIdentity, b: TopicContextIdentity) =>
   a.projectId === b.projectId &&
@@ -87,7 +88,7 @@ export class WorktreeManager {
       await this.git(["rev-parse", "--show-toplevel"], canonical)
     ).trim();
     if ((await realpath(top)) !== canonical)
-      throw new Error("Выберите корневую папку Git-проекта.");
+      throw new Error(tr("host.selectTheRootFolderOfTheGitProject"));
     const common = (
       await this.git(
         ["rev-parse", "--path-format=absolute", "--git-common-dir"],
@@ -106,7 +107,7 @@ export class WorktreeManager {
     );
     if (gitDir !== gitCommonDir)
       throw new Error(
-        "Проект указывает на внешнюю рабочую копию. Зарегистрируйте основную папку репозитория.",
+        tr("host.theProjectPointsToAnExternalWorkingCopyRegisterThe"),
       );
     return { projectPath: canonical, gitCommonDir };
   }
@@ -266,7 +267,7 @@ export class WorktreeManager {
           previous.ownership !== "managed"
         )
           throw new Error(
-            "Подготовка рабочей копии неоднозначна или конфликтует. Требуется проверка, автоматический повтор запрещён.",
+            tr("host.workingCopyPreparationIsAmbiguousOrInConflictVerifyIt"),
           );
       }
       const branchCopies = (
@@ -282,7 +283,7 @@ export class WorktreeManager {
           occupied.prunable
         )
           throw new Error(
-            "Ветка занята другой, внешней рабочей копией. Desktop не присваивает её себе.",
+            tr("host.anExternalWorkingCopyIsUsingTheBranchDesktopWill"),
           );
         const primary: WorktreeRecord = {
           ...identity,
@@ -307,7 +308,7 @@ export class WorktreeManager {
       }
       if (info)
         throw new Error(
-          "Каталог рабочей копии уже занят и не принадлежит Desktop.",
+          tr("host.theWorkingCopyDirectoryIsOccupiedAndDoesNotBelong"),
         );
       const pending: WorktreeRecord = {
         ...identity,
@@ -332,7 +333,7 @@ export class WorktreeManager {
         const reconciled = await this.refresh(pending);
         if (reconciled.state === "ready") return reconciled;
         throw new Error(
-          "Результат подготовки рабочей копии неоднозначен. Выполнена проверка; автоматический повтор запрещён.",
+          tr("host.workingCopyPreparationHasAnUncertainOutcomeVerificationRanThere"),
         );
       }
       const ready = await this.refresh(pending);

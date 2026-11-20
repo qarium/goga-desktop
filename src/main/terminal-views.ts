@@ -1,3 +1,4 @@
+import { getLocale, t } from "../shared/i18n";
 import { TerminalAdmissionClosedError } from "../host/terminal-errors";
 import {
   WebContentsView,
@@ -57,12 +58,16 @@ export class TerminalViews {
   private linkPending = false;
   private waiters = new Set<{ resolve(): void; reject(error: Error): void }>();
   private readyTimer?: ReturnType<typeof setTimeout>;
+  setLanguage(language: string): void {
+    if (this.ready && !this.isLost)
+      this.command({ kind: "language", language });
+  }
   get isLost(): boolean {
     return this.lost || this.disposed;
   }
   whenReady(): Promise<void> {
     if (this.isLost)
-      return Promise.reject(Error("Экран терминала недоступен."));
+      return Promise.reject(Error(t("native.terminalScreenUnavailable")));
     if (this.ready) return Promise.resolve();
     if (!this.readyTimer) this.readyTimer = setTimeout(this.lose, 10_000);
     return new Promise((resolve, reject) =>
@@ -73,7 +78,7 @@ export class TerminalViews {
     clearTimeout(this.readyTimer);
     this.readyTimer = undefined;
     for (const waiter of this.waiters) {
-      if (this.isLost) waiter.reject(Error("Экран терминала недоступен."));
+      if (this.isLost) waiter.reject(Error(t("native.terminalScreenUnavailable")));
       else waiter.resolve();
     }
     this.waiters.clear();
@@ -95,7 +100,7 @@ export class TerminalViews {
       new URL(options.url).protocol !== "file:" ||
       !isAbsolute(options.preload)
     )
-      throw Error("Недопустимый источник экрана терминала.");
+      throw Error(t("native.terminalScreenInvalid"));
     this.view = new WebContentsView({
       webPreferences: {
         sandbox: true,
@@ -140,6 +145,7 @@ export class TerminalViews {
     win.on("closed", this.dispose);
     this.listen("ready", () => {
       this.ready = true;
+      this.setLanguage(getLocale());
       this.settleReady();
     });
     this.listen("input", (_event, raw) => {
@@ -197,9 +203,9 @@ export class TerminalViews {
     try {
       const { response } = await dialog.showMessageBox(this.win, {
         type: "question",
-        message: "Открыть ссылку в браузере?",
+        message: t("native.openLinkQuestion"),
         detail: parsed.data.url,
-        buttons: ["Отмена", "Открыть"],
+        buttons: [t("native.cancel"), t("native.open")],
         defaultId: 0,
         cancelId: 0,
         noLink: true,
@@ -221,8 +227,8 @@ export class TerminalViews {
         if (!this.win.isDestroyed())
           await dialog.showMessageBox(this.win, {
             type: "error",
-            message: "Не удалось открыть ссылку в браузере.",
-            buttons: ["Закрыть"],
+            message: t("native.openLinkFailed"),
+            buttons: [t("native.close")],
             noLink: true,
           });
       }
@@ -280,7 +286,7 @@ export class TerminalViews {
   private entry(ref: TerminalSessionRef): Entry {
     const entry = this.entries.get(ref.sessionId);
     if (!entry || entry.ref.generation !== ref.generation)
-      throw Error("Сессия терминала отсутствует или устарела.");
+      throw Error(t("native.terminalSessionExpired"));
     return entry;
   }
   attach(
@@ -294,9 +300,9 @@ export class TerminalViews {
       this.disposed ||
       this.retired.has(this.key(ref))
     )
-      throw Error("Экран терминала недоступен; требуется новая сессия.");
+      throw Error(t("native.terminalScreenRetry"));
     if (this.entries.has(ref.sessionId))
-      throw Error("Экран сессии уже существует.");
+      throw Error(t("native.terminalScreenExists"));
     const flow = new TerminalFlow(ref, {
       send: (frame) =>
         this.view.webContents.send("terminal-screen:frame", frame),
@@ -343,7 +349,7 @@ export class TerminalViews {
     try {
       entry = this.entry(ref);
       bounds = boundsSchema.parse(rawBounds);
-      if (this.lost || this.disposed) throw Error("Экран терминала утрачен.");
+      if (this.lost || this.disposed) throw Error(t("native.terminalScreenLost"));
     } catch (error) {
       this.hide();
       throw error;

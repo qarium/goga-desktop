@@ -494,7 +494,8 @@ it("uses one labelled refresh icon with a fixed-size button during update", asyn
   render(view());
   await open();
   const button = screen.getByRole("button", { name: "Обновить из origin" });
-  expect(button.getAttribute("title")).toBe("Обновить из origin");
+  fireEvent.mouseEnter(button);
+  expect(button.ownerDocument.getElementById(button.getAttribute("aria-describedby")!)?.textContent).toBe("Обновить из origin");
   expect(button.textContent).toBe("");
   const icon = button.querySelector("svg");
   expect(icon?.getAttribute("aria-hidden")).toBe("true");

@@ -1,3 +1,5 @@
+import { t as msg } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import { useSyncExternalStore } from "react";
 import { TopicModal } from "../TopicsCommon";
 import type { DocumentTarget, HomeSessions } from "./session-summary";
@@ -11,28 +13,25 @@ export function SessionBuffer({
   target: DocumentTarget;
   onClose: () => void;
 }) {
+  useLocale();
   const text = useSyncExternalStore(store.subscribeBuffer, () =>
     store.readBuffer(target),
   );
   return (
     <TopicModal
-      title="Несохранённый файл"
-      closeLabel="Закрыть просмотр"
+      title={msg("shell.unsavedFile2")}
+      closeLabel={msg("shell.closeView")}
       onClose={onClose}
     >
       <p className="context-path">{target.relativePath}</p>
       {text === null ? (
-        <p role="status">Этот буфер уже закрыт или изменения сохранены.</p>
+        <p role="status">{msg("shell.thisBufferWasClosedOrItsChangesWereSaved")}</p>
       ) : (
         <>
-          <p className="hint">
-            Прежняя рабочая область недоступна или изменилась. Это текст из
-            памяти редактора; его можно выделить и скопировать. Запись на диск
-            не выполняется.
-          </p>
+          <p className="hint">{msg("shell.thePreviousWorkspaceIsUnavailableOrHasChangedYouCan")}</p>
           <textarea
             style={{ width: "100%", minHeight: "12rem" }}
-            aria-label="Несохранённый текст"
+            aria-label={msg("shell.unsavedText")}
             value={text}
             readOnly
             spellCheck={false}

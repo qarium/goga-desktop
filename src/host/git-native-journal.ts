@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import {
   assertCommitFreshProof,
   type CommitFreshProof,
@@ -296,7 +297,7 @@ interface Options {
 }
 const blocked = () =>
   Error(
-    "Журнал Git требует проверки: операция не завершена или её владелец изменился. Автоматическое повторение запрещено.",
+    gitMessage("gitHost.theGitJournalNeedsReviewTheOperationIsIncomplete"),
   );
 /** Only host preflight code may issue this after every started probe has settled.
  * It never stands for a failed/unknown worktree-mutating Git command. */

@@ -1,3 +1,6 @@
+/** Stable file-content CAS discriminator, preserved by Electron Error serialization. */
+export const DOCUMENT_SAVE_CONFLICT_PREFIX = "[desktop:document-save-conflict] ";
+import { t as tr } from "./i18n";
 export type ProjectDocumentTarget =
   | { kind: "config" }
   | { kind: "dockerfile"; path: string }
@@ -113,11 +116,11 @@ export function renamedProjectDocumentTarget(
   newName: string,
 ): Exclude<ProjectDocumentTarget, { kind: "config" | "dockerfile" }> {
   if (target.kind === "config" || target.kind === "dockerfile")
-    throw Error("Этот файл имеет заданное имя и не может быть переименован.");
+    throw Error(tr("host.thisFileHasAFixedNameAndCannotBeRenamed"));
   const sameName = (before: string) => {
-    if (before === newName) throw Error("Введите другое имя.");
+    if (before === newName) throw Error(tr("host.enterADifferentName"));
     if (projectWorkflowAliasKey(before) === projectWorkflowAliasKey(newName))
-      throw Error("Укажите имя, отличающееся не только регистром или формой Unicode.");
+      throw Error(tr("host.enterANameThatDiffersByMoreThanCaseOr"));
   };
   if (target.kind === "tool") {
     // Node replaces lone UTF-16 surrogates with U+FFFD when encoding paths.
@@ -126,7 +129,7 @@ export function renamedProjectDocumentTarget(
       encodeURIComponent(target.path);
       encodeURIComponent(newName);
     } catch {
-      throw Error("Имя файла содержит некорректный символ.");
+      throw Error(tr("host.theFileNameContainsAnInvalidCharacter"));
     }
     if (
       !isProjectToolName(target.tool) || !isProjectToolPath(target.path) ||
@@ -134,17 +137,17 @@ export function renamedProjectDocumentTarget(
       !/\.ya?ml$/.test(target.path) ||
       !isProjectToolPath(newName) || newName.includes("/") ||
       !/\.ya?ml$/.test(newName) || new TextEncoder().encode(newName).length > 255
-    ) throw Error("Введите имя файла .yaml или .yml без пути к папке.");
+    ) throw Error(tr("host.enterAYamlOrYmlFileNameWithoutAFolder"));
     const parts = target.path.split("/");
     sameName(parts.pop()!);
     parts.push(newName);
     const path = parts.join("/");
-    if (!isProjectToolPath(path)) throw Error("Недопустимый путь документа инструмента.");
+    if (!isProjectToolPath(path)) throw Error(tr("host.invalidToolDocumentPath2"));
     return { kind: "tool", tool: target.tool, path };
   }
   const valid = target.kind === "profile" ? isProjectProfileName : isProjectWorkflowName;
   if (!valid(target.name) || !valid(newName))
-    throw Error("Недопустимое имя документа.");
+    throw Error(tr("host.invalidDocumentName"));
   sameName(target.name);
   return { kind: target.kind, name: newName };
 }

@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import { randomBytes } from "node:crypto";
 import * as fs from "node:fs/promises";
 import os from "node:os";
@@ -173,10 +174,10 @@ export abstract class GitConflictActions {
         if (!row)
           return { kind: "absent", mode: null, oid: null, text: undefined };
         if (!["100644", "100755"].includes(row.mode))
-          throw Error("Разрешение symlink/gitlink пока не поддерживается.");
+          throw Error(gitMessage("gitHost.resolvingSymlinksAndGitlinksIsNotSupportedYet"));
         const size = (await this.git(c, ["cat-file", "-s", row.oid])).stdout;
         if (!/^(0|[1-9]\d*)\n$/.test(size) || Number(size) > LIMIT)
-          throw Error("Версия файла превышает предел 1 МиБ.");
+          throw Error(gitMessage("gitHost.thisFileVersionExceedsThe1MibLimit"));
         const text = (await this.git(c, ["cat-file", "blob", row.oid])).stdout,
           bytes = Buffer.from(text);
         if (
@@ -184,7 +185,7 @@ export abstract class GitConflictActions {
           bytes.length !== Number(size) ||
           identity(bytes, row.oid.length) !== row.oid
         )
-          throw Error("Разрешение binary/non-UTF8 пока не поддерживается.");
+          throw Error(gitMessage("gitHost.resolvingBinaryOrNonUtf8FilesIsNot"));
         return { ...row, kind: "text", text };
       };
       if (state.disk.work) {
@@ -193,10 +194,10 @@ export abstract class GitConflictActions {
             state.disk.work.bytes,
           );
         } catch {
-          throw Error("Разрешение binary/non-UTF8 пока не поддерживается.");
+          throw Error(gitMessage("gitHost.resolvingBinaryOrNonUtf8FilesIsNot"));
         }
         if (state.disk.work.bytes.includes(0))
-          throw Error("Разрешение binary пока не поддерживается.");
+          throw Error(gitMessage("gitHost.binaryConflictResolutionIsNotSupportedYet"));
       }
       if (stateFingerprint(state) !== req.fingerprint) throw stale();
       // A rejection must not release the owner/read scope while sibling Git
@@ -225,7 +226,7 @@ export abstract class GitConflictActions {
             : null;
       if (source?.kind === "absent")
         throw Error(
-          "Выбранная сторона отсутствует. Подтвердите удаление явно.",
+          gitMessage("gitHost.theSelectedSideDoesNotExistExplicitlyConfirmDeletion"),
         );
       const text =
         req.resolution.kind === "delete"
@@ -290,7 +291,7 @@ export abstract class GitConflictActions {
             (normalized.canonical?.length ?? 0)) +
         4096;
       if (retainedBytes > MAX_TICKET_BYTES)
-        throw Error("Слишком большой предпросмотр конфликта Git.");
+        throw Error(gitMessage("gitHost.theGitConflictPreviewIsTooLarge"));
       const used = () =>
         [...this.tickets.values()].reduce((sum, t) => sum + t.retainedBytes, 0);
       while (
@@ -314,7 +315,7 @@ export abstract class GitConflictActions {
       ticket = this.tickets.get(token);
     this.tickets.delete(token);
     if (!ticket || ticket.preview.expiresAt <= this.now())
-      throw Error("Подтверждение истекло или уже использовано.");
+      throw Error(gitMessage("gitHost.thisConfirmationHasExpiredOrWasAlreadyUsed"));
     let result: GitConflictSaveResult | undefined;
     let finalize: (() => Promise<void>) | undefined;
     try {
@@ -357,10 +358,10 @@ export abstract class GitConflictActions {
         status: "uncertain",
         lockRetained: true,
         message:
-          "Завершение сохранения не подтверждено. Материалы восстановления сохранены; автоматическое повторение запрещено.",
+          gitMessage("gitHost.theFinalSaveCouldNotBeVerifiedRecoveryData"),
         // A throwing context never returned its sanitized diagnostics. Finalize
         // also runs outside that boundary; never expose raw command/error data.
-        log: "Завершающая проверка сохранения или освобождение контекста завершились ошибкой. Диагностика окружения скрыта.",
+        log: gitMessage("gitHost.finalSaveVerificationOrContextReleaseFailedEnvironmentDiagnostics"),
       };
     }
   }

@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import {
   useEffect,
   useLayoutEffect,
@@ -83,7 +84,7 @@ export function useGitBranchMenu({
   const readInventory = async (signal: AbortSignal) => {
     const value = await readWithSignal(signal, "readGitBranches", projectId);
     if (value.projectId !== projectId)
-      throw Error("Список веток относится к другому проекту.");
+      throw Error(msg("git.theBranchListBelongsToAnotherProject"));
     return value;
   };
   useEffect(() => {
@@ -135,7 +136,7 @@ export function useGitBranchMenu({
       if (checkOnly && !reviewRequired) {
         setInventory(before);
         setStale(false);
-        setNotice("Состояние списка обновлено.");
+        setNotice(msg("git.listStateRefreshed"));
         return;
       }
       const prepared = await readWithSignal(
@@ -150,14 +151,14 @@ export function useGitBranchMenu({
         prepared.remote !== "origin"
       )
         throw Error(
-          "Подтверждение обновления относится к другой операции или проекту.",
+          msg("git.fetchConfirmationBelongsToAnotherOperationOrProject"),
         );
       if (checkOnly) {
         setReviewRequired(false);
         setExecutionDiagnostic("");
         setStale(false);
         setInventory(before);
-        setNotice("Проверка состояния пройдена. Можно обновить ветки.");
+        setNotice(msg("git.stateVerifiedBranchesCanNowBeFetched"));
         return;
       }
       issued = true;
@@ -167,7 +168,7 @@ export function useGitBranchMenu({
       );
       if (result.projectId !== projectId || result.action !== "fetch")
         throw Error(
-          "Результат относится к другой операции. Проверьте состояние Git.",
+          msg("git.theResultBelongsToAnotherOperationCheckTheGitState"),
         );
       successful = !hasGitDiagnostics(result);
       if (!successful) {
@@ -207,7 +208,7 @@ export function useGitBranchMenu({
                       .map((r) => r.ref)
                   : [],
               );
-              setNotice("Список веток обновлён.");
+              setNotice(msg("git.branchListRefreshed"));
             }
           }
         } catch (e) {

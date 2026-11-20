@@ -1,3 +1,4 @@
+import { t as gitMessage } from "./i18n";
 import type { NativeGitOperationResult } from "./git-native-operation";
 import { z } from "zod";
 import { gitRevisionSchema, type GitWorkspaceSnapshot } from "./git-workspace";
@@ -8,7 +9,7 @@ const name = z
   .max(1024)
   .refine(
     (v) => !v.startsWith("-") && !/[\x00-\x20\x7f]/.test(v),
-    "Недопустимое имя ветки.",
+    { error: () => gitMessage("gitHost.invalidBranchName") },
   );
 const base = { projectId: gitBranchProjectSchema, revision: gitRevisionSchema };
 export const gitBranchRequestSchema = z.discriminatedUnion("action", [

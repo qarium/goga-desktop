@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { noSymlinks } from "./settings";
@@ -13,7 +14,7 @@ import { gitFilePathSchema } from "../shared/git-workspace";
 type Client = Awaited<ReturnType<typeof createNativeGitClient>>;
 const invalid = () =>
   Error(
-    "Результат Git не совпадает с подтверждённой операцией. Данные и журнал сохранены.",
+    gitMessage("gitHost.theGitResultDoesNotMatchTheConfirmedOperation"),
   );
 const text = (bytes: Buffer) =>
   new TextDecoder("utf-8", { fatal: true }).decode(bytes);

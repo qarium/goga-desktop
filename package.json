@@ -20,7 +20,9 @@
     "test:release": "node --test scripts/tests/*.test.mjs",
     "release:version": "node scripts/release-version.mjs",
     "package:release": "CSC_IDENTITY_AUTO_DISCOVERY=false electron-builder --mac dmg --publish never",
-    "postinstall": "node scripts/patch-yaml-parser.mjs"
+    "postinstall": "node scripts/patch-yaml-parser.mjs",
+    "locales:generate": "node scripts/locales.mjs",
+    "locales:check": "node scripts/locales.mjs --check"
   },
   "dependencies": {
     "@codemirror/commands": "6.11.1",
@@ -43,6 +45,7 @@
     "@xterm/addon-fit": "0.11.0",
     "@xterm/xterm": "6.0.0",
     "@xyflow/react": "12.12.0",
+    "i18next": "25.6.3",
     "lucide-react": "0.468.0",
     "marked": "18.1.1",
     "node-pty": "1.1.0",

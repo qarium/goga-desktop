@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useViewActive } from "./RetainedViews";
 import { useEffect, useId, useRef } from "react";
 import type { DocumentDeletion } from "./settings-documents";
@@ -14,6 +16,7 @@ export function DocumentDeleteConfirmation({
   onCancel: () => void;
   onConfirm: () => void;
 }) {
+  useLocale();
   const active = useViewActive();
   const dialog = useRef<HTMLDialogElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
@@ -39,25 +42,22 @@ export function DocumentDeleteConfirmation({
     >
       <h2 id={title}>
         {deletion.memoryOnly
-          ? "Удалить черновик?"
-          : "Переместить файл в корзину?"}
+          ? msg("project.deleteDraft")
+          : msg("project.moveFileToTrash")}
       </h2>
       <div id={description}>
         <p>{deletion.ticket.name}</p>
         <p className="context-path">{deletion.ticket.relativePath}</p>
         <p>
           {deletion.memoryOnly
-            ? "Будет удалён только черновик в памяти. Файлы на диске не изменятся."
-            : "В корзину будет перемещена сохранённая версия файла."}
+            ? msg("project.onlyTheInMemoryDraftWillBeDeletedFilesOn")
+            : msg("project.theSavedVersionOfTheFileWillBeMovedTo")}
         </p>
         {!deletion.memoryOnly && deletion.ticket.profileFallback && (
-          <p className="hint">
-            После удаления снова будет применяться одноимённый глобальный
-            (личный) профиль. Его содержимое не изменится.
-          </p>
+          <p className="hint">{msg("project.theGlobalPersonalProfileWithTheSameNameWillApply")}</p>
         )}
         {dirty && (
-          <p className="hint">Несохранённые изменения будут потеряны.</p>
+          <p className="hint">{msg("project.unsavedChangesWillBeLost")}</p>
         )}
       </div>
       <div className="form-actions">
@@ -67,9 +67,7 @@ export function DocumentDeleteConfirmation({
           type="button"
           disabled={busy}
           onClick={onCancel}
-        >
-          Отмена
-        </button>
+        >{msg("project.cancel")}</button>
         <button
           className="danger"
           data-confirm-delete
@@ -78,10 +76,10 @@ export function DocumentDeleteConfirmation({
           onClick={onConfirm}
         >
           {busy
-            ? "Перемещаем…"
+            ? msg("project.moving")
             : deletion.memoryOnly
-              ? "Удалить черновик"
-              : "Переместить в корзину"}
+              ? msg("project.deleteDraft2")
+              : msg("project.moveToTrash")}
         </button>
       </div>
     </dialog>

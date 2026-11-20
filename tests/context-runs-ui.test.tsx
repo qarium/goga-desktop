@@ -675,3 +675,45 @@ describe("native preparation menu above attached panels", () => {
     expect(popup.api.closeTopicPopup).toHaveBeenCalled();
   });
 });
+
+it("updates the retained run history language without changing filters or user pipeline names", async () => {
+  const { getLocale, setLocale } = await import("../src/shared/i18n");
+  const previous = getLocale();
+  try {
+    setLocale("en");
+    render(<ContextRuns runs={[run("p", { pipelineName: "Проект клиента" }), build("b")]} context={a} onOpen={vi.fn()} />);
+    expect(screen.getByRole("button", { name: "Pipelines: 1" })).toBeTruthy();
+    expect(screen.getByText("Проект клиента")).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /Build/ }));
+    expect(screen.getByText("docs/implementation.md")).toBeTruthy();
+    act(() => setLocale("ru"));
+    expect(screen.getByRole("button", { name: "Конвейеры: 1" })).toBeTruthy();
+    expect(screen.getByText("docs/implementation.md")).toBeTruthy();
+    expect(screen.queryByText("Проект клиента")).toBeNull();
+  } finally { act(() => setLocale(previous)); }
+});
+
+it("orders pipelines and attached panels together by start time, and sorts builds separately", () => {
+  const runs = [
+    run("older", { pipelineName: "Older pipeline", startedAt: "2026-10-19T11:30:00Z" }),
+    build("build-old", { startedAt: "2026-10-19T18:00:00+09:00" }),
+    run("newer", { pipelineName: "Newest pipeline", startedAt: "2026-10-19T12:00:00Z" }),
+    build("build-new", { startedAt: "2026-10-19T11:00:00Z" }),
+    run("other", { context: b, startedAt: "2026-10-20T09:00:00Z" }),
+  ];
+  const panels = [
+    { id: "unknown", runId: "unknown", owner: {projectId:"p", context: a}, name: "No start time", url: "http://localhost:7777" },
+    { id: "middle", runId: "middle", owner: {projectId:"p", context: a}, name: "External pipeline", startedAt: "2026-10-19T07:45:00-04:00", url: "http://localhost:7778" },
+  ];
+  const onOpenPanel = vi.fn();
+  render(<ContextRuns runs={runs} panels={panels} onOpenPanel={onOpenPanel} context={a} onOpen={vi.fn()} />);
+  const rows = () => screen.getAllByRole("article");
+  expect(rows().map(row => row.querySelector("strong")!.textContent))
+    .toEqual(["Newest pipeline", "External pipeline", "Older pipeline", "No start time"]);
+  fireEvent.click(within(rows()[1]!).getByRole("button"));
+  expect(onOpenPanel).toHaveBeenCalledWith("middle");
+  fireEvent.click(screen.getByRole("button", { name: "Сборка" }));
+  expect(rows().map(row => row.querySelector("dd")!.textContent)).toEqual(["build-new", "build-old"]);
+  expect(runs.map(r => r.id)).toEqual(["older", "build-old", "newer", "build-new", "other"]);
+  expect(panels.map(p => p.id)).toEqual(["unknown", "middle"]);
+});

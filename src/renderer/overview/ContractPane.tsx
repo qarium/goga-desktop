@@ -1,3 +1,5 @@
+import { t as msg } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import { useRef, useLayoutEffect } from "react";
 import {
   ArrowLeft,
@@ -17,10 +19,11 @@ import type {
   SchemaCell,
   ContractPair,
 } from "../../shared/project-architecture";
-import { IconButton } from "./SchemaGraph";
+import { IconButton } from "./OverviewIconButton";
 import { basename } from "./graph";
 import "./ContractMembers.css";
 function Pair({ pair }: { pair: ContractPair }) {
+  useLocale();
   return (
     <div className="ov-pair">
       {(["codemanifest", "implementation"] as const).map((k) => (
@@ -65,41 +68,42 @@ export function ContractPane({
   positions?: Record<string, number>;
   navigable: (p: string) => boolean;
 }) {
+  useLocale();
   const scroll = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
     if (scroll.current) scroll.current.scrollTop = positions?.[cell.cell] ?? 0;
   }, [cell.cell]);
   const types = [...new Set([...cell.types, ...Object.keys(data ?? {})])];
   return (
-    <aside className="ov-contract" aria-label="Контракт">
+    <aside className="ov-contract" aria-label={msg("overview.contract")}>
       <header className="ov-heading" hidden={inline}>
         <Braces size={16} />
-        <strong>Контракт</strong>
-        <IconButton label="Закрыть контракт" onClick={onClose}>
+        <strong>{msg("overview.contract")}</strong>
+        <IconButton label={msg("overview.closeContract")} onClick={onClose}>
           <X size={16} />
         </IconButton>
       </header>
       <div className="ov-contract-toolbar">
         <IconButton
-          label="Предыдущий контракт"
+          label={msg("overview.previousContract")}
           disabled={!canBack}
           onClick={onBack}
         >
           <ArrowLeft size={15} />
         </IconButton>
         <IconButton
-          label="Следующий контракт"
+          label={msg("overview.nextContract")}
           disabled={!canForward}
           onClick={onForward}
         >
           <ArrowRight size={15} />
         </IconButton>
         <code title={cell.cell}>{cell.cell}</code>
-        <IconButton label="Обновить контракт" disabled={busy} onClick={onRetry}>
+        <IconButton label={msg("overview.refreshContract")} disabled={busy} onClick={onRetry}>
           <RefreshCw size={15} />
         </IconButton>
         <IconButton
-          label="Открыть CODEMANIFEST в редакторе"
+          label={msg("overview.openCODEMANIFESTInEditor")}
           onClick={() =>
             onSource(
               (cell.cell === "." ? "" : cell.cell + "/") + "CODEMANIFEST",
@@ -110,23 +114,22 @@ export function ContractPane({
         </IconButton>
       </div>
       {busy && data !== null && (
-        <p className="ov-hint" role="status">Обновляем контракт…</p>
+        <p className="ov-hint" role="status">{msg("overview.refreshingContract")}</p>
       )}
       {error && (
         <div className="ov-notice" role="alert">
           {error}
-          <button onClick={onRetry}>Повторить</button>
+          <button onClick={onRetry}>{msg("overview.retry")}</button>
         </div>
       )}
-      <nav className="ov-contract-jumps" aria-label="Разделы контракта">
+      <nav className="ov-contract-jumps" aria-label={msg("overview.contractSections")}>
         <button
           onClick={() =>
             scroll.current
               ?.querySelector(".ov-contract-types")
               ?.scrollIntoView({ block: "start", behavior: "smooth" })
           }
-        >
-          Контракт <span>{types.length}</span>
+        >{msg("overview.contract2")}<span>{types.length}</span>
         </button>
         <button
           onClick={() =>
@@ -134,8 +137,7 @@ export function ContractPane({
               ?.querySelector(".ov-contract-deps")
               ?.scrollIntoView({ block: "start", behavior: "smooth" })
           }
-        >
-          Зависимости <span>{Object.keys(cell.dependencies).length}</span>
+        >{msg("overview.dependencies")}<span>{Object.keys(cell.dependencies).length}</span>
         </button>
       </nav>
       <div
@@ -148,8 +150,8 @@ export function ContractPane({
         <div className="ov-contract-hero">
           <Braces size={24} />
           <div>
-            <small>ТОЛЬКО ПРОСМОТР</small>
-            <h2>Контракт</h2>
+            <small>{msg("overview.readONLY")}</small>
+            <h2>{msg("overview.contract")}</h2>
           </div>
         </div>
         {cell.description && (
@@ -157,12 +159,9 @@ export function ContractPane({
         )}
         <section className="ov-contract-types">
           <h3>
-            <Braces size={16} />
-            Типы и функции <span>{types.length}</span>
+            <Braces size={16} />{msg("overview.typesAndFunctions")}<span>{types.length}</span>
           </h3>
-          <p className="ov-hint">
-            Типы и функции, описанные в контракте, и их объявления в коде.
-          </p>
+          <p className="ov-hint">{msg("overview.typesAndFunctionsInTheContractAndTheirDeclarationsIn")}</p>
           {types.map((t) => {
             const details = data?.[t];
             return (
@@ -171,7 +170,7 @@ export function ContractPane({
                   <code>{t}</code>
                 </h4>
                 {busy && data === null ? (
-                  <p role="status">Загрузка…</p>
+                  <p role="status">{msg("overview.loading")}</p>
                 ) : details ? (
                   <>
                     {details.signature && <Pair pair={details.signature} />}
@@ -181,7 +180,7 @@ export function ContractPane({
                         {(["properties", "methods"] as const).map((group) => {
                           const entries = Object.entries(details[group] ?? {});
                           const isProperties = group === "properties";
-                          const label = isProperties ? "Свойства" : "Методы";
+                          const label = isProperties ? msg("overview.properties") : msg("overview.methods");
                           const Icon = isProperties ? List : SquareFunction;
                           return (
                             <section
@@ -206,8 +205,8 @@ export function ContractPane({
                               {!entries.length && (
                                 <p className="ov-member-empty">
                                   {isProperties
-                                    ? "Нет свойств."
-                                    : "Нет методов."}
+                                    ? msg("overview.noProperties")
+                                    : msg("overview.noMethods")}
                                 </p>
                               )}
                             </section>
@@ -217,19 +216,18 @@ export function ContractPane({
                     )}
                   </>
                 ) : (
-                  <p className="ov-hint">Подробности недоступны.</p>
+                  <p className="ov-hint">{msg("overview.detailsUnavailable")}</p>
                 )}
               </article>
             );
           })}
           {!types.length && (
-            <p className="ov-hint">В контракте нет типов и функций.</p>
+            <p className="ov-hint">{msg("overview.thisContractHasNoTypesOrFunctions")}</p>
           )}
         </section>
         <section className="ov-contract-deps">
           <h3>
-            <GitBranch size={16} />
-            Зависимости <span>{Object.keys(cell.dependencies).length}</span>
+            <GitBranch size={16} />{msg("overview.dependencies")}<span>{Object.keys(cell.dependencies).length}</span>
           </h3>
           {Object.entries(cell.dependencies).map(([p, dep]) => (
             <article className="ov-dependency" key={p}>
@@ -254,14 +252,12 @@ export function ContractPane({
                 ))}
               </div>
               {!navigable(p) && (
-                <p className="ov-hint">
-                  Внешняя зависимость — переход недоступен
-                </p>
+                <p className="ov-hint">{msg("overview.externalDependencyNavigationUnavailable")}</p>
               )}
             </article>
           ))}
           {!Object.keys(cell.dependencies).length && (
-            <p className="ov-hint">Нет прямых зависимостей.</p>
+            <p className="ov-hint">{msg("overview.noDirectDependencies")}</p>
           )}
         </section>
       </div>

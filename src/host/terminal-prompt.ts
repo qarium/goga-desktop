@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { mkdtemp, writeFile, open } from "node:fs/promises";
 import {
   constants,
@@ -127,7 +128,7 @@ add-zle-hook-widget line-finish _goga_desktop_busy
               (st.mode & 0o777) !== 0o600 ||
               st.uid !== process.getuid?.()
             )
-              throw Error("Не удалось подтвердить интеграцию оболочки.");
+              throw Error(t("hostTerminal.shellIntegrationFailed"));
             await fd.writeFile("\n" + script);
           } finally {
             await fd.close();

@@ -247,18 +247,10 @@ button.topic-link:hover:not(:disabled) {
   color: var(--muted);
 }
 .topic-dialog {
-  background: var(--surface);
   width: min(660px, calc(100vw - 40px));
   max-height: calc(100vh - 64px);
-  border: 1px solid var(--line);
-  border-radius: 12px;
   padding: 24px;
-  color: #e4ebf6;
-  box-shadow: 0 20px 80px #18274433;
   overflow-y: auto;
-}
-.topic-dialog::backdrop {
-  background: #17223655;
 }
 .topic-dialog > header {
   display: flex;
@@ -316,9 +308,6 @@ button.topic-link:hover:not(:disabled) {
   background: var(--surface);
 }
 .topic-warning {
-  border: 1px solid #61512f;
-  background: #2c281b;
-  border-radius: 7px;
   padding: 11px 13px;
   font-size: 12px;
   line-height: 1.6;
@@ -470,7 +459,6 @@ button.topic-link:hover:not(:disabled) {
     grid-template-columns: 1fr;
   }
   .topic-dialog {
-    background: var(--surface);
     padding: 18px;
   }
   .project-bar .topic-current-link {
@@ -523,10 +511,6 @@ button.topic-link:hover:not(:disabled) {
   gap: 8px;
   margin: 0;
   padding: 10px 12px;
-  border: 1px solid rgba(232, 168, 76, 0.32);
-  border-radius: 8px;
-  background: rgba(232, 168, 76, 0.09);
-  color: #edc28a;
   font-size: 12px;
   line-height: 1.5;
 }

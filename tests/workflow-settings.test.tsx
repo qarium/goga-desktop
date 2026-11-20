@@ -1,3 +1,4 @@
+import { DOCUMENT_SAVE_CONFLICT_PREFIX } from "../src/shared/project-documents";
 import { openCatalog, selectCatalog } from "./helpers/select-catalog";
 import "./helpers/overview-browser-fixture";
 import {
@@ -834,7 +835,7 @@ it("shows a readable external-save conflict without losing the workflow draft or
     "Конфликт сохранения: файл изменился после открытия. Файл не перезаписан. Обновите файл перед повторным сохранением.";
   api.saveProjectDocument.mockRejectedValueOnce(
     Error(
-      `Error invoking remote method 'goga:save-project-document': Error: ${reason}`,
+      `Error invoking remote method 'goga:save-project-document': Error: ${DOCUMENT_SAVE_CONFLICT_PREFIX}${reason}`,
     ),
   );
   expect(await store.save(source)).toBe(false);

@@ -124,3 +124,20 @@ it("keeps statusless topics in the category of the built-in empty status", () =>
     projectTopicsBoard(rows, rows, withoutPlanned).unassigned.rows,
   ).toEqual(rows);
 });
+
+it("changes built-in category labels but preserves user labels across language switches", async () => {
+  const { setLocale, getLocale } = await import("../src/shared/i18n");
+  const previousLocale = getLocale();
+  try {
+    setLocale("ru");
+    const prefs = defaultBoardPreferences();
+    const custom = renameBoardColumn(prefs, "working", "В работе");
+    setLocale("en");
+    expect(projectTopicsBoard([], [], prefs).columns.map(c => c.name))
+      .toEqual(["Planned", "In progress", "Completed"]);
+    expect(projectTopicsBoard([], [], custom).columns[1].name).toBe("В работе");
+    expect(custom.statusCategory.done).toBe("completed");
+  } finally {
+    setLocale(previousLocale);
+  }
+});

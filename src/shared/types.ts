@@ -37,6 +37,8 @@ export interface ProjectSettingsDocument {
   value: ProjectSettings;
   version: string;
 }
+/** Only a CAS refusal is retryable; transport errors remain failures. */
+export type ProjectSettingsSaveResponse = ProjectSettingsView | { code: "settings-version-conflict" };
 export interface ProjectSettingsView extends ProjectSettingsDocument {
   profiles: { name: string; source: "home" | "project" }[];
 }
@@ -146,6 +148,8 @@ export interface Run {
   taskSnapshot?: { text: string; year: string; topic: string; branch: string };
   output?: RunOutput;
   startupTimeoutMs?: number;
+  /** Live UI metadata only; raw diagnostics are not written to the Desktop journal. */
+  failureReason?: import("./run-failure").RunFailureReason;
   update?: boolean;
   /** Opt-in set only for launches created with durable dashboard recovery. */
   dashboardRecoveryVersion?: 1;

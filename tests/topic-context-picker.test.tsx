@@ -1075,10 +1075,10 @@ describe("persistent topic creation feedback", () => {
 
 it("gives persistent creation errors the existing visible error colour", async () => {
   const style = document.createElement("style");
-  style.textContent = readFileSync(
-    "src/renderer/TopicContextPicker.css",
-    "utf8",
-  );
+  style.textContent = [
+    readFileSync("src/shared/overlay-theme.css", "utf8"),
+    readFileSync("src/renderer/TopicContextPicker.css", "utf8"),
+  ].join("\n");
   document.head.append(style);
   try {
     Object.assign(api, {
@@ -1098,7 +1098,16 @@ it("gives persistent creation errors the existing visible error colour", async (
       }),
     );
     const error = await screen.findByRole("alert");
-    expect(getComputedStyle(error).color).toBe("rgb(239, 177, 160)");
+    // Chromium resolves custom properties in computed colours; jsdom preserves
+    // var(). Resolve the actual root token without substituting a fallback value.
+    let color = getComputedStyle(error).color;
+    if (color.startsWith("var(")) {
+      expect(color).toBe("var(--feedback-error-fg)");
+      const resolved = document.createElement("span");
+      resolved.style.color = getComputedStyle(document.documentElement).getPropertyValue("--feedback-error-fg").trim();
+      color = resolved.style.color;
+    }
+    expect(color).toBe("rgb(239, 177, 160)");
   } finally {
     style.remove();
   }

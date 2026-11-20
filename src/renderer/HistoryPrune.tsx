@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useRef, useState } from "react";
 import type { Project } from "../shared/types";
 import type {
@@ -19,6 +21,7 @@ export function HistoryPrune({
   onClose(): void;
   onChanged(): void;
 }) {
+  useLocale();
   const [preview, setPreview] = useState<HistoryPrunePreview>();
   const [result, setResult] = useState<HistoryPruneResult>();
   const [pending, setPending] = useState(true);
@@ -32,7 +35,7 @@ export function HistoryPrune({
       .then((p) => {
         if (current) {
           if (p.projectId !== project.id || p.year !== year)
-            throw Error("Предпросмотр относится к другому проекту или году.");
+            throw Error(msg("project.thePreviewBelongsToAnotherProjectOrYear"));
           setPreview(p);
         }
       })
@@ -80,20 +83,20 @@ export function HistoryPrune({
   const error = result?.error || preview?.error;
   return (
     <TopicModal
-      title={`Очистка истории · ${year}`}
+      title={msg("project.clearHistory", { year: String(year) })}
       className="history-prune-dialog"
       busy={applying.current && pending}
       onClose={onClose}
     >
       <p className="context-path">
-        {project.name} · Без топика · .goga/history/{year}
+        {project.name}{msg("project.noTopicGogaHistory")}{year}
       </p>
       {pending ? (
         <LoadingState
           label={
             applying.current
-              ? "Очищаем историю…"
-              : "Готовим предпросмотр очистки…"
+              ? msg("project.clearingHistory")
+              : msg("project.preparingPreview")
           }
         />
       ) : (
@@ -103,38 +106,27 @@ export function HistoryPrune({
               {error}
             </p>
           ) : result?.status === "ok" ? (
-            <h3>Очистка завершена</h3>
+            <h3>{msg("project.historyCleared")}</h3>
           ) : preview?.entries.length ? (
             <>
-              <p>
-                Будут удалены записи без соответствующей локальной или
-                remote-tracking ветки:
-              </p>
+              <p>{msg("project.entriesWithoutAMatchingLocalOrRemoteTrackingBranchWill")}</p>
               <ul className="history-prune-entries">
                 {preview.entries.map((entry) => (
                   <li key={entry}>{entry}</li>
                 ))}
               </ul>
-              <p className="history-prune-warning">
-                Записи и все их артефакты будут удалены безвозвратно, не в
-                корзину. Другие годы и ветки не изменятся.
-              </p>
-              <p className="hint">
-                Используется локальный список веток, без обращения к remote. Не
-                изменяйте историю и ветки во время очистки.
-              </p>
+              <p className="history-prune-warning">{msg("project.theseEntriesAndTheirArtifactsWillBePermanentlyDeletedNot")}</p>
+              <p className="hint">{msg("project.thisUsesLocalBranchInformationWithoutContactingTheRemoteDo")}</p>
             </>
           ) : (
             <>
-              <h3>Нет записей для очистки</h3>
-              <p>
-                У всех записей есть соответствующая ветка. Ничего не удалено.
-              </p>
+              <h3>{msg("project.noEntriesToClear")}</h3>
+              <p>{msg("project.everyEntryHasAMatchingBranchNothingWasDeleted")}</p>
             </>
           )}
           {(result?.log || preview?.log) && (
             <details open={!!error}>
-              <summary>Журнал операции</summary>
+              <summary>{msg("project.operationLog")}</summary>
               <pre className="history-prune-log">
                 {[preview?.log, result?.log].filter(Boolean).join("\n")}
               </pre>
@@ -147,16 +139,12 @@ export function HistoryPrune({
         preview?.status === "ready" &&
         !!preview.token && (
           <div className="form-actions">
-            <button type="button" autoFocus onClick={onClose}>
-              Отмена
-            </button>
+            <button type="button" autoFocus onClick={onClose}>{msg("project.cancel")}</button>
             <button
               type="button"
               className="danger"
               onClick={() => void confirm()}
-            >
-              Удалить записи
-            </button>
+            >{msg("project.deleteEntries")}</button>
           </div>
         )}
     </TopicModal>

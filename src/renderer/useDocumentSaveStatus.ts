@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import { useEffect, useState } from "react";
 import type { DocumentDraft } from "./settings-documents";
 
@@ -7,8 +8,7 @@ export type DocumentSaveStatus = {
   showSaving: boolean;
   detail?: string;
 };
-const missingFileHint =
-  "Файл отсутствует и будет создан при сохранении.";
+
 
 /** Presentation timers never modify a draft. Success expires from the actual
  * write response, not from mounting/revealing a retained editor. */
@@ -34,7 +34,7 @@ export function useDocumentSaveStatus(
     progress.identity === identity
   );
   const successDeadline =
-    draft.notice === "Сохранено" && draft.savedAt !== undefined
+    draft.noticeKind === "saved" && draft.savedAt !== undefined
       ? draft.savedAt + 3000
       : undefined;
   useEffect(() => {
@@ -48,24 +48,24 @@ export function useDocumentSaveStatus(
     return () => clearTimeout(timer);
   }, [successDeadline, enabled, identity, draft.saving]);
 
-  if (showSaving) return { text: "Сохраняем…", tone: "saving", showSaving };
+  if (showSaving) return { text: msg("project.saving"), tone: "saving", showSaving };
   if (draft.reloadError)
     return {
-      text: "Не обновлено",
+      text: msg("project.notRefreshed"),
       tone: "error",
       showSaving,
       detail: draft.reloadError,
     };
   if (draft.error)
     return {
-      text: "Не сохранено",
+      text: msg("project.notSaved"),
       tone: "error",
       showSaving,
       detail: draft.error,
     };
-  if (draft.notice && draft.notice !== "Сохранено")
+  if (draft.notice && draft.noticeKind !== "saved")
     return {
-      text: "Проверьте файл",
+      text: msg("project.checkFile"),
       tone: "warning",
       showSaving,
       detail: draft.notice,
@@ -73,23 +73,23 @@ export function useDocumentSaveStatus(
   const missing = draft.document?.exists === false;
   if (draft.document && draft.text !== draft.document.text)
     return {
-      text: "Файл: есть изменения",
+      text: msg("project.fileModified"),
       tone: "dirty",
       showSaving,
-      ...(missing ? { detail: missingFileHint } : {}),
+      ...(missing ? { detail: msg("project.fileDoesNotExistSavingWillCreateIt") } : {}),
     };
   if (
     !draft.saving &&
     successDeadline !== undefined &&
     Date.now() < successDeadline
   )
-    return { text: "Файл: сохранен", tone: "success", showSaving };
+    return { text: msg("project.fileSaved"), tone: "success", showSaving };
   return missing
     ? {
-        text: "Новый файл",
+        text: msg("project.newFile"),
         tone: "neutral",
         showSaving,
-        detail: missingFileHint,
+        detail: msg("project.fileDoesNotExistSavingWillCreateIt"),
       }
-    : { text: "Файл: нет изменений", tone: "neutral", showSaving };
+    : { text: msg("project.fileNoChanges"), tone: "neutral", showSaving };
 }

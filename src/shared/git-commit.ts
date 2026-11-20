@@ -1,3 +1,4 @@
+import { t as gitMessage } from "./i18n";
 import { z } from "zod";
 import { scopeRefSchema, type ScopeRef } from "./context";
 import { gitFilePathSchema, gitRevisionSchema } from "./git-workspace";
@@ -11,11 +12,11 @@ export const gitCommitRequestSchema = z
       .max(1000)
       .refine(
         (paths) => new Set(paths).size === paths.length,
-        "Пути не должны повторяться.",
+        { error: () => gitMessage("gitHost.duplicatePaths") },
       )
       .refine(
         (paths) => paths.reduce((size, p) => size + p.length, 0) <= 256 * 1024,
-        "Слишком много путей.",
+        { error: () => gitMessage("gitHost.tooManyPaths") },
       ),
     message: z
       .string()
@@ -23,7 +24,7 @@ export const gitCommitRequestSchema = z
       .max(16384)
       .refine(
         (value) => !!value.trim() && !value.includes("\0"),
-        "Введите сообщение коммита.",
+        { error: () => gitMessage("gitHost.enterCommitMessage") },
       ),
   })
   .strict();

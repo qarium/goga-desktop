@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import {
   terminalContextFromKey,
   terminalContextKey,
@@ -10,7 +11,7 @@ import {
   type TerminalProjectTabs,
 } from "../shared/terminal";
 const invalid = () =>
-  Error("Вкладка недоступна в выбранном контексте терминала.");
+  Error(t("hostTerminal.tabOutsideTerminal"));
 export const visibleTerminalTabs = (
   tabs: TerminalTab[],
   context: TerminalContext,

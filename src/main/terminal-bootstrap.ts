@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createRequire } from "node:module";
@@ -21,7 +22,7 @@ function absolute(value: string) {
     path.normalize(value) !== value ||
     /[\x00-\x1f\x7f]/.test(value)
   )
-    throw Error("Недопустимое расположение компонентов терминала.");
+    throw Error(t("native.terminalPathInvalid"));
   return value;
 }
 export function terminalAssets(
@@ -52,10 +53,10 @@ export function lazyTerminalDriver(
       if (!driver) {
         const root = path.join(appRoot, "node_modules/node-pty");
         if (load(path.join(root, "package.json")).version !== "1.1.0")
-          throw Error("Неподдерживаемая версия системного терминала.");
+          throw Error(t("native.terminalWrongVersion"));
         const module = load(root);
         if (typeof module.spawn !== "function")
-          throw Error("Системный терминал недоступен.");
+          throw Error(t("native.terminalUnavailable"));
         // Legacy .on(error) is validated for this exact pinned node-pty version.
         // Never reject a returned live child: ownership transfer belongs to NativeAdapter.
         driver = {
@@ -114,9 +115,12 @@ export function createWindowTerminal(options: {
   });
   return {
     ...runtime,
+    setLanguage(tag: string) {
+      for (const view of views) view.setLanguage(tag);
+    },
     disposeAfterExit() {
       if (runtime.sessions.list().some((s) => s.state !== "exited"))
-        throw Error("Сначала требуется безопасно завершить сессии терминала.");
+        throw Error(t("native.terminalStopFirst"));
       detach();
       for (const view of views) view.dispose();
       views.clear();

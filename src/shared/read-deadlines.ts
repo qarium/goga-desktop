@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 /** File IO is distinct from CLI snapshots (the host already allows 120s/command). */
 export const READ_BUDGETS = {
   listOverviewDirectory: 30000,
@@ -73,8 +74,8 @@ export type ReadMethod = keyof typeof READ_BUDGETS;
 export const readChannel = (method: ReadMethod) =>
   method.replace(/[A-Z]/g, (c) => "-" + c.toLowerCase());
 export const readTimeoutMessage = (budget: number) =>
-  `Превышено время ожидания чтения (${Math.ceil(budget / 1000)} с). Проверьте доступность проекта, Goga и Docker. Повторите загрузку или закройте раздел; черновик сохранён.`;
-export const readCancelledMessage = "Чтение отменено. Черновик сохранён.";
+  tr("host.readTimedOutValue1SCheckTheProjectGogaAnd", { value1: Math.ceil(budget / 1000) });
+export const readCancelledMessage = () => tr("host.readCanceledYourDraftWasKept");
 /** Physical calls stay counted after timeout until transport really settles.
  * A fresh retry gets its own result; non-cancellable broken transports cannot grow forever. */
 export class ReadCoordinator {
@@ -87,11 +88,11 @@ export class ReadCoordinator {
     cancel: () => void,
     signal?: AbortSignal,
   ): Promise<T> {
-    if (signal?.aborted) return Promise.reject(Error(readCancelledMessage));
+    if (signal?.aborted) return Promise.reject(Error(readCancelledMessage()));
     if (this.total >= 64 || (this.physical.get(key) ?? 0) >= 2)
       return Promise.reject(
         Error(
-          "Ожидаем завершения предыдущих чтений. Новые запросы временно ограничены, чтобы не создавать зависшие процессы. Повторите позже; черновик сохранён.",
+          tr("host.waitingForPreviousReadsToFinishNewRequestsAreTemporarily"),
         ),
       );
     this.total++;
@@ -115,7 +116,7 @@ export class ReadCoordinator {
           /* cancellation is best effort; result is already invalidated */
         }
       };
-      const abort = () => stop(readCancelledMessage);
+      const abort = () => stop(readCancelledMessage());
       const timer = setTimeout(() => stop(readTimeoutMessage(budget)), budget);
       signal?.addEventListener("abort", abort, { once: true });
       let physical: Promise<T>;

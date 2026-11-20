@@ -1,0 +1,16 @@
+{
+  "version": 1,
+  "viewport": [1440, 900],
+  "scenes": [
+    { "id": "projects", "holdMs": 2250, "view": [0, 0, 1] },
+    { "id": "add-project", "holdMs": 2600, "view": [0, 0, 0.66] },
+    { "id": "move-project", "holdMs": 1950, "view": [0, 0.057, 0.70] },
+    { "id": "group", "holdMs": 2600, "view": [0, 0.06, 0.62] },
+    { "id": "overview", "holdMs": 2350, "view": [0.165, 0.145, 0.835] },
+    { "id": "board", "holdMs": 2500, "view": [0.16, 0.14, 0.84] },
+    { "id": "launch-menu", "holdMs": 3250, "view": [0.55, 0.053, 0.45] },
+    { "id": "choose-refinement", "holdMs": 1800, "view": [0.2, 0.2, 0.74] },
+    { "id": "refinement", "holdMs": 3100, "view": [0.20, 0.22, 0.76] },
+    { "id": "run", "holdMs": 2900, "view": [0.165, 0.14, 0.65] }
+  ]
+}

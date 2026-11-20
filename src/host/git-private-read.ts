@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import { createHash } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -17,7 +18,7 @@ import {
 import { CommandExitError } from "./process";
 
 const LIMIT = 32 * 1024 * 1024;
-const stale = () => Error("Снимок Git устарел. Обновите список изменений.");
+const stale = () => Error(gitMessage("gitHost.theGitSnapshotExpiredRefreshChanges"));
 const stamp = (s: BigIntStats) =>
   [s.dev, s.ino, s.mode, s.size, s.mtimeNs, s.ctimeNs].join(":");
 async function regular(filename: string) {
@@ -34,7 +35,7 @@ async function regular(filename: string) {
     before.size > BigInt(LIMIT) ||
     (await fs.realpath(path.dirname(filename))) !== path.dirname(filename)
   )
-    throw Error("Небезопасный тип, ссылка или размер метаданных Git.");
+    throw Error(gitMessage("gitHost.unsafeGitMetadataTypeLinkOrSize"));
   const handle = await fs.open(
     filename,
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
@@ -76,7 +77,7 @@ const configQuote = (value: string) =>
  * names unknown at capture time. Working-tree attributes can name any driver;
  * there is no executable definition for it in this private execution context. */
 function privateConfig(raw: string, nativeAttributes: boolean) {
-  if (raw && !raw.endsWith("\0")) throw Error("Неполная конфигурация Git.");
+  if (raw && !raw.endsWith("\0")) throw Error(gitMessage("gitHost.incompleteGitConfiguration"));
   const result: string[] = [];
   for (const row of raw.split("\0").filter(Boolean)) {
     const split = row.indexOf("\n"),
@@ -96,12 +97,12 @@ function privateConfig(raw: string, nativeAttributes: boolean) {
       continue;
     if (lower === "extensions.refstorage" && value !== "files")
       throw Error(
-        "Формат ссылок Git пока не поддерживается безопасным чтением.",
+        gitMessage("gitHost.thisGitReferenceFormatIsNotSupportedForSafe"),
       );
     const match = /^([a-z0-9-]+)\.(?:([\s\S]*)\.)?([a-z][a-z0-9-]*)$/i.exec(
       key,
     );
-    if (!match) throw Error("Некорректный ключ конфигурации Git.");
+    if (!match) throw Error(gitMessage("gitHost.invalidGitConfigurationKey"));
     result.push(
       `[${match[1]}${match[2] === undefined ? "" : ` ${configQuote(match[2])}`}]\n${match[3]}${value === null ? "" : ` = ${configQuote(value)}`}\n`,
     );
@@ -171,7 +172,7 @@ export async function withPrivateGitRead<T>(
       break;
     }
     if (!name || name === "/dev/null") continue;
-    if (name.includes("\0")) throw Error("Некорректный путь attributes Git.");
+    if (name.includes("\0")) throw Error(gitMessage("gitHost.invalidGitAttributesFilePath"));
     const filename = path.resolve(root, name),
       file = await regular(filename);
     sources.push({ filename, identity: file?.identity ?? "missing" });
@@ -193,7 +194,7 @@ export async function withPrivateGitRead<T>(
   const tmp = await fs.realpath(os.tmpdir());
   if (tmp === root || tmp.startsWith(`${root}${path.sep}`))
     throw Error(
-      "Небезопасный временный каталог Git: он находится внутри рабочей папки.",
+      gitMessage("gitHost.unsafeTemporaryGitDirectoryItIsInsideTheWorking"),
     );
   const temp = await fs.mkdtemp(path.join(tmp, "goga-git-read-")),
     gitdir = path.join(temp, ".git"),
@@ -205,7 +206,7 @@ export async function withPrivateGitRead<T>(
       total = 0;
     const copy = async (relative: string, depth = 0): Promise<void> => {
       if (++count > 100000 || depth > 12)
-        throw Error("Метаданные Git превышают предел безопасного просмотра.");
+        throw Error(gitMessage("gitHost.gitMetadataExceedsTheSafePreviewLimit"));
       const filename = path.join(source, relative);
       let stat: BigIntStats;
       try {
@@ -227,7 +228,7 @@ export async function withPrivateGitRead<T>(
         if (!file) throw stale();
         total += file.bytes.length;
         if (total > 64 * 1024 * 1024)
-          throw Error("Метаданные Git превышают предел безопасного просмотра.");
+          throw Error(gitMessage("gitHost.gitMetadataExceedsTheSafePreviewLimit"));
         await fs.writeFile(path.join(gitdir, relative), file.bytes, {
           mode: 0o600,
           flag: "wx",

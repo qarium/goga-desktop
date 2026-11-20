@@ -296,3 +296,22 @@ it("selects a visible screen without stealing focus when a host overlay is open"
   expect(f.bridge.resize).toHaveBeenCalled();
   f.stop();
 });
+
+it("changes an open paste confirmation without replacing the screen, touching its contents or sending input", () => {
+  const f = fixture();
+  f.command({ kind: "language", language: "en" });
+  f.command({ kind: "grant", grant });
+  f.command({ kind: "select", grant });
+  const payload = "echo one\n# чужая команда";
+  paste(f, payload);
+  const dialog = f.root.querySelector("dialog")!;
+  const titleEn = dialog.querySelector("h2")!.textContent;
+  f.command({ kind: "language", language: "ru" });
+  expect(f.root.querySelector("dialog")).toBe(dialog);
+  expect(dialog.querySelector("h2")!.textContent).not.toBe(titleEn);
+  expect(dialog.querySelector("pre")!.textContent).toBe(payload);
+  expect([...dialog.querySelectorAll("button")].map(b => b.textContent)).toEqual(["Отмена", "Вставить"]);
+  expect(f.terms).toHaveLength(1);
+  expect(f.bridge.input).not.toHaveBeenCalled();
+  f.stop();
+});

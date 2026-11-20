@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -8,7 +9,7 @@ import { assertReadActive } from "./read-scope";
 
 const invalid = () =>
   Error(
-    "Не удалось безопасно перенести локальные настройки Git. Копия не подготовлена; значения настроек скрыты.",
+    tr("host.couldNotSafelyTransferLocalGitSettingsTheCopyWas"),
   );
 const limit = 1024 * 1024;
 const allowed = [

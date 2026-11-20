@@ -1,5 +1,6 @@
 import { createTerminalControlAPI,createTerminalPresetAPI } from "./terminal-control-preload";
 import { contextBridge, ipcRenderer } from "electron";
+import { setLocale, isSupportedLocale } from "../shared/i18n";
 import type { DesktopAPI } from "../shared/bridge";
 const invoke = (name: string, ...args: unknown[]) =>
   ipcRenderer.invoke(`goga:${name}`, ...args);
@@ -8,7 +9,17 @@ function listen<T>(name: string, callback: (value: T) => void) {
   ipcRenderer.on(`goga:${name}`, fn);
   return () => ipcRenderer.removeListener(`goga:${name}`, fn);
 }
+const initialInterfaceLanguage = process.argv.find(value => value.startsWith("--goga-interface-language="))?.slice("--goga-interface-language=".length);
+function applyLanguage(tag: string) {
+  if (isSupportedLocale(tag)) setLocale(tag);
+  return tag;
+}
+if (initialInterfaceLanguage) applyLanguage(initialInterfaceLanguage);
 const api: DesktopAPI = {
+  initialInterfaceLanguage,
+  getInterfaceLanguage: () => invoke("get-interface-language").then(applyLanguage),
+  setInterfaceLanguage: (tag) => invoke("set-interface-language", tag).then(applyLanguage),
+  onInterfaceLanguageChanged: (callback) => listen<string>("interface-language-changed", tag => callback(applyLanguage(tag))),
   demoState: () => invoke("demo-state"),
   demoExecute: cmd => invoke("demo-execute", cmd),
   demoNextFrame: (showId, tabId, after) => invoke("demo-next-frame", { showId, tabId, after }),

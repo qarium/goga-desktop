@@ -1,3 +1,5 @@
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useRef, useState } from "react";
 import type { TopicContextRef } from "../shared/worktrees";
 import type { ContextApplyPreview } from "../shared/context-sync";
@@ -18,6 +20,7 @@ export function TopicSyncActions({
   owner: TopicContextRef;
   onChanged: () => void;
 }) {
+  useLocale();
   const key = contextRequestKey(owner);
   const sync = useTopicSync(owner);
   const scope = useRef({ key, api: window.goga });
@@ -101,7 +104,7 @@ export function TopicSyncActions({
           setLocal({
             scope: operationScope,
             error: "",
-            notice: "Коммиты применены в базовую ветку.",
+            notice: tr("topics.commitsWereAppliedToTheBaseBranch"),
             busy: false,
             preview: null,
           });
@@ -124,19 +127,14 @@ export function TopicSyncActions({
   return (
     <section
       className="topic-card-section topic-sync"
-      aria-label="Перенос изменений"
+      aria-label={tr("topics.transferChanges")}
     >
-      <h3>Перенос изменений</h3>
+      <h3>{tr("topics.transferChanges")}</h3>
       <p role="status">
-        <strong>Синхронизация: </strong>
+        <strong>{tr("topics.sync2")}</strong>
         <span>{topicSyncLabel(sync)}</span>
       </p>
-      <p className="hint">
-        Push в origin копии — в ветку {owner.branch} исходного локального
-        проекта, без переключения ветки и слияния. Незакоммиченные файлы не
-        отправляются и не мешают синхронизации. Публикация на удалённый сервер
-        не выполняется.
-      </p>
+      <p className="hint">{tr("topics.copyPushExplanation", { branch: owner.branch })}</p>
       {(error || sync.state?.error) && (
         <p className="error" role="alert">
           {error || sync.state?.error}
@@ -150,44 +148,36 @@ export function TopicSyncActions({
           onClick={() => void act("sync")}
         >
           {sync.state?.status === "error" || sync.failedAction
-            ? "Повторить синхронизацию"
-            : "Синхронизировать"}
+            ? tr("topics.retrySync")
+            : tr("topics.sync")}
         </button>
         {error && (
           <button
             type="button"
             disabled={busy}
             onClick={() => void sync.refresh()}
-          >
-            Обновить статус
-          </button>
+          >{tr("topics.refreshStatus")}</button>
         )}
         <button
           type="button"
           disabled={busy}
           onClick={() => void act("preview")}
-        >
-          Применить в базу…
-        </button>
+        >{tr("topics.applyToBase")}</button>
       </div>
       {preview && (
         <div
           className="topic-confirmation"
           role="region"
-          aria-label="Подтверждение применения в базу"
+          aria-label={tr("topics.confirmApplyingToBase")}
         >
-          <h3>Применить коммиты в базовую ветку?</h3>
-          <p>
-            Целевая ветка: <strong>{preview.targetBranch}</strong>
+          <h3>{tr("topics.applyCommitsToTheBaseBranch")}</h3>
+          <p>{tr("topics.targetBranch")}<strong>{preview.targetBranch}</strong>
           </p>
-          <p className="hint">
-            Будут проверены локальные изменения, конфликты и активные операции.
-            Основная папка не переключается автоматически.
-          </p>
+          <p className="hint">{tr("topics.localChangesConflictsAndActiveOperationsWillBe")}</p>
           <details>
-            <summary>Коммиты и цель</summary>
-            <p>Источник: {preview.sourceOid}</p>
-            <p>Текущий коммит базы: {preview.targetOid}</p>
+            <summary>{tr("topics.commitsAndDestination")}</summary>
+            <p>{tr("topics.source")}{preview.sourceOid}</p>
+            <p>{tr("topics.currentBaseCommit")}{preview.targetOid}</p>
           </details>
           <ul>
             {preview.files.map((file) => (
@@ -200,17 +190,13 @@ export function TopicSyncActions({
               type="button"
               disabled={busy}
               onClick={() => setLocal({ ...view, preview: null })}
-            >
-              Отмена
-            </button>
+            >{tr("launch.cancel")}</button>
             <button
               type="button"
               className="primary"
               disabled={busy || !preview.canApply}
               onClick={() => void act("apply")}
-            >
-              Подтвердить применение
-            </button>
+            >{tr("topics.confirmApply")}</button>
           </div>
         </div>
       )}

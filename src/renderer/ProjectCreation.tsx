@@ -1,3 +1,6 @@
+import type { MessageKey } from "../shared/locale-packs.generated";
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useRef, useState } from "react";
 import {
   AlertCircle,
@@ -39,16 +42,16 @@ const empty = (): Draft => ({
 });
 const destination = (draft: Draft) =>
   draft.parent
-    ? `${draft.parent.replace(/\/+$/, "")}/${draft.name || "имя-проекта"}`
-    : "Выберите расположение проекта";
-const labels: Record<ProjectCreationStage, string> = {
-  checking: "Проверяем расположение",
-  creating: "Создаём папку проекта",
-  git: "Инициализируем Git",
-  cloning: "Получаем файлы репозитория",
-  registering: "Добавляем проект в Goga",
-  cancelling: "Останавливаем создание",
-};
+    ? `${draft.parent.replace(/\/+$/, "")}/${draft.name || msg("shell.projectName")}`
+    : msg("shell.chooseProjectLocation");
+const labels = {
+  checking: "shell.checkingLocation",
+  creating: "shell.creatingProjectFolder",
+  git: "shell.initializingGit",
+  cloning: "shell.fetchingRepositoryFiles",
+  registering: "shell.addingProjectToGoga",
+  cancelling: "shell.stoppingProjectCreation",
+} as const satisfies Record<ProjectCreationStage, MessageKey>;
 export function ProjectCreationDialog({
   onClose,
   onSuccess,
@@ -58,6 +61,7 @@ export function ProjectCreationDialog({
   onSuccess: (project: Project, warning?: string) => void;
   onOpenExisting: () => void;
 }) {
+  useLocale();
   const [mode, setMode] = useState<Mode>("empty");
   const [drafts, setDrafts] = useState<Record<Mode, Draft>>({
     empty: empty(),
@@ -171,10 +175,10 @@ export function ProjectCreationDialog({
           parsed.error.issues.map((issue) => [
             String(issue.path[0]),
             issue.path[0] === "name"
-              ? "Введите имя новой папки без разделителей пути и пробелов по краям."
+              ? msg("shell.enterAFolderNameWithoutPathSeparatorsOrLeadingOr")
               : issue.path[0] === "parent"
-                ? "Выберите родительскую папку или укажите абсолютный путь."
-                : "Укажите HTTPS- или SSH-адрес без пароля, токена и параметров.",
+                ? msg("shell.chooseAParentFolderOrEnterAnAbsolutePath")
+                : msg("shell.enterAnHTTPSOrSSHURLWithoutAPasswordToken"),
           ]),
         ),
       );
@@ -194,7 +198,7 @@ export function ProjectCreationDialog({
       // Transport failure is not evidence of cancellation. The host still owns
       // the attempt; keep cancel available instead of silently starting a second.
       setMessage(
-        `${preparationErrorMessage(error)} Результат создания не подтверждён. Отмените операцию или проверьте её результат.`,
+        msg("shell.projectCreationIsUnconfirmedCancelTheOperationOrCheckIts", { value1: String(preparationErrorMessage(error)) }),
       );
     }
   }
@@ -214,8 +218,8 @@ export function ProjectCreationDialog({
       } else
         setNotice(
           result.retainedPath
-            ? "Создание отменено. Временную папку не удалось убрать; её расположение указано ниже."
-            : "Создание отменено. Введённые данные сохранены.",
+            ? msg("shell.creationWasCanceledTheTemporaryFolderCouldNotBeRemoved")
+            : msg("shell.creationWasCanceledYourEntriesHaveBeenKept"),
         );
     }
   }
@@ -247,12 +251,12 @@ export function ProjectCreationDialog({
       title={
         busy
           ? mode === "clone"
-            ? "Клонируем репозиторий"
-            : "Создаём проект"
-          : "Новый проект"
+            ? msg("shell.cloningRepository")
+            : msg("shell.creatingProject")
+          : msg("shell.newProject")
       }
       className="project-creation-dialog"
-      closeLabel="Закрыть создание проекта"
+      closeLabel={msg("shell.closeProjectCreation")}
       busy={busy || choosing}
       onClose={onClose}
     >
@@ -268,7 +272,7 @@ export function ProjectCreationDialog({
           {busy ? (
             <section
               className="creation-progress"
-              aria-label="Ход создания проекта"
+              aria-label={msg("shell.projectCreationProgress")}
               aria-busy="true"
             >
               <div className="creation-progress-target">
@@ -302,24 +306,22 @@ export function ProjectCreationDialog({
                       ) : (
                         <span className="creation-step-dot" />
                       )}
-                      <span>{labels[stage]}</span>
+                      <span>{msg(labels[stage])}</span>
                     </li>
                   );
                 })}
               </ol>
               <p className="creation-progress-note" role="status">
-                {labels[operation.stage]}…
+                {msg(labels[operation.stage])}…
               </p>
-              <p className="creation-muted">
-                После завершения откроется «Обзор» нового проекта.
-              </p>
+              <p className="creation-muted">{msg("shell.overviewWillOpenForTheNewProjectWhenItIs")}</p>
             </section>
           ) : (
             <>
               <div
                 className="creation-modes"
                 role="tablist"
-                aria-label="Способ создания проекта"
+                aria-label={msg("shell.howToCreateTheProject")}
                 onKeyDown={(event) => {
                   if (event.key !== "ArrowLeft" && event.key !== "ArrowRight")
                     return;
@@ -338,8 +340,7 @@ export function ProjectCreationDialog({
                   onClick={() => switchMode("empty")}
                 >
                   <FolderPlus size={19} aria-hidden="true" />
-                  <span>
-                    С нуля<small>Новая пустая папка</small>
+                  <span>{msg("shell.fromScratch")}<small>{msg("shell.newEmptyFolder")}</small>
                   </span>
                 </button>
                 <button
@@ -353,8 +354,7 @@ export function ProjectCreationDialog({
                   onClick={() => switchMode("clone")}
                 >
                   <GitFork size={19} aria-hidden="true" />
-                  <span>
-                    Из Git-репозитория<small>Копия на этом компьютере</small>
+                  <span>{msg("shell.fromAGitRepository")}<small>{msg("shell.aCopyOnThisComputer")}</small>
                   </span>
                 </button>
               </div>
@@ -366,7 +366,7 @@ export function ProjectCreationDialog({
               >
                 {mode === "clone" && (
                   <div className="creation-field">
-                    <label htmlFor="repository">Адрес репозитория</label>
+                    <label htmlFor="repository">{msg("shell.repositoryURL")}</label>
                     <input
                       id="repository"
                       autoComplete="off"
@@ -392,15 +392,12 @@ export function ProjectCreationDialog({
                         {errors.repository}
                       </p>
                     ) : (
-                      <small id="repository-hint">
-                        HTTPS или SSH. Используем настроенный доступ Git — без
-                        ввода паролей здесь.
-                      </small>
+                      <small id="repository-hint">{msg("shell.httpsOrSSHYourExistingGitCredentialsAreUsedNo")}</small>
                     )}
                   </div>
                 )}
                 <div className="creation-field">
-                  <label htmlFor="project-name">Имя папки проекта</label>
+                  <label htmlFor="project-name">{msg("shell.projectFolderName")}</label>
                   <input
                     id="project-name"
                     placeholder="my-project"
@@ -422,20 +419,18 @@ export function ProjectCreationDialog({
                         className="creation-inline-link"
                         type="button"
                         onClick={onOpenExisting}
-                      >
-                        Открыть существующий проект…
-                      </button>
+                      >{msg("shell.openExistingProject")}</button>
                     </p>
                   )}
                 </div>
                 <div className="creation-field">
-                  <label htmlFor="project-parent">Расположение</label>
+                  <label htmlFor="project-parent">{msg("shell.location")}</label>
                   <div className="creation-location">
                     <input
                       id="project-parent"
                       autoComplete="off"
                       spellCheck={false}
-                      placeholder="Выберите родительскую папку"
+                      placeholder={msg("shell.chooseTheParentFolder")}
                       value={value.parent}
                       aria-invalid={!!errors.parent}
                       aria-describedby={
@@ -448,10 +443,10 @@ export function ProjectCreationDialog({
                       className="with-icon"
                       disabled={choosing}
                       onClick={() => void choose()}
-                      aria-label="Выбрать расположение проекта"
+                      aria-label={msg("shell.chooseProjectLocation2")}
                     >
                       <FolderOpen size={17} aria-hidden="true" />
-                      <span>Выбрать…</span>
+                      <span>{msg("shell.choose")}</span>
                     </button>
                   </div>
                   {errors.parent && (
@@ -469,7 +464,7 @@ export function ProjectCreationDialog({
                   >
                     <MapPin size={15} aria-hidden="true" />
                     <div>
-                      <span>Будет создана новая папка</span>
+                      <span>{msg("shell.aNewFolderWillBeCreated")}</span>
                       <code>{destination(value)}</code>
                     </div>
                   </div>
@@ -482,20 +477,15 @@ export function ProjectCreationDialog({
                       onChange={(event) => edit("git", event.target.checked)}
                     />
                     <span>
-                      <strong>Инициализировать Git</strong>
-                      <small>
-                        Локальный репозиторий, без коммита и публикации.
-                      </small>
+                      <strong>{msg("shell.initializeGit")}</strong>
+                      <small>{msg("shell.localRepositoryWithoutCommittingOrPublishing")}</small>
                     </span>
                     <GitBranch size={18} aria-hidden="true" />
                   </label>
                 ) : (
                   <p className="creation-clone-note">
                     <GitBranch size={16} aria-hidden="true" />
-                    <span>
-                      Откроем ветку репозитория по умолчанию. Изменения не
-                      публикуются.
-                    </span>
+                    <span>{msg("shell.theRepositorySDefaultBranchWillOpenNothingWillBe")}</span>
                   </p>
                 )}
               </div>
@@ -510,23 +500,21 @@ export function ProjectCreationDialog({
             <div role="alert" className="creation-error">
               <AlertCircle size={18} aria-hidden="true" />
               <div>
-                <strong>Создание не завершено</strong>
+                <strong>{msg("shell.creationIncomplete")}</strong>
                 <p>{message}</p>
                 {!busy && (
                   <button
                     className="creation-inline-link"
                     type="button"
                     onClick={onOpenExisting}
-                  >
-                    Открыть существующий проект…
-                  </button>
+                  >{msg("shell.openExistingProject")}</button>
                 )}
               </div>
             </div>
           )}
           {retained && (
             <p className="creation-retained">
-              <span>Сохранённая папка:</span>
+              <span>{msg("shell.savedFolder")}</span>
               <code>{retained}</code>
             </p>
           )}
@@ -535,9 +523,9 @@ export function ProjectCreationDialog({
           <span className="creation-muted">
             {busy
               ? operation.canCancel
-                ? "Можно отменить операцию"
-                : "Дождитесь завершения"
-              : "Проект откроется в «Обзоре»"}
+                ? msg("shell.youCanCancelThisOperation")
+                : msg("shell.pleaseWaitForTheOperationToFinish")
+              : msg("shell.theProjectWillOpenInOverview")}
           </span>
           <div className="creation-actions">
             {busy ? (
@@ -547,14 +535,12 @@ export function ProjectCreationDialog({
                 onClick={() => void cancel()}
               >
                 {!operation.canCancel && message
-                  ? "Проверить результат"
-                  : "Отменить создание"}
+                  ? msg("shell.checkResult")
+                  : msg("shell.cancelCreation")}
               </button>
             ) : (
               <>
-                <button type="button" disabled={choosing} onClick={onClose}>
-                  Отмена
-                </button>
+                <button type="button" disabled={choosing} onClick={onClose}>{msg("shell.cancel")}</button>
                 <button
                   type="submit"
                   disabled={choosing}
@@ -562,13 +548,11 @@ export function ProjectCreationDialog({
                 >
                   {message ? (
                     <>
-                      <RotateCcw size={16} aria-hidden="true" />
-                      Повторить
-                    </>
+                      <RotateCcw size={16} aria-hidden="true" />{msg("shell.retry")}</>
                   ) : mode === "clone" ? (
-                    "Клонировать и открыть"
+                    msg("shell.cloneAndOpen")
                   ) : (
-                    "Создать проект"
+                    msg("shell.createProject")
                   )}
                 </button>
               </>

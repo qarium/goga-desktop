@@ -237,7 +237,8 @@ it("refresh has its own framed-button style and preserves its accessible label",
   const refresh = screen.getByRole("button", { name: "Обновить список" });
   expect(refresh.classList.contains("topic-refresh-button")).toBe(true);
   expect(refresh.classList.contains("icon-button")).toBe(false);
-  expect(refresh.getAttribute("title")).toBe("Обновить список");
+  fireEvent.mouseEnter(refresh);
+  expect(refresh.ownerDocument.getElementById(refresh.getAttribute("aria-describedby")!)?.textContent).toBe("Обновить список");
   fireEvent.click(refresh);
   expect(api.readTopicBoard).toHaveBeenCalledTimes(2);
   expect(api.executeTopicOperation).not.toHaveBeenCalled();

@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { createSpecificationsState, type SpecificationsStateStore } from "./project-specifications-state";
 import { saveProjectSettingsReconciled } from "./project-settings-save";
 import { preparationErrorMessage } from "./preparation-error";
@@ -50,6 +52,7 @@ export function EnvironmentValueInput({
   onValue: (value: string) => void;
   onInvalid: (message: string) => void;
 }) {
+  useLocale();
   const input = useRef<HTMLInputElement>(null);
   const caret = useRef<number | null>(null);
   const rejectedNativeInput = useRef(false);
@@ -59,7 +62,7 @@ export function EnvironmentValueInput({
       return true;
     } catch (e) {
       onInvalid(
-        `${e instanceof Error ? e.message : "Недопустимое значение."} Ввод отклонён. Исправьте значение или удалите переменную.`,
+        msg("project.inputRejectedCorrectTheValueOrRemoveTheVariable", { value1: String(e instanceof Error ? e.message : msg("project.invalidValue")) }),
       );
       return false;
     }
@@ -167,6 +170,7 @@ export function ProjectSettings({
   guard: MutableRefObject<ProjectSettingsGuard | null>;
   onBusy: (busy: boolean) => void;
 }) {
+  useLocale();
   const viewActive = useViewActive();
   const scope = owner ? contextRef(owner) : project.id;
   const scopeKey = documentScopeId(scope);
@@ -289,7 +293,7 @@ export function ProjectSettings({
       },
       () => {
         if (!current) return;
-        setError("Не удалось загрузить настройки проекта. Повторите попытку.");
+        setError(msg("project.couldNotLoadProjectSettingsTryAgain"));
         setLoading(false);
         setSettled(loadKey);
       },
@@ -318,7 +322,7 @@ export function ProjectSettings({
         if (current) {
           setProfileSettled(profileLoadKey);
           setProfileCatalogError(
-            "Не удалось обновить список профилей. Введённые настройки сохранены.",
+            msg("project.couldNotRefreshTheProfilesListYourEntriesHaveBeen"),
           );
         }
       },
@@ -335,7 +339,7 @@ export function ProjectSettings({
     if (Object.keys(inputErrors).length > 0) return false;
     if (!timeoutValid) {
       setError(
-        `Тайм-аут запуска: введите целое число от ${MIN_STARTUP_TIMEOUT_MINUTES} до ${MAX_STARTUP_TIMEOUT_MINUTES} минут.`,
+        msg("project.startupTimeoutEnterAWholeNumberBetweenAndMinutes", { MIN_STARTUP_TIMEOUT_MINUTES: String(MIN_STARTUP_TIMEOUT_MINUTES), MAX_STARTUP_TIMEOUT_MINUTES: String(MAX_STARTUP_TIMEOUT_MINUTES) }),
       );
       return false;
     }
@@ -343,7 +347,7 @@ export function ProjectSettings({
       assertEnvironmentTransport(value.env);
     } catch (e) {
       setError(
-        e instanceof Error ? e.message : "Недопустимые переменные окружения.",
+        e instanceof Error ? e.message : msg("project.invalidEnvironmentVariables"),
       );
       return false;
     }
@@ -373,7 +377,7 @@ export function ProjectSettings({
               DEFAULT_STARTUP_TIMEOUT_MINUTES,
           ),
           conflict: result.conflict,
-          error: `Одни и те же настройки изменены в двух местах: ${result.conflict.fields.join(", ")}. Выберите, какие значения оставить. Остальные изменения объединены.`,
+          error: msg("project.theSameSettingsChangedInTwoPlacesChooseWhichValues", { value1: String(result.conflict.fields.join(", ")) }),
         }));
         return false;
       }
@@ -386,12 +390,12 @@ export function ProjectSettings({
         ),
       );
       if (alive.current && guard.current) guard.current.dirty = false;
-      setNotice("Сохранено. Изменения применятся к следующим запускам.");
+      setNotice(msg("project.savedChangesApplyToFutureRuns"));
       if (alive.current) onSaved(next.version);
       return true;
     } catch (e) {
       setError(
-        preparationErrorMessage(e) || "Не удалось сохранить настройки проекта.",
+        preparationErrorMessage(e) || msg("project.couldNotSaveProjectSettings"),
       );
       return false;
     } finally {
@@ -441,9 +445,9 @@ export function ProjectSettings({
       <div className="section-heading">
         <div>
           {!embedded && (
-            <span className="eyebrow">ПРОЕКТ / {project.name}</span>
+            <span className="eyebrow">{msg("project.project")}{project.name}</span>
           )}
-          <h2>{embedded ? "Проект" : "Настройки проекта"}</h2>
+          <h2>{embedded ? msg("project.project2") : msg("project.projectSettings")}</h2>
         </div>
         {!embedded && (
           <button
@@ -451,23 +455,22 @@ export function ProjectSettings({
             className="quiet"
             disabled={saving || documentsBusy}
             onClick={onBack}
-          >
-            ← Назад
-          </button>
+          >{msg("project.back")}</button>
         )}
       </div>
       <SettingsTabs
-        label="Разделы настроек проекта"
+        workspace
+        label={msg("project.projectSettingsSections")}
         tabs={[
-          ["launch", "Запуск"],
-          ["config", "Конфигурация"],
-          ["workflows", "Рабочие процессы"],
-          ["pipelines", "Конвейеры"],
-          ["image", "Образ"],
-          ["specifications", "Спецификации"],
-          ["history", "История"],
-          ["tools", "Инструменты"],
-          ["profiles", "Профили"],
+          ["launch", msg("project.launch")],
+          ["config", msg("project.configuration")],
+          ["workflows", msg("project.workflows")],
+          ["pipelines", msg("project.pipelines")],
+          ["image", msg("project.image")],
+          ["specifications", msg("project.usages")],
+          ["history", msg("project.history")],
+          ["tools", msg("project.tools")],
+          ["profiles", msg("project.profiles")],
         ]}
         current={tab}
         onChange={setTab}
@@ -482,18 +485,11 @@ export function ProjectSettings({
               appliedCatalogKey.current !== catalogKey &&
               profileSettled !== profileLoadKey)
           }
-          label="Загружаем настройки…"
+          label={msg("project.loadingSettings")}
         >
-          <p className="project-settings-notice">
-            Параметры запуска Desktop общие для всех топиков проекта:
-            исполняемый файл, профиль по умолчанию, окружение и тайм-аут.
-            Профили проверяются в выбранном контексте; проектные файлы ниже
-            принадлежат только ему. Уже запущенные процессы не меняются.
-          </p>
+          <p className="project-settings-notice">{msg("project.desktopLaunchSettingsAreSharedByAllTopicsInThis")}</p>
           {!value ? (
-            <button onClick={() => setAttempt((a) => a + 1)}>
-              Повторить загрузку
-            </button>
+            <button onClick={() => setAttempt((a) => a + 1)}>{msg("project.retryLoading")}</button>
           ) : (
             <form
               autoComplete="off"
@@ -506,14 +502,10 @@ export function ProjectSettings({
                 <section className="project-settings-section">
                   <div>
                     <h3>Goga</h3>
-                    <p className="hint">
-                      Свой исполняемый файл для каждого проекта.
-                    </p>
+                    <p className="hint">{msg("project.useASeparateExecutableForEachProject")}</p>
                   </div>
                   <div>
-                    <label>
-                      Исполняемый файл
-                      <input
+                    <label>{msg("project.executable")}<input
                         value={value.executable}
                         spellCheck={false}
                         onChange={(e) =>
@@ -522,38 +514,30 @@ export function ProjectSettings({
                         aria-describedby="executable-help"
                       />
                     </label>
-                    <p className="hint" id="executable-help">
-                      Имя из PATH, например goga-2.0, или абсолютный путь. Без
-                      аргументов командной строки.
-                    </p>
+                    <p className="hint" id="executable-help">{msg("project.enterANameOnYourPATHSuchAsGoga2")}</p>
                   </div>
                 </section>
                 <section className="project-settings-section">
                   <div>
-                    <h3>Профиль проекта</h3>
-                    <p className="hint">Выберите из существующих профилей.</p>
+                    <h3>{msg("project.projectProfile")}</h3>
+                    <p className="hint">{msg("project.chooseAnExistingProfile")}</p>
                   </div>
                   <div>
-                    <label>
-                      Профиль по умолчанию
-                      <select
+                    <label>{msg("project.defaultProfile")}<select
                         value={value.profile}
                         onChange={(e) =>
                           edit({ ...value, profile: e.target.value })
                         }
                       >
-                        <option value="">
-                          Автоматически — окружение / рабочий процесс
-                        </option>
+                        <option value="">{msg("project.automaticEnvironmentWorkflow")}</option>
                         {missing && (
                           <option value={value.profile}>
-                            {value.profile} · не найден
-                          </option>
+                            {value.profile}{msg("project.notFound")}</option>
                         )}
                         {doc?.profiles.map((p) => (
                           <option key={p.name} value={p.name}>
                             {p.name} ·{" "}
-                            {p.source === "project" ? "проектный" : "личный"}
+                            {p.source === "project" ? msg("project.project3") : msg("project.personal")}
                           </option>
                         ))}
                       </select>
@@ -566,36 +550,22 @@ export function ProjectSettings({
                         <button
                           type="button"
                           onClick={() => setProfileCatalogAttempt((a) => a + 1)}
-                        >
-                          Обновить профили
-                        </button>
+                        >{msg("project.refreshProfiles")}</button>
                       </div>
                     )}
                     {missing && (
-                      <p className="error">
-                        Сохранённый профиль не найден. Выберите доступный
-                        профиль или автоматический режим.
-                      </p>
+                      <p className="error">{msg("project.theSavedProfileWasNotFoundChooseAnAvailableProfile")}</p>
                     )}
-                    <p className="hint">
-                      Профиль применяется по умолчанию; в форме запуска его
-                      можно переопределить. Личные профили редактируются в общих
-                      настройках. Проектные — во вкладке «Профили»; они имеют
-                      приоритет перед одноимёнными личными.
-                    </p>
+                    <p className="hint">{msg("project.thisIsTheDefaultProfileYouCanOverrideItIn")}</p>
                   </div>
                 </section>
                 <section className="project-settings-section">
                   <div>
-                    <h3>Ожидание запуска</h3>
-                    <p className="hint">
-                      Лимит ожидания Dashboard, не всего конвейера.
-                    </p>
+                    <h3>{msg("project.startupTimeout")}</h3>
+                    <p className="hint">{msg("project.timeLimitForOpeningTheDashboardNotForTheEntire")}</p>
                   </div>
                   <div>
-                    <label>
-                      Тайм-аут запуска конвейера
-                      <input
+                    <label>{msg("project.pipelineStartupTimeout")}<input
                         type="text"
                         inputMode="numeric"
                         value={timeoutDraft}
@@ -609,33 +579,20 @@ export function ProjectSettings({
                         }}
                       />
                     </label>
-                    <p className="hint" id="startup-timeout-help">
-                      От {MIN_STARTUP_TIMEOUT_MINUTES} до{" "}
-                      {MAX_STARTUP_TIMEOUT_MINUTES} минут, целое число. По
-                      умолчанию — {DEFAULT_STARTUP_TIMEOUT_MINUTES} минут. От
-                      запуска процесса Goga после подтверждений до получения
-                      ссылки Dashboard и успешного открытия. Включает подготовку
-                      и обновление Docker. Только для будущих запусков.
-                    </p>
+                    <p className="hint" id="startup-timeout-help">{msg("project.startupTimeoutHelp", { min: MIN_STARTUP_TIMEOUT_MINUTES, max: MAX_STARTUP_TIMEOUT_MINUTES, defaultMinutes: DEFAULT_STARTUP_TIMEOUT_MINUTES })}</p>
                   </div>
                 </section>
                 <section className="project-settings-section">
                   <div>
-                    <h3>Переменные окружения</h3>
-                    <p className="hint">Окружение запуска Goga.</p>
+                    <h3>{msg("project.environmentVariables")}</h3>
+                    <p className="hint">{msg("project.environmentForLaunchingGoga")}</p>
                   </div>
                   <div>
-                    <p className="hint">
-                      Все переменные получает Goga. Включите «Передавать в
-                      runtime», чтобы передать конкретную переменную в окружение
-                      выполнения через -e.
-                    </p>
+                    <p className="hint">{msg("project.gogaReceivesAllVariablesEnablePassToRuntimeToPass")}</p>
                     {value.env.map((row, i) => (
                       <div className="project-env-row" key={i}>
-                        <label>
-                          Имя
-                          <input
-                            aria-label={`Имя ${i + 1}`}
+                        <label>{msg("project.name")}<input
+                            aria-label={msg("project.name2", { value1: String(i + 1) })}
                             value={row.key}
                             spellCheck={false}
                             onChange={(e) =>
@@ -648,10 +605,8 @@ export function ProjectSettings({
                             }
                           />
                         </label>
-                        <label>
-                          Значение
-                          <EnvironmentValueInput
-                            label={`Значение ${i + 1}`}
+                        <label>{msg("project.value")}<EnvironmentValueInput
+                            label={msg("project.value2", { value1: String(i + 1) })}
                             secret={row.secret}
                             value={row.value}
                             onInvalid={(message) => {
@@ -681,7 +636,7 @@ export function ProjectSettings({
                         <button
                           type="button"
                           className="quiet"
-                          aria-label={`Удалить переменную ${i + 1}`}
+                          aria-label={msg("project.removeVariable", { value1: String(i + 1) })}
                           onClick={() => {
                             if (saving || inFlight.current) return;
                             setInputErrors((errors) =>
@@ -710,7 +665,7 @@ export function ProjectSettings({
                               className="runtime-switch"
                               role="switch"
                               aria-checked={row.secret}
-                              aria-label={`Скрывать значение ${i + 1}`}
+                              aria-label={msg("project.hideValue", { value1: String(i + 1) })}
                               type="checkbox"
                               checked={row.secret}
                               onChange={(e) =>
@@ -723,13 +678,11 @@ export function ProjectSettings({
                                   ),
                                 })
                               }
-                            />
-                            Скрывать значение
-                          </label>
+                            />{msg("project.hideValue2")}</label>
                           <label className="check-row">
                             <input
                               className="runtime-switch"
-                              aria-label={`Передавать в runtime ${i + 1}`}
+                              aria-label={msg("project.passToRuntime", { value1: String(i + 1) })}
                               role="switch"
                               type="checkbox"
                               checked={row.runtime}
@@ -744,9 +697,7 @@ export function ProjectSettings({
                                   ),
                                 })
                               }
-                            />
-                            Передавать в runtime
-                          </label>
+                            />{msg("project.passToRuntime2")}</label>
                         </div>
                       </div>
                     ))}
@@ -767,25 +718,17 @@ export function ProjectSettings({
                           ],
                         })
                       }
-                    >
-                      ＋ Добавить переменную
-                    </button>
-                    <p className="hint">
-                      Значения указываются в одну строку. Служебные переменные
-                      нельзя переопределять
-                    </p>
-                    <p className="hint">
-                      Скрытие маскирует значение только на экране. Значения
-                      сохраняются без шифрования. Не показывайте их посторонним
-                    </p>
+                    >{msg("project.addVariable")}</button>
+                    <p className="hint">{msg("project.valuesMustFitOnASingleLineReservedVariablesCannot")}</p>
+                    <p className="hint">{msg("project.hidingAValueOnlyMasksItOnScreenValuesAre")}</p>
                   </div>
                 </section>
                 <div className="form-actions">
                   <span className="hint">
-                    {dirty ? "Есть несохранённые изменения" : "Нет изменений"}
+                    {dirty ? msg("project.unsavedChanges") : msg("project.noChanges")}
                   </span>
                   <button type="submit" className="primary" disabled={!dirty}>
-                    {saving ? "Сохраняем…" : "Сохранить"}
+                    {saving ? msg("project.saving") : msg("project.save")}
                   </button>
                 </div>
               </fieldset>
@@ -799,12 +742,12 @@ export function ProjectSettings({
           {registryDraft.conflict && (
             <div
               className="form-actions"
-              aria-label="Разрешение конфликта настроек"
+              aria-label={msg("project.resolveSettingsConflict")}
             >
               {(
                 [
-                  ["mine", "Оставить мои значения"],
-                  ["current", "Использовать актуальные значения"],
+                  ["mine", msg("project.keepMyValues")],
+                  ["current", msg("project.useCurrentValues")],
                 ] as const
               ).map(([choice, label]) => (
                 <button
@@ -823,7 +766,7 @@ export function ProjectSettings({
                       conflict: undefined,
                       error: "",
                       notice:
-                        "Значения выбраны. Проверьте настройки и сохраните изменения.",
+                        msg("project.valuesSelectedReviewYourSettingsAndSaveChanges"),
                     }));
                   }}
                 >
@@ -850,9 +793,7 @@ export function ProjectSettings({
         />
       </RetainedViews>
       {tab !== "history" && tab !== "specifications" && (
-        <p className="memory-note">
-          Несохранённые правки остаются в этом окне до его закрытия или перезагрузки.
-        </p>
+        <p className="memory-note">{msg("project.unsavedEditsStayInThisWindowUntilItIsClosed")}</p>
       )}
     </section>
   );
@@ -869,6 +810,7 @@ export function ProjectSettingsConfirmation({
   onDiscard: () => void;
   onSave: () => void;
 }) {
+  useLocale();
   const dialog = useRef<HTMLDialogElement>(null);
   const cancel = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -881,14 +823,14 @@ export function ProjectSettingsConfirmation({
     <dialog
       ref={dialog}
       className="task-reload-dialog project-settings-confirmation"
-      aria-label="Несохранённые настройки проекта"
+      aria-label={msg("project.unsavedProjectSettings")}
       onCancel={(e) => {
         e.preventDefault();
         if (!busy) onCancel();
       }}
     >
-      <h2>Сохранить изменения?</h2>
-      <p>В настройках проекта есть несохранённые изменения.</p>
+      <h2>{msg("project.saveChanges")}</h2>
+      <p>{msg("project.yourProjectSettingsHaveUnsavedChanges")}</p>
       <div className="form-actions">
         <button
           ref={cancel}
@@ -896,19 +838,15 @@ export function ProjectSettingsConfirmation({
           autoFocus
           disabled={busy}
           onClick={onCancel}
-        >
-          Отмена
-        </button>
-        <button type="button" disabled={busy} onClick={onDiscard}>
-          Не сохранять и перейти
-        </button>
+        >{msg("project.cancel")}</button>
+        <button type="button" disabled={busy} onClick={onDiscard}>{msg("project.continueWithoutSaving")}</button>
         <button
           type="button"
           className="primary"
           disabled={busy}
           onClick={onSave}
         >
-          {busy ? "Сохраняем…" : "Сохранить и перейти"}
+          {busy ? msg("project.saving") : msg("project.saveAndContinue")}
         </button>
       </div>
     </dialog>

@@ -223,7 +223,8 @@ it("reconciles a recovered process only on explicit click and enables stop only 
         .disabled,
     ).toBe(false),
   );
-  expect(screen.getByText("Процесс принадлежит этому запуску")).toBeTruthy();
+  expect(screen.queryByText("Процесс принадлежит этому запуску")).toBeNull();
+  expect(screen.queryByText("Нужно проверить владение процессом")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "Остановить" }));
   await waitFor(() => expect(api.stopRun).toHaveBeenCalledWith("old-run"));
 });

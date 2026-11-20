@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { lstat, open, readlink, readdir } from "node:fs/promises";
@@ -89,13 +90,13 @@ interface Prepared {
 }
 const stale = () =>
   new Error(
-    "Подтверждение устарело: проект, ветки, задача или настройки изменились. Обновите данные.",
+    tr("host.confirmationIsStaleTheProjectBranchesTaskOrSettingsChanged"),
   );
 /** A read raced repository changes; never use this as a mutation retry signal. */
 class TopicSnapshotChangedError extends Error {
   constructor() {
     super(
-      "Данные проекта меняются во время загрузки топиков. Повторите загрузку через несколько секунд.",
+      tr("host.projectDataIsChangingWhileTopicsAreLoadingTryAgain"),
     );
     this.name = "TopicSnapshotChangedError";
   }
@@ -113,7 +114,7 @@ async function refs(d: Pick<TopicsContext, "git">): Promise<TopicRef[]> {
     .flatMap((line) => {
       const [full, commit, symref] = line.split("\0");
       if (!full || !commit || !/^[a-f0-9]{40,64}$/.test(commit))
-        throw Error("Некорректный каталог Git refs");
+        throw Error(tr("host.invalidGitRefsDirectory"));
       if (symref || full.endsWith("/HEAD")) return [];
       const remote = full.startsWith("refs/remotes/");
       return [{ full, commit, remote, name: full.slice(remote ? 13 : 11) }];
@@ -167,7 +168,7 @@ async function topicsOnDisk(directory: string) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
   return (topic: string) => {
-    if (links.has(topic)) throw Error("Символические ссылки не разрешены");
+    if (links.has(topic)) throw Error(tr("host.symbolicLinksAreNotAllowed"));
     return dirs.has(topic);
   };
 }
@@ -295,7 +296,7 @@ async function state(d: TopicsContext, year: string): Promise<State> {
     assertReadActive();
     const file = path.resolve(d.root ?? d.project.path, name);
     if (!file.startsWith((d.root ?? d.project.path) + path.sep))
-      throw Error("Некорректный путь Git");
+      throw Error(tr("host.invalidGitPath"));
     const info = await lstat(file);
     if (info.isSymbolicLink()) extra.push(name, await readlink(file));
     else if (info.isFile()) {
@@ -332,7 +333,7 @@ async function state(d: TopicsContext, year: string): Promise<State> {
 /** A successful native catalog read proved only this exact target absent. */
 export class TopicCatalogMissingError extends Error {
   constructor() {
-    super("Топик отсутствует. Обновите каталог.");
+    super(tr("host.topicNotFoundRefreshTheCatalog"));
     this.name = "TopicCatalogMissingError";
   }
 }
@@ -412,7 +413,7 @@ export class TopicsDomain {
     try {
       rows = topicEntriesSchema.parse(JSON.parse(raw));
     } catch {
-      throw Error("Goga вернула некорректный JSON каталог топиков");
+      throw Error(tr("host.gogaReturnedAnInvalidJsonTopicCatalog"));
     }
     // The aggregated board already defines logical entries; per-host history
     // and clone inventories are deliberately not consulted for this display.
@@ -475,7 +476,7 @@ export class TopicsDomain {
       remoteRecords = topicRecordsSchema.parse(JSON.parse(raw[3]!));
     } catch (error) {
       if (error instanceof SyntaxError || (error as Error).name === "ZodError")
-        throw Error("Goga вернула некорректный JSON каталог топиков");
+        throw Error(tr("host.gogaReturnedAnInvalidJsonTopicCatalog"));
       throw error;
     }
     const after = await state(d, year);
@@ -523,7 +524,7 @@ export class TopicsDomain {
           r.remote === target.remote,
       );
     const rows = exactRows(board);
-    if (rows.length > 1) throw Error("Топик неоднозначен. Обновите каталог.");
+    if (rows.length > 1) throw Error(tr("host.theTopicIsAmbiguousRefreshTheCatalog"));
     const ownedCurrent =
       !!d.owner &&
       !target.remote &&
@@ -540,7 +541,7 @@ export class TopicsDomain {
     const ref = before.refs.find(
       (r) => r.name === target.branch && r.remote === target.remote,
     );
-    if (!ref) throw Error("Ветка отсутствует. Обновите каталог.");
+    if (!ref) throw Error(tr("host.branchNotFoundRefreshTheCatalog"));
     const own =
       normalize(target.remote ? short(target.branch) : target.branch) ===
       target.topic;
@@ -589,15 +590,15 @@ export class TopicsDomain {
       ...(!current
         ? {
             reason: target.remote
-              ? "Удалённая ветка: задача доступна только для чтения. Переключитесь на локальную собственную ветку топика."
+              ? tr("host.remoteBranchTheTaskIsReadOnlySwitchToThe")
               : !own
-                ? "Это размещённая история другого топика. Редактирование возможно только в собственной текущей ветке."
-                : "Для редактирования сначала переключитесь на собственную ветку топика.",
+                ? tr("host.thisIsAnotherTopicSHostedHistoryEditOnlyOn")
+                : tr("host.switchToTheTopicSOwnBranchBeforeEditing"),
           }
         : d.active()
           ? {
               reason:
-                "Во время активного запуска задача доступна только для чтения.",
+                tr("host.duringAnActiveRunTheTaskIsReadOnly"),
             }
           : {}),
     };
@@ -623,7 +624,7 @@ export class TopicsDomain {
   ): Promise<Prepared> {
     if (d.active())
       throw Error(
-        "В репозитории работает конвейер. Остановите его перед изменением топиков.",
+        tr("host.aPipelineIsRunningInTheRepositoryStopItBefore"),
       );
     // Destructive operations are resolved from exact Git refs, the target
     // directories and registry guards, never from Goga's display projections.
@@ -649,22 +650,22 @@ export class TopicsDomain {
         r.target?.branch === s.current);
     if (s.dirty && dirtyUnsafe)
       throw Error(
-        "В рабочей копии есть незакоммиченные изменения (dirty). Сохраните их перед операцией.",
+        tr("host.theWorkingCopyHasUncommittedChangesDirtySaveThemBefore"),
       );
     const ensureBase = async () => {
       const base = r.baseRef || board?.baseRef || (await d.baseRef());
       if (!base || base.startsWith("-") || /[\x00-\x20]/.test(base))
-        throw Error("Выберите базовую ветку");
+        throw Error(tr("host.selectABaseBranch"));
       await d.git(["rev-parse", "--verify", `${base}^{commit}`]);
       return base;
     };
     if (r.action === "create") {
       if (!board) throw stale();
-      if (!r.branch) throw Error("Укажите имя ветки");
+      if (!r.branch) throw Error(tr("host.enterABranchName"));
       await d.git(["check-ref-format", "--branch", r.branch]);
       await d.assertBranchesAvailable?.([r.branch], r.action);
       const slug = normalize(r.branch);
-      if (!slug) throw Error("Имя ветки не образует допустимый топик");
+      if (!slug) throw Error(tr("host.theBranchNameDoesNotFormAValidTopic2"));
       if (
         s.refs.some(
           (ref) => normalize(ref.remote ? short(ref.name) : ref.name) === slug,
@@ -673,7 +674,7 @@ export class TopicsDomain {
           (row) => row.topic === slug,
         )
       )
-        throw Error("Топик или ветка уже существует");
+        throw Error(tr("host.topicOrBranchAlreadyExists"));
       await noSymlinks(
         path.join(d.root ?? d.project.path, ".goga/history", r.year, slug),
       );
@@ -681,17 +682,17 @@ export class TopicsDomain {
         await lstat(
           path.join(d.root ?? d.project.path, ".goga/history", r.year, slug),
         );
-        throw Error("Каталог топика уже существует");
+        throw Error(tr("host.topicDirectoryAlreadyExists"));
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       }
       const base = await ensureBase();
       if ((r.publish || !r.switch) && !r.task)
         throw Error(
-          "Для публикации или создания без переключения требуется задача",
+          tr("host.aTaskIsRequiredWhenPublishingOrCreatingWithoutSwitching"),
         );
       if (r.commit && !r.publish)
-        throw Error("--commit действует только при публикации");
+        throw Error(tr("host.commitOnlyAppliesWhenPublishing"));
       const args = [
         ...prefix,
         "create",
@@ -704,22 +705,22 @@ export class TopicsDomain {
       ];
       commands.push({ args, ...(r.task ? { stdin: r.task } : {}) });
       details.push(
-        `Создать ${r.branch} (${r.year}/${slug}) от ${base}.`,
+        tr("host.createBranchYearSlugFromBase", { branch: r.branch, year: r.year, slug: slug, base: base }),
         r.publish
-          ? "Создать коммит задачи и опубликовать ветку в origin."
+          ? tr("host.commitTheTaskAndPublishTheBranchToOrigin")
           : r.switch
-            ? "Переключить ветку; задача останется незакоммиченной."
-            : "Создать локальный коммит задачи без переключения.",
+            ? tr("host.switchBranchesTheTaskWillRemainUncommitted")
+            : tr("host.commitTheTaskLocallyWithoutSwitching"),
       );
       if (r.publish && r.switch) {
         commands.push({ args: [...prefix, "switch", r.branch] });
         details.push(
-          "После публикации отдельно переключиться. Если переключение не удастся, опубликованная ветка останется.",
+          tr("host.switchSeparatelyAfterPublishingIfSwitchingFailsThePublishedBranch"),
         );
       }
     } else if (r.action === "save-task") {
       if (!r.target || r.task === undefined || !r.taskVersion)
-        throw Error("Отсутствует задача или её версия");
+        throw Error(tr("host.theTaskOrItsVersionIsMissing"));
       const doc = await this.details(d, r.year, r.target);
       if (!doc.editable) throw Error(doc.reason);
       if (
@@ -728,17 +729,17 @@ export class TopicsDomain {
         !r.task.trim()
       )
         throw Error(
-          "Введите непустое описание задачи для создания локальных данных.",
+          tr("host.enterANonEmptyTaskDescriptionToCreateLocalData"),
         );
       if (doc.version !== r.taskVersion) throw stale();
       save = { relative: taskPath(r.target.topic, r.year), text: r.task };
       details.push(
-        `Записать ${save.relative} в текущей ветке ${r.target.branch}. Без коммита и публикации.`,
+        tr("host.writeRelativeInTheCurrentBranchBranchWithoutCommittingOr", { relative: save.relative, branch: r.target.branch }),
       );
-      if (!r.task.trim()) details.push("Задача будет полностью очищена.");
+      if (!r.task.trim()) details.push(tr("host.theTaskWillBeCompletelyCleared"));
     } else if (r.action === "clear") {
       if (!d.removalFlow || d.owner)
-        throw Error("Используйте отдельное подтверждение очистки топиков.");
+        throw Error(tr("host.useTheSeparateTopicCleanupConfirmation"));
       await d.assertPrimaryOwnerAvailable?.(r);
       const base = await ensureBase();
       guards.push(
@@ -779,16 +780,16 @@ export class TopicsDomain {
         args: [...prefix, "clear", "--base-ref", base, "--yes"],
       });
       details.push(
-        `Очистить топики за ${r.year} год по правилам Goga; база ${base}.`,
-        "Поиск, фильтры, категории и отмеченные карточки не ограничивают очистку.",
-        "Могут удаляться собственные ветки, в том числе на origin, и история топиков. Точный список заранее не вычисляется Desktop.",
+        tr("host.clearTopicsForYearUnderGogaSRulesUsingBase", { year: r.year, base: base }),
+        tr("host.searchFiltersCategoriesAndSelectedCardsDoNotLimitCleanup"),
+        tr("host.topicBranchesIncludingBranchesOnOriginAndTopicHistoryMay"),
       );
     } else if (r.action === "delete") {
       await d.assertPrimaryOwnerAvailable?.(r);
       const topics = [
         ...new Set(r.topics ?? (r.target ? [r.target.topic] : [])),
       ];
-      if (!topics.length) throw Error("Выберите топики для удаления");
+      if (!topics.length) throw Error(tr("host.selectTopicsToRemove"));
       const identifiers = await this.deletion(
         d,
         r.year,
@@ -799,10 +800,10 @@ export class TopicsDomain {
       );
       commands.push({ args: [...prefix, "delete", ...identifiers, "--yes"] });
       details.push(
-        "Удаление без корзины. Ранее удалённые топики не восстанавливаются при ошибке следующего.",
+        tr("host.removeWithoutTrashIfALaterRemovalFailsPreviouslyRemoved"),
       );
     } else {
-      if (!board || !r.target) throw Error("Выберите топик");
+      if (!board || !r.target) throw Error(tr("host.selectATopic"));
       if (r.action === "update") await d.assertPrimaryOwnerAvailable?.(r);
       if (
         ![...board.records, ...board.remoteRecords].some(
@@ -828,7 +829,7 @@ export class TopicsDomain {
           s.current !== r.target.branch ||
           r.target.remote
         )
-          throw Error("Топик отсутствует");
+          throw Error(tr("host.topicMissing"));
         const directory = path.dirname(
           path.join(d.root ?? d.project.path, taskPath(d.owner.topic, r.year)),
         );
@@ -839,7 +840,7 @@ export class TopicsDomain {
             throw error;
           })
         )
-          throw Error("Топик отсутствует в каталоге Goga");
+          throw Error(tr("host.topicNotFoundInTheGogaCatalog"));
       }
       if (
         normalize(
@@ -847,24 +848,24 @@ export class TopicsDomain {
         ) !== r.target.topic
       )
         throw Error(
-          "Операция доступна только для собственной ветки топика, не размещённой истории",
+          tr("host.thisOperationIsOnlyAvailableForTheTopicSOwn"),
         );
       if (r.target.remote && r.action !== "switch")
-        throw Error("Операция требует локальную собственную ветку топика");
+        throw Error(tr("host.thisOperationRequiresTheTopicSOwnLocalBranch"));
       const own = s.refs.filter(
         (ref) =>
           normalize(ref.remote ? short(ref.name) : ref.name) ===
             r.target!.topic && !ref.remote,
       );
       if (own.length > 1)
-        throw Error("Неоднозначный топик: несколько собственных веток");
+        throw Error(tr("host.ambiguousTopicMultipleBranchesClaimOwnership"));
       if (
         r.target.remote &&
         (own.length ||
           s.refs.some((ref) => !ref.remote && ref.name === r.target!.branch))
       )
         throw Error(
-          "Неоднозначное переключение: существует локальная ветка с тем же именем. Выберите локальную ветку.",
+          tr("host.switchIsAmbiguousALocalBranchWithTheSameName"),
         );
       const identifier = r.target.branch;
       const args = [...prefix, r.action, identifier];
@@ -889,25 +890,25 @@ export class TopicsDomain {
         );
         if (branchShaped && localBase === s.current)
           throw Error(
-            `Базовая ветка «${localBase}» сейчас текущая. Сначала переключитесь на ветку топика или другую ветку.`,
+            tr("host.baseBranchLocalbaseIsCurrentlyCheckedOutSwitchToThe", { localBase: localBase }),
           );
         if (r.action === "propagate" && branchShaped)
           await d.assertBranchesAvailable?.([localBase], r.action);
         args.push("--base-ref", base);
-        details.push(`Базовая ветка: ${base}.`);
+        details.push(tr("host.baseBranchBase", { base: base }));
       }
       if (r.action === "update" && r.publish) args.push("--publish");
       if (r.action === "propagate") {
         args.push("--yes");
         details.push(
-          "Включить топик в базовую ветку и отправить базовую ветку в origin (push).",
+          tr("host.propagateTheTopicToTheBaseBranchAndPushThe"),
         );
       }
       if (r.action === "publish" || (r.action === "update" && r.publish))
-        details.push(`Отправить ветку ${identifier} в origin (push).`);
+        details.push(tr("host.pushBranchIdentifierToOrigin", { identifier: identifier }));
       if (s.dirty && (r.action === "publish" || r.action === "propagate"))
         details.push(
-          "Только коммиты. Незакоммиченные изменения не включаются и остаются в рабочей копии.",
+          tr("host.commitsOnlyUncommittedChangesAreNotIncludedAndRemainIn"),
         );
       details.unshift(`${r.action}: ${r.target.topic} → ${identifier}.`);
       commands.push({ args });
@@ -928,14 +929,14 @@ export class TopicsDomain {
         year: r.year,
         action: r.action,
         title: {
-          create: "Создание топика",
-          switch: "Переключение ветки",
-          "save-task": "Сохранение задачи",
-          update: "Обновление топика",
-          publish: "Публикация в origin",
-          propagate: "Включение в базовую ветку",
-          delete: "Удаление топиков",
-          clear: "Очистка топиков",
+          create: tr("host.createTopic"),
+          switch: tr("host.switchBranch"),
+          "save-task": tr("host.saveTask"),
+          update: tr("host.updateTopic"),
+          publish: tr("host.publishToOrigin"),
+          propagate: tr("host.propagateToBase"),
+          delete: tr("host.deleteTopics"),
+          clear: tr("host.clearTopics"),
         }[r.action],
         details,
         expiresAt: Date.now() + 5 * 60 * 1000,
@@ -971,7 +972,7 @@ export class TopicsDomain {
     for (const topic of topics) {
       if (normalize(s.current) === topic && d.deletionSwitchFrom !== s.current)
         throw Error(
-          "Нельзя удалить топик текущей ветки. Сначала переключитесь.",
+          tr("host.theTopicForTheCurrentBranchCannotBeRemovedSwitch"),
         );
       const own = s.refs.filter(
           (r) => normalize(r.remote ? short(r.name) : r.name) === topic,
@@ -979,7 +980,7 @@ export class TopicsDomain {
         local = own.filter((r) => !r.remote),
         origin = own.filter((r) => r.remote && r.name.startsWith("origin/"));
       if (local.length > 1 || origin.length > 1)
-        throw Error("Неоднозначный топик: несколько собственных веток");
+        throw Error(tr("host.ambiguousTopicMultipleBranchesClaimOwnership"));
       const directory = path.join(d.root ?? d.project.path, prefix, topic);
       const disk = onDisk(topic);
       const carried = s.refs.some((r) =>
@@ -987,16 +988,16 @@ export class TopicsDomain {
       );
       if (!own.length && carried)
         throw Error(
-          "Топик не имеет собственной ветки: это история, удалять нечего",
+          tr("host.thisTopicHasNoBranchOfItsOwnOnlyHistory"),
         );
       // No CLI identifier may fall through to prefix matching.
-      if (!carried && !disk) throw Error(`Топик «${topic}» отсутствует`);
+      if (!carried && !disk) throw Error(tr("host.topicTopicNotFound", { topic: topic }));
       if (
         !disk &&
         !s.refs.some((r) => byCommit.get(r.commit)!.visible.has(topic))
       )
         throw Error(
-          `Goga не может точно определить топик «${topic}» по именам файлов. Удаление не выполнено.`,
+          tr("host.gogaCouldNotIdentifyTopicTopicUnambiguouslyFromFileNames", { topic: topic }),
         );
       // Goga prioritizes exact branch names over normalized slugs. For a
       // colliding name force the verified exact-slug tier: ':' cannot occur
@@ -1016,15 +1017,15 @@ export class TopicsDomain {
         !survivors.some((r) => byCommit.get(r.commit)!.visible.has(topic));
       if (!local.length && !origin.length && !removeDir)
         throw Error(
-          "Для топика нет удаляемой локальной ветки или origin-двойника",
+          tr("host.thereIsNoRemovableLocalBranchOrMatchingOriginBranch"),
         );
       // Guard the entire removable directory, not only todo.md: CLI recursively removes it.
       if (removeDir) guards.push(await this.guardDirectory(directory));
       details.push(
-        `${topic}: локальная ветка ${local[0]?.name ?? "отсутствует"}; удалённая ветка origin/${origin[0] ? short(origin[0].name) : "(отсутствует)"}.`,
+        tr("host.topicLocalBranchValue2RemoteBranchOriginValue3", { topic: topic, value2: local[0]?.name ?? tr("host.missing"), value3: origin[0] ? short(origin[0].name) : tr("host.missing2") }),
         removeDir
-          ? `Удалить каталог ${prefix}${topic}.`
-          : `Каталог ${prefix}${topic} сохраняется: отсутствует или есть другие ветки-носители.`,
+          ? tr("host.removeDirectoryPrefixTopic", { prefix: prefix, topic: topic })
+          : tr("host.directoryPrefixTopicWillBeKeptItIsMissingOr", { prefix: prefix, topic: topic }),
       );
     }
     const localBranches = [...removingRefs]
@@ -1043,14 +1044,14 @@ export class TopicsDomain {
     for (const name of dropping) {
       if (surviving.has(name) || onDisk(name)) continue;
       throw Error(
-        `Будет потерян невыбранный топик «${name}»: он есть только в удаляемых ветках.`,
+        tr("host.unselectedTopicNameWouldBeLostBecauseItExistsOnly", { name: name }),
       );
     }
     return identifiers;
   }
   private async guardDirectory(directory: string, depth = 0): Promise<string> {
     assertReadActive();
-    if (depth > 32) throw Error("Каталог топика слишком глубок");
+    if (depth > 32) throw Error(tr("host.theTopicDirectoryIsNestedTooDeeply"));
     await noSymlinks(directory);
     const parts: string[] = [];
     for (const entry of (
@@ -1059,7 +1060,7 @@ export class TopicsDomain {
       const file = path.join(directory, entry.name),
         info = await lstat(file);
       if (entry.isSymbolicLink())
-        throw Error("Ссылки в удаляемом каталоге топика не поддержаны");
+        throw Error(tr("host.linksAreNotSupportedInATopicDirectorySelectedFor"));
       parts.push(
         entry.name,
         JSON.stringify([
@@ -1082,7 +1083,7 @@ export class TopicsDomain {
   ): Promise<TopicOperationResult> {
     if (d.deletionSwitchFrom)
       throw Error(
-        "Предпросмотр переключения не разрешает выполнение удаления.",
+        tr("host.aBranchSwitchPreviewDoesNotAuthorizeRemoval"),
       );
     const id = this.projectForToken(token),
       ticket = this.tickets.get(token)!;
@@ -1122,7 +1123,7 @@ export class TopicsDomain {
       return {
         projectId: id,
         status: "success",
-        message: "Операция выполнена. Обновите доску для просмотра состояния.",
+        message: tr("host.operationCompletedRefreshTheBoardToSeeItsState"),
       };
     } catch {
       // Local refs cannot prove that an origin push failed before taking effect.
@@ -1148,8 +1149,8 @@ export class TopicsDomain {
         projectId: id,
         status: changed ? "partial" : "failed",
         message: changed
-          ? "Команда завершилась ошибкой. Возможны частичные изменения; автоматического отката нет. Обновите доску и проверьте локальные ветки и origin."
-          : "Команда завершилась ошибкой. Изменений локального снимка не обнаружено; проверьте состояние репозитория и настройки Goga.",
+          ? tr("host.commandFailedPartialChangesArePossibleThereIsNoAutomatic")
+          : tr("host.commandFailedNoChangesDetectedInTheLocalSnapshotCheck"),
       };
     }
   }

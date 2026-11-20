@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import path from "node:path";
 import { lstat, mkdir, opendir } from "node:fs/promises";
 import {
@@ -16,7 +17,7 @@ const MAX_ENTRIES = 2048,
   MAX_SEARCH = 10000,
   MAX_DEPTH = 32;
 const validate = (p: string, root = false) => {
-  if (!isOverviewPath(p, root)) throw Error("Недопустимый путь файла");
+  if (!isOverviewPath(p, root)) throw Error(tr("host.invalidFilePath"));
 };
 export async function listOverviewDirectory(
   root: string,
@@ -48,7 +49,7 @@ export async function listOverviewDirectory(
             ? "file"
             : "unsupported",
       ...(e.isSymbolicLink()
-        ? { reason: "Символическая ссылка не открывается" }
+        ? { reason: tr("host.cannotOpenASymbolicLink") }
         : {}),
     });
   }
@@ -67,7 +68,7 @@ export async function searchOverviewFiles(
 ): Promise<OverviewDirectory> {
   validate(relative, true);
   if (!query.trim() || query.length > 256)
-    throw Error("Введите имя файла до 256 символов");
+    throw Error(tr("host.enterAFileNameUpTo256Characters"));
   const result: OverviewDirectory = {
     path: relative,
     entries: [],
@@ -119,7 +120,7 @@ export async function createOverviewEntry(
   validate(relative);
   if (kind === "file")
     return saveSourceFile(root, relative, text, "missing", guard);
-  if (kind !== "directory") throw Error("Недопустимый вид файла");
+  if (kind !== "directory") throw Error(tr("host.invalidFileType"));
   const parent = await sourceDirectories(
     root,
     path.dirname(relative) === "." ? "" : path.dirname(relative),
@@ -130,6 +131,6 @@ export async function createOverviewEntry(
   await verifySourceDirectories(parent.identities);
   const created = await lstat(path.join(root, relative));
   if (!created.isDirectory() || created.isSymbolicLink())
-    throw Error("Папка изменилась при создании");
+    throw Error(tr("host.folderChangedDuringCreation"));
   return null;
 }

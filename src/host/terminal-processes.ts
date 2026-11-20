@@ -1,3 +1,5 @@
+import type { MessageKey } from "../shared/locale-packs.generated";
+import { t } from "../shared/i18n";
 import { TerminalInspectorError } from "./terminal-errors";
 import { z } from "zod";
 /** Identity comes from the host OS inspector, never shell titles or renderer input. */
@@ -42,22 +44,22 @@ export interface TerminalProcessControl {
   /** Called only after the checked SIGHUP, never before job termination. */
   stop(plan: TerminalProcessPlan, afterHangup?: () => void): Promise<void>;
 }
-const messages: Record<string, string> = {
+const messages: Partial<Record<string, Extract<MessageKey, `hostTerminal.${string}`>>> = {
   uncertain:
-    "Принадлежность процессов терминалу не подтверждена. Сигналы не отправлены неопределённым процессам.",
+    "hostTerminal.processOwnerUnknown",
   stopped:
-    "В терминале есть приостановленный процесс. Автоматическое продолжение и принудительное завершение запрещены.",
-  stale: "Состав процессов изменился. Требуется новое подтверждение.",
+    "hostTerminal.processSuspended",
+  stale: "hostTerminal.processesChanged",
   timeout:
-    "Процессы терминала не завершились за 5 секунд. Принудительное завершение не выполнялось.",
-  signal: "Не удалось подтвердить отправку сигнала процессу терминала.",
+    "hostTerminal.processStopTimeout",
+  signal: "hostTerminal.processSignalUnconfirmed",
 };
 export class TerminalStopError extends Error {
   constructor(
     public readonly code: string,
     public readonly actions: readonly TerminalSignalAction[] = [],
   ) {
-    super(messages[code] ?? "Остановка терминала не подтверждена.");
+    super(t((Object.hasOwn(messages, code) ? messages[code] : undefined) ?? "hostTerminal.processStopUnconfirmed"));
   }
 }
 const positive = z.number().int().min(2).max(2147483647);

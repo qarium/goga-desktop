@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import type { DemoShow } from "../shared/demonstrations";
 
 interface SelectionReader {
@@ -5,7 +6,7 @@ interface SelectionReader {
   selection(showId: string, tabId: string): Promise<string>;
 }
 const MAX_BYTES = 1024 * 1024;
-const stale = () => Error("Выделение страницы закрыто или заменено.");
+const stale = () => Error(t("native.selectionGone"));
 function ownsPage(reader: SelectionReader, showId: string, tabId: string) {
   const show = reader.shows().find((s) => s.showId === showId);
   return (
@@ -35,9 +36,9 @@ export function createDemoSelectionClipboard(
     ): Promise<boolean> {
       if (closed || canceled.has(requestId)) return false;
       if (used.has(requestId) || pending.has(requestId))
-        throw Error("Запрос копирования уже использован.");
+        throw Error(t("native.copyRequestUsed"));
       if (!ownsPage(reader, showId, tabId)) throw stale();
-      if (pending.size >= 8) throw Error("Дождитесь завершения копирования.");
+      if (pending.size >= 8) throw Error(t("native.copyBusy"));
       let cancel!: () => void, timer: ReturnType<typeof setTimeout>;
       const cancellation = new Promise<null>((resolve) => {
         cancel = () => resolve(null);
@@ -48,7 +49,7 @@ export function createDemoSelectionClipboard(
           () =>
             reject(
               Error(
-                "Не удалось прочитать выделенный текст. Повторите попытку.",
+                t("native.selectionReadFailed"),
               ),
             ),
           10000,
@@ -67,13 +68,13 @@ export function createDemoSelectionClipboard(
           typeof text !== "string" ||
           Buffer.byteLength(text, "utf8") > MAX_BYTES
         )
-          throw Error("Выделенный текст слишком большой для копирования.");
+          throw Error(t("native.selectionTooLarge"));
         if (!text) return false; // Preserve the existing system clipboard.
         try {
           await writeText(text);
         } catch {
           throw Error(
-            "Не удалось скопировать выделенный текст. Повторите попытку.",
+            t("native.selectionCopyFailed"),
           );
         }
         return true;

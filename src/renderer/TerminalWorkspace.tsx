@@ -1,3 +1,5 @@
+import { t } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { flushSync } from "react-dom";
 import { LoadingState } from "./LoadingBoundary";
 import { useViewActive } from "./RetainedViews";
@@ -46,7 +48,7 @@ type PendingConfirmation = TerminalConfirmation & { closingTabId?: string };
 const errorText = (error: unknown) =>
   error instanceof Error
     ? preparationErrorMessage(error)
-    : "Операция терминала не выполнена.";
+    : t("general.terminalOperationFailed");
 export function TerminalWorkspace(props: Props) {
   const scope = useMemo(() => props.scope, [JSON.stringify(props.scope)]);
   if (props.blocked)
@@ -64,6 +66,7 @@ function Workspace({
   suspendOpen,
   onPresetSettings,
 }: Props) {
+  useLocale();
   const viewActive = useViewActive();
   const activeRef = useRef(viewActive);
   activeRef.current = viewActive;
@@ -297,7 +300,7 @@ function Workspace({
     }
   }
   const target = () => {
-    if (!state || !selected) throw Error("Выберите терминал.");
+    if (!state || !selected) throw Error(t("general.selectATerminal"));
     return { scope, revision: snapshot.current!.revision, tabId: selected.id };
   };
   function selectTab(tabId: string): Promise<boolean> {
@@ -405,7 +408,7 @@ function Workspace({
       reconciled = true;
       if (result.status !== "success")
         throw Error(
-          result.message ?? "Не все процессы завершены. Вкладка сохранена.",
+          result.message ?? t("general.someProcessesAreStillRunningTheTabHasBeen"),
         );
     } catch (error) {
       // A rejected IPC may have already stopped/removed the session. Reconcile
@@ -471,9 +474,9 @@ function Workspace({
   return (
     <section
       className="terminal-workspace project-content"
-      aria-label="Терминалы проекта"
+      aria-label={t("general.projectTerminals")}
     >
-      <h2 className="terminal-heading">Терминал</h2>
+      <h2 className="terminal-heading">{t("general.terminal")}</h2>
       <TerminalTabs
         scope={scope}
         state={state && { ...state, selectedId: selectedId ?? null }}
@@ -487,9 +490,7 @@ function Workspace({
         onError={setError}
       />
       {presetCreating && (
-        <p className="terminal-preset-progress" role="status">
-          Открываем вкладку по пресету…
-        </p>
+        <p className="terminal-preset-progress" role="status">{t("general.openingATabFromAPreset")}</p>
       )}
       {startupMessage && (
         <p className="terminal-error" role="alert">
@@ -497,27 +498,20 @@ function Workspace({
         </p>
       )}
       {!startupMessage && session?.presetStatus === "pending" && (
-        <p className="terminal-preset-progress" role="status">
-          Ожидаем готовности оболочки для команды пресета…
-        </p>
+        <p className="terminal-preset-progress" role="status">{t("general.waitingForTheShellBeforeRunningThePresetCommand")}</p>
       )}
       {!startupMessage && session?.presetStatus === "unconfirmed" && (
-        <p className="terminal-preset-progress" role="alert">
-          Не удалось подтвердить выполнение команды пресета. Проверьте вывод
-          терминала. Автоматического повтора не будет.
-        </p>
+        <p className="terminal-preset-progress" role="alert">{t("general.couldNotConfirmExecutionOfThePresetCommandCheck")}</p>
       )}
       {!startupMessage && session?.presetStatus === "cancelled" && (
-        <p className="terminal-preset-progress" role="status">
-          Автозапуск команды пресета отменён.
-        </p>
+        <p className="terminal-preset-progress" role="status">{t("general.presetCommandCanceled")}</p>
       )}
       {error && (
         <div role="alert" className="terminal-error">
           {error}
           <button
             type="button"
-            aria-label="Закрыть ошибку"
+            aria-label={t("general.dismissError")}
             onClick={() => {
               setError("");
               setPresentationFailed(false);
@@ -530,11 +524,8 @@ function Workspace({
 
       {state && !state.tabs.length && !enteringEmpty && (
         <div className="terminal-empty">
-          <h3>Нет открытых терминалов</h3>
-          <p>
-            Нажмите +, чтобы открыть терминал текущего контекста. Общий терминал
-            доступен через стрелку рядом.
-          </p>
+          <h3>{t("general.noOpenTerminals")}</h3>
+          <p>{t("general.chooseToOpenATerminalInTheCurrentContext")}</p>
         </div>
       )}
       {!error &&
@@ -547,10 +538,10 @@ function Workspace({
             <LoadingState
               label={
                 restarting
-                  ? "Перезапускаем терминал"
+                  ? t("general.restartingTerminal")
                   : closingSelected
-                    ? "Закрываем терминал"
-                    : "Открываем терминал"
+                    ? t("general.closingTerminal")
+                    : t("general.openingTerminal")
               }
             />
           </div>
@@ -583,72 +574,69 @@ function Workspace({
         <div
           role="dialog"
           aria-modal="true"
-          aria-label="Завершить процессы терминала"
+          aria-label={t("general.endTerminalProcesses")}
           className="terminal-confirmation"
         >
           <h3>
             {confirmation.kind === "tab"
-              ? "Закрыть терминал?"
-              : "Обновить сессию?"}
+              ? t("general.closeTerminal2")
+              : t("general.restartSession2")}
           </h3>
-          <p>
-            В следующих контекстах работают команды. Они получат сигнал
-            завершения; оболочки закроются после остановки команд.
-          </p>
+          <p>{t("general.commandsAreRunningInTheFollowingContextsTheyWill")}</p>
           <ul>
             {confirmation.sessions.map((s) => (
               <li key={`${s.sessionId}:${s.generation}`}>
-                {s.context.kind === "primary" ? "Без топика" : s.context.topic}{" "}
-                · команд: {s.jobCount}
+                {s.context.kind === "primary" ? t("general.noTopic") : s.context.topic}{" "}{t("general.commands")} {s.jobCount}
               </li>
             ))}
           </ul>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() =>
-              void action(async () => {
-                const token = confirmation.token;
-                ticket.current = undefined;
-                setConfirmation(undefined);
-                await api.request({ kind: "cancel", token });
-              })
-            }
-          >
-            Отмена
-          </button>
-          <button
-            type="button"
-            disabled={busy}
-            onClick={() => void action(() => complete(confirmation))}
-          >
-            {confirmation.kind === "tab"
-              ? "Завершить и закрыть"
-              : "Завершить и обновить"}
-          </button>
+          <div className="form-actions">
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() =>
+                void action(async () => {
+                  const token = confirmation.token;
+                  ticket.current = undefined;
+                  setConfirmation(undefined);
+                  await api.request({ kind: "cancel", token });
+                })
+              }
+            >{t("general.cancel")}</button>
+            <button
+              type="button"
+              disabled={busy}
+              className="danger"
+              onClick={() => void action(() => complete(confirmation))}
+            >
+              {confirmation.kind === "tab"
+                ? t("general.endAndClose")
+                : t("general.endAndRestart")}
+            </button>
+          </div>
         </div>
       )}
       <div className="terminal-footer">
         <span>
-          {selected ? terminalArea(selected) : "Нет открытых терминалов"}
+          {selected ? terminalArea(selected) : t("general.noOpenTerminals")}
         </span>
         {selected && (
           <>
             {" "}
             <span className="terminal-status" role="status">
               {startupMessage
-                ? "Оболочка не запущена"
+                ? t("general.shellNotStarted")
                 : error
-                  ? "Сессия недоступна"
+                  ? t("general.sessionUnavailable")
                   : !usable
-                    ? "Открываем терминал…"
+                    ? t("general.openingTerminal2")
                     : session.screen === "lost"
-                      ? "Экран недоступен — обновите сессию"
+                      ? t("general.screenUnavailableRestartTheSession")
                       : session.state === "exited"
-                        ? `Сессия завершена${session.exitCode === undefined ? "" : ` · код ${session.exitCode}`}`
+                        ? t("general.sessionEnded", { value1: session.exitCode === undefined ? "" : t("general.code", {exitCode:session.exitCode}) })
                         : session.state === "running"
-                          ? "Сессия открыта"
-                          : "Подождите…"}
+                          ? t("general.sessionOpen")
+                          : t("general.pleaseWait")}
             </span>
           </>
         )}

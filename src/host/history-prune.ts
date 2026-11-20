@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, readdir } from "node:fs/promises";
 import path from "node:path";
@@ -13,7 +14,7 @@ import { sanitizeRepositoryLog } from "./repository-actions";
 
 const stale = () =>
   Error(
-    "Предпросмотр очистки устарел. Откройте его заново и проверьте список.",
+    tr("host.theCleanupPreviewIsStaleOpenItAgainAndReview"),
   );
 interface Pending {
   projectId: string;
@@ -43,7 +44,7 @@ async function inventory(root: string, year: string) {
   ]) {
     const s = await lstat(p);
     if (!s.isDirectory() || s.isSymbolicLink())
-      throw Error("Каталог истории недоступен для безопасной очистки.");
+      throw Error(tr("host.theHistoryFolderCannotBeCleanedSafely"));
     hash.update(JSON.stringify([p, s.dev, s.ino]));
   }
   let count = 0;
@@ -51,12 +52,12 @@ async function inventory(root: string, year: string) {
     assertReadActive();
     if (++count > 20000 || depth > 20)
       throw Error(
-        "История слишком велика для безопасного предпросмотра очистки.",
+        tr("host.historyIsTooLargeToPreviewCleanupSafely"),
       );
     const s = await lstat(p);
     if (s.isSymbolicLink() || (!s.isFile() && !s.isDirectory()))
       throw Error(
-        "В истории обнаружена ссылка или специальный файл. Очистка отменена.",
+        tr("host.historyContainsALinkOrSpecialFileCleanupCanceled"),
       );
     hash.update(
       JSON.stringify([p, s.dev, s.ino, s.mode, s.size, s.mtimeMs, s.ctimeMs]),
@@ -83,7 +84,7 @@ function parseCandidates(stdout: string, available: string[]) {
     )
   )
     throw Error(
-      "Goga вернула неожиданный список очистки. Удаление не выполнено.",
+      tr("host.gogaReturnedAnUnexpectedCleanupListNothingWasDeleted"),
     );
   return entries.sort();
 }
@@ -185,17 +186,17 @@ export class HistoryPruner {
       const remaining = await inventory(access.root, year);
       if (entries.some((e) => remaining.entries.includes(e)))
         throw Error(
-          "Goga завершила очистку, но некоторые записи остались. Проверьте каталог и журнал.",
+          tr("host.gogaFinishedCleanupButSomeRecordsRemainCheckTheDirectory"),
         );
       return { status: "ok", changed, log: log() };
     } catch (error) {
       const message = sanitizeRepositoryLog(
         error instanceof Error
           ? error.message
-          : "Не удалось выполнить очистку.",
+          : tr("host.cleanupFailed"),
         access.secrets,
       );
-      lines.push(`Ошибка: ${message}`);
+      lines.push(tr("host.errorMessage", { message: message }));
       return pending
         ? { status: "error", changed, error: message, log: log() }
         : {

@@ -1,4 +1,14 @@
-/* Terminal and demonstration share presentation, never tab state or actions. */
+/* Shared presentation only: terminal, demonstration and project sections own their navigation. */
+.workspace-section-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--line, #26334a);
+  margin: 23px 0 24px;
+}
 .workspace-tab {
   box-sizing: border-box;
   display: inline-flex;

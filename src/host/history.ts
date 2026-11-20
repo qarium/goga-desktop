@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import path from "node:path";
 import { constants, type Stats } from "node:fs";
 import { lstat, open, opendir, realpath } from "node:fs/promises";
@@ -27,7 +28,7 @@ import { childEnvironment } from "./process-environment";
 const execute = promisify(execFile);
 const changed = () =>
   Error(
-    "История или её каталог изменились во время чтения. Откройте историю заново.",
+    tr("host.historyOrItsDirectoryChangedWhileBeingReadOpenHistory"),
   );
 const absent = (error: unknown) =>
   (error as NodeJS.ErrnoException).code === "ENOENT";
@@ -49,28 +50,28 @@ function text(bytes: Uint8Array): string {
       bytes,
     );
   } catch {
-    throw new Unreadable("Файл не является корректным UTF-8");
+    throw new Unreadable(tr("host.theFileIsNotValidUtf8"));
   }
   if (/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/.test(value))
     throw new Unreadable(
-      "Бинарные данные или управляющие символы не поддерживаются",
+      tr("host.binaryDataAndControlCharactersAreNotSupported"),
     );
   return value;
 }
 function supported(name: string, size: number) {
   if (!Number.isSafeInteger(size) || size < 0 || size > HISTORY_MAX_BYTES)
-    throw new Unreadable("Файл превышает лимит 1 МиБ");
+    throw new Unreadable(tr("host.theFileExceedsThe1MibLimit"));
   if (binary.test(name))
     throw new Unreadable(
-      "Бинарный формат доступен только вне просмотрщика истории",
+      tr("host.binaryFilesCannotBeOpenedInTheHistoryViewer"),
     );
 }
 function regular(name: string, info: Stats) {
   if (info.isSymbolicLink())
-    throw new Unreadable("Символические ссылки не разрешены");
-  if (!info.isFile()) throw new Unreadable("Читаются только обычные файлы");
+    throw new Unreadable(tr("host.symbolicLinksAreNotAllowed"));
+  if (!info.isFile()) throw new Unreadable(tr("host.onlyRegularFilesCanBeRead"));
   if (info.nlink !== 1)
-    throw new Unreadable("Файлы с жёсткими ссылками не разрешены");
+    throw new Unreadable(tr("host.hardLinkedFilesAreNotAllowed"));
   supported(name, info.size);
 }
 function document(relativePath: string, value: string): HistoryDocument {
@@ -142,7 +143,7 @@ class FilesystemRead {
   }
   async directories(relative: string, allowMissing = true): Promise<boolean> {
     if (!path.isAbsolute(this.root) || path.resolve(this.root) !== this.root)
-      throw Error("Недопустимый канонический путь проекта");
+      throw Error(tr("host.invalidCanonicalProjectPath"));
     const destination = path.join(this.root, relative);
     let cursor = path.parse(destination).root;
     for (const part of destination.slice(cursor.length).split(path.sep)) {
@@ -152,7 +153,7 @@ class FilesystemRead {
         return false;
       if (!info?.isDirectory() || info.isSymbolicLink())
         throw Error(
-          "Ожидался обычный каталог истории; символические ссылки запрещены",
+          tr("host.expectedARegularHistoryDirectorySymbolicLinksAreNotAllowed"),
         );
     }
     if ((await realpath(this.root)) !== this.root) throw changed();
@@ -198,7 +199,7 @@ class FilesystemRead {
       for await (const child of handle) {
         assertReadActive();
         if (names.length >= HISTORY_MAX_ENTRIES)
-          throw Error("Каталог истории превышает лимит 2048 элементов");
+          throw Error(tr("host.theHistoryDirectoryExceedsTheLimitOf2048Entries"));
         names.push(child.name);
       }
     } finally {
@@ -210,10 +211,10 @@ class FilesystemRead {
   }
   async read(relative: string): Promise<string> {
     if (!(await this.directories(path.dirname(relative))))
-      throw Error("Файл истории не найден");
+      throw Error(tr("host.historyFileNotFound"));
     const file = path.join(this.root, relative),
       initial = await this.stat(file);
-    if (!initial) throw Error("Файл истории не найден");
+    if (!initial) throw Error(tr("host.historyFileNotFound"));
     regular(relative, initial);
     await this.verify(file);
     const handle = await open(
@@ -294,11 +295,11 @@ async function workingArtifacts(
     for (const name of await fs.children(relative)) {
       assertReadActive();
       if (++visited > HISTORY_MAX_ENTRIES)
-        throw Error("История превышает лимит 2048 элементов");
+        throw Error(tr("host.historyExceedsTheLimitOf2048Entries"));
       if (!historyEntrySchema.safeParse(name).success) continue;
       const artifactPath = prefix ? `${prefix}/${name}` : name;
       if (artifactPath.split("/").length > HISTORY_MAX_DEPTH)
-        throw Error("Глубина истории превышает лимит 16");
+        throw Error(tr("host.historyExceedsTheMaximumDepthOf16"));
       const item = `${relative}/${name}`,
         info = await fs.stat(path.join(fs.root, item));
       if (!info) throw changed();
@@ -390,7 +391,7 @@ class CommittedRead {
       assertReadActive();
       // Git stderr can include arbitrary repository contents or local paths.
       throw Error(
-        "Не удалось прочитать историю Git: ветка отсутствует, ответ слишком велик или превышен срок чтения.",
+        tr("host.couldNotReadGitHistoryTheBranchIsMissingThe"),
       );
     }
   }
@@ -414,7 +415,7 @@ class CommittedRead {
       !/^[a-f0-9]{40,64}$/.test(commit) ||
       symbolic
     )
-      throw Error("Ветка отсутствует или неоднозначна. Обновите каталог.");
+      throw Error(tr("host.theBranchIsMissingOrAmbiguousRefreshTheCatalog"));
     const current = text(await this.git(["branch", "--show-current"])).trim();
     const head = text(
       await this.git(["rev-parse", "--verify", "HEAD^{commit}"]),
@@ -435,18 +436,18 @@ class CommittedRead {
     try {
       raw = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
     } catch {
-      throw Error("Некорректные имена файлов в дереве Git");
+      throw Error(tr("host.invalidFileNamesInTheGitTree"));
     }
     if (!raw) return [];
     const rows = raw.split("\0");
     if (rows.pop() !== "" || rows.length > HISTORY_MAX_ENTRIES)
-      throw Error("Дерево Git превышает лимит 2048 элементов");
+      throw Error(tr("host.theGitTreeExceedsTheLimitOf2048Entries"));
     const result = rows.map((row) => {
       const match =
         /^(\d{6}) (blob|tree|commit) ([a-f0-9]{40,64}) +(-|\d+)\t(.+)$/.exec(
           row,
         );
-      if (!match) throw Error("Некорректное дерево истории Git");
+      if (!match) throw Error(tr("host.invalidGitHistoryTree"));
       return {
         mode: match[1]!,
         kind: match[2]!,
@@ -456,7 +457,7 @@ class CommittedRead {
       };
     });
     if (new Set(result.map((row) => row.name)).size !== result.length)
-      throw Error("Неоднозначное дерево Git");
+      throw Error(tr("host.ambiguousGitTree"));
     return result;
   }
   async locate(
@@ -473,7 +474,7 @@ class CommittedRead {
       const node = rows[0]!;
       if (i < parts.length || directory) {
         if (node.mode !== "040000" || node.kind !== "tree")
-          throw Error("Ссылки и нестандартные каталоги Git запрещены");
+          throw Error(tr("host.linksAndNonStandardGitDirectoriesAreNotAllowed"));
       } else this.regular(node);
       if (i === parts.length) return node;
     }
@@ -481,7 +482,7 @@ class CommittedRead {
   }
   regular(node: TreeEntry) {
     if (!["100644", "100755"].includes(node.mode) || node.kind !== "blob")
-      throw new Unreadable("Ссылки и нестандартные объекты Git запрещены");
+      throw new Unreadable(tr("host.linksAndNonStandardGitObjectsAreNotAllowed"));
     supported(node.name, node.size);
   }
   async blob(node: TreeEntry) {
@@ -502,11 +503,11 @@ class CommittedRead {
       for (const node of await this.tree(oid)) {
         assertReadActive();
         if (++visited > HISTORY_MAX_ENTRIES)
-          throw Error("История превышает лимит 2048 элементов");
+          throw Error(tr("host.historyExceedsTheLimitOf2048Entries"));
         if (!historyEntrySchema.safeParse(node.name).success) continue;
         const name = prefix ? `${prefix}/${node.name}` : node.name;
         if (name.split("/").length > HISTORY_MAX_DEPTH)
-          throw Error("Глубина истории превышает лимит 16");
+          throw Error(tr("host.historyExceedsTheMaximumDepthOf16"));
         if (node.mode === "040000" && node.kind === "tree") {
           result.push({ path: name, kind: "directory", readable: false });
           await visit(node.oid, name);
@@ -561,7 +562,7 @@ async function readEntry<T>(
         source.owner.branch !== target.branch ||
         target.remote))
   )
-    throw Error("История относится к другому контексту топика.");
+    throw Error(tr("host.historyBelongsToADifferentTopicContext"));
   const git = new CommittedRead(root, source.gitEnv),
     before = await git.stamp(target);
   if (
@@ -619,7 +620,7 @@ export function readHistoryArtifact(
       async (git, commit, base) => {
         const full = `${base}/${relative}`,
           node = await git.locate(commit, full, false);
-        if (!node) throw Error("Файл истории не найден в выбранной ветке");
+        if (!node) throw Error(tr("host.historyFileNotFoundInTheSelectedBranch"));
         return document(full, await git.blob(node));
       },
     );

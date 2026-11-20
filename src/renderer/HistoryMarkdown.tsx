@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import {
   Fragment,
   createElement,
@@ -107,8 +109,7 @@ function renderMarkdown(
             break;
           case "image":
             content = (
-              <span className="history-image-note">
-                [Изображение: {entities(token.text) || "без подписи"}]
+              <span className="history-image-note">{msg("project.image2")}{entities(token.text) || msg("project.noCaption")}]
               </span>
             );
             break;
@@ -127,8 +128,8 @@ function renderMarkdown(
                 <span
                   title={
                     destination
-                      ? "Переход к файлам недоступен в этом просмотре"
-                      : "Внешние ссылки не открываются в просмотрщике"
+                      ? msg("project.fileNavigationIsUnavailableInThisView")
+                      : msg("project.externalLinksCannotBeOpenedInThisViewer")
                   }
                 >
                   {children()}
@@ -142,7 +143,7 @@ function renderMarkdown(
                 type="checkbox"
                 disabled
                 checked={token.checked}
-                aria-label={token.checked ? "Выполнено" : "Не выполнено"}
+                aria-label={token.checked ? msg("project.completed") : msg("project.notCompleted")}
               />
             );
             break;
@@ -213,6 +214,7 @@ export function HistoryMarkdown({
   path: string;
   onFile?: (path: string) => void;
 }) {
+  useLocale();
   const request = useMemo(() => ({ text, path }), [text, path]);
   const [result, setResult] = useState<{
     request: typeof request;
@@ -239,16 +241,14 @@ export function HistoryMarkdown({
     [current, text, path, onFile],
   );
   return (
-    <LoadingBoundary pending={!current} label="Форматируем Markdown…">
+    <LoadingBoundary pending={!current} label={msg("project.formattingMarkdown")}>
       {current && (
         <article className="history-markdown">
           {current.tokens ? (
             body
           ) : (
             <>
-              <p className="history-image-note">
-                Предпросмотр Markdown недоступен. Содержимое показано как текст.
-              </p>
+              <p className="history-image-note">{msg("project.markdownPreviewIsUnavailableShowingPlainText")}</p>
               <pre className="history-plain">{text}</pre>
             </>
           )}

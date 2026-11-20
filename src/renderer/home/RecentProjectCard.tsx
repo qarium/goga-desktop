@@ -1,3 +1,6 @@
+import { HintButton } from "../ActionHint";
+import { getLocale, t as msg } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import {
   memo,
   useCallback,
@@ -27,7 +30,6 @@ import {
   contextSuffix,
   ownerLabel,
   ownerProject,
-  plural,
   targetLabel,
 } from "./model";
 import { distinctSessionFiles } from "./session-summary";
@@ -67,6 +69,7 @@ export function RecentChanges(props: {
   owner: WorkspaceAddress;
   onNavigate: (t: HomeTarget) => void;
 }) {
+  useLocale();
   const supported =
     typeof window.goga?.readGitSummary === "function" ||
     typeof window.goga?.readRequest === "function";
@@ -74,9 +77,7 @@ export function RecentChanges(props: {
     <SubscribedChanges {...props} />
   ) : (
     <div className="d-git-change unknown">
-      <Files size={12} />
-      Изменения недоступны
-    </div>
+      <Files size={12} />{msg("shell.changesUnavailable")}</div>
   );
 }
 function SubscribedChanges({
@@ -86,6 +87,7 @@ function SubscribedChanges({
   owner: WorkspaceAddress;
   onNavigate: (t: HomeTarget) => void;
 }) {
+  useLocale();
   const ref = useRef<HTMLDivElement>(null),
     visible = useVisible(ref),
     scope = owner.kind === "primary" ? owner.projectId : owner.ref,
@@ -107,18 +109,18 @@ function SubscribedChanges({
     missing = v?.repository === "missing",
     unavailable = !v && !!state.error;
   const label = missing
-    ? "Без Git"
+    ? msg("shell.noGit")
     : v
       ? v.changedFiles
-        ? `${v.changedFiles} ${plural(v.changedFiles, ["файл", "файла", "файлов"])} с изменениями`
-        : "Нет изменений"
+        ? msg("shell.modifiedFileCount", { count: v.changedFiles })
+        : msg("shell.noChanges")
       : unavailable
-        ? "Изменения недоступны"
-        : "Проверяем изменения…";
+        ? msg("shell.changesUnavailable")
+        : msg("shell.checkingChanges");
   const who =
     owner.kind === "primary"
-      ? "Исходный проект · без топика"
-      : `Копия топика ${owner.ref.topic} · ${owner.ref.year}`;
+      ? msg("shell.originalProjectNoTopic")
+      : msg("shell.topicWorkingCopy2", { topic: String(owner.ref.topic), year: String(owner.ref.year) });
   return (
     <div
       ref={ref}
@@ -139,13 +141,13 @@ function SubscribedChanges({
         data-changes-link={ownerProject(owner)}
         disabled={missing}
         aria-label={
-          label + " · " + who + (missing ? "" : ". Открыть изменения")
+          label + " · " + who + (missing ? "" : msg("shell.openChanges"))
         }
         title={
           who +
           (v && state.checkedAt
-            ? " · Последняя проверка " +
-              new Date(state.checkedAt).toLocaleTimeString()
+            ? msg("shell.lastChecked") +
+              new Date(state.checkedAt).toLocaleTimeString(getLocale())
             : "")
         }
         onClick={() => onNavigate({ kind: "changes", owner })}
@@ -154,15 +156,15 @@ function SubscribedChanges({
         <span>{label}</span>
         {!missing && <ArrowUpRight size={11} />}
       </button>
-      <button
+      <HintButton
         className="d-changes-refresh"
-        title="Обновить изменения"
+        hint={msg("shell.refreshChanges")}
         aria-label={
           state.loading
-            ? "Обновляются изменения"
+            ? msg("shell.refreshingChanges")
             : state.error
-              ? "Повторить обновление изменений"
-              : "Обновить изменения"
+              ? msg("shell.retryRefreshingChanges")
+              : msg("shell.refreshChanges")
         }
         disabled={state.loading}
         onClick={() => void cache.ensure(scope, "manual")}
@@ -172,10 +174,10 @@ function SubscribedChanges({
         ) : (
           <RefreshCw size={12} />
         )}
-      </button>
+      </HintButton>
       {state.error && (
         <small role="status">
-          {v ? "Данные не обновлены" : "Не удалось проверить"}
+          {v ? msg("shell.dataNotRefreshed") : msg("shell.couldNotCheck")}
         </small>
       )}
     </div>
@@ -195,6 +197,7 @@ function EntryChooser({
   onClose: () => void;
   label: string;
 }) {
+  useLocale();
   const list = useRef<HTMLDivElement>(null);
   const close = useRef(onClose);
   close.current = onClose;
@@ -271,7 +274,7 @@ function EntryChooser({
                 o.kind === "topic" &&
                 " · " + o.ref.branch + " · " + o.ref.contextId.slice(-8)}
               {t.kind === "document"
-                ? " · " + (t.source === "overview" ? "Обзор" : "Проект")
+                ? " · " + (t.source === "overview" ? msg("shell.overview") : msg("shell.project2"))
                 : ""}
             </small>
           </button>
@@ -291,6 +294,7 @@ function SessionAction({
   kind: "draft" | "document";
   onNavigate: (t: HomeTarget) => void;
 }) {
+  useLocale();
   const [open, setOpen] = useState(false),
     anchor = useRef<HTMLButtonElement>(null);
   if (!entries.length) return null;
@@ -300,22 +304,22 @@ function SessionAction({
     kind === "document" ? distinctSessionFiles(entries).length : entries.length;
   const text =
     kind === "document"
-      ? `${count} ${plural(count, ["несохранённый файл", "несохранённых файла", "несохранённых файлов"])}`
+      ? msg("shell.unsavedFileCount", { count })
       : single
         ? targetLabel(first)
-        : "Черновики · " + count;
+        : msg("shell.drafts") + count;
   const scopes = new Set(
     entries.map((e) => contextSuffix(owner, e.target.owner)),
   );
   const suffix =
-    scopes.size === 1 ? contextSuffix(owner, first.owner) : "разные контексты";
+    scopes.size === 1 ? contextSuffix(owner, first.owner) : msg("shell.multipleContexts");
   const label = text + (suffix ? " · " + suffix : "");
   return (
     <>
-      <button
+      <HintButton
         ref={anchor}
         aria-label={label}
-        title={label}
+        hint={label}
         aria-haspopup={!single ? "menu" : undefined}
         aria-expanded={!single ? open : undefined}
         data-draft={kind === "draft" ? ownerProject(owner) : undefined}
@@ -340,7 +344,7 @@ function SessionAction({
           )}
         </span>
         <ArrowUpRight size={11} />
-      </button>
+      </HintButton>
       {open && !single && (
         <TopicPickerPopup
           domPortal
@@ -378,6 +382,7 @@ export const RecentProjectCard = memo(function RecentProjectCard({
   operation?: string;
   onNavigate: (t: HomeTarget) => void;
 }) {
+  useLocale();
   const owner = visit.target.owner;
   const docs = entries.filter((e) => e.target.kind === "document" && e.dirty),
     drafts = entries.filter((e) => e.target.kind === "draft");
@@ -386,10 +391,10 @@ export const RecentProjectCard = memo(function RecentProjectCard({
       <button
         className="d-recent-card"
         data-recent-project={project.id}
-        aria-label={`Продолжить ${project.name} · ${ownerLabel(owner)} · ${targetLabel(visit.target)}`}
+        aria-label={msg("shell.resume", { name: String(project.name), value2: String(ownerLabel(owner)), value3: String(targetLabel(visit.target)) })}
         title={
           visit.previousSessionOnly
-            ? "Прежняя вкладка была открыта только в прошлой сессии. Откроется Обзор этой рабочей области."
+            ? msg("shell.thePreviousTabWasOnlyOpenInThePreviousSession")
             : undefined
         }
         onClick={() => onNavigate(visit.target)}
@@ -402,25 +407,25 @@ export const RecentProjectCard = memo(function RecentProjectCard({
         <span className="d-recent-context">{ownerLabel(owner)}</span>
         <small>
           {visit.previousSessionOnly
-            ? "Прежняя вкладка закрыта · Открыть Обзор"
-            : "Продолжить: " + targetLabel(visit.target)}
+            ? msg("shell.previousTabClosedOpenOverview")
+            : msg("shell.resume2") + targetLabel(visit.target)}
           <ArrowRight size={12} />
         </small>
       </button>
       <div
         className="d-project-signals"
-        aria-label={"Состояние проекта " + project.name}
+        aria-label={msg("shell.projectStatus") + project.name}
       >
         <span>
           <Activity size={12} />
           {active === undefined
-            ? "Запуски — нет данных"
+            ? msg("shell.runsNoData")
             : active
-              ? `${active} ${plural(active, ["запуск", "запуска", "запусков"])}`
-              : "Нет активных запусков"}
+              ? msg("shell.runCount", { count: active })
+              : msg("shell.noActiveRuns")}
         </span>
         {!!unread && (
-          <span title="Непрочитанные уведомления проекта">
+          <span title={msg("shell.unreadProjectNotifications")}>
             <Bell size={12} />
             {unread}
           </span>

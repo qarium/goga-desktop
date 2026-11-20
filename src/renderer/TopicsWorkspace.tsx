@@ -1,3 +1,6 @@
+import { HintButton } from "./ActionHint";
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { Trash2 } from "lucide-react";
 import { TopicsRemovalDialog } from "./TopicsRemovalDialog";
 import { LayoutGrid, List } from "lucide-react";
@@ -101,6 +104,7 @@ export function TopicsWorkspace({
   selectedContext?: TopicContextIdentity | null;
   onSelectTopic?: (identity: TopicContextIdentity) => void;
 }) {
+  useLocale();
   const year = useTopicTableYear(store, project.id);
   const scope = useMemo(
     () => ({ projectId: project.id, path: project.path, year }),
@@ -122,7 +126,7 @@ export function TopicsWorkspace({
   const { board, loading, polling } = snapshot;
   const validYear = /^\d{4}$/.test(year);
   const error = !validYear
-    ? "Укажите год из четырёх цифр."
+    ? tr("topics.enterAFourDigitYear")
     : loading && !polling
       ? ""
       : snapshot.error;
@@ -251,15 +255,15 @@ export function TopicsWorkspace({
       return (
         <div className="topic-row-actions">
           {current(r) ? (
-            <span className="topic-selected-label">Текущий</span>
+            <span className="topic-selected-label">{tr("topics.current")}</span>
           ) : (
             <TooltipButton
               tooltipEnabled={!hidden}
               disabled={disabled || !onSelectTopic || r.remote}
-              label={`Переключиться на топик ${r.topic}`}
-              tooltipLabel="Переключиться"
+              label={tr("topics.switchToTopicTopic", { topic: r.topic })}
+              tooltipLabel={tr("topics.switch")}
               busy={false}
-              description="Открыть контекст топика"
+              description={tr("topics.openTopicContext")}
               onClick={() =>
                 onSelectTopic?.({
                   projectId: project.id,
@@ -289,17 +293,17 @@ export function TopicsWorkspace({
               activity.activeCount > 0 ||
               ownerReadState !== "confirmed"
             }
-            label={`Удалить топик ${r.topic}`}
-            tooltipLabel="Удалить топик"
+            label={tr("topics.deleteTopicTopic", { topic: r.topic })}
+            tooltipLabel={tr("topics.deleteTopic2")}
             busy={false}
             description={
               matchingOwners.length > 1
-                ? "Выберите нужный рабочий контекст в селекторе топиков"
+                ? tr("topics.chooseTheWorkingContextInTheTopicPicker")
                 : ownerReadState !== "confirmed"
-                  ? ownerReadError || "Проверяем контексты топиков"
+                  ? ownerReadError || tr("topics.checkingTopicContexts")
                   : activity.activeCount
-                    ? "Сначала завершите запуски топика"
-                    : "Удаление после подтверждения"
+                    ? tr("topics.finishTheTopicSRunsFirst2")
+                    : tr("topics.removalRequiresConfirmation")
             }
             buttonClassName="repository-action-button topic-delete-icon"
             onClick={() =>
@@ -345,9 +349,7 @@ export function TopicsWorkspace({
             />
           ) : activity.activeCount > 1 ? (
             <details className="topic-activity-choices">
-              <summary>
-                Активных: {activity.activeCount} · выбрать запуск
-              </summary>
+              <summary>{tr("topics.active")}{activity.activeCount}{tr("topics.selectRun")}</summary>
               {activity.activeRuns.map((run) => (
                 <TopicRunActivity
                   key={run.id}
@@ -358,7 +360,7 @@ export function TopicsWorkspace({
               ))}
             </details>
           ) : (
-            <span className="hint">Нет активного</span>
+            <span className="hint">{tr("topics.noneActive")}</span>
           )}
         </>
       );
@@ -400,12 +402,12 @@ export function TopicsWorkspace({
         ...(!board || error
           ? [
               !/^\d{4}$/.test(year)
-                ? "Укажите год из четырёх цифр"
-                : "Не удалось загрузить список топиков",
+                ? tr("topics.enterAFourDigitYear2")
+                : tr("topics.couldNotLoadTopics"),
             ]
           : []),
-        ...(!error && board?.active ? ["В проекте работает запуск"] : []),
-        ...(createBusy ? ["Выполняется операция с топиками"] : []),
+        ...(!error && board?.active ? [tr("topics.aRunIsActiveInTheProject")] : []),
+        ...(createBusy ? [tr("topics.topicOperationInProgress")] : []),
       ];
   const options = !picker
     ? []
@@ -428,19 +430,19 @@ export function TopicsWorkspace({
           ? ""
           : undefined
       }
-      aria-label="Топики проекта"
+      aria-label={tr("topics.projectTopics")}
       aria-busy={pending}
     >
       <div className="topics-heading">
         <div>
-          <h2>Топики</h2>
-          <p className="hint">Задачи и их состояние</p>
+          <h2>{tr("topics.topics")}</h2>
+          <p className="hint">{tr("topics.tasksAndTheirStatus")}</p>
         </div>
         <div className="topic-actions">
           <div
             className="topic-view-switch"
             role="group"
-            aria-label="Вид топиков"
+            aria-label={tr("topics.topicView")}
           >
             <button
               type="button"
@@ -449,9 +451,7 @@ export function TopicsWorkspace({
                 boardUI.onPreferences({ ...boardUI.preferences, view: "table" })
               }
             >
-              <List />
-              Таблица
-            </button>
+              <List />{tr("topics.table")}</button>
             <button
               type="button"
               aria-pressed={boardUI.preferences.view === "board"}
@@ -459,9 +459,7 @@ export function TopicsWorkspace({
                 boardUI.onPreferences({ ...boardUI.preferences, view: "board" })
               }
             >
-              <LayoutGrid />
-              Доска
-            </button>
+              <LayoutGrid />{tr("topics.board")}</button>
           </div>
           {createReasons.length > 0 && (
             <ActionReason id={reasonId} className="topic-create-reason">
@@ -474,50 +472,44 @@ export function TopicsWorkspace({
             </ActionReason>
           )}
           <div className="topic-create-action">
-            <button
+            <HintButton
               type="button"
               className="topic-refresh-button"
-              aria-label="Обновить список"
-              title="Обновить список"
+              aria-label={tr("topics.refreshList")}
+              hint={tr("topics.refreshList")}
               disabled={!validYear || cold || loading || createBusy}
               onClick={refreshTable}
             >
               {loading && board ? (
-                <span role="status" aria-label="Обновляем список топиков">
+                <span role="status" aria-label={tr("topics.refreshingTopics")}>
                   <span className="loading-spinner" aria-hidden="true" />
                 </span>
               ) : (
                 <span aria-hidden="true">↻</span>
               )}
-            </button>
+            </HintButton>
             <button
               type="button"
               className="primary"
               disabled={pending || createReasons.length > 0}
               aria-describedby={createReasons.length ? reasonId : undefined}
               onClick={() => setCreate(true)}
-            >
-              Создать топик
-            </button>
+            >{tr("topics.createTopic")}</button>
           </div>
         </div>
       </div>
       <div className="topic-search-row">
-        <label>
-          Год
-          <input
-            aria-label="Год"
+        <label>{tr("topics.year")}<input
+            aria-label={tr("topics.year")}
             inputMode="numeric"
             maxLength={4}
             value={year}
             onChange={(e) => store.setYear(project.id, e.target.value)}
           />
         </label>
-        <label>
-          Поиск топиков
-          <input
+        <label>{tr("topics.searchTopics")}<input
             type="search"
-            placeholder="Часть имени топика"
+            placeholder={tr("topics.partOfTopicName")}
             value={filters.query}
             onChange={(e) => update({ query: e.target.value })}
           />
@@ -526,9 +518,9 @@ export function TopicsWorkspace({
       <div className="topic-filter-row">
         {(
           [
-            ["topics", "Топики"],
-            ["statuses", "Статусы"],
-            ["hosts", "Размещение"],
+            ["topics", tr("topics.topics")],
+            ["statuses", tr("topics.statuses")],
+            ["hosts", tr("topics.location")],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -537,15 +529,13 @@ export function TopicsWorkspace({
             disabled={!board}
             onClick={() => setPicker(key)}
           >
-            {label} · {filters[key].length || "Все"} ▾
+            {label} · {filters[key].length || tr("topics.all")} ▾
           </button>
         ))}
         <TopicSwitch
           checked={filters.onlyActive}
           onChange={() => update({ onlyActive: !filters.onlyActive })}
-        >
-          Только с активными запусками
-        </TopicSwitch>
+        >{tr("topics.onlyWithActiveRuns")}</TopicSwitch>
         <button
           className="quiet"
           onClick={() =>
@@ -557,9 +547,7 @@ export function TopicsWorkspace({
               onlyActive: false,
             })
           }
-        >
-          Сбросить фильтры
-        </button>
+        >{tr("topics.resetFilters")}</button>
         <div className="topic-filter-clear">
           <button
             type="button"
@@ -568,8 +556,7 @@ export function TopicsWorkspace({
             }
             onClick={() => setRemoving({ action: "clear", topics: [] })}
           >
-            <Trash2 size={14} /> Очистить топики…
-          </button>
+            <Trash2 size={14} />{tr("topics.clearTopics2")}</button>
         </div>
       </div>
       {boardUI.error && (
@@ -579,15 +566,12 @@ export function TopicsWorkspace({
       )}
       {boardUI.selected.size > 0 && (
         <div className="topic-selection">
-          <span>
-            Выбрано: {boardUI.selected.size}
+          <span>{tr("topics.selected")}{boardUI.selected.size}
             {hiddenSelection > 0
-              ? ` · Скрыто фильтрами: ${hiddenSelection}`
+              ? tr("topics.hiddenByFiltersHiddenselection", { hiddenSelection: hiddenSelection })
               : ""}
           </span>
-          <button type="button" onClick={() => boardUI.onSelection(new Set())}>
-            Снять выделение
-          </button>
+          <button type="button" onClick={() => boardUI.onSelection(new Set())}>{tr("topics.clearSelection")}</button>
           <button
             type="button"
             className="danger"
@@ -601,18 +585,16 @@ export function TopicsWorkspace({
               })
             }
           >
-            <Trash2 />
-            Удалить выбранные топики
-          </button>
+            <Trash2 />{tr("topics.deleteSelectedTopics")}</button>
         </div>
       )}
       <LoadingBoundary
         pending={cold}
         background={!!board && !!error}
-        label="Загружаем топики…"
+        label={tr("topics.loadingTopics")}
         error={
           board && error
-            ? `Показан последний загруженный список. Не удалось обновить топики: ${error}`
+            ? tr("topics.showingTheLastLoadedListCouldNotRefresh", { error: error })
             : error
         }
         onRetry={validYear ? refreshTable : undefined}
@@ -641,8 +623,8 @@ export function TopicsWorkspace({
               ) : (
                 <span>
                   {exactRow(r).owners.some((owner) => !owner.deletedAt)
-                    ? "Рабочая копия"
-                    : "Исходный проект"}
+                    ? tr("topics.workingCopy")
+                    : tr("topics.originalProject")}
                 </span>
               )
             }
@@ -655,7 +637,7 @@ export function TopicsWorkspace({
                   <th className="topic-table-checkbox">
                     <input
                       type="checkbox"
-                      aria-label="Выбрать топики таблицы"
+                      aria-label={tr("topics.selectTopicsInTheTable")}
                       checked={columnChecked(visibleKeys, boardUI.selected)}
                       disabled={!visibleKeys.length}
                       onChange={() =>
@@ -665,13 +647,13 @@ export function TopicsWorkspace({
                       }
                     />
                   </th>
-                  <th className="topic-table-topic">Топик</th>
-                  <th className="topic-table-branch">Ветка</th>
-                  <th className="topic-table-divergence">Относительно base</th>
-                  <th className="topic-table-statuses">Статусы</th>
-                  <th className="topic-table-activity">Активные запуски</th>
+                  <th className="topic-table-topic">{tr("topics.topic2")}</th>
+                  <th className="topic-table-branch">{tr("topics.branch")}</th>
+                  <th className="topic-table-divergence">{tr("topics.relativeToBase2")}</th>
+                  <th className="topic-table-statuses">{tr("topics.statuses")}</th>
+                  <th className="topic-table-activity">{tr("topics.activeRuns")}</th>
                   <th className="topic-table-actions">
-                    <span className="sr-only">Действия</span>
+                    <span className="sr-only">{tr("topics.actions")}</span>
                   </th>
                 </tr>
               </thead>
@@ -697,23 +679,20 @@ export function TopicsWorkspace({
         {!rows.length && (
           <p className="topic-empty">
             {filters.onlyActive
-              ? "Нет топиков с активными запусками по выбранным условиям."
+              ? tr("topics.noTopicsWithActiveRunsMatchTheseFilters")
               : board?.entries.length
-                ? "Нет топиков по выбранным условиям."
-                : "За этот год топиков пока нет."}
+                ? tr("topics.noTopicsMatchTheseFilters")
+                : tr("topics.noTopicsForThisYearYet")}
           </p>
         )}
       </LoadingBoundary>
       {pendingDeletions.length > 0 && (
         <section
           className="topic-card-section"
-          aria-label="Незавершённые удаления"
+          aria-label={tr("topics.unfinishedRemovals")}
         >
-          <h3>Незавершённые удаления</h3>
-          <p className="hint">
-            Копия уже удалена. Можно продолжить оставшийся шаг в основном
-            проекте.
-          </p>
+          <h3>{tr("topics.unfinishedRemovals")}</h3>
+          <p className="hint">{tr("topics.theCopyHasAlreadyBeenRemovedContinueThe")}</p>
           {pendingDeletions.map((owner) => (
             <button
               key={owner.contextId}
@@ -731,8 +710,7 @@ export function TopicsWorkspace({
                   owner,
                 })
               }
-            >
-              Продолжить удаление {owner.topic} · {owner.year}
+            >{tr("topics.continueRemoval")}{owner.topic} · {owner.year}
             </button>
           ))}
         </section>
@@ -820,6 +798,7 @@ const TopicTableRow = memo(function TopicTableRow({
   activityFor: (r: TopicBoardRecord) => ReactNode;
   actionsFor: (r: TopicBoardRecord, hidden: boolean) => ReactNode;
 }) {
+  useLocale();
   return (
     <tr
       hidden={hidden}
@@ -829,7 +808,7 @@ const TopicTableRow = memo(function TopicTableRow({
       <td className="topic-table-checkbox">
         <input
           type="checkbox"
-          aria-label={`Выбрать топик ${r.topic}`}
+          aria-label={tr("topics.selectTopicTopic", { topic: r.topic })}
           checked={checked}
           onChange={() => toggleOne(selectionKey)}
         />
@@ -837,7 +816,7 @@ const TopicTableRow = memo(function TopicTableRow({
       <td>
         <button
           className="topic-link"
-          aria-label={`Открыть топик ${r.topic}`}
+          aria-label={tr("topics.openTopicTopic", { topic: r.topic })}
           onClick={() => openRow(r)}
         >
           {r.topic}
@@ -878,6 +857,7 @@ function TopicCreateLoader(props: {
   onChanged: () => void;
   onBusy?: (v: boolean) => void;
 }) {
+  useLocale();
   const read = useReadScope(
     JSON.stringify(["create", props.project.id, props.year]),
   );
@@ -889,7 +869,7 @@ function TopicCreateLoader(props: {
       .then((b) => {
         if (b.projectId !== props.project.id || b.year !== props.year)
           throw Error(
-            "Параметры создания относятся к другому проекту или году.",
+            tr("topics.creationSettingsBelongToAnotherProjectOrYear"),
           );
         if (alive) setBoard(b);
       })
@@ -903,10 +883,10 @@ function TopicCreateLoader(props: {
   return board ? (
     <TopicCreate {...props} board={board} />
   ) : (
-    <TopicModal title="Создать топик" onClose={props.onClose}>
+    <TopicModal title={tr("topics.createTopic")} onClose={props.onClose}>
       <LoadingBoundary
         pending={!error}
-        label="Проверяем параметры создания…"
+        label={tr("topics.checkingCreationSettings")}
         error={error}
       >
         {null}
@@ -924,17 +904,18 @@ function TopicRunActivity({
   unverified: boolean;
   onOpenRun?: (id: string) => void;
 }) {
+  useLocale();
   const status = unverified
-    ? "Требует проверки"
+    ? tr("topics.needsReview")
     : run.status === "starting"
-      ? "Запускается"
-      : "Работает";
-  const kind = run.kind === "build" ? "Сборка" : "Конвейер";
+      ? tr("launch.starting")
+      : tr("topics.running");
+  const kind = run.kind === "build" ? tr("launch.build") : tr("launch.pipeline");
   return (
     <button
       type="button"
       className={`topic-link topic-run-activity${unverified ? " topic-run-unverified" : ""}`}
-      aria-label={`Открыть запуск ${run.id} · ${kind} · ${status}`}
+      aria-label={tr("topics.openRunIdKindStatus", { id: run.id, kind: kind, status: status })}
       title={`${kind} · ${run.id}`}
       disabled={!onOpenRun}
       onClick={() => onOpenRun?.(run.id)}
@@ -956,20 +937,21 @@ function TopicPicker({
   onApply: (next: string[]) => void;
   onClose: () => void;
 }) {
+  useLocale();
   const [query, setQuery] = useState(""),
     [chosen, setChosen] = useState(values);
   const title =
       kind === "topics"
-        ? "Топики"
+        ? tr("topics.topics")
         : kind === "hosts"
-          ? "Ветки размещения"
-          : "Статусы",
+          ? tr("topics.branchesHostingTheTopic")
+          : tr("topics.statuses"),
     search =
       kind === "topics"
-        ? "Найти топик"
+        ? tr("topics.findTopic")
         : kind === "hosts"
-          ? "Найти ветку"
-          : "Найти статус";
+          ? tr("topics.findBranch")
+          : tr("topics.findStatus");
   return (
     <TopicModal title={title} onClose={onClose}>
       <label>
@@ -1004,24 +986,15 @@ function TopicPicker({
             </label>
           ))}
       </div>
-      <p className="hint">
-        Поиск меняет только список вариантов. Внутри группы действует «или»,
-        между группами — «и».
-      </p>
+      <p className="hint">{tr("topics.searchOnlyFiltersTheAvailableOptionsOptionsWithin")}</p>
       <div className="form-actions">
-        <button type="button" onClick={() => setChosen([])}>
-          Все
-        </button>
-        <button type="button" onClick={onClose}>
-          Отмена
-        </button>
+        <button type="button" onClick={() => setChosen([])}>{tr("topics.all")}</button>
+        <button type="button" onClick={onClose}>{tr("launch.cancel")}</button>
         <button
           type="button"
           className="primary"
           onClick={() => onApply(chosen)}
-        >
-          Применить
-        </button>
+        >{tr("topics.apply")}</button>
       </div>
     </TopicModal>
   );
@@ -1041,6 +1014,7 @@ function TopicCreate({
   onChanged: () => void;
   onBusy?: (busy: boolean) => void;
 }) {
+  useLocale();
   const key = JSON.stringify([project.id, board.year]);
   const [draft, setDraft] = useState<TopicCreateDraft>(
     store.creates.get(key) ?? {
@@ -1060,7 +1034,7 @@ function TopicCreate({
     store.creates.set(key, next);
   }
   return (
-    <TopicModal title="Создать топик" busy={operation.busy} onClose={onClose}>
+    <TopicModal title={tr("topics.createTopic")} busy={operation.busy} onClose={onClose}>
       <TopicFeedback operation={operation} />
       {operation.plan ? (
         <TopicConfirmation
@@ -1086,9 +1060,7 @@ function TopicCreate({
             }}
           >
             <fieldset disabled={operation.busy || board.active}>
-              <label>
-                Имя ветки / топика
-                <input
+              <label>{tr("topics.branchTopicName")}<input
                   autoFocus
                   required
                   autoComplete="off"
@@ -1097,21 +1069,15 @@ function TopicCreate({
                   onChange={(e) => edit({ branch: e.target.value })}
                 />
               </label>
-              <p className="hint">
-                Имя топика будет получено из имени ветки по правилам Goga.
-              </p>
-              <label>
-                Задача
-                <textarea
+              <p className="hint">{tr("topics.theTopicNameWillBeDerivedFromThe")}</p>
+              <label>{tr("topics.task")}<textarea
                   rows={5}
                   required={draft.publish || !draft.switch}
                   value={draft.task}
                   onChange={(e) => edit({ task: e.target.value })}
                 />
               </label>
-              <label>
-                Базовая ветка
-                <input
+              <label>{tr("topics.baseBranch")}<input
                   required
                   list="topic-create-bases"
                   value={draft.baseRef}
@@ -1123,28 +1089,22 @@ function TopicCreate({
                   ))}
                 </datalist>
               </label>
-              <h3>После создания</h3>
+              <h3>{tr("topics.afterCreation")}</h3>
               <div className="topic-create-switches">
                 <TopicSwitch
                   checked={draft.publish}
                   onChange={() => edit({ publish: !draft.publish })}
-                >
-                  Опубликовать
-                </TopicSwitch>
+                >{tr("topics.publish")}</TopicSwitch>
                 <TopicSwitch
                   checked={draft.switch}
                   onChange={() => edit({ switch: !draft.switch })}
-                >
-                  Переключиться на новый топик
-                </TopicSwitch>
+                >{tr("topics.switchToNewTopic")}</TopicSwitch>
               </div>
               {draft.publish && (
-                <label>
-                  Сообщение коммита · необязательно
-                  <input
+                <label>{tr("topics.commitMessageOptional")}<input
                     value={draft.commit}
                     onChange={(e) => edit({ commit: e.target.value })}
-                    placeholder="Из настроек проекта"
+                    placeholder={tr("launch.fromProjectSettings")}
                   />
                 </label>
               )}
@@ -1152,11 +1112,9 @@ function TopicCreate({
                 {createTopicExplanation(draft.publish, draft.switch)}
               </p>
               <div className="form-actions">
-                <button type="button" onClick={onClose}>
-                  Отмена
-                </button>
+                <button type="button" onClick={onClose}>{tr("launch.cancel")}</button>
                 <button type="submit" className="primary">
-                  {operation.busy ? "Проверяем…" : "Продолжить"}
+                  {operation.busy ? tr("topics.checking") : tr("topics.continue")}
                 </button>
               </div>
             </fieldset>

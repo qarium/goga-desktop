@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useRef, useState } from "react";
 import { FolderOpen, FolderPlus } from "lucide-react";
 import { TopicPickerPopup, dismissActiveTopicPopup } from "./TopicPickerPopup";
@@ -18,6 +20,7 @@ export function ProjectAddMenu({
   onAction: (action: "open" | "create") => void;
   onError: (error: unknown) => void;
 }) {
+  useLocale();
   const anchor = useRef<HTMLSpanElement>(null),
     callbacks = useRef({ onClose, onAction, onError });
   callbacks.current = { onClose, onAction, onError };
@@ -70,7 +73,7 @@ export function ProjectAddMenu({
       <TopicPickerPopup
         anchor={anchor}
         width={270}
-        label="Добавить проект"
+        label={msg("shell.addProject")}
         domPortal
         onClose={() => onClose(true)}
       >
@@ -78,7 +81,7 @@ export function ProjectAddMenu({
           ref={setRoot}
           className="project-list-menu"
           role="menu"
-          aria-label="Добавить проект"
+          aria-label={msg("shell.addProject")}
           onKeyDown={(event) => {
             if (event.key === "Escape" || event.key === "Tab") {
               if (event.key === "Escape") {
@@ -114,17 +117,13 @@ export function ProjectAddMenu({
             role="menuitem"
             onClick={() => void choose("open")}
           >
-            <FolderOpen size={16} aria-hidden="true" />
-            Открыть существующий…
-          </button>
+            <FolderOpen size={16} aria-hidden="true" />{msg("shell.openExisting")}</button>
           <button
             type="button"
             role="menuitem"
             onClick={() => void choose("create")}
           >
-            <FolderPlus size={16} aria-hidden="true" />
-            Создать новый…
-          </button>
+            <FolderPlus size={16} aria-hidden="true" />{msg("shell.createNew")}</button>
         </div>
       </TopicPickerPopup>
     </>

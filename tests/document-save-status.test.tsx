@@ -89,7 +89,7 @@ it("delays saving progress by 250ms and cancels fast and previous writes", () =>
   });
 });
 it("shows successful save for 3s from actual completion, including time zero", () => {
-  const ui = status({ ...clean, notice: "Сохранено", savedAt: 0 });
+  const ui = status({ ...clean, noticeKind: "saved" as const, notice: "Сохранено", savedAt: 0 });
   expect(ui.result.current).toMatchObject({
     text: "Файл: сохранен",
     tone: "success",
@@ -103,7 +103,7 @@ it("shows successful save for 3s from actual completion, including time zero", (
   });
 });
 it("does not replay expired success after hiding, remounting or changing source", () => {
-  const saved = { ...clean, notice: "Сохранено", savedAt: 0 };
+  const saved = { ...clean, noticeKind: "saved" as const, notice: "Сохранено", savedAt: 0 };
   const ui = status(saved);
   advance(1000);
   ui.rerender({ draft: saved, enabled: false, identity: "file-a" });
@@ -116,7 +116,7 @@ it("does not replay expired success after hiding, remounting or changing source"
   expect(status(saved).result.current.text).toBe("Файл: нет изменений");
 });
 it("resumes only the remaining success lifetime when coming back quickly", () => {
-  const saved = { ...clean, notice: "Сохранено", savedAt: 0 };
+  const saved = { ...clean, noticeKind: "saved" as const, notice: "Сохранено", savedAt: 0 };
   const ui = status(saved);
   advance(1000);
   ui.rerender({ draft: saved, enabled: false, identity: "file-a" });
@@ -127,7 +127,7 @@ it("resumes only the remaining success lifetime when coming back quickly", () =>
   expect(ui.result.current.text).toBe("Файл: нет изменений");
 });
 it("never lets a prior success timer overwrite edits or a new success", () => {
-  const ui = status({ ...clean, notice: "Сохранено", savedAt: 0 });
+  const ui = status({ ...clean, noticeKind: "saved" as const, notice: "Сохранено", savedAt: 0 });
   advance(2000);
   ui.rerender({
     draft: { ...clean, text: "changed" },
@@ -140,7 +140,7 @@ it("never lets a prior success timer overwrite edits or a new success", () => {
     tone: "dirty",
   });
   ui.rerender({
-    draft: { ...clean, notice: "Сохранено", savedAt: 3100 },
+    draft: { ...clean, noticeKind: "saved" as const, notice: "Сохранено", savedAt: 3100 },
     enabled: true,
     identity: "file-a",
   });
@@ -191,7 +191,7 @@ it("timestamps only actual project success and clears it on edits/reset", async 
   finish({ ...clean.document, text: "value: 2\n", version: "v2" });
   await saving;
   expect(store.get(source)).toMatchObject({
-    notice: "Сохранено",
+    noticeKind: "saved" as const, notice: "Сохранено",
     savedAt: 500,
     busy: false,
   });

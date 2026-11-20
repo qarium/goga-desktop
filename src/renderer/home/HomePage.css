@@ -89,8 +89,9 @@
 .d-no-active,.home-empty { display:flex; flex-direction:column; align-items:center; justify-content:center; gap:12px; min-height:230px; padding:32px; border:1px dashed #304058; border-radius:8px; text-align:center; }
 .d-no-active p,.home-empty p { color:#839cb5; }
 .home-empty { min-height:300px; gap:19px; }
-.home-notice { color:#d4bb87; padding:10px 0; }
-.home-session-menu { display:grid; gap:3px; padding:7px; border:1px solid var(--line); background:#101829; border-radius:8px; }
+.home-notice { color:var(--feedback-warning-fg); padding:10px 0; }
+.home-notice[role="alert"] { color:var(--feedback-error-fg); }
+.home-session-menu { display:grid; gap:3px; padding:7px; }
 .home-session-menu button { border:0; background:transparent; text-align:left; min-width:0; overflow-wrap:anywhere; }
 .home-session-menu small { display:block; color:var(--muted); }
 @media(max-width:1250px) { .d-project-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } .d-local {display:none} }

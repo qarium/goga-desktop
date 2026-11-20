@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 // A Desktop UI preference, not a project document or part of Goga configuration.
 const key = "goga.desktop.autoSaveOnLeave.v1";
 const changed = "goga:auto-save-on-leave-changed";
@@ -15,7 +16,7 @@ export function setAutoSaveOnLeave(enabled: boolean): void {
     window.localStorage.setItem(key, String(enabled));
   } catch {
     throw Error(
-      "Не удалось сохранить настройку автосохранения на этом компьютере.",
+      msg("workspace.couldNotSaveTheAutosavePreferenceOnThisComputer"),
     );
   }
   window.dispatchEvent(new Event(changed));

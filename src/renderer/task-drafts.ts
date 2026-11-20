@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import { preparationErrorMessage } from "./preparation-error";
 import { readWithSignal } from "./read-request";
 import { useEffect, useReducer, useRef } from "react";
@@ -135,7 +136,7 @@ export function useTaskDraft(
             status: expected.document ? "ready" : "error",
             error: expected.document
               ? ""
-              : "Предыдущее чтение отменено. Повторите загрузку задачи.",
+              : msg("workspace.thePreviousReadWasCanceledReloadTheTask"),
           }
         : expected;
     const entry: TaskDraft = { ...previous, status: "loading", error: "" };

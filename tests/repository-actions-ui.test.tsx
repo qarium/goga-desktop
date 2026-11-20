@@ -982,3 +982,19 @@ it("keeps independent owners' action names when their operations overlap", async
   await act(async () => finishes.get("primary")!({ projectId: "p", action: "sync", status: "success", log: "done" }));
   expect(screen.queryByRole("status")).toBeNull();
 });
+
+it.each([
+  ["en", "Propagate to base and publish", "Propagate", "Update topic from remote", "Update from remote"],
+  ["ru", "Перенести топик в base и опубликовать", "Перенести в базу", "Обновить топик из remote", "Обновить из remote"],
+])("uses short action headings but keeps precise accessible labels (%s)", async (lang, propagate, shortPropagate, update, shortUpdate) => {
+  const { setLocale } = await import("../src/shared/i18n");
+  setLocale(lang);
+  mount();
+  for (const [label, heading] of [[propagate, shortPropagate], [update, shortUpdate]]) {
+    fireEvent.focus(screen.getByRole("button", { name: label }));
+    const tip = screen.getByRole("tooltip");
+    expect(tip.querySelector("strong")?.textContent).toBe(heading);
+    expect(tip.textContent).toContain("origin");
+    fireEvent.keyDown(document, { key: "Escape" });
+  }
+});

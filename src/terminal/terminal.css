@@ -1,3 +1,5 @@
+@import "../shared/overlay-theme.css";
+
 html,
 body,
 #terminal-root {
@@ -19,17 +21,10 @@ body,
   width: min(560px, calc(100% - 32px));
   max-height: calc(100% - 32px);
   overflow: auto;
-  color: #dce5f3;
-  background: #101a2b;
-  border: 1px solid #33445e;
-  border-radius: 12px;
   padding: 20px;
   font:
     14px/1.5 system-ui,
     sans-serif;
-}
-.terminal-confirmation::backdrop {
-  background: #0009;
 }
 .terminal-confirmation h2 {
   margin: 0 0 12px;
@@ -47,18 +42,26 @@ body,
 .terminal-confirmation-actions {
   display: flex;
   justify-content: flex-end;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .terminal-confirmation button {
   padding: 8px 16px;
-  border: 1px solid #40536f;
+  border: 1px solid var(--overlay-line);
   border-radius: 6px;
-  background: #1a2940;
+  background: #182239;
   color: inherit;
   font: inherit;
   cursor: pointer;
 }
 .terminal-confirmation button:focus-visible {
-  outline: 2px solid #16cbb9;
+  outline: 2px solid var(--overlay-focus);
   outline-offset: 3px;
+}
+
+.terminal-confirmation .primary {
+  background: var(--overlay-focus);
+  border-color: var(--overlay-focus);
+  color: #06251f;
+  font-weight: 600;
 }

@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import { z } from "zod";
 
 export interface HistoryArtifact {
@@ -31,14 +32,14 @@ const component = (value: string) =>
 export const historyYearSchema = z.string().regex(/^\d{4}$/);
 export const historyEntrySchema = z
   .string()
-  .refine(component, "Недопустимое имя записи истории");
+  .refine(component, { error: () => tr("host.invalidHistoryEntryName") });
 export const historyPathSchema = z
   .string()
   .max(4096)
   .refine((value) => {
     const parts = value.split("/");
     return parts.length <= HISTORY_MAX_DEPTH && parts.every(component);
-  }, "Недопустимый относительный путь истории (глубина до 16)");
+  }, { error: () => tr("host.invalidRelativeHistoryPathMaximumDepth16") });
 
 export interface HistoryPrunePreview {
   status: "ready" | "error";

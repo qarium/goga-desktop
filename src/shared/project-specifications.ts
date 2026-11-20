@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import { z } from "zod";
 import { isOverviewPath } from "./project-overview";
 export const SPECIFICATIONS_ROOT = ".goga/usages";
@@ -9,7 +10,7 @@ export const specificationPathSchema = z
       isOverviewPath(p) &&
       isOverviewPath(`${SPECIFICATIONS_ROOT}/${p}`) &&
       /\.md$/i.test(p),
-    "Недопустимый путь Markdown-файла спецификации",
+    { error: () => tr("host.invalidUsagesMarkdownFilePath") },
   );
 export interface SpecificationCatalog {
   exists: boolean;

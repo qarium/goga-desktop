@@ -1,3 +1,5 @@
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useRef, useState } from "react";
 import type { Project } from "../shared/types";
 import type { TopicBoardSnapshot } from "../shared/topics";
@@ -28,6 +30,7 @@ export function TopicsRemovalDialog({
   onChanged: () => void;
   onBusy?: (busy: boolean) => void;
 }) {
+  useLocale();
   const context = useContextDeletionExecutor(),
     local = useTopicRemovalController(context, onChanged),
     global = useTopicRemovalExecutor();
@@ -68,7 +71,7 @@ export function TopicsRemovalDialog({
       if (action === "clear" && (chooseBase || !board)) {
         const fresh = await read("readTopicBoard", project.id, year);
         if (fresh.projectId !== project.id || fresh.year !== year)
-          throw Error("Ответ другого проекта или года.");
+          throw Error(tr("topics.theResponseBelongsToAnotherProjectOrYear"));
         if (turn === epoch.current) {
           setBoard(fresh);
           setBase(fresh.baseRef);
@@ -92,7 +95,7 @@ export function TopicsRemovalDialog({
         next.year !== year ||
         next.action !== action
       )
-        throw Error("Подтверждение другого действия.");
+        throw Error(tr("topics.confirmationBelongsToAnotherAction"));
       if (turn === epoch.current) {
         setPlan(next);
         setAck(false);
@@ -150,7 +153,7 @@ export function TopicsRemovalDialog({
       {!submitted && (
         <TopicModal
           title={
-            action === "clear" ? "Очистить топики" : "Удалить выбранные топики"
+            action === "clear" ? tr("topics.clearTopics") : tr("topics.deleteSelectedTopics")
           }
           className="topic-removal-dialog"
           busy={executing}
@@ -159,11 +162,11 @@ export function TopicsRemovalDialog({
           <div className="topic-removal-body">
             <p className="hint">
               {project.name} · {year}
-              {action === "clear" && base ? ` · база ${base}` : ""}
+              {action === "clear" && base ? tr("topics.baseBase", { base: base }) : ""}
             </p>
             {action === "delete" && (
               <div className="topic-removal-selected">
-                <h3>Выбрано топиков: {selected.length}</h3>
+                <h3>{tr("topics.selectedTopics")}{selected.length}</h3>
                 <ul>
                   {selected.map((t) => (
                     <li key={t}>
@@ -175,19 +178,15 @@ export function TopicsRemovalDialog({
             )}
             {action === "clear" && (
               <>
-                <p className="topic-warning">
-                  Goga определяет подходящие топики выбранного года по базовой
-                  ветке. Поиск, фильтры, категории и отмеченные карточки не
-                  ограничивают очистку.
-                </p>
+                <p className="topic-warning">{tr("topics.gogaUsesTheBaseBranchToDetermineEligible")}</p>
                 {!plan && board && (
                   <SearchablePicker
-                    label="Базовая ветка"
-                    placeholder="Выберите базовую ветку"
-                    emptyLabel="Нет базовой ветки"
-                    searchLabel="Найти базовую ветку"
-                    searchPlaceholder="Название ветки"
-                    listLabel="Базовые ветки"
+                    label={tr("topics.baseBranch")}
+                    placeholder={tr("topics.selectABaseBranch")}
+                    emptyLabel={tr("topics.noBaseBranch")}
+                    searchLabel={tr("topics.findBaseBranch")}
+                    searchPlaceholder={tr("topics.branchName")}
+                    listLabel={tr("topics.baseBranches")}
                     entries={[
                       ...new Set([
                         ...board.branches,
@@ -204,24 +203,18 @@ export function TopicsRemovalDialog({
                     type="button"
                     disabled={busy || !base || !board}
                     onClick={() => void check()}
-                  >
-                    Проверить и продолжить
-                  </button>
+                  >{tr("topics.checkAndContinue")}</button>
                 )}
               </>
             )}
-            <p className="topic-warning">
-              Удаление затрагивает историю топиков и может затронуть ветки на
-              origin.{" "}
+            <p className="topic-warning">{tr("topics.removalAffectsTopicHistoryAndMayAffectBranches")}{" "}
               {action === "delete"
-                ? "После удаления топиков их рабочие копии будут целиком перемещены в Корзину. Вы потеряете все данные в этих копиях: незакоммиченные изменения, неотслеживаемые и игнорируемые файлы, непереданные коммиты."
-                : "Рабочие копии проверяются отдельно и перемещаются в Корзину только после удаления топиков."}
+                ? tr("topics.afterTopicRemovalTheirEntireWorkingCopiesWill")
+                : tr("topics.workingCopiesAreCheckedSeparatelyAndMovedTo")}
             </p>
             {checking && (
               <p className="topic-removal-progress" role="status">
-                <span className="loading-spinner" aria-hidden="true" />
-                Проверяем топики…
-              </p>
+                <span className="loading-spinner" aria-hidden="true" />{tr("topics.checkingTopics")}</p>
             )}
             {error && (
               <p role="alert" className="error">
@@ -258,9 +251,7 @@ export function TopicsRemovalDialog({
                         if (topics.every((t) => next.includes(t))) onClose();
                         else setExcluded(next);
                       }}
-                    >
-                      Исключить недоступные (
-                      {new Set(plan.blocked.map((item) => item.topic)).size})
+                    >{tr("topics.excludeUnavailable")}{new Set(plan.blocked.map((item) => item.topic)).size})
                     </button>
                   </div>
                 )}
@@ -272,18 +263,13 @@ export function TopicsRemovalDialog({
                       checked={ack}
                       disabled={busy}
                       onChange={(e) => setAck(e.target.checked)}
-                    />
-                    Подтверждаю удаление топиков выбранного года по правилам
-                    Goga и последующую очистку соответствующих копий.
-                  </label>
+                    />{tr("topics.iConfirmRemovalOfTopicsForTheSelected")}</label>
                 )}
               </>
             )}
           </div>
           <footer className="topic-removal-actions">
-            <button type="button" disabled={executing} onClick={onClose}>
-              Отмена
-            </button>
+            <button type="button" disabled={executing} onClick={onClose}>{tr("launch.cancel")}</button>
             {plan ? (
               <button
                 type="button"
@@ -291,7 +277,7 @@ export function TopicsRemovalDialog({
                 disabled={confirmationMissing || busy || !!plan.blocked?.length}
                 onClick={() => void execute()}
               >
-                {action === "clear" ? "Очистить топики" : "Удалить топики"}
+                {action === "clear" ? tr("topics.clearTopics") : tr("topics.deleteTopics")}
               </button>
             ) : (
               error && (
@@ -301,8 +287,8 @@ export function TopicsRemovalDialog({
                   onClick={() => void check()}
                 >
                   {action === "clear" && !board
-                    ? "Повторить загрузку веток"
-                    : "Повторить проверку"}
+                    ? tr("topics.retryLoadingBranches")
+                    : tr("topics.checkAgain")}
                 </button>
               )
             )}

@@ -1,3 +1,5 @@
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import type { BuildRepeatPreparation } from "../shared/build-repeat";
 import { BuildRepeatNotice } from "./BuildRepeatNotice";
 import type { TopicContextRef } from "../shared/worktrees";
@@ -15,7 +17,7 @@ import type {
   BuildFileList,
   BuildRequest,
 } from "../shared/build";
-import { buildPlanProblem, validateBuildOptions } from "../shared/build";
+import { buildPlanMessage, buildPlanProblem, validateBuildOptions } from "../shared/build";
 import "../shared/bridge";
 import { EnvironmentValueInput } from "./ProjectSettings";
 import { SearchablePicker } from "./SearchablePicker";
@@ -88,10 +90,10 @@ const errorText = (e: unknown) =>
         /^Error invoking remote method 'goga:[a-z-]+': (?:Error: )?/,
         "",
       )
-    : "Не удалось выполнить действие";
+    : tr("launch.theActionCouldNotBeCompleted");
 function integer(s: string, name: string) {
   if (!/^\d+$/.test(s) || !Number.isSafeInteger(Number(s)))
-    throw Error(name + ": введите целое число");
+    throw Error(name + tr("launch.enterAWholeNumber"));
   return Number(s);
 }
 export function BuildForm({
@@ -122,6 +124,7 @@ export function BuildForm({
   blocked?: boolean | string;
   onBusyChange?: (projectId: string, busy: boolean) => void;
 }) {
+  useLocale();
   const scope = owner ? contextRef(owner) : project.id;
   const ownerKey = owner ? contextRequestKey(owner) : project.id;
   const storageKey = draftId ?? (owner ? draftKey(owner, "build") : project.id);
@@ -137,7 +140,7 @@ export function BuildForm({
       (seed.context
         ? !owner || contextRequestKey(seed.context) !== ownerKey
         : !!owner))
-      ? "Параметры повторной сборки принадлежат другому владельцу. Подготовьте повтор заново."
+      ? tr("launch.theseRepeatBuildSettingsBelongToADifferent")
       : "";
   const repeatEnvValues = new Map(
     draft.env.map((entry) => [entry.key, entry.value]),
@@ -158,7 +161,6 @@ export function BuildForm({
   const [attempt, setAttempt] = useState(0),
     [loading, setLoading] = useState(true);
   const [plan, setPlan] = useState<BuildPlanDocument | null>(null),
-    [planError, setPlanError] = useState(""),
     [planLoading, setPlanLoading] = useState(false);
   const reasonId = useId();
   const planInputId = useId();
@@ -314,7 +316,6 @@ export function BuildForm({
   useEffect(() => {
     let valid = true;
     setPlan(null);
-    setPlanError("");
     setPlanFailure(null);
     setPreview(false);
     if (draft.path === null || !draft.path.trim()) {
@@ -337,7 +338,6 @@ export function BuildForm({
             e,
             draft.path === context?.historyPlan.path,
           );
-          setPlanError(problem.message);
           setPlanFailure({
             projectId: project.id,
             path: draft.path!,
@@ -357,16 +357,11 @@ export function BuildForm({
     (loading ||
       contextSettled !== contextKey ||
       (!contextReadFailed && (planLoading || planSettled !== planKey)));
-  const planMessage =
-    planError ||
-    (!plan &&
-    !planLoading &&
-    (!draft.path || draft.path === context?.historyPlan.path)
-      ? context?.historyPlan.error
-      : "");
-  const missingPlan =
-    planMessage?.includes("ещё не создан") ||
-    planMessage?.startsWith("Файл плана не найден");
+  const useHistoryPlan = !plan && !planLoading && (!draft.path || draft.path === context?.historyPlan.path);
+  const planCode = planFailure?.code ?? (useHistoryPlan ? context?.historyPlan.errorCode : undefined);
+  const missingPlan = planCode === "missing";
+  const planMessage = planCode ? buildPlanMessage(planCode, draft.path === context?.historyPlan.path)
+    : useHistoryPlan ? context?.historyPlan.error : "";
   const skip = draft.skipReview ?? context?.defaults.skipReview ?? false;
   const unsupported = (flag: string) =>
     !!context && !context.capabilities.includes(flag);
@@ -377,7 +372,7 @@ export function BuildForm({
         ? context.defaults.profile
         : draft.profile) &&
         unsupported("profile")))
-      ? "Выбранная версия Goga не поддерживает рабочий процесс или профиль сборки. Выбор не будет проигнорирован. Выберите поддерживаемую версию в разделе «Проект» или автоматический режим."
+      ? tr("launch.thisVersionOfGogaDoesNotSupportSelecting")
       : "";
   const reviewError =
     draft.skipReview === undefined ? context?.defaults.reviewError : "";
@@ -424,11 +419,11 @@ export function BuildForm({
     if (draft.maxIterations)
       o.maxIterations = integer(
         draft.maxIterations,
-        "Максимальное число итераций",
+        tr("launch.maximumIterations"),
       );
     if (!skip) {
       if (draft.reviewPatience)
-        o.reviewPatience = integer(draft.reviewPatience, "Повторные раунды");
+        o.reviewPatience = integer(draft.reviewPatience, tr("launch.repeatRounds"));
       if (draft.baseRef) o.baseRef = draft.baseRef;
     }
     if (draft.skipReview !== undefined) o.skipReview = draft.skipReview;
@@ -460,7 +455,7 @@ export function BuildForm({
         unsupported(flag)
       )
         throw Error(
-          "Выбранная версия Goga не поддерживает параметр «" + flag + "».",
+          tr("launch.theSelectedGogaVersionDoesNotSupport") + flag + "».",
         );
     return o;
   }
@@ -487,7 +482,7 @@ export function BuildForm({
       if (alive.current) {
         let s = errorText(e);
         for (const v of [...draft.env.map((x) => x.value), draft.proxy])
-          if (v) s = s.split(v).join("[скрыто]");
+          if (v) s = s.split(v).join(tr("launch.hidden"));
         setError(s);
       }
     } finally {
@@ -525,19 +520,17 @@ export function BuildForm({
   return (
     <section
       className="build-form"
-      aria-label="Новая сборка"
+      aria-label={tr("launch.newBuild")}
       aria-busy={formLoading || busy}
     >
       <div className="section-heading">
         <div>
-          <h2>Запустить сборку</h2>
-          <p className="hint">
-            Выполнить план разработки в текущей ветке проекта.
-          </p>
+          <h2>{tr("launch.launchBuild")}</h2>
+          <p className="hint">{tr("launch.runADevelopmentPlanOnTheCurrentProject")}</p>
         </div>
         <button
           type="button"
-          aria-label="Закрыть форму сборки"
+          aria-label={tr("launch.closeBuildForm")}
           disabled={busy}
           onClick={onCancel}
         >
@@ -546,7 +539,7 @@ export function BuildForm({
       </div>
       <LoadingBoundary
         pending={formLoading}
-        label="Загружаем параметры сборки…"
+        label={tr("launch.loadingBuildSettings")}
         error={contextReadFailed ? contextError : undefined}
         onRetry={() => setAttempt((n) => n + 1)}
       >
@@ -567,26 +560,21 @@ export function BuildForm({
               ownerError={repeatOwnerError}
             />
           )}
-          <label htmlFor={planInputId}>План сборки</label>
+          <label htmlFor={planInputId}>{tr("launch.buildPlan")}</label>
           <div className="build-plan-row">
             <input
               id={planInputId}
               value={draft.path ?? ""}
               onChange={(e) => edit({ path: e.target.value })}
               placeholder={
-                loading ? "Получаем путь из истории…" : "Путь внутри проекта"
+                loading ? tr("launch.readingThePathFromHistory") : tr("launch.pathWithinProject")
               }
             />
-            <button type="button" onClick={() => setChooser(true)}>
-              Выбрать файл…
-            </button>
+            <button type="button" onClick={() => setChooser(true)}>{tr("launch.chooseFile")}</button>
           </div>
-          <p className="hint">
-            Другой файл можно выбрать только внутри этого проекта. Путь из
-            истории не создаёт план автоматически.
-          </p>
+          <p className="hint">{tr("launch.chooseAFileWithinThisProjectAPath")}</p>
           {planLoading ? (
-            <p role="status">Проверяем план…</p>
+            <p role="status">{tr("launch.checkingPlan")}</p>
           ) : planMessage ? (
             <p
               role={missingPlan ? "status" : "alert"}
@@ -595,18 +583,14 @@ export function BuildForm({
               {planMessage}
             </p>
           ) : plan ? (
-            <p className="hint" role="status">
-              План доступен
-            </p>
+            <p className="hint" role="status">{tr("launch.planAvailable")}</p>
           ) : null}
           <div className="build-inline-actions">
             <button
               type="button"
               disabled={!plan}
               onClick={() => setPreview(true)}
-            >
-              Посмотреть план
-            </button>
+            >{tr("launch.viewPlan")}</button>
             <button
               type="button"
               disabled={loading}
@@ -614,36 +598,32 @@ export function BuildForm({
                 edit({ path: null });
                 setAttempt((n) => n + 1);
               }}
-            >
-              План из истории
-            </button>
+            >{tr("launch.planFromHistory")}</button>
             <button
               type="button"
               disabled={loading}
               onClick={() => setAttempt((n) => n + 1)}
-            >
-              Обновить данные
-            </button>
+            >{tr("launch.refresh")}</button>
           </div>
           <div className="build-grid">
             <SearchablePicker
-              label="Рабочий процесс"
-              placeholder="Выберите рабочий процесс"
-              emptyLabel="Нет рабочих процессов"
-              searchLabel="Поиск рабочего процесса"
-              searchPlaceholder="Найти рабочий процесс…"
-              listLabel="Рабочие процессы"
+              label={tr("launch.workflow")}
+              placeholder={tr("launch.selectAWorkflow")}
+              emptyLabel={tr("launch.noWorkflows")}
+              searchLabel={tr("launch.searchWorkflows")}
+              searchPlaceholder={tr("launch.findWorkflow")}
+              listLabel={tr("launch.workflows")}
               value={draft.workflow}
               disabled={busy || suspended || loading}
               onChange={(value) => edit({ workflow: value })}
               entries={[
-                { value: "", label: "Из конфигурации" },
+                { value: "", label: tr("launch.fromConfiguration") },
                 ...(draft.workflow &&
                 !context?.workflows.includes(draft.workflow)
                   ? [
                       {
                         value: draft.workflow,
-                        label: `${draft.workflow} · недоступен`,
+                        label: tr("launch.workflowUnavailable", { workflow: draft.workflow }),
                       },
                     ]
                   : []),
@@ -655,12 +635,12 @@ export function BuildForm({
               ]}
             />
             <SearchablePicker
-              label="Профиль"
-              placeholder="Выберите профиль"
-              emptyLabel="Нет профилей"
-              searchLabel="Поиск профиля"
-              searchPlaceholder="Найти профиль…"
-              listLabel="Профили"
+              label={tr("launch.profile")}
+              placeholder={tr("launch.selectAProfile")}
+              emptyLabel={tr("launch.noProfiles")}
+              searchLabel={tr("launch.searchProfiles")}
+              searchPlaceholder={tr("launch.findProfile")}
+              listLabel={tr("launch.profiles")}
               value={draft.profile}
               disabled={busy || suspended || loading}
               onChange={(value) => edit({ profile: value })}
@@ -668,19 +648,19 @@ export function BuildForm({
                 {
                   value: "__project__",
                   label:
-                    "Из настроек проекта" +
+                    tr("launch.fromProjectSettings") +
                     (context?.defaults.profile
                       ? " · " + context.defaults.profile
                       : ""),
                 },
-                { value: "", label: "Автоматически" },
+                { value: "", label: tr("launch.automatic") },
                 ...(draft.profile !== "__project__" &&
                 draft.profile &&
                 !context?.profiles.some((p) => p.name === draft.profile)
                   ? [
                       {
                         value: draft.profile,
-                        label: `${draft.profile} · недоступен`,
+                        label: tr("launch.profileUnavailable", { profile: draft.profile }),
                       },
                     ]
                   : []),
@@ -693,10 +673,7 @@ export function BuildForm({
             />
           </div>
           {(unsupported("workflow") || unsupported("profile")) && (
-            <p className="hint">
-              Выбор рабочего процесса и профиля требует версии Goga с поддержкой
-              этих параметров сборки.
-            </p>
+            <p className="hint">{tr("launch.selectingAWorkflowAndProfileRequiresAGoga")}</p>
           )}
           {selectionError && (
             <p role="alert" className="error">
@@ -704,58 +681,42 @@ export function BuildForm({
             </p>
           )}
           <details className="build-group">
-            <summary>
-              Выполнение <span>· лимиты и ожидание</span>
+            <summary>{tr("launch.execution")}<span>{tr("launch.limitsAndTimeouts")}</span>
             </summary>
             <div className="build-group-body">
               <div className="build-grid">
-                <label>
-                  Максимальное время одной сессии
-                  <input
+                <label>{tr("launch.maximumSessionTime")}<input
                     value={draft.sessionTimeout}
                     onChange={(e) => edit({ sessionTimeout: e.target.value })}
-                    placeholder="Из конфигурации · например 1h30m"
+                    placeholder={tr("launch.fromConfigurationEG1h30m")}
                   />
-                  <small>
-                    Отдельно для каждой сессии выполнения задач и ревью, не
-                    общий лимит сборки.
-                  </small>
+                  <small>{tr("launch.appliesSeparatelyToEachTaskAndReviewSession")}</small>
                 </label>
-                <label>
-                  Максимальное время бездействия
-                  <input
+                <label>{tr("launch.maximumIdleTime")}<input
                     value={draft.idleTimeout}
                     onChange={(e) => edit({ idleTimeout: e.target.value })}
-                    placeholder="Из конфигурации · например 10m"
+                    placeholder={tr("launch.fromConfigurationEG10m")}
                   />
                 </label>
-                <label>
-                  Пауза при лимите ИИ
-                  <input
+                <label>{tr("launch.aiRateLimitBackoff")}<input
                     value={draft.wait}
                     onChange={(e) => edit({ wait: e.target.value })}
-                    placeholder="Из конфигурации · например 5m"
+                    placeholder={tr("launch.fromConfigurationEG5m")}
                   />
-                  <small>
-                    Ожидание перед повторной попыткой при ограничении
-                    использования ИИ-провайдером.
-                  </small>
+                  <small>{tr("launch.timeToWaitBeforeRetryingAfterAnAi")}</small>
                 </label>
-                <label>
-                  Максимальное число итераций
-                  <input
+                <label>{tr("launch.maximumIterations")}<input
                     inputMode="numeric"
                     value={draft.maxIterations}
                     onChange={(e) => edit({ maxIterations: e.target.value })}
-                    placeholder="Из конфигурации"
+                    placeholder={tr("launch.fromConfiguration")}
                   />
                 </label>
               </div>
             </div>
           </details>
           <details className="build-group" open>
-            <summary>
-              Ревью <span>· {skip ? "пропустить" : "выполнять"}</span>
+            <summary>{tr("launch.review")}<span>· {skip ? tr("launch.skip") : tr("launch.run")}</span>
             </summary>
             <div className="build-group-body">
               <div className="build-review-choice">
@@ -763,17 +724,13 @@ export function BuildForm({
                   checked={skip}
                   disabled={loading}
                   onChange={() => edit({ skipReview: !skip })}
-                >
-                  Пропустить ревью
-                </TopicSwitch>
+                >{tr("launch.skipReview")}</TopicSwitch>
                 {draft.skipReview !== undefined && (
                   <button
                     type="button"
                     className="build-inherit"
                     onClick={() => edit({ skipReview: undefined })}
-                  >
-                    Использовать настройку проекта
-                  </button>
+                  >{tr("launch.useProjectSetting")}</button>
                 )}
               </div>
               {reviewError && (
@@ -784,69 +741,57 @@ export function BuildForm({
               <div className="build-grid">
                 <div className="build-catalog-field">
                   <SearchablePicker
-                    label="База сравнения"
-                    placeholder="Выберите базу сравнения"
-                    emptyLabel="Нет доступных веток"
-                    searchLabel="Поиск базы сравнения"
-                    searchPlaceholder="Найти ветку…"
-                    listLabel="Базы сравнения"
+                    label={tr("launch.comparisonBase")}
+                    placeholder={tr("launch.selectAComparisonBase")}
+                    emptyLabel={tr("launch.noBranchesAvailable")}
+                    searchLabel={tr("launch.searchComparisonBases")}
+                    searchPlaceholder={tr("launch.findBranch")}
+                    listLabel={tr("launch.comparisonBases")}
                     disabled={skip || busy || suspended || loading}
                     value={draft.baseRef}
                     onChange={(value) => edit({ baseRef: value })}
                     entries={[
-                      { value: "", label: "Из конфигурации проекта" },
+                      { value: "", label: tr("launch.fromProjectConfiguration") },
                       ...(draft.baseRef &&
                       !context?.branches.includes(draft.baseRef)
                         ? [
                             {
                               value: draft.baseRef,
-                              label: `${draft.baseRef} · недоступна`,
+                              label: tr("launch.baserefUnavailable", { baseRef: draft.baseRef }),
                             },
                           ]
                         : []),
                       ...(context?.branches ?? []),
                     ]}
                   />
-                  <small>
-                    Ветка, относительно которой сравниваются изменения. Список
-                    без fetch.
-                  </small>
+                  <small>{tr("launch.theBranchToCompareChangesAgainstThisList")}</small>
                 </div>
-                <label>
-                  Повторные раунды без изменений
-                  <input
+                <label>{tr("launch.repeatRoundsWithoutChanges")}<input
                     disabled={skip}
                     inputMode="numeric"
-                    aria-label="Повторные раунды без изменений"
+                    aria-label={tr("launch.repeatRoundsWithoutChanges")}
                     value={draft.reviewPatience}
                     onChange={(e) => edit({ reviewPatience: e.target.value })}
-                    placeholder="Из конфигурации"
+                    placeholder={tr("launch.fromConfiguration")}
                   />
-                  <small>
-                    После этого числа раундов внешнее ревью завершается.
-                  </small>
+                  <small>{tr("launch.externalReviewEndsAfterThisManyRounds")}</small>
                 </label>
               </div>
             </div>
           </details>
           <details className="build-group" open={seed ? true : undefined}>
-            <summary>
-              Окружение <span>· переменные и сеть</span>
+            <summary>{tr("launch.environment")}<span>{tr("launch.variablesAndNetwork")}</span>
             </summary>
             <div className="build-group-body build-environment">
               <section className="build-environment-block">
-                <h3>Переменные окружения</h3>
-                <p className="hint">
-                  Дополнения для этой сборки. Значения скрыты на экране и не
-                  входят в сводку запуска.
-                </p>
+                <h3>{tr("launch.environmentVariables")}</h3>
+                <p className="hint">{tr("launch.overridesForThisBuildValuesAreHiddenAnd")}</p>
                 {draft.env.map((row, i) => (
                   <div className="build-pair" key={i}>
-                    <label>
-                      Имя переменной {i + 1}
+                    <label>{tr("launch.variableName")}{i + 1}
                       <EnvironmentValueInput
                         secret={false}
-                        label={"Имя переменной " + (i + 1)}
+                        label={tr("launch.variableName") + (i + 1)}
                         value={row.key}
                         onInvalid={(message) =>
                           setInputErrors((prev) => ({
@@ -864,11 +809,10 @@ export function BuildForm({
                         }}
                       />
                     </label>
-                    <label>
-                      Значение переменной {i + 1}
+                    <label>{tr("launch.variableValue")}{i + 1}
                       <EnvironmentValueInput
                         secret
-                        label={"Значение переменной " + (i + 1)}
+                        label={tr("launch.variableValue") + (i + 1)}
                         value={row.value}
                         onInvalid={(message) =>
                           setInputErrors((prev) => ({
@@ -888,7 +832,7 @@ export function BuildForm({
                     </label>
                     <button
                       type="button"
-                      aria-label={"Удалить переменную " + (i + 1)}
+                      aria-label={tr("launch.removeVariable") + (i + 1)}
                       onClick={() => {
                         removeRowErrors(["env", "key"], i);
                         edit({ env: draft.env.filter((_, n) => n !== i) });
@@ -903,19 +847,16 @@ export function BuildForm({
                   onClick={() =>
                     edit({ env: [...draft.env, { key: "", value: "" }] })
                   }
-                >
-                  Добавить переменную
-                </button>
+                >{tr("launch.addVariable")}</button>
               </section>
               <section className="build-environment-block">
-                <h3>Дополнительные хосты</h3>
+                <h3>{tr("launch.additionalHosts")}</h3>
                 {draft.addHost.map((row, i) => (
                   <div className="build-pair" key={i}>
-                    <label>
-                      Имя хоста {i + 1}
+                    <label>{tr("launch.hostName")}{i + 1}
                       <EnvironmentValueInput
                         secret={false}
-                        label={"Имя хоста " + (i + 1)}
+                        label={tr("launch.hostName") + (i + 1)}
                         value={row.host}
                         onInvalid={(message) =>
                           setInputErrors((prev) => ({
@@ -933,11 +874,10 @@ export function BuildForm({
                         }}
                       />
                     </label>
-                    <label>
-                      IP-адрес {i + 1}
+                    <label>{tr("launch.ipAddress")}{i + 1}
                       <EnvironmentValueInput
                         secret={false}
-                        label={"IP-адрес " + (i + 1)}
+                        label={tr("launch.ipAddress") + (i + 1)}
                         value={row.ip}
                         onInvalid={(message) =>
                           setInputErrors((prev) => ({
@@ -957,7 +897,7 @@ export function BuildForm({
                     </label>
                     <button
                       type="button"
-                      aria-label={"Удалить хост " + (i + 1)}
+                      aria-label={tr("launch.removeHost") + (i + 1)}
                       onClick={() => {
                         removeRowErrors(["host", "ip"], i);
                         edit({
@@ -974,15 +914,11 @@ export function BuildForm({
                   onClick={() =>
                     edit({ addHost: [...draft.addHost, { host: "", ip: "" }] })
                   }
-                >
-                  Добавить хост
-                </button>
+                >{tr("launch.addHost")}</button>
               </section>
-              <label className="build-proxy">
-                Прокси
-                <EnvironmentValueInput
+              <label className="build-proxy">{tr("launch.proxy")}<EnvironmentValueInput
                   secret
-                  label="Прокси"
+                  label={tr("launch.proxy")}
                   value={draft.proxy}
                   onInvalid={(message) =>
                     setInputErrors((prev) => ({ ...prev, proxy: message }))
@@ -992,15 +928,12 @@ export function BuildForm({
                     edit({ proxy: value });
                   }}
                 />
-                <small>
-                  HTTP/HTTPS URL. Учётные данные не показываются в сводке.
-                </small>
+                <small>{tr("launch.httpHttpsUrlCredentialsAreHiddenFromThe")}</small>
               </label>
             </div>
           </details>
           <details className="build-group">
-            <summary>
-              Дополнительно <span>· контракты</span>
+            <summary>{tr("launch.advanced")}<span>{tr("launch.contracts")}</span>
             </summary>
             <div className="build-group-body">
               <label className="check">
@@ -1010,13 +943,8 @@ export function BuildForm({
                   onChange={(e) =>
                     edit({ skipManifestCheck: e.target.checked })
                   }
-                />
-                Разрешить сборку с незакоммиченными контрактами
-              </label>
-              <p className="hint">
-                Отключает проверку незакоммиченных CODEMANIFEST, а не проверку
-                несохранённого редактора.
-              </p>
+                />{tr("launch.allowBuildsWithUncommittedContracts")}</label>
+              <p className="hint">{tr("launch.skipsTheUncommittedCodemanifestCheckNotTheUnsaved")}</p>
             </div>
           </details>
           <div className="build-clean">
@@ -1026,33 +954,22 @@ export function BuildForm({
                   type="checkbox"
                   checked={draft.update}
                   onChange={(event) => edit({ update: event.target.checked })}
-                />
-                Обновить образ перед сборкой
-              </label>
+                />{tr("launch.updateImageBeforeBuilding")}</label>
             )}
             <label className="check">
               <input
                 type="checkbox"
                 checked={draft.clean}
                 onChange={(e) => edit({ clean: e.target.checked })}
-              />
-              Очистить состояние предыдущей сборки
-            </label>
-            <p className="hint">
-              Начать заново, не продолжая предыдущую сборку. Перед запуском
-              потребуется подтверждение.
-            </p>
+              />{tr("launch.clearPreviousBuildState")}</label>
+            <p className="hint">{tr("launch.startFreshInsteadOfResumingThePreviousBuild")}</p>
           </div>
           <div className="build-footer">
-            <button type="button" onClick={onCancel}>
-              Отмена
-            </button>
-            <span className="hint">Параметры только для этого запуска</span>
+            <button type="button" onClick={onCancel}>{tr("launch.cancel")}</button>
+            <span className="hint">{tr("launch.forThisRunOnly")}</span>
             <div className="build-launch-action">
               {showMissingReason && (
-                <ActionReason id={reasonId} className="build-launch-reason">
-                  План не найден. Выберите файл плана
-                </ActionReason>
+                <ActionReason id={reasonId} className="build-launch-reason">{tr("launch.planNotFoundChooseAPlanFile")}</ActionReason>
               )}
               <SplitLaunchButton
                 disabled={disabled}
@@ -1068,7 +985,7 @@ export function BuildForm({
             <p className="hint">
               {typeof blocked === "string"
                 ? blocked
-                : "В этой рабочей копии уже выполняется сборка."}
+                : tr("launch.aBuildIsAlreadyRunningInThisWorking")}
             </p>
           )}
         </fieldset>
@@ -1085,7 +1002,7 @@ export function BuildForm({
         />
       )}
       {preview && plan && (
-        <TopicModal title="План сборки" onClose={() => setPreview(false)}>
+        <TopicModal title={tr("launch.buildPlan")} onClose={() => setPreview(false)}>
           <p className="hint">{plan.path}</p>
           <pre className="build-plan-preview">{plan.text}</pre>
         </TopicModal>
@@ -1110,28 +1027,22 @@ export function BuildCleanConfirmation({
   onConfirm: () => void;
   busy?: boolean;
 }) {
+  useLocale();
   return (
     <TopicModal
-      title="Очистить состояние предыдущей сборки?"
+      title={tr("launch.clearThePreviousBuildState")}
       onClose={onCancel}
       busy={busy}
     >
-      <p>
-        Goga удалит сохранённое состояние предыдущей сборки для текущей ветки.
-        Продолжить её с этого состояния уже не получится.
-      </p>
+      <p>{tr("launch.gogaWillDeleteThePreviousBuildStateFor")}</p>
       <div className="form-actions">
-        <button type="button" disabled={busy} onClick={onCancel}>
-          Отмена
-        </button>
+        <button type="button" disabled={busy} onClick={onCancel}>{tr("launch.cancel")}</button>
         <button
           type="button"
           className="primary"
           disabled={busy}
           onClick={onConfirm}
-        >
-          Очистить и запустить
-        </button>
+        >{tr("launch.clearAndLaunch")}</button>
       </div>
     </TopicModal>
   );
@@ -1147,6 +1058,7 @@ function BuildFileChooser({
   onSelect: (path: string) => void;
   onClose: () => void;
 }) {
+  useLocale();
   const [directory, setDirectory] = useState(""),
     [list, setList] = useState<BuildFileList | null>(null),
     [error, setError] = useState(""),
@@ -1179,26 +1091,22 @@ function BuildFileChooser({
     };
   }, [ownerKey, directory, attempt]);
   return (
-    <TopicModal title="Выбрать план в проекте" onClose={onClose}>
-      <LoadingBoundary pending={settled !== loadKey} label="Загружаем файлы…">
-        <p className="hint">Только файлы текущего проекта</p>
+    <TopicModal title={tr("launch.chooseAPlanInThisProject")} onClose={onClose}>
+      <LoadingBoundary pending={settled !== loadKey} label={tr("launch.loadingFiles")}>
+        <p className="hint">{tr("launch.filesInTheCurrentProjectOnly")}</p>
         <div className="build-file-toolbar">
           <button
             type="button"
             disabled={!directory}
             onClick={() => setDirectory("")}
-          >
-            Корень проекта
-          </button>
+          >{tr("launch.projectRoot")}</button>
           <button
             type="button"
             disabled={!directory}
             onClick={() =>
               setDirectory(directory.split("/").slice(0, -1).join("/"))
             }
-          >
-            Назад
-          </button>
+          >{tr("launch.back")}</button>
         </div>
         <p className="build-file-location">
           {directory || "/ · " + project.name}
@@ -1208,12 +1116,10 @@ function BuildFileChooser({
             <p className="error" role="alert">
               {error}
             </p>
-            <button type="button" onClick={() => setAttempt((n) => n + 1)}>
-              Повторить
-            </button>
+            <button type="button" onClick={() => setAttempt((n) => n + 1)}>{tr("launch.retry")}</button>
           </>
         ) : !list ? (
-          <p role="status">Загружаем файлы…</p>
+          <p role="status">{tr("launch.loadingFiles")}</p>
         ) : (
           <div className="build-file-list">
             {list.entries.map((e) => (
@@ -1221,7 +1127,7 @@ function BuildFileChooser({
                 type="button"
                 key={e.path}
                 aria-label={
-                  (e.directory ? "Открыть папку " : "Выбрать ") + e.name
+                  (e.directory ? tr("launch.openFolder") : tr("launch.choose")) + e.name
                 }
                 onClick={() =>
                   e.directory ? setDirectory(e.path) : onSelect(e.path)
@@ -1233,15 +1139,13 @@ function BuildFileChooser({
               </button>
             ))}
             {list.entries.length === 0 && (
-              <p className="hint">Нет доступных файлов</p>
+              <p className="hint">{tr("launch.noFilesAvailable")}</p>
             )}
           </div>
         )}
       </LoadingBoundary>
       <div className="form-actions">
-        <button type="button" onClick={onClose}>
-          Отмена
-        </button>
+        <button type="button" onClick={onClose}>{tr("launch.cancel")}</button>
       </div>
     </TopicModal>
   );

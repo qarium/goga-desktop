@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import { useCallback, useEffect, useState } from "react";
 import type { TopicBoardSnapshot } from "../shared/topics";
 import {
@@ -16,7 +17,7 @@ function load(projectId: string) {
   } catch {
     return {
       value: defaultBoardPreferences(),
-      error: "Не удалось прочитать настройки доски.",
+      error: msg("workspace.couldNotReadBoardSettings"),
     };
   }
 }
@@ -88,7 +89,7 @@ export function useTopicsBoard(
       try {
         result = writeBoardPreferences(window.localStorage, projectId, value);
       } catch {
-        result = { error: "Настройки доски не сохранены." };
+        result = { error: msg("workspace.boardSettingsWereNotSaved") };
       }
       setSaved({ projectId, value, ...result });
     },

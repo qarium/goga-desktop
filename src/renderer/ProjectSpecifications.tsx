@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import {
   useEffect,
   useLayoutEffect,
@@ -70,7 +72,7 @@ function readError(error: unknown): string {
     "",
   );
   return message === readTimeoutMessage(30000)
-    ? "Не удалось прочитать спецификации за 30 секунд. Повторите загрузку."
+    ? msg("project.readingUsagesTimedOutAfter30SecondsTryAgain")
     : message;
 }
 
@@ -85,6 +87,7 @@ export function ProjectSpecifications({
   refreshRevision?: number;
   stateStore?: SpecificationsStateStore;
 }) {
+  const locale = useLocale();
   const active = useViewActive();
   const scope = owner ? contextRef(owner) : project.id;
   const ownerKey = specificationOwnerKey(scope);
@@ -170,7 +173,7 @@ export function ProjectSpecifications({
   const catalogError =
     catalogState.key === catalogKey ? catalogState.error : undefined;
   const catalogReady = active && !catalogPending && !!catalog;
-  const tree = useMemo(() => buildTree(catalog?.paths ?? []), [catalog]);
+  const tree = useMemo(() => buildTree(catalog?.paths ?? [], locale), [catalog, locale]);
   const selected = view.selected;
   const documentKey = JSON.stringify([
     authority,
@@ -198,7 +201,7 @@ export function ProjectSpecifications({
       .then((value) => {
         if (value.path !== selected)
           throw Error(
-            "Получен документ другой спецификации. Повторите загрузку.",
+            msg("project.theReturnedUsageDocumentDoesNotMatchReloadIt"),
           );
         if (current)
           setDocument({
@@ -269,7 +272,7 @@ export function ProjectSpecifications({
   function choose(path: string) {
     if (!tree.nodes.has(path) || tree.nodes.get(path)?.kind !== "file") {
       setLinkError(
-        `Документ «${path}» не найден в .goga/usages. Обновите спецификации.`,
+        msg("project.documentWasNotFoundInGogaUsagesRefreshUsages", { path: String(path) }),
       );
       return;
     }
@@ -320,19 +323,19 @@ export function ProjectSpecifications({
     }
   }
   return (
-    <section className="specifications-view" aria-label="Спецификации проекта">
+    <section className="specifications-view" aria-label={msg("project.projectUsages")}>
       <div className="spec-section-toolbar">
         <div>
           <code>.goga/usages/</code>
-          <span>Спецификации выбранной рабочей области</span>
+          <span>{msg("project.usagesForTheSelectedWorkspace")}</span>
         </div>
         <div>
-          <span className="spec-readonly">Только просмотр</span>
+          <span className="spec-readonly">{msg("project.readOnly")}</span>
           <button
             type="button"
             className="quiet spec-icon"
             disabled={catalogPending || documentPending}
-            aria-label="Обновить спецификации"
+            aria-label={msg("project.refreshUsages")}
             onClick={() => setAttempt((value) => value + 1)}
           >
             <RefreshCw size={16} />
@@ -342,60 +345,48 @@ export function ProjectSpecifications({
       <LoadingBoundary
         pending={catalogPending}
         background={!!catalog}
-        label="Загружаем спецификации…"
+        label={msg("project.loadingUsages")}
         error={catalog ? catalogError : undefined}
         onRetry={() => setAttempt((value) => value + 1)}
       >
         {catalogError && !catalog && (
           <div className="spec-state" role="alert">
             <Info size={28} />
-            <h3>Не удалось загрузить спецификации</h3>
+            <h3>{msg("project.couldNotLoadUsages")}</h3>
             <p>{catalogError}</p>
             <button
               type="button"
-              aria-label="Повторить загрузку"
+              aria-label={msg("project.retryLoading")}
               onClick={() => setAttempt((value) => value + 1)}
-            >
-              Повторить
-            </button>
+            >{msg("project.retry")}</button>
           </div>
         )}
         {catalogError && catalog && (
-          <p className="spec-refresh-error">
-            Спецификации не обновлены. Ниже показана предыдущая версия.
-          </p>
+          <p className="spec-refresh-error">{msg("project.usagesWereNotRefreshedThePreviousVersionIsShownBelow")}</p>
         )}
         {!catalogPending && catalog && !catalog.exists ? (
           <div className="spec-state">
             <FolderOpen size={32} />
-            <h3>Спецификаций пока нет</h3>
-            <p>Папка .goga/usages ещё не создана в этой рабочей области.</p>
+            <h3>{msg("project.noUsagesYet")}</h3>
+            <p>{msg("project.theGogaUsagesFolderDoesNotYetExistInThis")}</p>
             <button
               type="button"
               onClick={() => setAttempt((value) => value + 1)}
-            >
-              Обновить
-            </button>
+            >{msg("project.refresh")}</button>
           </div>
         ) : catalog && !panesVisible ? (
           <div className="spec-state">
             <FolderOpen size={32} />
-            <h3>Markdown-файлы не найдены</h3>
-            <p>
-              В .goga/usages пока нет файлов .md, в том числе во вложенных
-              папках.
-            </p>
+            <h3>{msg("project.noMarkdownFilesFound")}</h3>
+            <p>{msg("project.thereAreNoMdFilesInGogaUsagesOrIts")}</p>
             <button
               type="button"
               onClick={() => setAttempt((value) => value + 1)}
-            >
-              Обновить
-            </button>
+            >{msg("project.refresh")}</button>
           </div>
         ) : null}
         {catalog?.skippedUnsupported ? (
-          <p className="spec-unsupported">
-            Ссылки и специальные файлы не открываются:{" "}
+          <p className="spec-unsupported">{msg("project.linksAndSpecialFilesCannotBeOpened")}{" "}
             {catalog.skippedUnsupported}.
           </p>
         ) : null}
@@ -403,12 +394,12 @@ export function ProjectSpecifications({
           <HistoryViewport active={active && panesVisible}>
             <div className="item-list tree-pane spec-tree">
               <div className="spec-tree-heading">
-                <span className="eyebrow">ФАЙЛЫ</span>
+                <span className="eyebrow">{msg("project.files2")}</span>
                 <div>
                   <button
                     type="button"
                     className="quiet spec-icon"
-                    aria-label="Раскрыть все папки"
+                    aria-label={msg("project.expandAllFolders")}
                     onClick={() =>
                       update((state) => ({
                         ...state,
@@ -425,7 +416,7 @@ export function ProjectSpecifications({
                   <button
                     type="button"
                     className="quiet spec-icon"
-                    aria-label="Свернуть все папки"
+                    aria-label={msg("project.collapseAllFolders")}
                     onClick={() =>
                       update((state) => ({ ...state, expanded: new Set() }))
                     }
@@ -437,8 +428,8 @@ export function ProjectSpecifications({
               <div className="spec-search">
                 <Search size={15} />
                 <input
-                  aria-label="Найти спецификацию"
-                  placeholder="Имя файла или путь…"
+                  aria-label={msg("project.findAUsage")}
+                  placeholder={msg("project.fileNameOrPath")}
                   value={view.query}
                   onChange={(event) =>
                     update((state) => ({ ...state, query: event.target.value }))
@@ -448,7 +439,7 @@ export function ProjectSpecifications({
                   <button
                     type="button"
                     className="quiet spec-icon"
-                    aria-label="Очистить поиск"
+                    aria-label={msg("project.clearSearch")}
                     onClick={() => {
                       reveal.current = true;
                       update((state) => ({ ...state, query: "" }));
@@ -461,7 +452,7 @@ export function ProjectSpecifications({
               <div
                 className="history-scroll-region"
                 role="region"
-                aria-label="Дерево спецификаций"
+                aria-label={msg("project.usagesTree")}
                 tabIndex={0}
                 ref={treeRoot}
                 onScroll={(event) => {
@@ -476,7 +467,7 @@ export function ProjectSpecifications({
                   <div
                     className="spec-results"
                     role="list"
-                    aria-label="Результаты поиска"
+                    aria-label={msg("project.searchResults")}
                   >
                     {results.length ? (
                       results.map((row) => (
@@ -495,14 +486,14 @@ export function ProjectSpecifications({
                         </button>
                       ))
                     ) : (
-                      <p className="spec-no-results">Ничего не найдено</p>
+                      <p className="spec-no-results">{msg("project.noMatches")}</p>
                     )}
                   </div>
                 ) : (
                   <div
                     className="spec-tree-rows"
                     role="tree"
-                    aria-label="Файлы спецификаций"
+                    aria-label={msg("project.usageFiles")}
                   >
                     {rows.map((row) => (
                       <button
@@ -521,7 +512,7 @@ export function ProjectSpecifications({
                             ? selected === row.path
                             : undefined
                         }
-                        aria-label={`${row.kind === "file" ? "Файл" : "Папка"} ${row.path}`}
+                        aria-label={`${row.kind === "file" ? msg("project.file") : msg("project.folder2")} ${row.path}`}
                         title={row.path}
                         className={`spec-tree-row ${row.kind === "file" && selected === row.path ? "selected" : ""}`}
                         style={{ paddingLeft: 8 + row.depth * 16 }}
@@ -555,8 +546,8 @@ export function ProjectSpecifications({
               </div>
               <div className="spec-tree-footer">
                 {searching
-                  ? `${results.length} найдено`
-                  : `${tree.files.length} документов`}
+                  ? msg("project.found", { length: String(results.length) })
+                  : msg("project.documents", { length: String(tree.files.length) })}
               </div>
             </div>
             {selected ? (
@@ -577,7 +568,7 @@ export function ProjectSpecifications({
                     <button
                       type="button"
                       className="quiet spec-icon"
-                      aria-label="Закрыть сообщение"
+                      aria-label={msg("project.dismissMessage")}
                       onClick={() => setLinkError("")}
                     >
                       <X size={14} />
@@ -587,19 +578,17 @@ export function ProjectSpecifications({
                 <LoadingBoundary
                   pending={documentPending}
                   background={!!document}
-                  label="Загружаем документ…"
+                  label={msg("project.loadingDocument")}
                   error={documentError}
                   onRetry={() => setDocumentAttempt((value) => value + 1)}
                 >
                   {documentError && document && (
-                    <p className="spec-refresh-error">
-                      Документ не обновлён. Ниже показана предыдущая версия.
-                    </p>
+                    <p className="spec-refresh-error">{msg("project.theDocumentWasNotRefreshedThePreviousVersionIsShown")}</p>
                   )}
                   {document?.exists ? (
                     <div className="history-preview">
                       {document.text === "" ? (
-                        <p className="history-empty">Файл пуст</p>
+                        <p className="history-empty">{msg("project.fileIsEmpty")}</p>
                       ) : (
                         <HistoryMarkdown
                           text={document.text}
@@ -611,11 +600,8 @@ export function ProjectSpecifications({
                   ) : !documentPending && !documentError ? (
                     <div className="spec-state spec-file-missing">
                       <FileText size={30} />
-                      <h3>Файл больше недоступен</h3>
-                      <p>
-                        Он мог быть удалён или перемещён. Выберите другой
-                        документ слева.
-                      </p>
+                      <h3>{msg("project.fileNoLongerAvailable")}</h3>
+                      <p>{msg("project.itMayHaveBeenDeletedOrMovedSelectAnotherDocument")}</p>
                     </div>
                   ) : null}
                 </LoadingBoundary>
@@ -623,8 +609,8 @@ export function ProjectSpecifications({
             ) : (
               <div className="spec-state">
                 <FileText size={30} />
-                <h3>Выберите Markdown-файл</h3>
-                <p>Документы находятся в дереве слева.</p>
+                <h3>{msg("project.selectAMarkdownFile")}</h3>
+                <p>{msg("project.documentsAreInTheTreeOnTheLeft")}</p>
               </div>
             )}
           </HistoryViewport>

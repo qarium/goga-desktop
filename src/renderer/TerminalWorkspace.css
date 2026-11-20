@@ -62,9 +62,6 @@
   z-index: 3;
   width: 220px;
   padding: 6px;
-  border: 1px solid #26334a;
-  border-radius: 8px;
-  background: #101728;
 }
 .terminal-actions-menu button {
   display: flex;
@@ -100,19 +97,15 @@
   background: #0a0e1a;
 }
 .terminal-confirmation {
-  border: 1px solid #28354e;
-  border-radius: 8px;
   padding: 16px;
-  background: #101a2c;
-}
-.terminal-confirmation {
   max-width: 680px;
 }
-.terminal-confirmation button {
-  margin-right: 8px;
+.terminal-confirmation .form-actions {
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
 }
 .terminal-error {
-  border: 1px solid #a7584e;
   padding: 12px;
   display: flex;
   justify-content: space-between;
@@ -195,9 +188,6 @@
 .terminal-add-menu {
   width: 270px;
   padding: 6px;
-  border: 1px solid #26334a;
-  border-radius: 8px;
-  background: #101728;
 }
 .terminal-add-menu button {
   display: flex;

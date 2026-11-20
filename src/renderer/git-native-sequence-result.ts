@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import { z } from "zod";
 import { scopeRefSchema, type ScopeRef } from "../shared/context";
 import { documentScopeId } from "./settings-documents";
@@ -95,26 +96,26 @@ export function nativeSequenceDiagnostics(
 ): string {
   const parsed = schema.safeParse(value);
   if (!parsed.success)
-    return "Ответ штатной операции Git не подтверждён. Проверьте состояние; автоматического повтора нет.";
+    return msg("git.nativeGitResponseUnverifiedCheckTheStateThereIsNo");
   const v = parsed.data,
     n = v.native;
   return [
     verified
       ? v.status === "conflict"
-        ? "Git остановился на следующем конфликте; операция ещё не завершена."
-        : "Результат штатной операции Git проверен."
-      : "Результат не подтверждён. Автоматического повтора нет.",
+        ? msg("git.gitStoppedAtTheNextConflictTheOperationIsNot")
+        : msg("git.nativeGitResultVerified")
+      : msg("git.resultUnconfirmedThereIsNoAutomaticRetry"),
     v.message,
     v.log,
-    `Процесс завершён: ${n.processSettled ? "да" : "не подтверждено"}. Сохранность несвязанных файлов: ${n.verifiedUnrelatedData ? "проверена" : "не подтверждена"}.`,
+    msg("git.processExitedUnrelatedFilesPreserved", { value1: String(n.processSettled ? msg("git.yes") : msg("git.unconfirmed")), value2: String(n.verifiedUnrelatedData ? msg("git.verified") : msg("git.unconfirmed2")) }),
     n.recovery === "removed"
-      ? "Защитный снимок удалён после проверки результата."
+      ? msg("git.theSafetySnapshotWasRemovedAfterVerifyingTheResult")
       : n.recovery === "retained" && n.recoveryPath
-        ? `Материалы восстановления: ${n.recoveryPath}`
-        : "Состояние материалов восстановления не подтверждено.",
-    ...v.retainedLocks.map((p) => `Сохранена блокировка: ${p}`),
-    ...v.uncheckedLocks.map((p) => `Не проверена блокировка: ${p}`),
-    "Git ведёт свой журнал штатно. Публикация и автоматический повтор Goga не выполнялись.",
+        ? msg("git.recoveryFiles", { recoveryPath: String(n.recoveryPath) })
+        : msg("git.recoveryStateIsUnconfirmed"),
+    ...v.retainedLocks.map((p) => msg("git.retainedLock", { p: String(p) })),
+    ...v.uncheckedLocks.map((p) => msg("git.unverifiedLock", { p: String(p) })),
+    msg("git.gitMaintainsItsLogNormallyNoPushOrAutomaticGoga"),
   ]
     .filter(Boolean)
     .join("\n\n");

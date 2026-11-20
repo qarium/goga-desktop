@@ -1,3 +1,6 @@
+import { t } from "../shared/i18n";
+import { useLocale } from "./useLocale";
+import { InterfaceLanguageSettings } from "./InterfaceLanguageSettings";
 import { RetainedViews, useViewActive } from "./RetainedViews";
 import { useReadScope } from "./read-request";
 import { LoadingBoundary } from "./LoadingBoundary";
@@ -19,6 +22,7 @@ import { TopicSwitch } from "./TopicsCommon";
 import "./WorkspaceLeaveDialog.css";
 
 function WorkspaceSaveSettings() {
+  useLocale();
   const enabled = useSyncExternalStore(
     subscribeAutoSaveOnLeave,
     readAutoSaveOnLeave,
@@ -26,7 +30,7 @@ function WorkspaceSaveSettings() {
   const [error, setError] = useState("");
   return (
     <section className="workspace-leave-settings">
-      <h3>Сохранение файлов</h3>
+      <h3>{t("general.fileSaving")}</h3>
       <TopicSwitch
         checked={enabled}
         onChange={() => {
@@ -37,17 +41,9 @@ function WorkspaceSaveSettings() {
             setError(e instanceof Error ? e.message : String(e));
           }
         }}
-      >
-        Автосохранение при переходе
-      </TopicSwitch>
-      <p>
-        Сохранять правки без напоминания при выходе из «Обзора» или «Проекта»,
-        смене проекта или топика и перед запуском.
-      </p>
-      <p className="hint">
-        Если файл изменился на диске, переход остановится. Ваши правки останутся
-        в редакторе.
-      </p>
+      >{t("general.autosaveWhenLeaving")}</TopicSwitch>
+      <p>{t("general.saveEditsWithoutAskingWhenLeavingOverviewOrProject")}</p>
+      <p className="hint">{t("general.ifTheFileChangedOnDiskYouWillStay")}</p>
       {error && (
         <p className="error" role="alert">
           {error}
@@ -56,6 +52,8 @@ function WorkspaceSaveSettings() {
     </section>
   );
 }
+
+export const DEFAULT_SETTINGS_TAB = "workspace";
 
 export function Settings({
   documents,
@@ -68,6 +66,7 @@ export function Settings({
   selectedTab?: string;
   onTabChange?: (tab: string) => void;
 }) {
+  useLocale();
   const [ownStore] = useState(createSettingsDocuments);
   const store = documents ?? ownStore;
   const revision = useSyncExternalStore(store.subscribe, store.homeRevision);
@@ -75,7 +74,7 @@ export function Settings({
   const seenRemovals = useRef(removals);
   const initialized = useRef(false);
   const busy = useSyncExternalStore(store.subscribe, store.busy);
-  const [ownTab, setOwnTab] = useState("config"),
+  const [ownTab, setOwnTab] = useState<string>(DEFAULT_SETTINGS_TAB),
     [profiles, setProfiles] = useState<string[]>(() => store.profiles()),
     [profile, setProfile] = useState(""),
     [creating, setCreating] = useState(false),
@@ -153,7 +152,7 @@ export function Settings({
       profiles.includes(name)
     ) {
       setError(
-        "Укажите уникальное имя профиля: до 180 символов, латинские буквы, цифры, точка, дефис или подчёркивание.",
+        t("general.chooseAUniqueProfileNameOfUpTo180"),
       );
       return;
     }
@@ -168,34 +167,32 @@ export function Settings({
     <section className="settings-panel structured-settings">
       <div className="section-heading">
         <div>
-          <span className="eyebrow">ЛИЧНОЕ · НА ЭТОМ КОМПЬЮТЕРЕ</span>
-          <h2>Общие настройки</h2>
+          <span className="eyebrow">{t("general.personalOnThisComputer")}</span>
+          <h2>{t("general.generalSettings")}</h2>
         </div>
         {onBack && (
-          <button className="quiet" disabled={busy} onClick={onBack}>
-            ← Назад
-          </button>
+          <button className="quiet" disabled={busy} onClick={onBack}>{t("general.back")}</button>
         )}
       </div>
       <SettingsTabs
-        label="Разделы общих настроек"
+        label={t("general.generalSettingsSections")}
         tabs={[
-          ["config", "Конфигурация"],
-          ["profiles", "Профили"],
-          ["workspace", "Рабочая область"],
-          ...(typeof window.goga?.demoState === "function"
-            ? [["demonstrations", "Демонстрации"] as const]
-            : []),
+          [DEFAULT_SETTINGS_TAB, t("general.generalTab")],
+          ["config", t("general.configuration")],
           ...(window.goga?.terminalPresets
-            ? [["terminal", "Терминал"] as const]
+            ? [["terminal", t("general.terminal")] as const]
             : []),
+          ...(typeof window.goga?.demoState === "function"
+            ? [["demonstrations", t("general.demonstrationTab")] as const]
+            : []),
+          ["profiles", t("general.profiles")],
         ]}
         current={tab}
         onChange={setTab}
       />
       <RetainedViews activeKey={tab}>
         {tab === "workspace" ? (
-          <WorkspaceSaveSettings />
+          <div className="workspace-settings-sections"><InterfaceLanguageSettings /><WorkspaceSaveSettings /></div>
         ) : tab === "demonstrations" ? (
           <DemoSettings />
         ) : tab === "terminal" ? (
@@ -205,20 +202,18 @@ export function Settings({
             store={store}
             source={{ scope: "home", kind: "config" }}
             path="~/.goga/config.yml"
-            title="Конфигурация Goga"
-            description="Домашняя конфигурация. Личные профили находятся в отдельном разделе «Профили»."
+            title={t("general.gogaConfiguration")}
+            description={t("general.configurationForThisComputerManagePersonalProfilesInProfiles")}
           />
         ) : (
           <LoadingBoundary
             background={settled !== ""}
             pending={settled !== loadKey}
-            label="Загружаем личные профили…"
+            label={t("general.loadingPersonalProfiles")}
           >
             <div className="subsection-intro">
-              <p>Личные профили для повторного использования в проектах.</p>
-              <button className="quiet" onClick={() => setCreating((v) => !v)}>
-                ＋ Новый профиль
-              </button>
+              <p>{t("general.reusePersonalProfilesAcrossProjects")}</p>
+              <button className="quiet" onClick={() => setCreating((v) => !v)}>{t("general.newProfile")}</button>
             </div>
             {creating && (
               <form
@@ -228,30 +223,24 @@ export function Settings({
                   create();
                 }}
               >
-                <label>
-                  Имя профиля
-                  <input
+                <label>{t("general.profileName")}<input
                     value={newName}
                     onChange={(e) => setNewName(e.target.value)}
-                    placeholder="например careful-review"
+                    placeholder={t("general.eGCarefulReview")}
                     autoFocus
                   />
                 </label>
-                <button className="primary" type="submit">
-                  Создать черновик
-                </button>
+                <button className="primary" type="submit">{t("general.createDraft")}</button>
                 <button
                   type="button"
                   className="quiet"
                   onClick={() => setCreating(false)}
-                >
-                  Отмена
-                </button>
+                >{t("general.cancel")}</button>
               </form>
             )}
             <div className="master-detail">
               <div className="item-list">
-                <span className="eyebrow">ЛИЧНЫЕ ПРОФИЛИ</span>
+                <span className="eyebrow">{t("general.personalProfiles")}</span>
                 {profiles.map((name) => (
                   <button
                     key={name}
@@ -262,7 +251,7 @@ export function Settings({
                     {name}
                   </button>
                 ))}
-                <small>Проектные профили здесь не редактируются.</small>
+                <small>{t("general.projectProfilesCannotBeEditedHere")}</small>
               </div>
               {profile ? (
                 <SettingsDocument
@@ -270,13 +259,13 @@ export function Settings({
                   source={{ scope: "home", kind: "profile", name: profile }}
                   path={`~/.goga/profiles/${profile}.yml`}
                   title={profile}
-                  description="Содержимое выбранного личного профиля. Черновики других профилей сохраняются при переключении."
+                  description={t("general.contentsOfTheSelectedPersonalProfileSwitchingProfilesPreserves")}
                 />
               ) : (
                 <p className="hint">
                   {profiles.length
-                    ? "Выберите профиль."
-                    : "Личных профилей пока нет. Создайте новый профиль."}
+                    ? t("general.selectAProfile")
+                    : t("general.noPersonalProfilesYetCreateOneToGetStarted")}
                 </p>
               )}
             </div>
@@ -289,16 +278,10 @@ export function Settings({
         </p>
       )}
       {tab === "profiles" && error && settled === loadKey && (
-        <button onClick={() => setAttempt((n) => n + 1)}>
-          Повторить загрузку
-        </button>
+        <button onClick={() => setAttempt((n) => n + 1)}>{t("general.retryLoading")}</button>
       )}
       {!standalone && (
-        <p className="memory-note">
-          Черновики сохраняются при переходах в этом окне до его закрытия или
-          перезагрузки. На диск записывается только выбранный файл по кнопке
-          «Сохранить».
-        </p>
+        <p className="memory-note">{t("general.draftsStayInThisWindowUntilYouCloseOr")}</p>
       )}
     </section>
   );

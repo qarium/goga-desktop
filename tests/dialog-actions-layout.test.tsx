@@ -3,6 +3,8 @@ import React from "react";
 import { readFileSync } from "node:fs";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { ReloadConfirmation } from "../src/renderer/TaskReloadConfirmation";
+import { PopupClose } from "../src/renderer/PopupClose";
 import { ProjectSettingsConfirmation } from "../src/renderer/ProjectSettings";
 
 beforeEach(() => {
@@ -72,4 +74,34 @@ it("adapts dialog actions to actual popup width instead of changing normal edito
   expect(css).toMatch(
     /\.form-actions\s*\{\s*display:\s*flex;\s*justify-content:\s*space-between;/,
   );
+});
+
+it("uses one surface contract in the Desktop shell, native-layer popup documents and the isolated terminal screen", () => {
+  const theme = readFileSync("src/shared/overlay-theme.css", "utf8");
+  for (const entry of ["src/renderer/style.css", "src/terminal/terminal.css"])
+    expect(readFileSync(entry, "utf8")).toContain('@import "../shared/overlay-theme.css"');
+  for (const cls of ["topic-dialog", "task-reload-dialog", "attach-panel-dialog", "repository-operation-dialog", "terminal-confirmation", "context-launch-menu", "topic-context-popup", "topic-select-popup", "git-branch-menu", "searchable-menu", "workflow-name-popup", "project-list-menu", "terminal-actions-menu", "terminal-add-menu", "home-session-menu", "launch-menu", "repository-action-tooltip", "topic-popup-error", "ov-modal", "ov-file-menu"])
+    expect(theme).toContain("." + cls);
+  expect(theme).toContain("--feedback-error-fg:");
+  expect(theme).toContain("--feedback-warning-fg:");
+  // Fullscreen readers and their deliberate transparent backdrops are not confirmation dialogs.
+  expect(theme).not.toMatch(/(?:^|,)\s*(?:dialog|\[role="dialog"\])\s*[:{]/m);
+});
+
+it("keeps dismiss buttons labelled and non-submitting; destructive reload never becomes the default focus", () => {
+  const cancel = vi.fn(), submit = vi.fn();
+  const view = render(<ReloadConfirmation title="Discard changes?" description="Unsaved edits will be lost." confirmLabel="Discard" destructive onCancel={cancel} onConfirm={submit}/>);
+  const close = document.querySelector<HTMLButtonElement>("button.popup-close")!;
+  expect(close.type).toBe("button");
+  expect(close.getAttribute("aria-label")).toBeTruthy();
+  expect(close.querySelector("svg")?.getAttribute("aria-hidden")).toBe("true");
+  expect(document.activeElement).toBe(screen.getByRole("button", {name: "Отмена"}));
+  expect(screen.getByRole("button",{name:"Discard"}).classList.contains("danger")).toBe(true);
+  fireEvent.click(close);
+  expect(cancel).toHaveBeenCalledTimes(1);
+  expect(submit).not.toHaveBeenCalled();
+  view.unmount();
+  render(<PopupClose disabled label="Close dialog" onClick={cancel}/>);
+  fireEvent.click(screen.getByRole("button", {name:"Close dialog"}));
+  expect(cancel).toHaveBeenCalledTimes(1);
 });

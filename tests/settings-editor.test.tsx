@@ -47,6 +47,7 @@ async function openEditor() {
 }
 it("opens the real YAML editor only after explicit consent and preserves unedited source in IPC", async () => {
   render(<Settings />);
+  fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
   await waitFor(() => expect(api.listSettings).toHaveBeenCalled());
   expect(api.readSettings).not.toHaveBeenCalled();
   expect(input()).toBeNull();
@@ -71,6 +72,7 @@ it.each(["invalid YAML", "Файл изменился вне приложени�
   async (error) => {
     api.saveSettings.mockRejectedValueOnce(Error(error));
     render(<Settings />);
+    fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
     const view = await openEditor();
     const draft = source + "unfinished: [\r\n";
     act(() =>
@@ -105,6 +107,7 @@ it("keeps one view and history during save, then uses the returned version", asy
       }),
   );
   render(<Settings />);
+  fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
   const view = await openEditor();
   act(() =>
     view.dispatch({
@@ -137,6 +140,7 @@ it("keeps one view and history during save, then uses the returned version", asy
 });
 it("unmounts hidden/switched documents and explicitly opens personal profiles", async () => {
   render(<Settings />);
+  fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
   const old = await openEditor();
   const destroy = vi.spyOn(old, "destroy");
   fireEvent.click(
@@ -170,6 +174,7 @@ it.each(["config", "profile"])(
   "supports line indentation in the %s editor without touching source line endings",
   async (kind) => {
     render(<Settings />);
+    fireEvent.click(screen.getByRole("button", { name: "Конфигурация" }));
     if (kind === "profile") {
       fireEvent.click(await screen.findByRole("button", { name: "Профили" }));
       fireEvent.click(await screen.findByRole("button", { name: "personal" }));

@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import {
   TerminalStartupError,
   type TerminalStartupPhase,
@@ -84,7 +85,7 @@ const sameBirth = (a: Birth, b: Birth) =>
   );
 const failure = () =>
   Error(
-    "Системный адаптер терминала недоступен. Процесс сохранён до подтверждённого завершения.",
+    t("hostTerminal.nativeAdapterUnavailable"),
   );
 
 /** No PID, environment or native kill method escapes the host-facing PTY wrapper.

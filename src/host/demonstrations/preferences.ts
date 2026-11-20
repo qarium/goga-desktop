@@ -1,3 +1,4 @@
+import { t } from "../../shared/i18n";
 import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
@@ -37,7 +38,7 @@ export class InvalidDemoPreferences extends Error {
     readonly port: number,
     readonly engine: DemoEngine,
   ) {
-    super("Не удалось прочитать настройки порта и браузера демонстрации.");
+    super(t("hostTerminal.preferencesUnavailable"));
   }
 }
 export async function readPreferences(file: string): Promise<DemoPreferences> {
@@ -76,17 +77,17 @@ async function write(file: string, prefs: DemoPreferences) {
 // an engine never probes, rebinds or repairs the port of a live show.
 export async function saveEngine(file: string, engine: DemoEngine) {
   if (!demoEngineSchema.safeParse(engine).success)
-    throw Error("Неизвестный браузер демонстрации.");
+    throw Error(t("hostTerminal.engineInvalid"));
   const prefs = await readPreferences(file);
   try {
     return await write(file, { ...prefs, engine });
   } catch {
-    throw Error("Не удалось сохранить браузер демонстрации.");
+    throw Error(t("hostTerminal.engineSaveFailed"));
   }
 }
 export async function savePort(file: string, port: number) {
   if (!demoPortSchema.safeParse(port).success)
-    throw Error("Введите целый порт от 1024 до 65535.");
+    throw Error(t("hostTerminal.portRange"));
   // This check does not reserve the port: arm() checks the exact port again.
   const probe = createServer((s) => s.destroy());
   await new Promise<void>((resolve, reject) => {
@@ -95,7 +96,7 @@ export async function savePort(file: string, port: number) {
       probe.close((error) => (error ? reject(error) : resolve())),
     );
   }).catch(() => {
-    throw new Error("Этот порт занят или недоступен.");
+    throw new Error(t("hostTerminal.portUnavailable"));
   });
   try {
     // Explicit port save also repairs a damaged file. Preserve any surviving,
@@ -108,6 +109,6 @@ export async function savePort(file: string, port: number) {
       engine: engine.success ? engine.data : DEMO_DEFAULT_ENGINE,
     });
   } catch {
-    throw Error("Не удалось сохранить порт демонстрации.");
+    throw Error(t("hostTerminal.portSaveFailed"));
   }
 }

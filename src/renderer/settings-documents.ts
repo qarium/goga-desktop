@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import {
   documentSaveErrorMessage,
   preparationErrorMessage,
@@ -91,6 +92,8 @@ export interface DocumentDeletion {
 export interface DocumentDraft {
   /** Actual successful project write time; UI confirmation must not replay on reveal. */
   savedAt?: number;
+  /** Semantic notice type: presentation copy never controls the save lifecycle. */
+  noticeKind?: "saved" | "warning";
   memoryOnly?: boolean;
   preparing?: boolean;
   deleting?: boolean;
@@ -324,7 +327,7 @@ export function createSettingsDocuments() {
         before.document?.exists !== false &&
         document.exists === false
       )
-        throw new Error("Файла больше нет на диске.");
+        throw new Error(msg("workspace.theFileNoLongerExistsOnDisk"));
       put(source, {
         document,
         text: document.text,
@@ -342,7 +345,7 @@ export function createSettingsDocuments() {
           deletion: undefined,
           ...(reloading
             ? {
-                reloadError: `Не удалось обновить файл. ${reason} Текст в редакторе не изменён.`,
+                reloadError: msg("workspace.couldNotRefreshTheFileEditorTextHasNotChanged", { reason: String(reason) }),
               }
             : { error: reason }),
         });
@@ -367,7 +370,7 @@ export function createSettingsDocuments() {
       kind === "pipeline" ? projectPipelineAliasKey : projectWorkflowAliasKey;
     if (!validName(name))
       throw new Error(
-        `Недопустимое имя ${kind === "profile" ? "профиля" : kind === "pipeline" ? "конвейера" : "рабочего процесса"}. Укажите имя без расширения, пробелов и разделителей пути.`,
+        msg("workspace.invalidNameEnterANameWithoutAnExtensionSpacesOr", { value1: String(kind === "profile" ? msg("workspace.profile2") : kind === "pipeline" ? msg("workspace.pipeline") : msg("workspace.workflow")) }),
       );
     const state = flatState(projectId, kind);
     const existingNames = [...entries.keys()]
@@ -387,7 +390,7 @@ export function createSettingsDocuments() {
     ];
     if (filenames.some((filename) => aliasKey(filename) === alias))
       throw new Error(
-        `${kind === "profile" ? "Профиль" : kind === "pipeline" ? "Конвейер" : "Рабочий процесс"} с таким именем или эквивалентным написанием уже существует.`,
+        msg(`workspace.nameInUse.${kind}`),
       );
     const source: DocumentSource = {
       scope: "project",
@@ -535,11 +538,11 @@ export function createSettingsDocuments() {
       const selected = catalog.find((item) => item.name === tool);
       if (!isProjectToolName(tool) || !selected)
         throw new Error(
-          "Выберите существующий инструмент перед созданием файла.",
+          msg("workspace.selectAnExistingToolBeforeCreatingAFile"),
         );
       if (!isProjectToolPath(path) || !/\.ya?ml$/.test(path))
         throw new Error(
-          "Недопустимое имя или путь файла. Укажите файл с расширением .yml или .yaml внутри инструмента.",
+          msg("workspace.invalidFileNameOrPathSpecifyAYmlOrYaml"),
         );
       try {
         encodeURIComponent(path);
@@ -550,7 +553,7 @@ export function createSettingsDocuments() {
         )
           throw new Error();
       } catch {
-        throw new Error("Недопустимое имя или путь файла.");
+        throw new Error(msg("workspace.invalidFileNameOrPath"));
       }
       const parts = path.split("/");
       for (let index = 1; index < parts.length; index++) {
@@ -559,7 +562,7 @@ export function createSettingsDocuments() {
         );
         if (!parent || parent.kind !== "directory" || parent.reason)
           throw new Error(
-            "Родительская папка отсутствует или недоступна. Выберите существующий безопасный каталог инструмента.",
+            msg("workspace.theParentFolderIsMissingOrUnavailableChooseAnExisting"),
           );
       }
       const state = toolState(scope, tool);
@@ -582,7 +585,7 @@ export function createSettingsDocuments() {
         ].some((entry) => projectWorkflowAliasKey(entry) === alias)
       )
         throw new Error(
-          "Файл или папка с таким именем или эквивалентным написанием уже существует.",
+          msg("workspace.aFileOrFolderWithThisNameOrAnEquivalent"),
         );
       const source: DocumentSource = {
         scope: "project",
@@ -674,8 +677,10 @@ export function createSettingsDocuments() {
             reloading: false,
             preparing: false,
             deletion: undefined,
+            savedAt: undefined,
+            noticeKind: "warning",
             notice:
-              "Файлы проекта могли измениться. Ваш черновик сохранён; перед записью проверяется версия файла.",
+              msg("workspace.projectFilesMayHaveChangedYourDraftWasKeptFile"),
           });
           continue;
         }
@@ -908,7 +913,7 @@ export function createSettingsDocuments() {
         before.busy ||
         before.deletion
       )
-        throw Error("Файл сейчас недоступен для переименования.");
+        throw Error(msg("workspace.thisFileCannotBeRenamedRightNow"));
       const target = renamedProjectDocumentTarget(source.target, newName);
       const dest = { ...source, target };
       const key = documentKey(source),
@@ -931,7 +936,7 @@ export function createSettingsDocuments() {
         key === destKey ||
         [...entries.keys()].some((k) => k !== key && identity(k) === alias)
       )
-        throw Error("Имя уже используется открытым файлом или черновиком.");
+        throw Error(msg("workspace.theNameIsAlreadyInUseByAnOpenFile"));
       const reserved: DocumentDraft = { ...empty, busy: true };
       const pending = { ...before, busy: true, renaming: true };
       entries.set(destKey, reserved);
@@ -945,7 +950,7 @@ export function createSettingsDocuments() {
         );
         if (get(source) !== pending || get(dest) !== reserved)
           throw Error(
-            "Документ в редакторе уже изменился. Проверьте имена файлов в каталоге.",
+            msg("workspace.theDocumentInTheEditorHasChangedCheckTheFile"),
           );
         const oldName =
           source.target.kind === "tool"
@@ -1042,9 +1047,9 @@ export function createSettingsDocuments() {
           error: "",
           notice:
             source.scope === "project"
-              ? "Сохранено"
-              : "Сохранено. Изменения применятся к следующим запускам.",
-          ...(source.scope === "project" ? { savedAt: Date.now() } : {}),
+              ? msg("workspace.saved")
+              : msg("workspace.savedChangesApplyToFutureRuns"),
+          ...(source.scope === "project" ? { savedAt: Date.now(), noticeKind: "saved" as const } : {}),
         });
         return true;
       } catch (e) {

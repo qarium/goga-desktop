@@ -1,3 +1,5 @@
+import { DesktopLanguagePreference } from "./interface-language";
+import { getLocale, setLocale, t } from "../shared/i18n";
 import {Demonstrations} from "../host/demonstrations/runtime";
 import {createWindowDemonstrations} from "./demo-window";
 import { OverviewExitGuard } from "./overview-close";
@@ -60,6 +62,8 @@ if (!app.requestSingleInstanceLock()) {
   void app
     .whenReady()
     .then(async () => {
+      const languagePreference = new DesktopLanguagePreference(app.getPath("userData"));
+      setLocale(languagePreference.read());
       nativeTheme.themeSource = "dark";
       const icon = installApplicationIcon(app, __dirname);
       // Keep the shell's entire lazy-import graph stable for this window's
@@ -80,6 +84,7 @@ if (!app.requestSingleInstanceLock()) {
         backgroundColor: "#0a0e1a",
         webPreferences: {
           preload: path.join(__dirname, "preload.cjs"),
+          additionalArguments: ["--goga-interface-language=" + getLocale()],
           sandbox: true,
           contextIsolation: true,
           nodeIntegration: false,
@@ -90,35 +95,36 @@ if (!app.requestSingleInstanceLock()) {
       win.once("closed", () => {
         void rendererAssets?.dispose().catch(() => {});
       });
-      Menu.setApplicationMenu(
+      const refreshMenu = () => Menu.setApplicationMenu(
         Menu.buildFromTemplate([
           {
             label: "Goga Desktop",
             submenu: [
-              { role: "about" },
+              { role: "about", label: t("native.menuAbout") },
               { type: "separator" },
-              { role: "hide" },
-              { role: "hideOthers" },
-              { role: "unhide" },
+              { role: "hide", label: t("native.menuHide") },
+              { role: "hideOthers", label: t("native.menuHideOthers") },
+              { role: "unhide", label: t("native.menuUnhide") },
               { type: "separator" },
-              { role: "quit" },
+              { role: "quit", label: t("native.menuQuit") },
             ],
           },
           {
-            label: "Правка",
+            label: t("native.editMenu"),
             submenu: [
-              { role: "undo" },
-              { role: "redo" },
+              { role: "undo", label: t("native.menuUndo") },
+              { role: "redo", label: t("native.menuRedo") },
               { type: "separator" },
-              { role: "cut" },
-              { role: "copy" },
-              { role: "paste" },
-              { role: "selectAll" },
+              { role: "cut", label: t("native.menuCut") },
+              { role: "copy", label: t("native.menuCopy") },
+              { role: "paste", label: t("native.menuPaste") },
+              { role: "selectAll", label: t("native.menuSelectAll") },
             ],
           },
-          { label: "Окно", submenu: [{ role: "minimize" }, { role: "front" }] },
+          { label: t("native.windowMenu"), submenu: [{ role: "minimize", label: t("native.menuMinimize") }, { role: "front", label: t("native.menuFront") }] },
         ]),
       );
+      refreshMenu();
       const settings = new SettingsStore(os.homedir());
       const demos = new Demonstrations({settingsFile:path.join(app.getPath("userData"),"demonstrations.json")});
       const service = new HostService({
@@ -166,7 +172,7 @@ if (!app.requestSingleInstanceLock()) {
       );
       let deliveryError="";
       const monitorErrors=new Map<string,string>();
-      const withNotificationErrors=(snapshot:NotificationSnapshot):NotificationSnapshot=>({...snapshot,...(!snapshot.error&&(deliveryError||monitorErrors.size)?{error:deliveryError||"Обновление уведомлений временно недоступно. История сохранена."}:{})});
+      const withNotificationErrors=(snapshot:NotificationSnapshot):NotificationSnapshot=>({...snapshot,...(!snapshot.error&&(deliveryError||monitorErrors.size)?{error:deliveryError||t("native.notificationsUnavailable")}:{})});
       const delivery=new NotificationDelivery({
         create: options=>{
           if(!Notification.isSupported())throw Error("Unsupported notifications");
@@ -202,11 +208,11 @@ if (!app.requestSingleInstanceLock()) {
       const overviewExit = new OverviewExitGuard(async (paths) => {
         const result = await dialog.showMessageBox(win, {
           type: "warning",
-          message: "В обзоре есть несохранённые файлы",
+          message: t("native.unsavedOverview"),
           detail:
             paths.join("\n") +
-            "\n\nВернитесь в приложение, чтобы сохранить файлы. При выходе без сохранения черновики будут потеряны.",
-          buttons: ["Вернуться", "Выйти без сохранения"],
+            t("native.unsavedOverviewDetail"),
+          buttons: [t("native.returnToApp"), t("native.quitWithoutSaving")],
           defaultId: 0,
           cancelId: 0,
         });
@@ -214,6 +220,19 @@ if (!app.requestSingleInstanceLock()) {
       });
       const topicPopup = new TopicPopup(win, shellURL);
       registerIPC(ipcMain, {
+        interfaceLanguage: {
+          get: getLocale,
+          set: (tag) => {
+            const language = languagePreference.write(tag);
+            if (language !== getLocale()) {
+              setLocale(language);
+              refreshMenu();
+              send("interface-language-changed", language);
+              terminal.setLanguage(language);
+            }
+            return language;
+          },
+        },
         topicPopup,
         overviewCloseState: (paths, busy) => overviewExit.update(paths, busy),
         service,
@@ -222,14 +241,14 @@ if (!app.requestSingleInstanceLock()) {
         shellURL,
         choose: async () => {
           const result = await dialog.showOpenDialog(win, {
-            title: "Выберите проект Goga",
+            title: t("native.chooseProject"),
             properties: ["openDirectory"],
           });
           return result.canceled ? null : (result.filePaths[0] ?? null);
         },
         chooseProjectLocation: async () => {
           const result = await dialog.showOpenDialog(win, {
-            title: "Выберите расположение нового проекта", properties: ["openDirectory"],
+            title: t("native.chooseProjectLocation"), properties: ["openDirectory"],
           });
           return result.canceled ? null : (result.filePaths[0] ?? null);
         },
@@ -238,28 +257,28 @@ if (!app.requestSingleInstanceLock()) {
         refreshDashboard:async id=>{
           const run=service.runCatalog().find(r=>r.id===id);
           if(!run?.url||run.status!=="running"||run.kind==="build"||run.recovery==="unverified")
-            throw Error("Панель запуска недоступна.");
+            throw Error(t("native.runDashboardUnavailable"));
           const {url,dashboardRunId:pin}=run;
           const verify=async()=>{
             if(pin&&await readDashboardIdentity(url)!==pin)return false;
             const current=service.runCatalog().find(r=>r.id===id);
             return current?.status==="running"&&current.url===url&&current.recovery!=="unverified"&&(!pin||current.dashboardRunId===pin);
           };
-          if(!await views.refresh(id,verify))throw Error("Не удалось обновить страницу панели. Конвейер не перезапускался.");
+          if(!await views.refresh(id,verify))throw Error(t("native.refreshPanelFailed"));
         },
         restoreDashboard: async (id) => {
           const url=await service.prepareDashboardReconnect(id);
-          if(!(await views.restore(id,url)))throw Error("Не удалось восстановить панель. Процесс не перезапускался.");
+          if(!(await views.restore(id,url)))throw Error(t("native.restorePanelFailed"));
         },
         select: (id) => views.select(id),
         viewport: (bounds) => views.setViewport(bounds),
         stop: async (id) => {
           const result = await dialog.showMessageBox(win, {
             type: "warning",
-            message: "Остановить этот запуск?",
+            message: t("native.stopRunQuestion"),
             detail:
-              "Goga получит сигнал завершения. Уже сделанные изменения в проекте останутся.",
-            buttons: ["Отмена", "Остановить"],
+              t("native.stopRunDetail"),
+            buttons: [t("native.cancel"), t("native.stop")],
             defaultId: 0,
             cancelId: 0,
           });
@@ -278,7 +297,7 @@ if (!app.requestSingleInstanceLock()) {
             views.remove(run.id);
           else if (run.url)
             void views.ensure(run.id, run.url).catch(() => {
-              const error = "Недопустимый адрес панели конвейера";
+              const error = t("native.invalidDashboardURL");
               send("view-error", { id: run.id, error });
               void service.dashboardFailed(run.id, error).catch(() => {});
             });
@@ -319,11 +338,11 @@ if (!app.requestSingleInstanceLock()) {
         confirm: async (items) => {
           const answer = await dialog.showMessageBox(win, {
             type: "warning",
-            message: "Закрыть Goga Desktop?",
+            message: t("native.quitQuestion"),
             detail:
               items.map((item) => item.label).join("\n") +
-              "\n\nМожно оставить новые управляемые конвейеры работать и подключиться к ним при следующем открытии. Создание проектов будет отменено (готовые папки сохраняются). Открытые демонстрации и подключения агентов в обоих случаях будут закрыты. Терминалы будут завершены; их вкладки сохранятся, но процессы не перезапускаются. Если безопасное сохранение запуска невозможно, приложение останется открытым.",
-            buttons: ["Остаться", "Оставить запуски работать и выйти", "Завершить и выйти"],
+              t("native.quitDetail"),
+            buttons: [t("native.stay"), t("native.keepRunsAndQuit"), t("native.stopAndQuit")],
             defaultId: 0,
             cancelId: 0,
           });
@@ -356,13 +375,13 @@ if (!app.requestSingleInstanceLock()) {
         report: async (result) => {
           await dialog.showMessageBox(win, {
             type: "error",
-            message: "Не удалось завершить выход",
+            message: t("native.quitFailed"),
             detail:
-              (result.message ?? "Приложение остаётся открытым.") +
+              (result.message ?? t("native.staysOpen")) +
               (result.inventoryComplete === false
-                ? "\nНе все компоненты подтвердили готовность к выходу. Приложение осталось открытым."
-                : `\nЗавершено: ${result.completed.length}. Осталось: ${result.remaining.length}.` + (result.retained?.length ? `\nОставлены работать: ${result.retained.length}.` : "")),
-            buttons: ["Закрыть"],
+                ? t("native.quitNotConfirmed")
+                : t("native.processCounts", { completed: result.completed.length, remaining: result.remaining.length }) + (result.retained?.length ? t("native.processRetained", { count: result.retained.length }) : "")),
+            buttons: [t("native.close")],
           });
         },
       });
@@ -384,9 +403,9 @@ if (!app.requestSingleInstanceLock()) {
           const answer = await dialog.showMessageBox({
             type: "warning",
             title: "Goga Desktop",
-            message: "Нужно восстановить блокировку настроек Desktop",
-            detail: "Предыдущая версия оставила блокировку без данных владельца. Закройте другие экземпляры Goga Desktop. После подтверждения приложение проверит, что файл не используется, сохранит его резервную копию и перезапустится. Настройки, проекты и данные запусков не сбрасываются.",
-            buttons: ["Закрыть", "Проверить и восстановить"],
+            message: t("native.recoverLockTitle"),
+            detail: t("native.recoverLockDetail"),
+            buttons: [t("native.close"), t("native.verifyRecover")],
             defaultId: 0,
             cancelId: 0,
           });

@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useLayoutEffect, useRef } from "react";
 import type { ScopeRef } from "../shared/context";
 import type { TerminalAPI } from "../shared/terminal-control";
@@ -13,6 +15,7 @@ export function TerminalSurface(props: {
   session: TerminalSessionRef;
   onError(message: string): void;
 }) {
+  useLocale();
   const root = useRef<HTMLDivElement>(null),
     report = useRef(props.onError);
   report.current = props.onError;
@@ -76,7 +79,7 @@ export function TerminalSurface(props: {
           if (live && order === measurement) {
             void hide();
             report.current(
-              "Не удалось показать терминал. Переключите вкладку или обновите сессию.",
+              msg("workspace.couldNotDisplayTheTerminalSwitchTabsOrRefreshThe"),
             );
           }
         });
@@ -112,6 +115,6 @@ export function TerminalSurface(props: {
     props.session.generation,
   ]);
   return (
-    <div className="terminal-surface" ref={root} aria-label="Экран терминала" />
+    <div className="terminal-surface" ref={root} aria-label={msg("workspace.terminalScreen")} />
   );
 }

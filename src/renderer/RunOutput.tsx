@@ -1,9 +1,13 @@
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { memo, useLayoutEffect, useRef, useState } from "react";
 import type { Run } from "../shared/types";
+import { runFailureMessage } from "../shared/run-failure";
 import "./RunOutput.css";
 import { useRunJournal } from "./useRunJournal";
 
 export function TerminalIcon() {
+  useLocale();
   return (
     <svg
       viewBox="0 0 24 24"
@@ -34,6 +38,7 @@ const OutputText = memo(function OutputText({
   text: string;
   live: boolean;
 }) {
+  useLocale();
   const viewport = useRef<HTMLDivElement>(null);
   const following = useRef(true);
   useLayoutEffect(() => {
@@ -52,7 +57,7 @@ const OutputText = memo(function OutputText({
     >
       <pre
         className="run-output-text"
-        aria-label="Строки вывода запуска"
+        aria-label={tr("launch.runOutputLines")}
         tabIndex={0}
       >
         {text}
@@ -60,8 +65,8 @@ const OutputText = memo(function OutputText({
       {!text && (
         <p className="run-output-empty">
           {live
-            ? "Новых сообщений пока нет. Вывод появится здесь по мере поступления."
-            : "Сохранённых сообщений нет."}
+            ? tr("launch.noNewMessagesYetOutputAppearsHereAs")
+            : tr("launch.noSavedMessages")}
         </p>
       )}
     </div>
@@ -77,6 +82,7 @@ export function RunOutput({
   viewError?: string;
   onRestore?: () => Promise<void>;
 }) {
+  useLocale();
   const [restoring, setRestoring] = useState(false);
   const restoreFlight = useRef(false);
   const [restoreError, setRestoreError] = useState("");
@@ -89,7 +95,7 @@ export function RunOutput({
       await onRestore();
     } catch {
       setRestoreError(
-        "Не удалось восстановить панель. Процесс не перезапускался; повторите подключение.",
+        tr("launch.theDashboardCouldNotBeRestoredTheProcess"),
       );
     } finally {
       restoreFlight.current = false;
@@ -103,35 +109,29 @@ export function RunOutput({
   const active =
     !unverified && (run.status === "starting" || run.status === "running");
   const ready = dashboardReady(run);
-  const failure = viewError || run.error;
+  const failure = viewError || (run.failureReason ? runFailureMessage(run.failureReason) : run.error);
   const title = unverified
-    ? "Состояние процесса не подтверждено после перезапуска"
+    ? tr("launch.processStateHasNotBeenVerifiedSinceRestart")
     : viewError
-      ? "Панель конвейера недоступна"
+      ? tr("launch.pipelineDashboardUnavailable")
       : run.status === "failed" || (active && !!failure)
-        ? "Не удалось запустить"
+        ? tr("launch.couldNotLaunch")
         : run.status === "exited"
-          ? "Процесс завершён"
+          ? tr("launch.processFinished")
           : run.status === "stopped"
-            ? "Запуск остановлен"
+            ? tr("launch.runStopped")
             : confirmed
-              ? "Процесс подтверждён после перезапуска"
+              ? tr("launch.processVerifiedAfterRestart")
               : isBuild
-                ? "Сборка выполняется"
-                : "Готовим запуск";
+                ? tr("launch.buildRunning")
+                : tr("launch.preparingRun2");
   return (
-    <section className="run-output-page" aria-label="Журнал вывода">
+    <section className="run-output-page" aria-label={tr("launch.outputLog")}>
       {run.syncPending && (
-        <p className="run-output-note" role="status">
-          Синхронизация коммитов ожидает выполнения. Это отдельное состояние и
-          не меняет результат запуска.
-        </p>
+        <p className="run-output-note" role="status">{tr("launch.commitSyncIsPendingThisIsSeparateFrom")}</p>
       )}
       {run.persistenceError && (
-        <p className="error" role="alert">
-          История запуска не сохранена полностью: {run.persistenceError}. Не
-          закрывайте приложение до проверки сохранности истории.
-        </p>
+        <p className="error" role="alert">{tr("launch.runHistoryWasNotFullySaved")}{run.persistenceError}{tr("launch.keepTheAppOpenUntilTheHistoryIs")}</p>
       )}
       {(!ready || failure) && (
         <div className="run-output-hero">
@@ -159,14 +159,14 @@ export function RunOutput({
             <h2>{title}</h2>
             <p className={failure ? "error" : ""}>
               {unverified
-                ? "Последний вывод сохранён. Desktop не подтверждает завершение процесса, не останавливает неизвестный процесс и не запускает повтор автоматически. Рабочая копия остаётся занятой до проверки."
+                ? tr("launch.theLastOutputWasSavedDesktopCannotConfirm")
                 : failure ||
                   run.dashboardMessage ||
                   (confirmed
-                    ? "Исходный вывод и Dashboard не восстановлены. Ниже — сохранённый журнал. Процесс не перезапускался."
+                    ? tr("launch.theOriginalOutputAndDashboardCouldNotBe")
                     : active
-                      ? `${run.update ? "Запуск с обновлением образа." : "Обычный запуск."} Вывод появляется ниже по мере поступления.`
-                      : "Вывод этого запуска сохранён ниже.")}
+                      ? tr("launch.value1OutputAppearsBelowAsItArrives", { value1: run.update ? tr("launch.launchingWithAnImageUpdate") : tr("launch.standardLaunch") })
+                      : tr("launch.outputFromThisRunIsSavedBelow"))}
             </p>
             {onRestore && canRestoreRunDashboard(run,viewError) && (
                 <div className="run-output-reconnect">
@@ -176,7 +176,7 @@ export function RunOutput({
                     aria-busy={restoring}
                     onClick={() => void restore()}
                   >
-                    {restoring ? "Подключаем панель…" : "Восстановить панель"}
+                    {restoring ? tr("launch.connectingDashboard") : tr("launch.restoreDashboard")}
                   </button>
                   {restoreError && (
                     <p className="error" role="alert">
@@ -186,10 +186,8 @@ export function RunOutput({
                 </div>
               )}
             {active && !confirmed && !failure && !ready && !isBuild && (
-              <p className="run-output-budget">
-                До открытия Dashboard — не более{" "}
-                {(run.startupTimeoutMs ?? 600_000) / 60_000} мин
-              </p>
+              <p className="run-output-budget">{tr("launch.maximumTimeToOpenTheDashboard")}{" "}
+                {(run.startupTimeoutMs ?? 600_000) / 60_000}{tr("launch.min")}</p>
             )}
           </div>
         </div>
@@ -197,44 +195,37 @@ export function RunOutput({
       <section
         id="run-output-journal"
         className="run-output-journal"
-        aria-label="Вывод запуска"
+        aria-label={tr("launch.runOutput")}
       >
         <header className="run-output-header">
           <TerminalIcon />
-          <h3>Вывод</h3>
+          <h3>{tr("launch.output")}</h3>
         </header>
-        {journal.error && <p role="alert" className="run-output-note">
-          Не удалось загрузить вывод. <button onClick={journal.retry}>Повторить загрузку журнала</button>
+        {journal.error && <p role="alert" className="run-output-note">{tr("launch.couldNotLoadOutput")}<button onClick={journal.retry}>{tr("launch.retryLoadingLog")}</button>
         </p>}
-        {journal.loading ? <p className="run-output-note" role="status">Загружаем журнал…</p> :
+        {journal.loading ? <p className="run-output-note" role="status">{tr("launch.loadingLog")}</p> :
           (!journal.error || journal.output) && <OutputText text={journal.output?.text ?? ""} live={active && !confirmed} />}
         <footer className="run-output-footer">
           <span>
-            {active && !confirmed ? "Вывод обновляется" : "Вывод сохранён"}
+            {active && !confirmed ? tr("launch.liveOutput") : tr("launch.savedOutput")}
           </span>
-          <span>Журнал этой вкладки</span>
+          <span>{tr("launch.logForThisTab")}</span>
         </footer>
       </section>
       {journal.output?.truncated && (
-        <p className="run-output-note">
-          Часть вывода удалена или скрыта из-за ограничений журнала. Показан
-          последний доступный вывод.
-        </p>
+        <p className="run-output-note">{tr("launch.someOutputWasRemovedOrHiddenDueTo")}</p>
       )}
-      <p className="run-output-note">
-        Известные секреты скрываются. Неизвестные секреты могут остаться в
-        выводе — проверьте его перед передачей.
-      </p>
+      <p className="run-output-note">{tr("launch.knownSecretsAreHiddenOtherSecretsMayStill")}</p>
       <p className="run-output-hint">
         {confirmed
-          ? "Сохранённый журнал не является текущим потоком вывода. Автоматического повторного запуска нет."
+          ? tr("launch.theSavedLogIsNotALiveOutput")
           : isBuild
-            ? "Вывод сборки доступен во время выполнения и после завершения. Автоматического повторного запуска нет."
+            ? tr("launch.buildOutputIsAvailableDuringAndAfterExecution")
             : ready && !failure
-              ? "Повторный клик по «Работает» вернёт Dashboard. Конвейер не останавливается."
+              ? tr("launch.clickRunningAgainToReturnToTheDashboard")
               : active && !failure
-                ? "Dashboard откроется автоматически, когда будет готов. Отсутствие новых строк само по себе не означает ошибку."
-                : "Автоматического повторного запуска нет."}
+                ? tr("launch.theDashboardWillOpenAutomaticallyWhenReadyNo")
+                : tr("launch.theRunWillNotRestartAutomatically")}
       </p>
     </section>
   );

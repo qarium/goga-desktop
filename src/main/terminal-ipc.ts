@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { terminalPresetEnvelopeSchema } from "../shared/terminal-preset-control";
 import type { TerminalPresetStore } from "../host/terminal-preset-store";
 import type { TerminalCatalogSnapshot } from "../shared/terminal-catalog";
@@ -87,7 +88,7 @@ export function registerTerminalIPC(
     disposed = false;
   let documentId: string | undefined;
   const now = d.now ?? (() => performance.now());
-  const denied = () => Error("Терминал: запрос запрещён или устарел.");
+  const denied = () => Error(t("native.terminalRequestDenied"));
   const valid = (event: Pick<IpcMainInvokeEvent, "sender" | "senderFrame">) => {
     if (disposed || d.window.isDestroyed()) return false;
     const wc = d.window.webContents;
@@ -203,7 +204,7 @@ export function registerTerminalIPC(
       captured = epoch;
     const parsed = terminalPresetEnvelopeSchema.safeParse(raw);
     if (!parsed.success || parsed.data.documentId !== documentId)
-      throw Error("Недопустимые параметры пресета терминала.");
+      throw Error(t("native.presetInvalid"));
     const req = parsed.data.request,
       store = d.presetStore;
     const result =

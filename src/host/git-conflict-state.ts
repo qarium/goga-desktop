@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import { createHash } from "node:crypto";
 import {
   constants,
@@ -35,7 +36,7 @@ export const hash = (v: string | Buffer) =>
   createHash("sha256").update(v).digest("hex");
 export const stale = () =>
   Error(
-    "Предпросмотр конфликта Git устарел или изменился владелец. Обновите его и подтвердите заново.",
+    gitMessage("gitHost.theConflictPreviewExpiredOrItsOwnerChangedRefresh"),
   );
 export const safe = [
   "--no-pager",
@@ -92,7 +93,7 @@ export function regular(file: string, limit = 32 * LIMIT): File | null {
   const s = stat(file);
   if (!s) return null;
   if (!s.isFile() || s.nlink !== 1n || s.size > BigInt(limit))
-    throw Error("Небезопасный тип, ссылка или размер файла Git.");
+    throw Error(gitMessage("gitHost.unsafeGitFileTypeLinkOrSize"));
   const fd = openSync(
     file,
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
@@ -133,7 +134,7 @@ export function parents(root: string, name: string) {
     current = path.join(current, part);
     rows.push([current, directory(current)]);
     if (stat(path.join(current, ".git")))
-      throw Error("Вложенный репозиторий не поддерживается.");
+      throw Error(gitMessage("gitHost.nestedRepositoriesAreNotSupported"));
   }
   return rows;
 }
@@ -165,7 +166,7 @@ export function metadata(root: string, name?: string) {
   let count = 0;
   function visit(file: string, depth: number) {
     if (++count > 10000 || depth > 16)
-      throw Error("Слишком много метаданных Git.");
+      throw Error(gitMessage("gitHost.tooMuchGitMetadata"));
     const s = stat(file);
     if (!s) {
       rows.push([file, "missing"]);
@@ -269,25 +270,25 @@ function auditTopology(root: string, name: string) {
   const ps = parents(root, name),
     gd = path.join(root, ".git");
   if (readdirSync(gd).some((n) => n.toLowerCase().startsWith("sharedindex.")))
-    throw Error("Git split-index пока не поддерживается.");
+    throw Error(gitMessage("gitHost.gitSplitIndexIsNotSupportedYet"));
   for (const n of [
     "commondir",
     "objects/info/alternates",
     "objects/info/http-alternates",
   ])
     if (stat(path.join(gd, n)))
-      throw Error("Внешнее хранилище объектов Git не поддерживается.");
+      throw Error(gitMessage("gitHost.externalGitObjectStorageIsNotSupported"));
   let count = 0;
   function visit(file: string, depth: number) {
     if (++count > 100000 || depth > 12)
-      throw Error("Слишком много метаданных Git.");
+      throw Error(gitMessage("gitHost.tooMuchGitMetadata"));
     const s = stat(file);
     if (!s) return;
     if (
       s.isSymbolicLink() ||
       (!s.isDirectory() && (!s.isFile() || s.nlink !== 1n))
     )
-      throw Error("Небезопасная ссылка в метаданных Git.");
+      throw Error(gitMessage("gitHost.unsafeLinkInGitMetadata"));
     if (s.isDirectory()) {
       directory(file);
       for (const child of readdirSync(file))
@@ -314,7 +315,7 @@ export interface Stage {
 }
 export function parseStages(raw: string, name: string): (Stage | null)[] {
   if (!raw || !raw.endsWith("\0") || Buffer.byteLength(raw) > 32768)
-    throw Error("Файл не является неразрешённым конфликтом Git.");
+    throw Error(gitMessage("gitHost.thisFileIsNotAnUnresolvedGitConflict"));
   const rows: (Stage | null)[] = [null, null, null];
   for (const row of raw.slice(0, -1).split("\0")) {
     const m =
@@ -475,7 +476,7 @@ export function assertPolicySupported(p: Policy) {
   for (const attr of ["filter", "working-tree-encoding", "ident"])
     if (!["unspecified", "unset"].includes(p.values[attr]))
       throw Error(
-        "Внешний фильтр (filter), ident и working-tree-encoding пока не поддерживаются.",
+        gitMessage("gitHost.externalFiltersIdentAndWorkingTreeEncodingAreNot"),
       );
   if (
     !["true", "false", "input"].includes(p.autocrlf) ||
@@ -486,5 +487,5 @@ export function assertPolicySupported(p: Policy) {
     !["lf", "crlf", "unspecified", "unset"].includes(p.values.eol) ||
     !["set", "unset", "unspecified", "input"].includes(p.values.crlf)
   )
-    throw Error("Неподдерживаемые параметры нормализации текста Git.");
+    throw Error(gitMessage("gitHost.unsupportedGitTextNormalizationSettings"));
 }

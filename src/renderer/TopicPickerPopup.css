@@ -40,17 +40,13 @@ html.topic-popup-document {
   max-height: calc(100dvh - 32px);
   overflow-y: auto;
   box-sizing: border-box;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface);
-  box-shadow: 0 12px 32px #0006;
-  color: var(--text);
   font-size: 13px;
   line-height: 1.5;
   overflow-wrap: anywhere;
   text-align: left;
 }
 .topic-popup-error p {
+  color: var(--feedback-error-fg);
   margin: 0;
 }
 .topic-popup-error button {

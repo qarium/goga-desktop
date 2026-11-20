@@ -1,3 +1,4 @@
+import { subscribeLocale, t as msg } from "../../../shared/i18n";
 import {
   repositionTooltips,
   type EditorView,
@@ -34,7 +35,6 @@ export function createCandidateTooltip(
   const box = doc.createElement("div");
   box.className = "nav-candidates";
   box.setAttribute("role", "dialog");
-  box.setAttribute("aria-label", "Кандидаты в этом файле");
   const cleanups: (() => void)[] = [];
   function listen<K extends keyof HTMLElementEventMap>(
     node: HTMLElement,
@@ -47,12 +47,10 @@ export function createCandidateTooltip(
   const header = doc.createElement("div");
   header.className = "nav-candidates-heading";
   const title = doc.createElement("strong");
-  title.textContent = "Кандидаты в этом файле";
   const dismiss = doc.createElement("button");
   dismiss.type = "button";
   dismiss.className = "icon-button";
   dismiss.textContent = "×";
-  dismiss.setAttribute("aria-label", "Закрыть кандидатов");
   const cancel = () => {
     if (valid()) {
       close();
@@ -62,12 +60,11 @@ export function createCandidateTooltip(
   listen(dismiss, "click", cancel);
   header.append(title, dismiss);
   const note = doc.createElement("p");
-  note.textContent =
-    "Найдено несколько возможных объявлений или точная связь не установлена.";
   note.className = "nav-candidates-note";
   const list = doc.createElement("div");
   list.className = "nav-candidates-list";
   let selected = 0;
+  const lineLabels: (() => void)[] = [];
   const buttons = targets.map((target, index) => {
     const button = doc.createElement("button");
     button.type = "button";
@@ -85,7 +82,7 @@ export function createCandidateTooltip(
     }
     const line = doc.createElement("span");
     line.className = "nav-candidate-line";
-    line.textContent = `стр. ${target.line}`;
+    lineLabels.push(() => { line.textContent = msg("workspace.line", { line: target.line }); });
     button.append(body, line);
     listen(button, "click", () => {
       if (valid()) choose(target);
@@ -125,7 +122,15 @@ export function createCandidateTooltip(
   });
   const hint = doc.createElement("div");
   hint.className = "nav-candidates-footer";
-  hint.textContent = "↑ ↓ выбрать  ·  Enter перейти  ·  Esc закрыть";
+  const refreshLabels = () => {
+    title.textContent = msg("workspace.candidatesInThisFile");
+    box.setAttribute("aria-label", title.textContent);
+    dismiss.setAttribute("aria-label", msg("workspace.closeCandidates"));
+    note.textContent = msg("workspace.severalDeclarationsMatchOrTheExactTargetCouldNotBe");
+    hint.textContent = msg("workspace.selectEnterGoToDefinitionEscClose");
+    lineLabels.forEach(refresh => refresh());
+  };
+  refreshLabels();
   box.append(header, note, list, hint);
   const size = () => {
     const space = candidateSpace(view);
@@ -155,6 +160,7 @@ export function createCandidateTooltip(
       };
     },
     mount() {
+      cleanups.push(subscribeLocale(refreshLabels));
       size();
       doc.defaultView!.addEventListener("resize", resize);
       cleanups.push(() =>

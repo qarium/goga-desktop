@@ -1,0 +1,93 @@
+/* Desktop-owned surfaces only. Position, available height, scrolling, z-index
+   and native-view presentation remain the responsibility of their owner. */
+:root {
+  --overlay-bg: var(--surface, #10162a);
+  --overlay-fg: var(--text, #e4ebf6);
+  --overlay-line: var(--line, #26334b);
+  --overlay-focus: var(--teal, #20d4bf);
+  --menu-shadow: 0 12px 32px #0006;
+  --dialog-shadow: 0 18px 60px #0007;
+  --dialog-backdrop: rgb(0 0 0 / 60%);
+  --feedback-error-fg: #efb1a0;
+  --feedback-error-bg: #2c1d24;
+  --feedback-error-line: #684033;
+  --feedback-warning-fg: #edc28a;
+  --feedback-warning-bg: #2c281b;
+  --feedback-warning-line: #61512f;
+  --feedback-hint-fg: var(--muted, #93a3ba);
+  --feedback-ok-fg: #75d7c6;
+}
+
+/* Menus/listboxes and anchored panels share their shell, not row geometry. */
+:where(.context-launch-menu, .launch-menu, .topic-context-popup, .topic-select-popup,
+  .git-branch-menu, .searchable-menu, .workflow-name-popup, .project-list-menu,
+  .terminal-actions-menu, .terminal-add-menu, .home-session-menu,
+  .repository-operation-popup, .topic-popup-error, .ov-file-menu) {
+  background: var(--overlay-bg);
+  color: var(--overlay-fg);
+  border: 1px solid var(--overlay-line);
+  border-radius: 10px;
+  box-shadow: var(--menu-shadow);
+}
+:where(.topic-dialog, .task-reload-dialog, .attach-panel-dialog,
+  .repository-operation-dialog, .terminal-confirmation, .ov-modal) {
+  background: var(--overlay-bg);
+  color: var(--overlay-fg);
+  border: 1px solid var(--overlay-line);
+  border-radius: 12px;
+  box-shadow: var(--dialog-shadow);
+  overflow-wrap: anywhere;
+}
+:is(.topic-dialog, .task-reload-dialog, .attach-panel-dialog,
+  .repository-operation-dialog, dialog.terminal-confirmation)::backdrop {
+  background: var(--dialog-backdrop);
+}
+/* A tooltip or passive copy receipt is not a menu or blocking error. */
+:where(.repository-action-tooltip, .demo-selection-feedback, .demo-copy-feedback:not(:empty)) {
+  padding: 7px 10px;
+  background: var(--overlay-bg);
+  border: 1px solid var(--overlay-line);
+  color: var(--overlay-fg);
+  border-radius: 6px;
+  box-shadow: 0 6px 20px #0005;
+  font-size: 12px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+  max-width: calc(100vw - 24px);
+}
+:where(.error, .creation-error, .terminal-error, .notifications-error, .spec-link-error) {
+  color: var(--feedback-error-fg);
+  border: 1px solid var(--feedback-error-line);
+  background: var(--feedback-error-bg);
+  border-radius: 6px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+:where(.topic-warning, .action-reason, .topic-action-reason, .project-creation-notice) {
+  color: var(--feedback-warning-fg);
+  border: 1px solid var(--feedback-warning-line);
+  background: var(--feedback-warning-bg);
+  border-radius: 6px;
+}
+
+button.popup-close {
+  flex: none;
+  display: inline-grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  min-height: 28px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--feedback-hint-fg);
+}
+button.popup-close:hover:enabled {
+  background: var(--raised, #182239);
+  color: var(--overlay-fg);
+}
+button.popup-close:focus-visible {
+  outline: 2px solid var(--overlay-focus);
+  outline-offset: 1px;
+}

@@ -101,8 +101,12 @@ it.each([true, false])(
     const action = screen.queryByRole("button", {
       name: "Показать папку src на схеме",
     });
+    const contract = screen.queryByRole("button", {
+      name: "Показать контракт папки src",
+    });
     if (!hasContract) {
       expect(action).toBeNull();
+      expect(contract).toBeNull();
       return;
     }
     expect(action).toBeTruthy();
@@ -113,11 +117,14 @@ it.each([true, false])(
     expect(
       document.querySelector(".ov-tree-row")?.getAttribute("aria-expanded"),
     ).toBe("false");
-    const contract = screen.queryByRole("button", {
-      name: "Показать контракт папки src",
-    });
-    if (hasContract) expect(contract?.nextElementSibling).toBe(action);
-    else expect(contract).toBeNull();
+    expect(contract).not.toBeNull();
+    const controls = Array.from(action!.closest(".ov-tree-row")!.querySelectorAll("button"));
+    const contractIndex = controls.findIndex(button => button === contract);
+    expect(contractIndex).toBeGreaterThanOrEqual(0);
+    expect(controls[contractIndex + 1]).toBe(action);
+    fireEvent.click(contract!);
+    expect(f.contract).toHaveBeenCalledExactlyOnceWith("src");
+    expect(f.navigate).toHaveBeenCalledTimes(1);
   },
 );
 

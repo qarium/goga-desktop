@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { constants, type Stats } from "node:fs";
@@ -40,11 +41,11 @@ interface Node {
 }
 const changed = () =>
   Error(
-    "Файл или каталог изменился во время копирования. Обновите дерево и проверьте результат.",
+    tr("host.theFileOrDirectoryChangedDuringCopyingRefreshTheTree"),
   );
 const limit = () =>
   Error(
-    "Превышен предел копирования: 10 000 элементов, глубина 32 и общий размер 256 МиБ.",
+    tr("host.copyLimitExceeded10000EntriesDepth32And256"),
   );
 const same = (a: Stats, b: Stats) =>
   a.dev === b.dev && a.ino === b.ino && a.mode === b.mode;
@@ -67,7 +68,7 @@ function sourcePath(p: string) {
     /[\x00-\x1f\x7f-\x9f]/.test(p) ||
     p.split(path.sep).some((n) => n.toLowerCase() === ".git")
   )
-    throw Error("Недопустимый файл в буфере обмена.");
+    throw Error(tr("host.invalidClipboardFile"));
 }
 async function assertSource(node: Node) {
   await verifySourceDirectories(node.ancestors);
@@ -94,14 +95,14 @@ const result = (
   touchedPaths,
   message:
     status === "done"
-      ? "Файлы скопированы."
+      ? tr("host.filesCopied")
       : status === "uncertain"
-        ? "Результат копирования не подтверждён. Проверьте дерево; автоматического повтора и удаления не будет." +
+        ? tr("host.theCopyResultCouldNotBeVerifiedCheckTheTree") +
           (reason ? " " + reason : "")
         : status === "partial"
-          ? "Копирование прервано. Часть файлов или папок уже создана; они оставлены для проверки. " +
+          ? tr("host.copyingStoppedSomeFilesOrFoldersWereCreatedAndLeft") +
             reason
-          : "Файлы не скопированы. " + reason,
+          : tr("host.noFilesCopied") + reason,
 });
 export interface PreparedOverviewPaste {
   conflicts: OverviewPasteConflict[];
@@ -121,10 +122,10 @@ export async function prepareOverviewPaste(
   allowConflicts = true,
 ): Promise<PreparedOverviewPaste> {
   if (!isOverviewPath(destination, true))
-    throw Error("Недопустимая папка назначения.");
+    throw Error(tr("host.invalidDestinationFolder"));
   if (!Array.isArray(sources) || !sources.length || sources.length > 128)
     throw Error(
-      "В буфере нет файлов для вставки (не более 128 выбранных объектов).",
+      tr("host.noFilesToPasteFromTheClipboardUpTo128"),
     );
   sources.forEach(sourcePath);
   const selected = [...new Set(sources)].filter(
@@ -180,7 +181,7 @@ export async function prepareOverviewPaste(
     if (++count > MAX_ENTRIES || depth > MAX_DEPTH) throw limit();
     if (!isOverviewPath(relative))
       throw Error(
-        "Копирование служебных Git-путей и неподдерживаемых имён запрещено.",
+        tr("host.copyingInternalGitPathsOrUnsupportedNamesIsNotAllowed"),
       );
     await verifySourceDirectories(ancestors);
     const info = await lstat(source);
@@ -190,7 +191,7 @@ export async function prepareOverviewPaste(
       (info.isFile() && info.nlink !== 1)
     )
       throw Error(
-        "Копируются только обычные файлы и папки, без символических/жёстких ссылок и специальных файлов.",
+        tr("host.onlyRegularFilesAndFoldersCanBeCopiedLinksHard"),
       );
     if (info.isFile() && (bytes += info.size) > MAX_BYTES) throw limit();
     const existing = targetParents
@@ -204,10 +205,10 @@ export async function prepareOverviewPaste(
     )
       throw changed();
     if (existing && same(existing, info))
-      throw Error("Нельзя вставить файл или папку в самих себя.");
+      throw Error(tr("host.aFileOrFolderCannotBePastedIntoItself"));
     if (existing && !allowConflicts)
       throw Error(
-        `Файл или папка «${path.basename(relative)}» уже существует. Вставка не заменяет файлы и не объединяет папки.`,
+        tr("host.aFileOrFolderNamedValue1AlreadyExistsThisPaste", { value1: path.basename(relative) }),
       );
     const collision =
       !!existing && !(info.isDirectory() && existing.isDirectory());
@@ -228,7 +229,7 @@ export async function prepareOverviewPaste(
     if (info.isDirectory()) {
       if (inside(destinationPhysical, await realpath(source)))
         throw Error(
-          "Нельзя вставить папку в саму себя или в её вложенную папку.",
+          tr("host.aFolderCannotBePastedIntoItselfOrOneOf"),
         );
       const names: string[] = [],
         aliases = new Set<string>();
@@ -237,7 +238,7 @@ export async function prepareOverviewPaste(
         if (names.length >= MAX_ENTRIES) throw limit();
         const alias = projectWorkflowAliasKey(entry.name);
         if (aliases.has(alias))
-          throw Error("Имена файлов неоднозначны для папки назначения.");
+          throw Error(tr("host.fileNamesAreAmbiguousInTheDestinationFolder"));
         aliases.add(alias);
         names.push(entry.name);
       }
@@ -273,7 +274,7 @@ export async function prepareOverviewPaste(
     const name = path.basename(source),
       alias = projectWorkflowAliasKey(name);
     if (topNames.has(alias))
-      throw Error("В буфере несколько файлов с одинаковым именем.");
+      throw Error(tr("host.multipleClipboardFilesHaveTheSameName"));
     topNames.add(alias);
     const relative = destination ? destination + "/" + name : name;
     nodes.push(
@@ -311,7 +312,7 @@ export async function prepareOverviewPaste(
             (!item.replaceable && actions.get(item.path) === "replace"),
         )
       )
-        throw Error("Для каждого совпадения нужно выбрать замену или пропуск.");
+        throw Error(tr("host.chooseReplaceOrSkipForEachConflict"));
       const guard = async () => {
         await performGuard();
         await verifyTargetRoot();
@@ -441,7 +442,7 @@ export async function prepareOverviewPaste(
                   bytesRead - written,
                   offset + written,
                 );
-                if (!n.bytesWritten) throw Error("Не удалось записать файл.");
+                if (!n.bytesWritten) throw Error(tr("host.couldNotWriteFile"));
                 written += n.bytesWritten;
               }
               offset += bytesRead;
@@ -512,7 +513,7 @@ export async function prepareOverviewPaste(
             if (!cleaned) {
               if (!touched.includes(top)) touched.push(top);
               throw new UncertainCopy(
-                `Промежуточный файл «${path.relative(root, staged).split(path.sep).join("/")}» оставлен для проверки.`,
+                tr("host.temporaryFileValue1WasKeptForInspection", { value1: path.relative(root, staged).split(path.sep).join("/") }),
               );
             }
           }

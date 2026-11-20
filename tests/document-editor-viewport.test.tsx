@@ -222,7 +222,7 @@ it("enlarges only the project workspace, hides its chrome, and leaves the sideba
             <div className="run-context">Context</div>
             <div className="scroll-area">
               <section className="project-settings-panel">
-                <nav className="section-tabs">Settings tabs</nav>
+                <nav className="workspace-section-tabs">Settings tabs</nav>
                 <div className="master-detail">
                   <div className="tree-pane">File tree</div>
                   <section className="editor-pane">
@@ -243,7 +243,7 @@ it("enlarges only the project workspace, hides its chrome, and leaves the sideba
       ".project-bar",
       ".tabs",
       ".run-context",
-      ".section-tabs",
+      ".workspace-section-tabs",
       ".tree-pane",
     ])
       expect(display(chrome), chrome).toBe("none");
@@ -257,7 +257,7 @@ it("enlarges only the project workspace, hides its chrome, and leaves the sideba
       ".project-bar",
       ".tabs",
       ".run-context",
-      ".section-tabs",
+      ".workspace-section-tabs",
       ".tree-pane",
     ])
       expect(display(chrome), chrome).not.toBe("none");

@@ -1,3 +1,5 @@
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { ContextDeletionAction } from "./ContextDeletionAction";
 import type { WorktreeRecord } from "../shared/worktrees";
 import {
@@ -83,6 +85,7 @@ export function TopicCard({
   selectedContextId?: string;
   runs?: RunWithContext[];
 }) {
+  useLocale();
   // Board rows carry display-only fields; IPC accepts only the exact identity.
   const target: TopicTarget = {
     topic: sourceTarget.topic,
@@ -226,18 +229,18 @@ export function TopicCard({
       .replace(/^-|-$/g, "");
   const actionReason = (action: TopicAction): string => {
     if (catalogReadOnly)
-      return "Удалённый топик открыт только для просмотра каталога. Для изменений выберите проверенную локальную копию.";
-    if (missingOwner) return "Автономный клон не подготовлен.";
-    if (operation.busy) return "Дождитесь завершения текущего действия.";
-    if (loading) return "Дождитесь загрузки карточки.";
+      return tr("topics.remoteTopicOpenedForViewingOnlySelectA");
+    if (missingOwner) return tr("topics.anIndependentCloneHasNotBeenPrepared");
+    if (operation.busy) return tr("topics.waitForTheCurrentOperationToFinish");
+    if (loading) return tr("topics.waitForTheCardToLoad");
     if (!board || error || !details)
-      return "Не удалось загрузить карточку. Откройте её повторно.";
-    if (deleted) return "Топик удалён.";
+      return tr("topics.theCardCouldNotBeLoadedOpenIt");
+    if (deleted) return tr("topics.topicDeleted");
     if (missingMetadata)
-      return "Сначала создайте задачу в этой копии; данные топика ещё не созданы.";
-    if (ownerActive) return "Недоступно во время активного запуска.";
-    if (!isOwn) return "У этой ветки нет собственного топика.";
-    if (action === "switch" && current) return "Вы уже в этом топике.";
+      return tr("topics.firstCreateATaskInThisCopyTopic");
+    if (ownerActive) return tr("topics.unavailableWhileARunIsActive");
+    if (!isOwn) return tr("topics.thisBranchHasNoTopicOfItsOwn");
+    if (action === "switch" && current) return tr("topics.youAreAlreadyInThisTopic");
     // Deletion resolves the whole topic, including its origin twin.
     if (
       action === "delete" &&
@@ -248,15 +251,15 @@ export function TopicCard({
           .replace(/[^a-z0-9]+/g, "-")
           .replace(/^-|-$/g, "")
     )
-      return "Текущий топик удалить нельзя.";
-    if (dirty) return "Сначала сохраните черновик задачи.";
+      return tr("topics.theCurrentTopicCannotBeDeleted");
+    if (dirty) return tr("topics.saveTheTaskDraftFirst");
     if (target.remote && ["update", "publish", "propagate"].includes(action))
-      return "Для этого действия выберите локальную ветку топика.";
+      return tr("topics.selectALocalTopicBranchForThisAction");
     if (
       ["update", "propagate"].includes(action) &&
       base === board.currentBranch
     )
-      return "Базовая ветка сейчас текущая. Сначала переключитесь на другую ветку.";
+      return tr("topics.theBaseBranchIsCurrentlyCheckedOutSwitch");
     if (
       board.dirty &&
       (action === "switch" ||
@@ -264,7 +267,7 @@ export function TopicCard({
           !target.remote &&
           target.branch === board.currentBranch))
     )
-      return "Недоступно, пока в рабочей копии есть незакоммиченные изменения.";
+      return tr("topics.unavailableWhileTheWorkingCopyHasUncommittedChanges");
     return "";
   };
   const ownRecord =
@@ -303,18 +306,18 @@ export function TopicCard({
   }
   const commonReasonId = useId();
   const cardActions = [
-    ...(!minimal ? [["switch", "Переключиться на топик…"] as const] : []),
-    ["update", "Обновить из базы…"],
-    ["publish", "Опубликовать…"],
+    ...(!minimal ? [["switch", tr("topics.switchToTopic")] as const] : []),
+    ["update", tr("topics.updateFromBase2")],
+    ["publish", tr("topics.publish2")],
     ...(!owner || owner.storageKind === "clone"
       ? [
           [
             "propagate",
-            owner ? "Перенести в базу и опубликовать…" : "Перенести в базу…",
+            owner ? tr("topics.propagateToBaseAndPublish2") : tr("topics.propagateToBase"),
           ] as const,
         ]
       : []),
-    ...(!owner ? [["delete", "Удалить топик…"] as const] : []),
+    ...(!owner ? [["delete", tr("topics.deleteTopic")] as const] : []),
   ] as readonly (readonly [TopicAction, string])[];
   const commonReasons = new Map<string, string[]>();
   if (minimal)
@@ -329,24 +332,20 @@ export function TopicCard({
   const snapshot = historical ? context.run.taskSnapshot : undefined;
   return (
     <TopicModal
-      title={target.topic || "Ветка без собственного топика"}
+      title={target.topic || tr("topics.branchWithoutItsOwnTopic")}
       onClose={onClose}
       busy={operation.busy}
     >
       {missingOwner && (
         <section
           className="topic-card-section"
-          aria-label="Контекст топика недоступен"
+          aria-label={tr("topics.topicContextUnavailable")}
         >
-          <p>
-            Автономный клон этого топика не подтверждён. Основная папка не
-            используется вместо него; задача и действия недоступны до
-            подготовки.
-          </p>
+          <p>{tr("topics.thisTopicSIndependentCloneIsUnverifiedThe")}</p>
         </section>
       )}
       {!missingOwner && (
-        <LoadingBoundary pending={cardLoading} label="Загружаем топик…">
+        <LoadingBoundary pending={cardLoading} label={tr("topics.loadingTopic")}>
           {!cardLoading && <TopicFeedback operation={operation} />}
           {operation.plan ? (
             <TopicConfirmation
@@ -360,13 +359,11 @@ export function TopicCard({
           ) : error ? (
             <div className="topic-card-state">
               <div role="alert">
-                <h3>Не удалось загрузить топик</h3>
+                <h3>{tr("topics.couldNotLoadTopic")}</h3>
                 <p className="error">{error}</p>
               </div>
               {dirty && (
-                <p className="hint">
-                  Несохранённый черновик остаётся в памяти.
-                </p>
+                <p className="hint">{tr("topics.yourUnsavedDraftRemainsInMemory")}</p>
               )}
               <button
                 type="button"
@@ -375,74 +372,62 @@ export function TopicCard({
                   setError("");
                   setRefresh((n) => n + 1);
                 }}
-              >
-                Повторить загрузку
-              </button>
+              >{tr("launch.retryLoading")}</button>
             </div>
           ) : (
             <>
               <div className="topic-card-context">
                 <strong>
                   {historical
-                    ? "Топик этого запуска"
+                    ? tr("topics.topicForThisRun")
                     : context.kind === "preparation"
-                      ? "Выбрано для нового запуска"
+                      ? tr("topics.selectedForANewRun")
                       : context.kind === "current"
-                        ? "Текущий контекст проекта"
-                        : "Топик проекта"}
+                        ? tr("topics.currentProjectContext")
+                        : tr("topics.projectTopic")}
                 </strong>
                 <span>
                   {year} · {target.branch}
                 </span>
                 <small>
                   {historical
-                    ? "Снимок на момент начала запуска. Текущая ветка проекта и задача могли измениться."
+                    ? tr("topics.snapshotFromTheStartOfTheRunThe")
                     : current
-                      ? "Это собственный топик текущей ветки проекта."
-                      : `Текущая ветка проекта: ${board?.currentBranch || "уточняется"}. Просмотр её не переключает.`}
+                      ? tr("topics.thisIsTheCurrentProjectBranchSOwn")
+                      : tr("topics.currentProjectBranchValue1ViewingDoesNotSwitch", { value1: board?.currentBranch || tr("launch.checking2") })}
                 </small>
               </div>
               {host && host.branch !== target.branch && (
-                <p className="hint">
-                  На доске выбрана ветка {host.branch}; действия относятся к
-                  собственной ветке {target.branch}.
+                <p className="hint">{tr("topics.selectedAndTargetBranches", { selected: host.branch, target: target.branch })}
                 </p>
               )}
               {!historical && ownRecord && (
                 <dl className="topic-facts">
-                  <dt>Статусы в собственной ветке</dt>
-                  <dd>{ownRecord.statuses.join(" · ") || "Без статуса"}</dd>
-                  <dt>Относительно базы</dt>
-                  <dd>{ownRecord.divergence || "Нет данных"}</dd>
+                  <dt>{tr("topics.statusesOnTheTopicBranch")}</dt>
+                  <dd>{ownRecord.statuses.join(" · ") || tr("topics.noStatus")}</dd>
+                  <dt>{tr("topics.relativeToBase")}</dt>
+                  <dd>{ownRecord.divergence || tr("topics.noData")}</dd>
                 </dl>
               )}
               <section className="topic-card-section">
-                <h3>{historical ? "Задача при запуске" : "Задача"}</h3>
+                <h3>{historical ? tr("topics.taskAtLaunch") : tr("topics.task")}</h3>
                 {!historical && missingMetadata && (
-                  <p className="hint" role="status">
-                    В этой копии данные топика ещё не созданы. Введите задачу и
-                    сохраните её здесь; основная папка не изменится.
-                  </p>
+                  <p className="hint" role="status">{tr("topics.thisCopyDoesNotHaveTopicDataYet")}</p>
                 )}
                 {historical ? (
                   <>
                     {snapshot ? (
                       <pre className="topic-task-preview">
-                        {snapshot.text || "Задача была пустой"}
+                        {snapshot.text || tr("topics.theTaskWasEmpty")}
                       </pre>
                     ) : (
-                      <p className="hint">
-                        Снимок задачи для этого запуска отсутствует. Текущую
-                        задачу не подставляем вместо исторической.
-                      </p>
+                      <p className="hint">{tr("topics.noTaskSnapshotIsAvailableForThisRun")}</p>
                     )}
                   </>
                 ) : context.kind === "preparation" ? (
                   <>
                     {context.edit ? (
-                      <label>
-                        Задача подготовки запуска
-                        <textarea
+                      <label>{tr("topics.launchTask")}<textarea
                           rows={7}
                           value={preparationText}
                           onChange={(e) => {
@@ -453,18 +438,15 @@ export function TopicCard({
                       </label>
                     ) : (
                       <pre className="topic-task-preview">
-                        {preparationText || "Задача пока не задана"}
+                        {preparationText || tr("topics.noTaskYet")}
                       </pre>
                     )}
-                    <p className="hint">
-                      Это черновик формы подготовки запуска. Изменения остаются
-                      в памяти; файл топика не меняется.
-                    </p>
+                    <p className="hint">{tr("topics.thisIsADraftFromTheLaunchForm")}</p>
                   </>
                 ) : draft ? (
                   <>
                     <label className={readOnly ? "sr-only" : ""}>
-                      {readOnly ? "Сохранённая задача" : "Задача топика"}
+                      {readOnly ? tr("topics.savedTask") : tr("topics.topicTask")}
                       {!readOnly && (
                         <textarea
                           rows={7}
@@ -484,19 +466,15 @@ export function TopicCard({
                       <pre className="topic-task-preview">
                         {(catalogReadOnly ? details?.text : draft.text) ||
                           (missingMetadata
-                            ? "Локальный файл задачи отсутствует."
-                            : "Задача не задана")}
+                            ? tr("topics.theLocalTaskFileIsMissing")
+                            : tr("topics.noTaskSpecified"))}
                       </pre>
                     )}
                     {details?.reason && (
                       <p className="hint">{details.reason}</p>
                     )}
                     {dirty && (
-                      <p className="topic-warning">
-                        Есть несохранённый черновик. Он остаётся в памяти при
-                        закрытии карточки; операции с ветками заблокированы до
-                        сохранения.
-                      </p>
+                      <p className="topic-warning">{tr("topics.anUnsavedDraftWillStayInMemoryWhen")}</p>
                     )}
                     {!readOnly && (
                       <button
@@ -511,15 +489,12 @@ export function TopicCard({
                         onClick={() => void prepare("save-task")}
                       >
                         {missingMetadata
-                          ? "Создать задачу в этой копии…"
-                          : "Сохранить задачу…"}
+                          ? tr("topics.createTaskInThisCopy")
+                          : tr("topics.saveTask")}
                       </button>
                     )}
                     {draft.version !== details?.version && dirty && (
-                      <p role="alert" className="topic-warning">
-                        Сохранённая задача изменилась. Черновик оставлен без
-                        замены; сохранение старой версии будет отклонено.
-                      </p>
+                      <p role="alert" className="topic-warning">{tr("topics.theSavedTaskHasChangedYourDraftWas")}</p>
                     )}
                   </>
                 ) : null}
@@ -527,41 +502,30 @@ export function TopicCard({
               {!historical && board && (
                 <>
                   <details className="topic-card-section">
-                    <summary>Где находится</summary>
-                    <p className="hint">
-                      Все известные размещения. Ничего не переключается.
-                    </p>
+                    <summary>{tr("topics.locations")}</summary>
+                    <p className="hint">{tr("topics.allKnownLocationsNoBranchesAreSwitched")}</p>
                     {topicPlacements(board, target.topic).map((p) => (
                       <div
                         className="topic-placement"
                         key={`${p.branch}/${p.remote}`}
                       >
                         <strong>{p.branch}</strong>
-                        <span>{p.statuses.join(" · ") || "Без статуса"}</span>
-                        <small>{p.todo || "Задача не задана"}</small>
+                        <span>{p.statuses.join(" · ") || tr("topics.noStatus")}</span>
+                        <small>{p.todo || tr("topics.noTaskSpecified")}</small>
                       </div>
                     ))}
                   </details>
                   {!deleted && (
                     <section className="topic-card-section">
-                      <h3>Работа с топиком</h3>
+                      <h3>{tr("topics.topicActions")}</h3>
                       {!minimal && board.active && (
-                        <p className="topic-warning">
-                          Во время активного запуска доступны только просмотр и
-                          черновики.
-                        </p>
+                        <p className="topic-warning">{tr("topics.onlyViewingAndDraftsAreAvailableDuringAn")}</p>
                       )}
                       {board.dirty && (
-                        <p className="hint">
-                          Есть незакоммиченные изменения. Публикация и перенос в
-                          базу их не включают.
-                        </p>
+                        <p className="hint">{tr("topics.uncommittedChangesWillNotBeIncludedInPublishing")}</p>
                       )}
                       {!isOwn && (
-                        <p className="hint">
-                          Ветка не имеет собственного топика: здесь размещена
-                          история другого топика. Операции недоступны.
-                        </p>
+                        <p className="hint">{tr("topics.thisBranchHasNoTopicOfItsOwn2")}</p>
                       )}
                       {!minimal && (
                         <>
@@ -587,22 +551,14 @@ export function TopicCard({
                                   : draft?.text,
                               )
                             }
-                          >
-                            Подготовить запуск
-                          </button>
+                          >{tr("topics.prepareRun")}</button>
                           {(target.remote || year !== currentYear) && (
-                            <p className="hint">
-                              Подготовка запуска доступна для локального топика
-                              текущего года. Для удалённого топика сначала
-                              переключитесь на него.
-                            </p>
+                            <p className="hint">{tr("topics.youCanPrepareARunForALocal")}</p>
                           )}
                         </>
                       )}
                       <div className="topic-operation-fields">
-                        <label>
-                          Базовая ветка
-                          <input
+                        <label>{tr("topics.baseBranch")}<input
                             value={base}
                             onChange={(e) => setBase(e.target.value)}
                             disabled={operation.busy}
@@ -618,9 +574,7 @@ export function TopicCard({
                           checked={publish}
                           onChange={() => setPublish((v) => !v)}
                           disabled={!!actionReason("update")}
-                        >
-                          Опубликовать после обновления
-                        </TopicSwitch>
+                        >{tr("topics.publishAfterUpdate")}</TopicSwitch>
                       </div>
                       {minimal && commonReasons.size > 0 && (
                         <div
@@ -707,12 +661,11 @@ export function TopicCard({
                       </div>
                       <p className="hint">
                         {!minimal &&
-                          "Подготовка только заполняет форму, не запускает конвейер. "}
-                        Все изменения — после подтверждения.{" "}
+                          tr("topics.preparingARunOnlyFillsInTheForm")}{tr("topics.allChangesRequireConfirmation")}{" "}
                         {owner?.storageKind === "clone"
-                          ? "«Применить в базу» — только локально. «Перенести в базу и опубликовать» включает публикацию; точный внешний адрес покажем в подтверждении. "
+                          ? tr("topics.applyToBaseIsLocalOnlyPropagateTo")
                           : !owner &&
-                            "Перенос в базу включает её публикацию на origin. "}
+                            tr("topics.propagatingToBaseIncludesPublishingTheBaseBranch")}
                       </p>
                     </section>
                   )}
@@ -732,28 +685,24 @@ export function TopicCard({
         ) : (
           <section
             className="topic-card-section topic-sync"
-            aria-label="Перенос изменений"
+            aria-label={tr("topics.transferChanges")}
           >
-            <h3>Перенос изменений</h3>
+            <h3>{tr("topics.transferChanges")}</h3>
             <p role={ownerReadState === "error" && !owner ? "alert" : "status"}>
               {!owner && ownerReadState === "loading"
-                ? "Проверяем наличие рабочей копии…"
+                ? tr("topics.checkingForAWorkingCopy")
                 : !owner && ownerReadState === "error"
-                  ? "Не удалось проверить рабочую копию. Её отсутствие не подтверждено."
+                  ? tr("topics.couldNotVerifyTheWorkingCopyItsAbsence")
                   : providedOwner && !owner
-                    ? "Контекст рабочей копии не подтверждён. Перенос недоступен."
+                    ? tr("topics.theWorkingCopyContextCouldNotBeVerified")
                     : topicSyncUnavailable(owner)}
             </p>
             {!owner && ownerReadState === "error" && ownerReadError && (
               <p className="error">{ownerReadError}</p>
             )}
             <div className="form-actions">
-              <button type="button" disabled>
-                Синхронизировать
-              </button>
-              <button type="button" disabled>
-                Применить в базу…
-              </button>
+              <button type="button" disabled>{tr("topics.sync")}</button>
+              <button type="button" disabled>{tr("topics.applyToBase")}</button>
             </div>
           </section>
         ))}

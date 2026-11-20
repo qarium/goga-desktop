@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import path from "node:path";
 import { lstat } from "node:fs/promises";
 import { noSymlinks } from "./settings";
@@ -14,10 +15,10 @@ type Git = (root: string, args: string[]) => Promise<string>;
 const same = (a: Task, b: Task) => a.exists === b.exists && a.text === b.text;
 const changed = () =>
   Error(
-    "Ветка или данные задачи изменились во время проверки. Повторите подготовку.",
+    tr("host.branchOrTaskDataChangedDuringVerificationPrepareAgain"),
   );
 const missing = () =>
-  Error("Данные выбранного топика не найдены. Обновите каталог.");
+  Error(tr("host.dataForTheSelectedTopicWasNotFoundRefreshThe"));
 async function snapshot(
   root: string,
   identity: TopicContextIdentity,
@@ -30,7 +31,7 @@ async function snapshot(
   const gitRoot = path.join(root, ".git");
   await noSymlinks(gitRoot);
   if (!(await lstat(gitRoot)).isDirectory())
-    throw Error("Для проверки задачи требуется автономная папка Git проекта.");
+    throw Error(tr("host.taskVerificationNeedsAnIndependentGitProjectFolder"));
   const effective = async () => {
     const actual = (
       await git(root, [
@@ -59,7 +60,7 @@ async function snapshot(
       actual.some((value, i) => path.resolve(root, value) !== expected[i])
     )
       throw Error(
-        "Эффективные пути Git не соответствуют выбранной папке проекта.",
+        tr("host.effectiveGitPathsDoNotMatchTheSelectedProjectFolder"),
       );
     await noSymlinks(gitRoot);
   };
@@ -154,7 +155,7 @@ export async function assertTopicTaskReady(input: {
       .map((row) => ({ topic: row.topic, branch: row.branch }));
   const rows = await exact();
   if (rows.length > 1)
-    throw Error("Топик неоднозначен в локальном каталоге. Обновите список.");
+    throw Error(tr("host.theTopicIsAmbiguousInTheLocalCatalogRefreshThe"));
   if (!input.clone && !rows.length) throw missing();
   const verify = async () => {
     await local.verify();

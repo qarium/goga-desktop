@@ -1,3 +1,6 @@
+import type { MessageKey } from "../../shared/locale-packs.generated";
+import { t as msg } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import {AttachedPanelCard} from "../AttachedPanels";
 import type {AttachedDashboard} from "../../shared/attached-dashboard";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -11,7 +14,6 @@ import {
   createRunProjection,
   groupActive,
   ownerProject,
-  plural,
   type Filter,
   type OrganizationView,
 } from "./model";
@@ -22,6 +24,13 @@ import type {
   WorkspaceAddress,
 } from "./types";
 import "./HomePage.css";
+
+// Keep the number visually distinct without hard-coding word order or a plural rule.
+function metric(key: MessageKey, count: number, atLeast = false) {
+  const marker = "\uFFFC";
+  const [before, after] = msg(key, { count, number: marker }).split(marker);
+  return <>{before}<b>{atLeast ? "≥" : ""}{count}</b>{after}</>;
+}
 
 const noEntries: readonly SessionEntry[] = [];
 export interface HomePageProps {
@@ -46,6 +55,7 @@ export interface HomePageProps {
   operations?: Readonly<Record<string, string>>;
 }
 export function HomePage(props: HomePageProps) {
+  useLocale();
   const {
     projects,
     runs,
@@ -143,64 +153,53 @@ export function HomePage(props: HomePageProps) {
       <div className="home-dashboard">
         <header className="home-heading">
           <div>
-            <span className="eyebrow">МОЙ КОМПЬЮТЕР / РАБОЧАЯ ОБЛАСТЬ</span>
-            <h1>Главная</h1>
-            <p>
-              Проекты, к которым вы возвращаетесь. Запуски, которые идут сейчас.
-            </p>
+            <span className="eyebrow">{msg("shell.myCOMPUTERWORKSPACE")}</span>
+            <h1>{msg("shell.home")}</h1>
+            <p>{msg("shell.pickUpARecentProjectOrFollowAnActiveRun")}</p>
           </div>
           <div className="d-local">
             <span>
-              <i />
-              Состояние Desktop
-            </span>
-            <small>Git-сводки — в фоне</small>
+              <i />{msg("shell.desktopStatus")}</span>
+            <small>{msg("shell.gitSummariesUpdateInTheBackground")}</small>
           </div>
         </header>
         {catalogError && (
           <div role="alert" className="home-notice">
             {catalogError}{" "}
             {props.onRetry && (
-              <button onClick={props.onRetry}>
-                Повторить загрузку проектов
-              </button>
+              <button onClick={props.onRetry}>{msg("shell.retryLoadingProjects")}</button>
             )}
           </div>
         )}
         {notifications?.error && (
-          <p role="status" className="home-notice">
-            Не удалось обновить уведомления. Показаны последние известные
-            данные.
-          </p>
+          <p role="status" className="home-notice">{msg("shell.couldNotRefreshNotificationsShowingTheLastKnownData")}</p>
         )}
         {!catalogReady ? (
           <p role="status">
             {catalogError
-              ? "Каталог проектов недоступен"
-              : "Загружаем проекты…"}
+              ? msg("shell.projectCatalogUnavailable")
+              : msg("shell.loadingProjects")}
           </p>
         ) : !projects.length ? (
           <section className="home-empty">
             <Folder size={34} />
-            <h2>Место для вашей следующей идеи</h2>
-            <p>Добавьте проект. Его конвейеры и сборки появятся на Главной.</p>
+            <h2>{msg("shell.roomForYourNextIdea")}</h2>
+            <p>{msg("shell.addAProjectToSeeItsPipelinesAndBuildsOn")}</p>
             <button
               className="primary"
               onClick={(e) => props.onAdd(e.currentTarget)}
-            >
-              Добавить проект
-            </button>
+            >{msg("shell.addProject")}</button>
           </section>
         ) : (
           <>
             {recent.length > 0 && (
               <section
                 className="d-recent-projects"
-                aria-label="Недавние проекты"
+                aria-label={msg("shell.recentProjects")}
               >
                 <header className="d-section-head">
-                  <h2>Недавние проекты</h2>
-                  <p>Продолжите с того места, где остановились</p>
+                  <h2>{msg("shell.recentProjects")}</h2>
+                  <p>{msg("shell.pickUpWhereYouLeftOff")}</p>
                 </header>
                 <div className="d-recent-row">
                   {recent.map((v) => (
@@ -225,51 +224,48 @@ export function HomePage(props: HomePageProps) {
                 </div>
               </section>
             )}
-            {!!props.attached?.some(r=>catalog.has(r.owner.projectId))&&<section className="d-work-section" aria-label="Подключённые панели">
-              <header className="d-section-head"><h2>Подключённые панели</h2><p>Внешние конвейеры · только просмотр</p></header>
+            {!!props.attached?.some(r=>catalog.has(r.owner.projectId))&&<section className="d-work-section" aria-label={msg("shell.attachedPanels")}>
+              <header className="d-section-head"><h2>{msg("shell.attachedPanels")}</h2><p>{msg("shell.externalPipelinesReadOnly")}</p></header>
               <div className="context-run-list">{props.attached.filter(r=>catalog.has(r.owner.projectId)).map(row=><AttachedPanelCard key={row.id} row={row}
                 error={props.viewErrors?.[row.id]} label={[catalog.get(row.owner.projectId)?.name,row.owner.context?.topic].filter(Boolean).join(" · ")}
                 onDetach={props.onDetachPanel?()=>props.onDetachPanel!(row):undefined}
                 onOpen={()=>go({kind:"run",runId:row.id,owner:row.owner.context?{kind:"topic",ref:row.owner.context}:{kind:"primary",projectId:row.owner.projectId}})}/>)}</div>
             </section>}
-            <section className="d-work-section" aria-label="Сейчас в работе">
+            <section className="d-work-section" aria-label={msg("shell.inProgress")}>
               <header className="d-section-head">
-                <h2>
-                  Сейчас в работе{" "}
+                <h2>{msg("shell.inProgress")}{" "}
                   {runsReady && (
                     <small>{summary.pipelines + summary.builds}</small>
                   )}
                 </h2>
-                <p>Конвейеры и сборки по проектам</p>
+                <p>{msg("shell.pipelinesAndBuildsByProject")}</p>
               </header>
               {runsError && (
                 <p className="home-notice" role="alert">
                   {runsError}{" "}
                   {props.onRetryRuns && (
-                    <button onClick={props.onRetryRuns}>
-                      Повторить загрузку запусков
-                    </button>
+                    <button onClick={props.onRetryRuns}>{msg("shell.retryLoadingRuns")}</button>
                   )}
                 </p>
               )}
               {!runsReady ? (
                 <p role="status">
                   {runsError
-                    ? "Данные запусков недоступны"
-                    : "Загружаем запуски…"}
+                    ? msg("shell.runInformationUnavailable")
+                    : msg("shell.loadingRuns")}
                 </p>
               ) : (
                 <>
                   <div className="d-work-toolbar">
                     <div
                       className="d-filters"
-                      aria-label="Фильтр активных запусков"
+                      aria-label={msg("shell.filterActiveRuns")}
                     >
                       {(
                         [
-                          ["all", "Все"],
-                          ["pipeline", "Конвейеры"],
-                          ["build", "Сборки"],
+                          ["all", msg("shell.all")],
+                          ["pipeline", msg("shell.pipelines")],
+                          ["build", msg("shell.builds")],
                         ] as const
                       ).map(([f, label]) => (
                         <button
@@ -284,48 +280,33 @@ export function HomePage(props: HomePageProps) {
                     </div>
                     <div
                       className="d-overview"
-                      aria-label="Сводка активных запусков"
+                      aria-label={msg("shell.activeRunSummary")}
                     >
                       <span>
                         <Terminal size={13} />
-                        <b>{summary.pipelines}</b>{" "}
-                        {plural(summary.pipelines, [
-                          "конвейер",
-                          "конвейера",
-                          "конвейеров",
-                        ])}
+                        {metric("shell.activeSummary.pipeline", summary.pipelines)}
                       </span>
                       <span>
                         <Hammer size={13} />
-                        <b>{summary.builds}</b>{" "}
-                        {plural(summary.builds, ["сборка", "сборки", "сборок"])}
+                        {metric("shell.activeSummary.build", summary.builds)}
                       </span>
                       <span>
                         <Folder size={13} />
-                        <b>{summary.projects}</b>{" "}
-                        {plural(summary.projects, [
-                          "проект",
-                          "проекта",
-                          "проектов",
-                        ])}
+                        {metric("shell.activeSummary.project", summary.projects)}
                       </span>
                       <span
                         data-topic-count
                         title={
                           summary.unknownTopics
-                            ? `Подтверждено ${summary.topics}; у ${summary.unknownTopics} запусков не сохранён полный контекст.`
-                            : "Уникальные топики с активными запусками; без топика не учитываются."
+                            ? msg("shell.confirmedRunsHaveIncompleteContext", { topics: String(summary.topics), unknownTopics: String(summary.unknownTopics) })
+                            : msg("shell.distinctTopicsWithActiveRunsRunsWithoutATopicAre")
                         }
                       >
                         <Layers size={13} />
-                        <b>
-                          {summary.unknownTopics ? "≥" : ""}
-                          {summary.topics}
-                        </b>{" "}
-                        {plural(summary.topics, ["топик", "топика", "топиков"])}
+                        {metric("shell.activeSummary.topic", summary.topics, summary.unknownTopics > 0)}
                       </span>
                       {summary.unverified > 0 && (
-                        <span>Требуют проверки: {summary.unverified}</span>
+                        <span>{msg("shell.needVerification")}{summary.unverified}</span>
                       )}
                     </div>
                   </div>
@@ -347,18 +328,16 @@ export function HomePage(props: HomePageProps) {
                       <CheckCircle2 size={25} />
                       <h3>
                         {visible.length
-                          ? "В этом фильтре нет запусков"
-                          : "Нет активных запусков"}
+                          ? msg("shell.noRunsMatchThisFilter")
+                          : msg("shell.noActiveRuns")}
                       </h3>
                       <p>
                         {visible.length
-                          ? "В других фильтрах есть запуски."
-                          : "Вернитесь к недавнему проекту или откройте другой в боковой панели."}
+                          ? msg("shell.otherFiltersHaveRuns")
+                          : msg("shell.returnToARecentProjectOrOpenAnotherFromThe")}
                       </p>
                       {filter !== "all" && (
-                        <button onClick={() => setFilter("all")}>
-                          Показать все
-                        </button>
+                        <button onClick={() => setFilter("all")}>{msg("shell.showAll")}</button>
                       )}
                     </div>
                   )}

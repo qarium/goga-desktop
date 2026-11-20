@@ -1,3 +1,5 @@
+import { t } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { SearchablePicker } from "./SearchablePicker";
 import { DemoOpenShows } from "./demonstrations/DemoOpenShows";
 import { useEffect, useRef, useState } from "react";
@@ -16,20 +18,21 @@ const problem = (e: unknown) =>
         /^Error invoking remote method '[^']+': (?:Error: )?/,
         "",
       )
-    : "Не удалось прочитать настройку порта.";
+    : t("general.couldNotReadThePortSetting");
 // These addresses are not credentials. Never put an admin URL, session id or
 // request id in the address list (nor offer these addresses as panel links).
 function AgentAddresses({ port }: { port: number }) {
+  useLocale();
   return (
-    <dl className="demo-addresses" aria-label="Адреса для агента">
+    <dl className="demo-addresses" aria-label={t("general.agentConnectionAddresses")}>
       <div>
-        <dt>На этом компьютере</dt>
+        <dt>{t("general.onThisComputer")}</dt>
         <dd>
           <code data-testid="demo-local-address">http://127.0.0.1:{port}</code>
         </dd>
       </div>
       <div>
-        <dt>Из Docker</dt>
+        <dt>{t("general.fromDocker")}</dt>
         <dd>
           <code data-testid="demo-docker-address">
             http://host.docker.internal:{port}
@@ -41,6 +44,7 @@ function AgentAddresses({ port }: { port: number }) {
 }
 
 export function DemoSettings() {
+  useLocale();
   const active = useViewActive(),
     life = useRef<AbortController | null>(null),
     pending = useRef(false),
@@ -119,7 +123,7 @@ export function DemoSettings() {
         setState(updated);
         if (!engine) setDraft(null);
         setNotice(
-          engine ? "Браузер для новых показов сохранён." : "Порт сохранён.",
+          engine ? t("general.browserPreferenceSavedForNewDemonstrations") : t("general.portSaved"),
         );
       }
     } catch (e) {
@@ -142,18 +146,14 @@ export function DemoSettings() {
   return (
     <section
       className="demo-settings"
-      aria-label="Демонстрации"
+      aria-label={t("general.demonstrations")}
       data-testid="demo-settings-section"
     >
       <div className="demo-settings-title">
         <Cable size={20} />
-        <h3>Браузер и подключение агента</h3>
+        <h3>{t("general.browserAndAgentConnection")}</h3>
       </div>
-      <p>
-        Укажите порт заранее. Он общий для всех проектов и топиков на этом
-        компьютере. Сохранение не открывает порт. Он откроется, когда вы начнёте
-        первый показ.
-      </p>
+      <p>{t("general.setThePortInAdvanceAllProjectsAndTopics")}</p>
       {state?.settingsError && (
         <p className="error" role="alert">
           {state.settingsError}
@@ -163,10 +163,10 @@ export function DemoSettings() {
         <>
           <div className="demo-engine-edit">
             <SearchablePicker
-              label="Браузер демонстрации"
+              label={t("general.demonstrationBrowser")}
               entries={[
-                { value: "embedded", label: "Встроенный Chromium" },
-                { value: "system", label: "Системный браузер" },
+                { value: "embedded", label: t("general.bundledChromium") },
+                { value: "system", label: t("general.systemBrowser") },
               ]}
               value={state.engine ?? DEMO_DEFAULT_ENGINE}
               onChange={(value) => {
@@ -174,18 +174,16 @@ export function DemoSettings() {
                   void save(value);
               }}
               disabled={busy || !!state.settingsError}
-              placeholder="Выберите браузер"
-              emptyLabel="Нет браузеров"
-              listLabel="Браузеры демонстрации"
-              searchLabel="Найти браузер"
-              searchPlaceholder="Найти браузер"
+              placeholder={t("general.selectABrowser")}
+              emptyLabel={t("general.noBrowsers")}
+              listLabel={t("general.demonstrationBrowsers")}
+              searchLabel={t("general.findABrowser")}
+              searchPlaceholder={t("general.findABrowser")}
             />
             <small>
               {(state.engine ?? DEMO_DEFAULT_ENGINE) === "embedded"
-                ? "Входит в Goga. Отдельная установка браузера не нужна."
-                : "Используется совместимый браузер, установленный на компьютере."}{" "}
-              Выбор применяется только к новым показам.
-            </small>
+                ? t("general.includedWithGogaNoSeparateBrowserInstallationRequired")
+                : t("general.usesACompatibleBrowserInstalledOnThisComputer")}{" "}{t("general.appliesOnlyToNewDemonstrations")}</small>
           </div>
           <form
             noValidate
@@ -194,7 +192,7 @@ export function DemoSettings() {
               void save();
             }}
           >
-            <label htmlFor="demo-agent-port">Порт агента</label>
+            <label htmlFor="demo-agent-port">{t("general.agentPort")}</label>
             <div className="demo-port-edit">
               <input
                 id="demo-agent-port"
@@ -224,27 +222,22 @@ export function DemoSettings() {
                   (n === state.port && !state.settingsError)
                 }
               >
-                {saving === "port" ? "Сохраняем…" : "Сохранить"}
+                {saving === "port" ? t("general.saving") : t("general.save")}
               </button>
             </div>
             <small id="demo-port-hint" data-error={!valid}>
               {locked
-                ? "Чтобы изменить порт, закройте показ «" +
-                  (state.shows.find((c) => c.showId === state.access.owner)
-                    ?.label ?? state.access.owner) +
-                  "», к которому он привязан."
+                ? t("general.portOwnerHint", {name: state.shows.find(c => c.showId === state.access.owner)?.label ?? state.access.owner ?? ""})
                 : !valid
-                  ? "Введите целое число от 1024 до 65535."
-                  : "От 1024 до 65535. По умолчанию: " +
-                    DEMO_DEFAULT_PORT +
-                    "."}
+                  ? t("general.enterAWholeNumberBetween1024And65535")
+                  : t("general.portRange", {port: DEMO_DEFAULT_PORT})}
             </small>
           </form>
           <DemoOpenShows
             shows={state.shows}
             stop={async (showId) => {
               const signal = life.current?.signal;
-              if (!signal || signal.aborted) throw Error("Настройки закрыты.");
+              if (!signal || signal.aborted) throw Error(t("general.settingsClosed"));
               await window.goga.demoExecute({ action: "stop", showId });
               const seq = ++generation.current;
               const latest = await window.goga.demoState();
@@ -252,14 +245,9 @@ export function DemoSettings() {
                 setState(latest);
             }}
           />
-          <h4>Адреса для агента</h4>
+          <h4>{t("general.agentConnectionAddresses")}</h4>
           <AgentAddresses port={state.port} />
-          <p className="demo-settings-note">
-            Это адреса для программы, управляющей показом, а не для просмотра
-            панели в браузере. Первый клиент, который подключится к этому порту,
-            автоматически получит управление привязанным показом. Отдельного
-            запроса и ключа нет. Запускайте только доверенных агентов.
-          </p>
+          <p className="demo-settings-note">{t("general.theseAddressesAreForTheAgentControllingTheDemonstration")}</p>
         </>
       )}
       {err && (
@@ -267,9 +255,9 @@ export function DemoSettings() {
           {err}
         </p>
       )}
-      {!state && !err && <p role="status">Загружаем настройку…</p>}
+      {!state && !err && <p role="status">{t("general.loadingSetting")}</p>}
       {!state && err && (
-        <button onClick={() => setAttempt((n) => n + 1)}>Повторить</button>
+        <button onClick={() => setAttempt((n) => n + 1)}>{t("general.retry")}</button>
       )}
       {notice && <p role="status">{notice}</p>}
     </section>

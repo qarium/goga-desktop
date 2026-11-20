@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import { z } from "zod";
 import type { Project } from "./types";
 
@@ -19,7 +20,7 @@ export const projectFolderName = z
       !value.startsWith("-") &&
       value !== "." &&
       value !== "..",
-    "Укажите имя новой папки без разделителей пути.",
+    { error: () => tr("host.enterANewFolderNameWithoutPathSeparators") },
   );
 
 export function validRepositoryAddress(value: string): boolean {
@@ -46,7 +47,7 @@ export const repositoryAddressSchema = z
   .string()
   .refine(
     validRepositoryAddress,
-    "Укажите HTTPS- или SSH-адрес без пароля, токена и параметров.",
+    { error: () => tr("host.enterAnHttpsOrSshAddressWithoutAPasswordToken") },
   );
 const common = {
   id: projectCreationIdSchema,
@@ -56,7 +57,7 @@ const common = {
     .max(4096)
     .refine(
       (value) => value.startsWith("/") && !controls.test(value),
-      "Выберите родительскую папку.",
+      { error: () => tr("host.chooseAParentFolder") },
     ),
   name: projectFolderName,
 };

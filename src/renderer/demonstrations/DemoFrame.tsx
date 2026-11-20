@@ -1,3 +1,5 @@
+import { t } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import {
   useEffect,
   useRef,
@@ -54,6 +56,7 @@ type PendingCopy = { id: string; owner: Owner; started: boolean };
 type Task =
   { owner: Owner; input: DemoInput } | { owner: Owner; copy: PendingCopy };
 function Surface({ showId, tabId, disabled, onError }: FrameProps) {
+  useLocale();
   const ref = useRef<HTMLCanvasElement>(null),
     live = useRef(false),
     painted = useRef<Owner | null>(null),
@@ -163,7 +166,7 @@ function Surface({ showId, tabId, disabled, onError }: FrameProps) {
                 pendingCopy.current !== copy
               )
                 continue;
-              setFeedback(copied ? "Скопировано" : "Нет выделенного текста");
+              setFeedback(copied ? t("general.copied") : t("general.noTextSelected"));
               clearTimeout(copyTimer.current);
               copyTimer.current = setTimeout(() => setFeedback(""), 1800);
             } else {
@@ -224,7 +227,7 @@ function Surface({ showId, tabId, disabled, onError }: FrameProps) {
     if (items.length >= 80) {
       cancelDrags();
       latest.current.onError(
-        "Слишком много команд. Дождитесь обновления страницы.",
+        t("general.tooManyCommandsWaitForThePageToUpdate"),
       );
       return;
     }
@@ -583,7 +586,7 @@ function Surface({ showId, tabId, disabled, onError }: FrameProps) {
       lines.some((l) => /[\x00-\x1f\x7f-\x9f]/u.test(l))
     )
       return onError(
-        "Вставьте текст без управляющих символов: до 2048 символов и 16 строк.",
+        t("general.pasteTextWithoutControlCharactersUpTo2048"),
       );
     lines.forEach((text, i) => {
       if (i) input({ action: "key", key: "Enter" });
@@ -613,7 +616,7 @@ function Surface({ showId, tabId, disabled, onError }: FrameProps) {
         ref={ref}
         className={"demo-frame is-" + health}
         role="img"
-        aria-label="Интерактивный показ выбранного контекста"
+        aria-label={t("general.interactiveDemonstrationForTheSelectedContext")}
         tabIndex={0}
         onPointerDown={down}
         onPointerMove={move}
@@ -649,8 +652,8 @@ function Surface({ showId, tabId, disabled, onError }: FrameProps) {
       {health !== "ready" && (
         <div className="demo-frame-wait" role="status">
           {health === "loading"
-            ? "Открываем страницу…"
-            : "Нет изображения. Подключаемся снова…"}
+            ? t("general.openingPage")
+            : t("general.noImageReconnecting")}
         </div>
       )}
     </div>
@@ -668,6 +671,7 @@ function SelectionMenu({
   copy: () => void;
   close: () => void;
 }) {
+  useLocale();
   const ref = useRef<HTMLDivElement>(null),
     latest = useRef({ copy, close });
   latest.current = { copy, close };
@@ -690,7 +694,7 @@ function SelectionMenu({
       ref={ref}
       className="project-list-menu demo-selection-menu"
       role="menu"
-      aria-label="Действия со страницей"
+      aria-label={t("general.pageActions")}
       style={{ left: x, top: y }}
       onKeyDown={(e) => {
         if (e.key === "Escape" || e.key === "Tab") {
@@ -707,9 +711,7 @@ function SelectionMenu({
       }}
     >
       <button type="button" role="menuitem" onClick={copy}>
-        <Copy size={15} aria-hidden />
-        Копировать
-      </button>
+        <Copy size={15} aria-hidden />{t("general.copy")}</button>
     </div>
   );
 }

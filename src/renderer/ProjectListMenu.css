@@ -10,11 +10,6 @@
   overflow-y: auto;
   width: 100%;
   padding: 6px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: 0 14px 40px #0008;
 }
 .project-list-menu button {
   display: flex;
@@ -57,7 +52,7 @@
   color: var(--muted);
 }
 .project-removal-warning {
-  color: #edc384;
+  color: var(--feedback-warning-fg);
 }
 .project-removal-warning ul {
   margin: 12px 0;

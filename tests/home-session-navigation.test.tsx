@@ -489,8 +489,8 @@ it("remembers only a successful Project save, autosaves the next edits, and can 
   fireEvent.click(screen.getByRole("button", { name: "Настройки" }));
   fireEvent.click(
     await within(
-      await screen.findByRole("navigation", { name: "Разделы общих настроек" }),
-    ).findByRole("button", { name: "Рабочая область" }),
+      await screen.findByRole("navigation", { name: "Разделы настроек" }),
+    ).findByRole("button", { name: "Общие" }),
   );
   const toggle = await screen.findByRole("switch", {
     name: "Автосохранение при переходе",

@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { randomUUID } from "node:crypto";
 import { lstat } from "node:fs/promises";
 import path from "node:path";
@@ -59,7 +60,7 @@ export async function hasLocalTopicMetadata(root: string, year: string, topic: s
     try {
       const info = await lstat(at);
       if (!info.isDirectory() || info.isSymbolicLink())
-        throw Error("Недопустимый путь каталога топика.");
+        throw Error(tr("host.invalidTopicDirectoryPath"));
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
       throw error;

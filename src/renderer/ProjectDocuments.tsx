@@ -1,3 +1,6 @@
+import { HintButton } from "./ActionHint";
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { ProjectSpecifications } from "./ProjectSpecifications";
 import type { SpecificationsStateStore } from "./project-specifications-state";
 import { useViewActive } from "./RetainedViews";
@@ -32,6 +35,7 @@ export function ProjectDocuments({
   savedSettingsVersion?: string;
   specificationsState?: SpecificationsStateStore;
 }) {
+  useLocale();
   const viewActive = useViewActive();
   const scope = owner ? contextRef(owner) : project.id;
   const scopeKey = documentScopeId(scope);
@@ -178,8 +182,8 @@ export function ProjectDocuments({
           target: { kind: "config" },
         }}
         path=".goga/config.yml"
-        title="Конфигурация проекта"
-        description="Это проектный файл Goga, не параметры запуска Desktop. Секция tools задаёт версии установки; файлы инструментов — в отдельном разделе."
+        title={msg("project.projectConfiguration")}
+        description={msg("project.thisIsAGogaProjectFileNotDesktopLaunchSettings")}
       />
     );
   const selected = tools.find((item) => item.name === tool),
@@ -264,31 +268,31 @@ export function ProjectDocuments({
   function sourceAction(entry: ProjectToolEntry, heldOnly = false) {
     const memorySource = entry.kind === "directory";
     return (
-      <button
+      <HintButton
         type="button"
         className={`file-row ${file === entry.path ? "selected" : ""}`}
-        aria-label={`${memorySource ? "Исходник в памяти" : "Файл"} ${entry.path}`}
+        aria-label={`${memorySource ? msg("project.inMemorySource") : msg("project.file")} ${entry.path}`}
         aria-pressed={file === entry.path}
         disabled={
           (!entry.editable || heldOnly) && !loadedPaths.includes(entry.path)
         }
-        title={
+        hint={
           memorySource
-            ? "Открыть исходник в памяти без чтения пути на диске"
+            ? msg("project.openTheInMemorySourceWithoutReadingTheFileFrom")
             : entry.reason
         }
         onClick={() => store.updateTool(scope, tool, { selected: entry.path })}
       >
         <span className="file-mark" aria-hidden="true" />
         <span>
-          {memorySource ? "Исходник в памяти" : entry.path.split("/").pop()}
+          {memorySource ? msg("project.inMemorySource") : entry.path.split("/").pop()}
           {!memorySource && !entry.editable && (
             <small>
-              {entry.reason ?? "Этот файл недоступен для редактирования"}
+              {entry.reason ?? msg("project.thisFileCannotBeEdited")}
             </small>
           )}
         </span>
-      </button>
+      </HintButton>
     );
   }
   function row(entry: ProjectToolEntry, heldOnly = false) {
@@ -299,13 +303,13 @@ export function ProjectDocuments({
       <li key={entry.path}>
         {entry.kind === "directory" ? (
           <>
-            <button
+            <HintButton
               type="button"
               className="folder-row"
-              aria-label={`Папка ${entry.path}`}
+              aria-label={msg("project.folder", { path: String(entry.path) })}
               aria-expanded={open}
               disabled={!!entry.reason && !hasLoadedDescendants(entry.path)}
-              title={entry.reason}
+              hint={entry.reason}
               onClick={() =>
                 setExpanded((value) => ({ ...value, [key]: !open }))
               }
@@ -318,7 +322,7 @@ export function ProjectDocuments({
                 {name}
                 {entry.reason && <small>{entry.reason}</small>}
               </span>
-            </button>
+            </HintButton>
             {loadedPaths.includes(entry.path) && sourceAction(entry, heldOnly)}
             {open && (
               <div>{branch(`${entry.path}/`, heldOnly || !!entry.reason)}</div>
@@ -331,12 +335,12 @@ export function ProjectDocuments({
               <>
                 {/* A live file/symlink stays a file. This separate branch exposes
                   only exact cached descendants, never a filesystem directory. */}
-                <button
+                <HintButton
                   type="button"
                   className="folder-row"
-                  aria-label={`Черновики в ${entry.path}`}
+                  aria-label={msg("project.draftsIn", { path: String(entry.path) })}
                   aria-expanded={open}
-                  title="Открыть сохранённые в памяти черновики"
+                  hint={msg("project.openInMemoryDrafts")}
                   onClick={() =>
                     setExpanded((value) => ({ ...value, [key]: !open }))
                   }
@@ -344,8 +348,8 @@ export function ProjectDocuments({
                   <span className="chevron" aria-hidden="true">
                     {open ? "⌄" : "›"}
                   </span>
-                  <span>Черновики в памяти</span>
-                </button>
+                  <span>{msg("project.inMemoryDrafts")}</span>
+                </HintButton>
                 {open && <div>{branch(`${entry.path}/`, true)}</div>}
               </>
             )}
@@ -357,40 +361,31 @@ export function ProjectDocuments({
   return (
     <LoadingBoundary
       pending={refreshing && !catalogLoaded}
-      label="Загружаем инструменты…"
+      label={msg("project.loadingTools")}
     >
       {error && (
         <>
           <p className="error" role="alert">
             {error}
           </p>
-          <button onClick={() => setAttempt((value) => value + 1)}>
-            Повторить загрузку
-          </button>
+          <button onClick={() => setAttempt((value) => value + 1)}>{msg("project.retryLoading")}</button>
         </>
       )}
       {catalogLoaded && !error && !tools.length && !retained && (
         <div className="empty-file">
-          <h3>В проекте пока нет инструментов</h3>
-          <p>
-            Здесь отображаются существующие папки .goga/tools. Файлы
-            автоматически не создаются.
-          </p>
+          <h3>{msg("project.noToolsInThisProjectYet")}</h3>
+          <p>{msg("project.existingFoldersFromGogaToolsAppearHereFilesAreNot")}</p>
         </div>
       )}
       {(tools.length > 0 || retained) && (
         <>
           <div className="tool-controls">
-            <label>
-              Инструмент
-              <select
+            <label>{msg("project.tool")}<select
                 value={availableTools.includes(tool) ? tool : ""}
                 onChange={(e) => store.selectTool(scope, e.target.value)}
               >
                 {!availableTools.includes(tool) && (
-                  <option value="" disabled>
-                    Выберите инструмент
-                  </option>
+                  <option value="" disabled>{msg("project.selectATool")}</option>
                 )}
                 {availableTools.map((name) => (
                   <option key={name} value={name}>
@@ -409,14 +404,11 @@ export function ProjectDocuments({
                 store.updateTool(scope, tool, { creating: true });
                 clearNameError();
               }}
-            >
-              Создать файл
-            </button>
+            >{msg("project.createFile")}</button>
             <small className="tool-root">.goga/tools/{tool}/</small>
           </div>
           {!file && (
-            <p className="description tools-description">
-              Файлы выбранного инструмента в проекте {project.name}.
+            <p className="description tools-description">{msg("project.toolFilesInProject", { project: project.name })}
             </p>
           )}
           {state.creating && (
@@ -427,9 +419,7 @@ export function ProjectDocuments({
                 create();
               }}
             >
-              <label>
-                Имя файла
-                <input
+              <label>{msg("project.fileName")}<input
                   value={state.name}
                   onChange={(e) => {
                     store.updateTool(scope, tool, { name: e.target.value });
@@ -445,14 +435,8 @@ export function ProjectDocuments({
                   (postSaveRefresh && !!selected) || undefined
                 }
                 disabled={!catalogReady}
-              >
-                Создать черновик
-              </button>
-              <p className="hint">
-                Имя с расширением .yml или .yaml; путь — только внутри
-                существующих папок инструмента. Черновик остаётся в памяти до
-                нажатия «Сохранить».
-              </p>
+              >{msg("project.createDraft")}</button>
+              <p className="hint">{msg("project.useAYmlOrYamlExtensionAndAPathInside")}</p>
             </form>
           )}
           {nameError && (
@@ -462,19 +446,16 @@ export function ProjectDocuments({
           )}
           {!entries.length && !retained ? (
             <div className="empty-file">
-              <h3>У {tool} пока нет конфигурационных файлов</h3>
-              <p>
-                Папка .goga/tools/{tool}/ пуста. Файлы автоматически не
-                создаются.
-              </p>
+              <h3>{msg("project.toolHasNoFiles", { tool })}</h3>
+              <p>{msg("project.toolFolderEmpty", { folder: `.goga/tools/${tool}/` })}</p>
             </div>
           ) : (
             <div className="master-detail tools-detail tool-files-detail">
               <div className="item-list tree-pane">
-                <span className="eyebrow">ФАЙЛЫ · {tool}</span>
+                <span className="eyebrow">{msg("project.files")}{tool}</span>
                 <nav
                   className="file-tree"
-                  aria-label={`Файлы инструмента ${tool}`}
+                  aria-label={msg("project.filesFor", { tool: String(tool) })}
                 >
                   {branch()}
                 </nav>
@@ -490,15 +471,12 @@ export function ProjectDocuments({
                   }}
                   path={`.goga/tools/${tool}/${file}`}
                   title={file.split("/").pop()!}
-                  description={`YAML инструмента ${tool}. Сохраняется только выбранный файл.`}
+                  description={msg("project.yamlForTheToolOnlyTheSelectedFileIsSaved", { tool: String(tool) })}
                 />
               ) : (
                 <div className="empty-file">
-                  <h3>Выберите файл</h3>
-                  <p>
-                    Раскройте папку и выберите доступный YAML-файл. Остальные
-                    форматы показаны с причиной недоступности.
-                  </p>
+                  <h3>{msg("project.selectAFile")}</h3>
+                  <p>{msg("project.expandAFolderAndSelectAnAvailableYAMLFileOther")}</p>
                 </div>
               )}
             </div>

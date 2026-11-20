@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import {
   terminalContextKey,
   terminalContextSchema,
@@ -21,10 +22,9 @@ export interface TerminalPresetCrypto {
   open(sealed: string): string;
 }
 const messages = {
-  invalid:
-    "Хранилище пресетов повреждено или несовместимо. Данные не перезаписаны.",
-  conflict: "Пресет изменён. Обновите его перед сохранением или запуском.",
-  unavailable: "Не удалось прочитать или сохранить пресеты терминала.",
+  get invalid() { return t("hostTerminal.presetStoreInvalid"); },
+  get conflict() { return t("hostTerminal.presetChanged"); },
+  get unavailable() { return t("hostTerminal.presetStoreUnavailable"); },
 };
 const fail = (message: string): never => {
   throw new PrivateFileError(message);
@@ -46,7 +46,7 @@ type Entry = z.infer<typeof storedPreset>;
 type State = z.infer<typeof stateSchema>;
 function identity(v: string): string {
   if (!id.safeParse(v).success)
-    fail("Недопустимый идентификатор пресета или снимка.");
+    fail(t("hostTerminal.badPresetSnapshot"));
   return v;
 }
 function parse(raw: string | undefined): State {
@@ -79,7 +79,7 @@ function snapshotOwner(input: TerminalPresetSnapshotOwner) {
     .object({ tabId: id, context: terminalContextSchema })
     .strict()
     .safeParse(input);
-  if (!owner.success) return fail("Владелец окружения вкладки недоступен.");
+  if (!owner.success) return fail(t("hostTerminal.environmentOwnerMissing"));
   return {
     tabId: owner.data.tabId,
     contextKey: terminalContextKey(owner.data.context),
@@ -88,7 +88,7 @@ function snapshotOwner(input: TerminalPresetSnapshotOwner) {
 function lookup(s: State, pid: string, rev?: string) {
   identity(pid);
   const found = s.presets.find((p) => p.id === pid);
-  if (!found) return fail("Пресет удалён или недоступен.");
+  if (!found) return fail(t("hostTerminal.presetGone"));
   if (rev !== undefined && found.revision !== identity(rev))
     return fail(messages.conflict);
   return found;
@@ -113,7 +113,7 @@ export class TerminalPresetStore {
       return this.crypto.seal(JSON.stringify(value));
     } catch {
       return fail(
-        "Не удалось зашифровать данные терминала. Проверьте доступ к связке ключей macOS.",
+        t("hostTerminal.encryptionFailed"),
       );
     }
   }
@@ -123,7 +123,7 @@ export class TerminalPresetStore {
       plain = this.crypto.open(payload);
     } catch {
       return fail(
-        "Не удалось расшифровать данные терминала. Проверьте доступ к связке ключей macOS.",
+        t("hostTerminal.decryptionFailed"),
       );
     }
     try {
@@ -178,19 +178,19 @@ export class TerminalPresetStore {
   ): Promise<TerminalPresetDocument> {
     const draft = parseTerminalPresetDraft(input);
     if ((key === undefined) !== (revision === undefined))
-      fail("Недопустимая версия пресета.");
+      fail(t("hostTerminal.badPresetVersion"));
     return this.tx((s) => {
       const before = key === undefined ? undefined : lookup(s, key, revision);
       if (before) this.document(before); // Do not overwrite a damaged or substituted record.
       if (!before && s.presets.length >= 4096)
-        fail("Достигнут предел количества пресетов.");
+        fail(t("hostTerminal.presetLimit"));
       if (
         s.presets.some(
           (p) =>
             p.id !== key && p.name.toLowerCase() === draft.name.toLowerCase(),
         )
       )
-        fail("Пресет с таким названием уже есть.");
+        fail(t("hostTerminal.duplicatePresetName"));
       const header = {
         id: before?.id ?? randomUUID(),
         revision: randomUUID(),
@@ -226,7 +226,7 @@ export class TerminalPresetStore {
     if (!env.length) return undefined;
     return this.tx((s) => {
       if (s.snapshots.length >= 65536)
-        fail("Слишком много сохранённых окружений терминала.");
+        fail(t("hostTerminal.savedEnvironmentLimit"));
       const sid = randomUUID();
       s.snapshots.push({
         id: sid,
@@ -245,7 +245,7 @@ export class TerminalPresetStore {
       const row = s.snapshots.find((x) => x.id === sid);
       if (!row)
         return fail(
-          "Сохранённое окружение вкладки недоступно. Новая оболочка не открыта.",
+          t("hostTerminal.environmentMissing"),
         );
       const value = this.open(row.payload);
       try {

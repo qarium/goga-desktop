@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { TERMINAL_SELECTION_STALE } from "../shared/terminal-catalog";
 import { randomUUID } from "node:crypto";
 import { scopeRefSchema, type ScopeRef } from "../shared/context";
@@ -31,7 +32,7 @@ const empty = (): TerminalProjectTabs => ({
   tabs: [],
   selectedByContext: {},
 });
-const denied = () => Error("Вкладка терминала недоступна или данные устарели.");
+const denied = () => Error(t("hostTerminal.tabUnavailable"));
 /** Serial host-owned catalog. Resolving ScopeRef must verify its actual project/clone,
  * identity and initial revision; no shell/environment/path comes from the UI.
  */
@@ -103,7 +104,7 @@ export class TerminalCatalog {
   }
   private unlocked(tab: TerminalTab) {
     if (this.frozen.has(this.key(tab)))
-      throw Error("Вкладка терминала закрывается или обновляется.");
+      throw Error(t("hostTerminal.tabBusy"));
   }
   private target(
     registry: TerminalRegistry,
@@ -169,7 +170,7 @@ export class TerminalCatalog {
           state = createTerminalTab(state, context, request.area, randomUUID());
           break;
         case "create-from-preset": {
-          if (!this.presets) throw Error("Пресеты терминала недоступны.");
+          if (!this.presets) throw Error(t("hostTerminal.presetsUnavailable"));
           const { store, start } = this.presets;
           // Only reconcile under this host registry's serial writer, never while
           // another tab is between snapshot publication and registry commit.

@@ -1,3 +1,4 @@
+import { t as gitMessage } from "./i18n";
 import { z } from "zod";
 import { scopeRefSchema, type ScopeRef } from "./context";
 import { gitFilePathSchema, gitRevisionSchema } from "./git-workspace";
@@ -12,7 +13,7 @@ const text = z
         value,
       ) &&
       new TextEncoder().encode(value).length <= 1024 * 1024,
-    "Поддерживается точный текст UTF-8 размером не более 1 МиБ.",
+    { error: () => gitMessage("gitHost.onlyUtf8") },
   );
 export const gitConflictResolutionSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("text"), text }).strict(),

@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import {
   withNativeGitCompletion,
   deferNativeGitRecovery,
@@ -88,7 +89,7 @@ export class GitBranchActions extends GitMergeSafety {
     source = "refs/heads/*",
   ): Promise<NonNullable<Plan["remote"]>> {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(name) || name === ".")
-      throw Error("Upstream remote отсутствует или неоднозначен.");
+      throw Error(gitMessage("gitHost.upstreamRemoteIsMissingOrAmbiguous"));
     const prefix = `remote.${name}.`,
       entries = state.config.filter(([key]) => key.startsWith(prefix));
     if (
@@ -99,7 +100,7 @@ export class GitBranchActions extends GitMergeSafety {
       )
     )
       throw Error(
-        "Remote содержит неподдерживаемые или небезопасные настройки.",
+        gitMessage("gitHost.theRemoteContainsUnsupportedOrUnsafeSettings"),
       );
     const get = (key: string) =>
       entries.filter(([k]) => k === prefix + key).map(([, v]) => v);
@@ -108,7 +109,7 @@ export class GitBranchActions extends GitMergeSafety {
       get("fetch").length !== 1 ||
       get("pushurl").length > 1
     )
-      throw Error("Remote или refspec неоднозначен.");
+      throw Error(gitMessage("gitHost.theRemoteOrRefspecIsAmbiguous"));
     // Do not infer custom mappings from an apparently familiar short name.
     if (
       ![
@@ -116,7 +117,7 @@ export class GitBranchActions extends GitMergeSafety {
         `refs/heads/*:refs/remotes/${name}/*`,
       ].includes(get("fetch")[0])
     )
-      throw Error("Неподдерживаемый или неоднозначный refspec remote.");
+      throw Error(gitMessage("gitHost.unsupportedOrAmbiguousRemoteRefspec"));
     const endpoint = (
       await this.git(ctx, ["remote", "get-url", "--all", name])
     ).stdout.trim();
@@ -126,13 +127,13 @@ export class GitBranchActions extends GitMergeSafety {
       /[\x00-\x20\x7f]/.test(endpoint) ||
       endpoint.includes("::")
     )
-      throw Error("Remote содержит недопустимый адрес.");
+      throw Error(gitMessage("gitHost.theRemoteContainsAnInvalidAddress"));
     const url = /^(https|ssh):\/\//.test(endpoint),
       scp = /^(?:[A-Za-z0-9._-]+@)?[A-Za-z0-9.-]+:[^/].+/.test(endpoint),
       local = path.isAbsolute(endpoint);
     if (!url && !scp && !local)
       throw Error(
-        "Поддерживаются только HTTPS, SSH и абсолютный локальный адрес remote.",
+        gitMessage("gitHost.onlyHttpsSshAndAbsoluteLocalRemotePathsAre"),
       );
     if (local) await noSymlinks(endpoint);
     if (
@@ -143,10 +144,10 @@ export class GitBranchActions extends GitMergeSafety {
       )
     )
       throw Error(
-        "Внешние transport helpers или перенаправления remote не поддерживаются.",
+        gitMessage("gitHost.externalTransportHelpersAndRemoteRedirectsAreNotSupported"),
       );
     if (!source.startsWith("refs/heads/"))
-      throw Error("Upstream должен быть однозначной веткой refs/heads.");
+      throw Error(gitMessage("gitHost.theUpstreamMustUnambiguouslyIdentifyABranchUnderRefs"));
     if (source !== "refs/heads/*")
       await this.git(ctx, ["check-ref-format", source]);
     return {
@@ -190,7 +191,7 @@ export class GitBranchActions extends GitMergeSafety {
       (s.operation !== "none" || s.files.some((f) => f.kind === "conflict"))
     )
       throw Error(
-        "Сначала завершите текущую операцию Git и разрешите конфликты.",
+        gitMessage("gitHost.finishTheCurrentGitOperationAndResolveConflictsFirst"),
       );
     await auditMetadata(ctx.root);
     if (
@@ -198,19 +199,19 @@ export class GitBranchActions extends GitMergeSafety {
       s.files.some((f) => ![".", " ", "?"].includes(f.indexStatus))
     )
       throw Error(
-        "Перед слиянием уберите посторонние staged изменения: они не должны попасть в merge-коммит.",
+        gitMessage("gitHost.unstageUnrelatedChangesBeforeMergingSoTheyDoNot"),
       );
     if (merging) {
       if (!s.branch || !s.head)
         throw Error(
-          "Слияние требует текущую локальную ветку с коммитом, не detached или unborn HEAD.",
+          gitMessage("gitHost.mergingRequiresACheckedOutLocalBranchWithA"),
         );
       if (
         state.worktrees
           .split("\0")
           .filter((row) => row === `branch refs/heads/${s.branch}`).length !== 1
       )
-        throw Error("Текущая ветка уже открыта в другой рабочей копии.");
+        throw Error(gitMessage("gitHost.theCurrentBranchIsAlreadyCheckedOutInAnother"));
       // REBASE_HEAD may survive a completed native rebase; it is sealed as
       // metadata, but is not proof of a running sequencer on its own.
       for (const name of [
@@ -219,14 +220,14 @@ export class GitBranchActions extends GitMergeSafety {
       ])
         if (await stat(path.join(ctx.root, ".git", name)))
           throw Error(
-            "Смешанная операция Git или внешний autostash: безопасная операция слияния невозможна.",
+            gitMessage("gitHost.cannotMergeSafelyDuringAMixedGitOperationOr"),
           );
       if (state.config.some(([key]) => /^merge\..+\.driver$/i.test(key)))
-        throw Error("Внешние merge-драйверы (driver) пока не поддерживаются.");
+        throw Error(gitMessage("gitHost.externalMergeDriversAreNotSupportedYet"));
       if (request.action === "abort-merge") {
         if (!ctx.privateGit)
           throw Error(
-            "Исполнитель не поддерживает безопасный частный индекс для отмены слияния.",
+            gitMessage("gitHost.theExecutorCannotUseAPrivateIndexToAbort"),
           );
         await this.mergeState(ctx, state);
       }
@@ -238,14 +239,14 @@ export class GitBranchActions extends GitMergeSafety {
       "packed-refs.lock",
     ])
       if (await stat(path.join(ctx.root, ".git", name)))
-        throw Error("Репозиторий занят другой операцией Git.");
+        throw Error(gitMessage("gitHost.anotherGitOperationIsUsingTheRepository"));
     const switches =
       request.action === "switch-local" ||
       request.action === "switch-remote" ||
       (request.action === "create" && request.switch);
     if (switches && state.inventory.dirty)
       throw Error(
-        "Переключение требует чистой рабочей папки: сохраните все изменения, включая неотслеживаемые файлы.",
+        gitMessage("gitHost.switchingRequiresACleanWorkingTreeSaveAllChanges"),
       );
     if (
       (switches || request.action === "pull" || merging) &&
@@ -254,7 +255,7 @@ export class GitBranchActions extends GitMergeSafety {
       )
     )
       throw Error(
-        "Внешние Git-фильтры (например LFS) пока не поддерживаются при переключении, pull или слиянии.",
+        gitMessage("gitHost.switchPullAndMergeDoNotYetSupportExternal"),
       );
     if (switches || request.action === "pull" || merging) {
       const flags = (await this.git(ctx, ["ls-files", "-v", "-z"])).stdout;
@@ -264,7 +265,7 @@ export class GitBranchActions extends GitMergeSafety {
           .some((row) => row && (/^[a-z] /.test(row) || row.startsWith("S ")))
       )
         throw Error(
-          "Индекс скрывает изменения (assume-unchanged или sparse/skip-worktree). Сначала восстановите обычный индекс самостоятельно.",
+          gitMessage("gitHost.theIndexHidesChangesAssumeUnchangedOrSparseSkip"),
         );
     }
     let sourceOid: string | null = null;
@@ -274,9 +275,9 @@ export class GitBranchActions extends GitMergeSafety {
     if (request.action === "create") {
       await this.git(ctx, ["check-ref-format", "--branch", request.name]);
       if (request.name.startsWith("refs/") || request.name.includes("@{"))
-        throw Error("Укажите обычное имя локальной ветки.");
+        throw Error(gitMessage("gitHost.enterAValidLocalBranchName"));
       if (!s.head)
-        throw Error("Сначала создайте первый коммит: HEAD ещё не существует.");
+        throw Error(gitMessage("gitHost.createTheFirstCommitFirstHeadDoesNotExist"));
       toRef = `refs/heads/${request.name}`;
       toOid = s.head;
       if (
@@ -284,7 +285,7 @@ export class GitBranchActions extends GitMergeSafety {
         state.config.some(([key]) => key.startsWith(`branch.${request.name}.`))
       )
         throw Error(
-          "Локальная ветка или её настройки уже существуют. Используйте список локальных веток.",
+          gitMessage("gitHost.theLocalBranchOrItsConfigurationAlreadyExistsUse"),
         );
     } else if (request.action === "switch-local") {
       const target = state.inventory.local.find((r) => r.ref === request.ref);
@@ -292,7 +293,7 @@ export class GitBranchActions extends GitMergeSafety {
       toRef = target.ref;
       toOid = target.oid;
       if (target.checkedOut && s.branch !== target.name)
-        throw Error("Ветка уже открыта в другой рабочей копии.");
+        throw Error(gitMessage("gitHost.theBranchIsAlreadyCheckedOutInAnotherWorking"));
     } else if (request.action === "switch-remote") {
       const target = state.inventory.remote.find((r) => r.ref === request.ref);
       if (!target) throw stale();
@@ -301,7 +302,7 @@ export class GitBranchActions extends GitMergeSafety {
         .map(([key]) => key.slice(7, -6))
         .filter((name) => target.ref.startsWith(`refs/remotes/${name}/`));
       if (new Set(matching).size !== 1)
-        throw Error("Remote выбранной ветки неоднозначен.");
+        throw Error(gitMessage("gitHost.theSelectedBranchSRemoteIsAmbiguous"));
       const name = matching[0],
         branch = target.ref.slice(`refs/remotes/${name}/`.length);
       remote = await this.remote(ctx, state, name, `refs/heads/${branch}`);
@@ -313,7 +314,7 @@ export class GitBranchActions extends GitMergeSafety {
         state.config.some(([key]) => key.startsWith(`branch.${branch}.`))
       )
         throw Error(
-          "Локальная ветка или её настройки уже существуют. Используйте список локальных веток.",
+          gitMessage("gitHost.theLocalBranchOrItsConfigurationAlreadyExistsUse"),
         );
     } else if (request.action === "merge") {
       await this.git(ctx, ["check-ref-format", request.ref]);
@@ -327,7 +328,7 @@ export class GitBranchActions extends GitMergeSafety {
         "commit"
       )
         throw Error(
-          "Источник слияния должен указывать непосредственно на коммит.",
+          gitMessage("gitHost.theMergeSourceMustPointDirectlyToACommit"),
         );
       toRef = `refs/heads/${s.branch!}`;
       toOid = s.head;
@@ -340,21 +341,21 @@ export class GitBranchActions extends GitMergeSafety {
     else if (request.action === "pull") {
       if (!s.branch || !s.head)
         throw Error(
-          "Pull требует текущую локальную ветку с коммитом, не detached или unborn HEAD.",
+          gitMessage("gitHost.pullRequiresACheckedOutLocalBranchWithA"),
         );
       const get = (key: string) =>
         state.config
           .filter(([k]) => k === `branch.${s.branch}.${key}`)
           .map(([, v]) => v);
       if (get("remote").length !== 1 || get("merge").length !== 1)
-        throw Error("Настроенный upstream отсутствует или неоднозначен.");
+        throw Error(gitMessage("gitHost.theConfiguredUpstreamIsMissingOrAmbiguous"));
       remote = await this.remote(ctx, state, get("remote")[0], get("merge")[0]);
       const local = state.inventory.local.find(
         (r) => r.ref === `refs/heads/${s.branch}`,
       );
       if (local?.upstream && local.upstream !== remote.destination)
         throw Error(
-          "Настроенный upstream не соответствует проверенному refspec.",
+          gitMessage("gitHost.theConfiguredUpstreamDoesNotMatchTheVerifiedRefspec"),
         );
       toRef = local!.ref;
       toOid =
@@ -509,7 +510,7 @@ export class GitBranchActions extends GitMergeSafety {
             record.recovery !== null)
         )
           throw Error(
-            "Предыдущая операция Git требует проверки; повторная запись запрещена.",
+            gitMessage("gitHost.thePreviousGitOperationNeedsReviewFurtherWritesAre"),
           );
         const intent = nativeIntent([request, plan.preview, ctx.ownerKey]);
         native = {
@@ -791,8 +792,8 @@ export class GitBranchActions extends GitMergeSafety {
           ...(result.recoveryPath ? { recoveryPath: result.recoveryPath } : {}),
           message:
             result.outcome === "completed"
-              ? "Операция Git завершена; результат проверен."
-              : "Результат Git не подтверждён. Материалы восстановления сохранены; автоматический повтор запрещён.",
+              ? gitMessage("gitHost.gitOperationCompletedAndVerified")
+              : gitMessage("gitHost.theGitResultCouldNotBeVerifiedRecoveryData"),
           log: (ctx.sanitizeDiagnostics ?? sanitizeRepositoryLog)(
             lines.join("\n"),
           ),
@@ -805,9 +806,9 @@ export class GitBranchActions extends GitMergeSafety {
         status: attempted ? "uncertain" : "error",
         changed: attempted,
         message: sanitizeRepositoryLog(
-          error instanceof Error ? error.message : "Операция Git не выполнена.",
+          error instanceof Error ? error.message : gitMessage("gitHost.gitOperationFailed"),
         ),
-        log: "Внешний контекст операции завершился ошибкой; диагностика окружения скрыта.",
+        log: gitMessage("gitHost.theOperationSExternalContextFailedEnvironmentDiagnosticsAre"),
       };
     }
   }
@@ -886,7 +887,7 @@ export class GitBranchActions extends GitMergeSafety {
                 JSON.stringify(await refs()) !== JSON.stringify(beforeRefs)
               )
                 throw new NativeGitPreflightRejection(
-                  "Состояние Git изменилось до fetch.",
+                  gitMessage("gitHost.theGitStateChangedBeforeFetch"),
                 );
               attempted = true;
               const output = await client.run({
@@ -923,7 +924,7 @@ export class GitBranchActions extends GitMergeSafety {
                 (r) => r.ref === remote.destination,
               );
               if (!target)
-                throw Error("После fetch upstream-ветка не найдена.");
+                throw Error(gitMessage("gitHost.theUpstreamBranchWasNotFoundAfterFetching"));
               await this.validate(ctx, request, fetched, true);
               if (await this.isAncestor(ctx, before.snapshot.head!, target.oid))
                 expectedHead = target.oid;
@@ -931,7 +932,7 @@ export class GitBranchActions extends GitMergeSafety {
                 !(await this.isAncestor(ctx, target.oid, before.snapshot.head!))
               )
                 throw Error(
-                  "Ветки разошлись. Fetch выполнен, fast-forward невозможен; merge/rebase не запускались.",
+                  gitMessage("gitHost.theBranchesDivergedFetchSucceededButFastForwardIs"),
                 );
               if (
                 (await this.capture(ctx, request.projectId)).fingerprint !==
@@ -1028,11 +1029,11 @@ export class GitBranchActions extends GitMergeSafety {
           message:
             result.outcome === "completed"
               ? pull
-                ? "Изменения подтянуты штатным Git; fast-forward и сохранность правок проверены."
-                : "Remote-ветки обновлены; рабочие файлы, индекс и локальные ветки сохранены и проверены."
+                ? gitMessage("gitHost.gitPulledTheChangesTheFastForwardAndPreservation")
+                : gitMessage("gitHost.remoteTrackingBranchesRefreshedWorkingFilesIndexAndLocal")
               : result.outcome === "rejected"
-                ? "Git отказал в обновлении; состояние сохранено и проверено."
-                : "Результат обновления не подтверждён. Материалы восстановления сохранены; повтор запрещён.",
+                ? gitMessage("gitHost.gitRejectedTheUpdateTheExistingStateWasPreserved")
+                : gitMessage("gitHost.theUpdateCouldNotBeVerifiedRecoveryDataWas"),
           log: sanitizeRepositoryLog(lines.join("\n"), [remote.endpoint]),
         };
       });
@@ -1043,10 +1044,10 @@ export class GitBranchActions extends GitMergeSafety {
         status: attempted ? "uncertain" : "error",
         changed: attempted,
         message: sanitizeRepositoryLog(
-          error instanceof Error ? error.message : "Обновление не выполнено.",
+          error instanceof Error ? error.message : gitMessage("gitHost.updateFailed"),
           ticket.remote ? [ticket.remote.endpoint] : [],
         ),
-        log: "Внешний контекст операции завершился ошибкой; диагностика окружения скрыта.",
+        log: gitMessage("gitHost.theOperationSExternalContextFailedEnvironmentDiagnosticsAre"),
       };
     }
   }
@@ -1113,7 +1114,7 @@ export class GitBranchActions extends GitMergeSafety {
                     });
                     if (output.exitCode !== 0)
                       throw new CommandExitError(
-                        "Git merge-tree отказал в подготовке.",
+                        gitMessage("gitHost.gitMergeTreeRejectedThePreparation"),
                         output.exitCode,
                         output.stdout.toString("utf8"),
                         output.stderr.toString("utf8"),
@@ -1153,7 +1154,7 @@ export class GitBranchActions extends GitMergeSafety {
                 lines.push(
                   error instanceof Error
                     ? error.message
-                    : "Проверка перед слиянием не пройдена.",
+                    : gitMessage("gitHost.preMergeChecksFailed"),
                 );
                 throw new NativeGitPreflightRejection(lines.at(-1));
               }
@@ -1312,12 +1313,12 @@ export class GitBranchActions extends GitMergeSafety {
           ...(result.recoveryPath ? { recoveryPath: result.recoveryPath } : {}),
           message:
             result.outcome === "completed"
-              ? "Слияние завершено; результат проверен. Публикация не выполнялась."
+              ? gitMessage("gitHost.mergeCompletedAndVerifiedNothingWasPublished")
               : result.outcome === "rejected"
-                ? "Git отказал в слиянии; ветка и изменения сохранены и проверены. Повтор и сброс не выполнялись."
+                ? gitMessage("gitHost.gitRejectedTheMergeTheBranchAndEditsWere")
                 : result.outcome === "conflicts"
-                  ? "Слияние остановлено на конфликтах. Исходные данные сохранены; разрешите конфликты или подтвердите отмену."
-                  : "Результат слияния не подтверждён. Материалы восстановления сохранены; повтор запрещён.",
+                  ? gitMessage("gitHost.theMergeStoppedAtConflictsOriginalDataWasKept")
+                  : gitMessage("gitHost.theMergeResultCouldNotBeVerifiedRecoveryData"),
           log: (ctx.sanitizeDiagnostics ?? sanitizeRepositoryLog)(
             lines.join("\n"),
           ),
@@ -1330,9 +1331,9 @@ export class GitBranchActions extends GitMergeSafety {
         status: attempted ? "uncertain" : "error",
         changed: attempted,
         message: sanitizeRepositoryLog(
-          error instanceof Error ? error.message : "Слияние не выполнено.",
+          error instanceof Error ? error.message : gitMessage("gitHost.mergeFailed"),
         ),
-        log: "Внешний контекст операции завершился ошибкой; диагностика окружения скрыта.",
+        log: gitMessage("gitHost.theOperationSExternalContextFailedEnvironmentDiagnosticsAre"),
       };
     }
   }

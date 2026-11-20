@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, rename, link, unlink } from "node:fs/promises";
 import path from "node:path";
@@ -18,9 +19,9 @@ const hash = (value: string) =>
 const absent = (error: unknown) =>
   (error as NodeJS.ErrnoException).code === "ENOENT";
 const invalid = () =>
-  new Error("Реестр рабочих копий повреждён или несовместим.");
+  new Error(tr("host.theWorkingCopyRegistryIsDamagedOrIncompatible"));
 const conflict = () =>
-  new Error("Реестр рабочих копий изменён. Обновите данные и повторите.");
+  new Error(tr("host.theWorkingCopyRegistryChangedRefreshAndRetry"));
 const boundedPath = (value: string) =>
   path.isAbsolute(value) &&
   path.resolve(value) === value &&
@@ -324,7 +325,7 @@ export class WorktreeStore {
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
           if (attempt === 99)
-            throw new Error("Хранилище рабочих копий занято. Повторите позже.");
+            throw new Error(tr("host.workingCopyStorageIsBusyRetryLater"));
           await new Promise((resolve) => setTimeout(resolve, 20));
         }
       }

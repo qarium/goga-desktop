@@ -155,7 +155,7 @@
   overflow-wrap: anywhere;
 }
 .demo-workspace [data-error="true"] {
-  color: #ffadb5;
+  color: var(--feedback-error-fg);
 }
 .demo-full[open] {
   position: fixed;
@@ -293,12 +293,7 @@
   z-index: 4;
   right: 0;
   top: calc(100% + 6px);
-  padding: 5px 8px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
-  background: var(--surface);
-  color: var(--teal);
-  font-size: 11px;
+  color: var(--feedback-ok-fg);
   pointer-events: none;
 }
 .demo-selection-menu {
@@ -312,11 +307,6 @@
   right: 12px;
   bottom: 12px;
   z-index: 5;
-  padding: 6px 9px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--muted);
-  font-size: 12px;
+  color: var(--feedback-hint-fg);
   pointer-events: none;
 }

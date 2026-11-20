@@ -1,3 +1,4 @@
+import { t as gitMessage } from "./i18n";
 import { z } from "zod";
 import { scopeRefSchema, type ScopeRef } from "./context";
 
@@ -24,7 +25,7 @@ export const gitFilePathSchema = z
             part !== ".." &&
             part.toLowerCase() !== ".git",
         ),
-    "Недопустимый путь файла Git.",
+    { error: () => gitMessage("gitHost.invalidFilePath") },
   );
 /** Read freshness only; this is never authority for a mutation. */
 export const gitRevisionSchema = z.string().regex(/^[a-f0-9]{64}$/);

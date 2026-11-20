@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import type { ScopeRef } from "../shared/context";
 import {
   gitRebaseOperationRequestSchema,
@@ -68,8 +69,8 @@ export class NativeGitSequenceAPI {
   }
   private effects(action: "continue" | "abort") {
     return action === "continue"
-      ? "Git продолжит подтверждённую операцию. Возможны новый коммит и следующая остановка на конфликте. Хуки отключены; публикация и повтор Goga не выполняются."
-      : "Git отменит подтверждённую операцию. Решения её конфликтов будут отброшены; несвязанные файлы проверяются и сохраняются. Публикация не выполняется.";
+      ? gitMessage("gitHost.gitWillContinueTheConfirmedOperationItMayCreate")
+      : gitMessage("gitHost.gitWillAbortTheConfirmedOperationAndDiscardIts");
   }
   private remember(
     token: string,
@@ -98,7 +99,7 @@ export class NativeGitSequenceAPI {
       p.expiresAt <= Date.now() ||
       (p.operation === "rebase") !== (kind === "rebase")
     )
-      throw Error("Подтверждение устарело или относится к другой операции.");
+      throw Error(gitMessage("gitHost.confirmationExpiredOrBelongsToAnotherOperation"));
     const { log, lockRetained, retainedLocks, uncheckedLocks, ...native } =
       await this.engine.execute(token);
     return {
@@ -122,10 +123,10 @@ export class NativeGitSequenceAPI {
       ...(native.recoveryPath ? { recoveryPath: native.recoveryPath } : {}),
       message:
         native.outcome === "completed"
-          ? "Штатная операция Git завершена, результат и сохранность несвязанных данных проверены. Публикация не выполнялась."
+          ? gitMessage("gitHost.theNativeGitOperationCompletedTheResultAndUnrelated")
           : native.outcome === "conflicts"
-            ? "Git остановился на конфликте. Исходный снимок сохранён; требуется отдельное разрешение и подтверждение."
-            : "Результат не подтверждён. Автоматический повтор запрещён; проверьте журнал и рабочую папку.",
+            ? gitMessage("gitHost.gitStoppedAtAConflictTheOriginalSnapshotWas")
+            : gitMessage("gitHost.theResultCouldNotBeVerifiedNoAutomaticRetry"),
     };
   }
 }

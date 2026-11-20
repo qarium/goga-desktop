@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import { z } from "zod";
 
 export interface SchemaDependency {
@@ -122,21 +123,21 @@ export const overviewContractSchema = boundedRecord(
 export function assertOverviewSchemaBounds(value: unknown): void {
   if (!Array.isArray(value)) return; // Zod supplies the shape error.
   if (value.length > OVERVIEW_ARCHITECTURE_LIMITS.cells)
-    throw Error("Схема превышает лимит количества узлов.");
+    throw Error(tr("host.theSchemaExceedsTheNodeCountLimit"));
   const pending = value.map((node) => ({ node, depth: 1 }));
   const paths = new Set<string>();
   let count = 0;
   while (pending.length) {
     const { node, depth } = pending.pop()!;
     if (++count > OVERVIEW_ARCHITECTURE_LIMITS.cells)
-      throw Error("Схема превышает лимит количества узлов.");
+      throw Error(tr("host.theSchemaExceedsTheNodeCountLimit"));
     if (depth > OVERVIEW_ARCHITECTURE_LIMITS.depth)
-      throw Error("Схема превышает лимит глубины.");
+      throw Error(tr("host.theSchemaExceedsTheDepthLimit"));
     if (node === null || typeof node !== "object" || Array.isArray(node))
       continue;
     if (typeof node.cell === "string") {
       if (paths.has(node.cell))
-        throw Error("Схема содержит повторяющийся путь.");
+        throw Error(tr("host.theSchemaContainsADuplicatePath"));
       paths.add(node.cell);
     }
     if (Array.isArray(node.children)) {
@@ -144,7 +145,7 @@ export function assertOverviewSchemaBounds(value: unknown): void {
         count + pending.length + node.children.length >
         OVERVIEW_ARCHITECTURE_LIMITS.cells
       )
-        throw Error("Схема превышает лимит количества узлов.");
+        throw Error(tr("host.theSchemaExceedsTheNodeCountLimit"));
       for (const child of node.children)
         pending.push({ node: child, depth: depth + 1 });
     }

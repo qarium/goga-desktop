@@ -1,3 +1,5 @@
+import { CommandOutputLimitError } from "./process";
+import { t as gitMessage } from "../shared/i18n";
 import { createHash } from "node:crypto";
 import { constants, type BigIntStats } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -21,7 +23,7 @@ const unavailable = (text: string): GitDiffPart => ({
   kind: "unavailable",
   text,
 });
-const stale = () => new Error("Снимок Git устарел. Обновите список изменений.");
+const stale = () => new Error(gitMessage("gitHost.theGitSnapshotExpiredRefreshChanges"));
 const fingerprint = (stat: BigIntStats | null) =>
   stat
     ? [
@@ -102,7 +104,7 @@ function parseStatus(raw: string): ParsedStatus {
     files: [],
   };
   const unsupportedPaths = new Set<string>();
-  if (raw && !raw.endsWith("\0")) throw new Error("Неполный ответ Git status.");
+  if (raw && !raw.endsWith("\0")) throw new Error(gitMessage("gitHost.incompleteGitStatusResponse"));
   const entries = raw.split("\0");
   for (let i = 0; i < entries.length; i++) {
     const entry = entries[i];
@@ -117,7 +119,7 @@ function parseStatus(raw: string): ParsedStatus {
       result.upstream = entry.slice(18);
     else if (entry.startsWith("# branch.ab ")) {
       const counts = /^# branch.ab \+(\d+) -(\d+)$/.exec(entry);
-      if (!counts) throw new Error("Некорректный ответ Git status.");
+      if (!counts) throw new Error(gitMessage("gitHost.invalidGitStatusResponse"));
       result.ahead = Number(counts[1]);
       result.behind = Number(counts[2]);
     } else if (entry.startsWith("# ")) continue;
@@ -141,17 +143,17 @@ function parseStatus(raw: string): ParsedStatus {
     } else {
       const fields =
         entry[0] === "1" ? 8 : entry[0] === "2" ? 9 : entry[0] === "u" ? 10 : 0;
-      if (!fields) throw new Error("Неизвестная запись Git status.");
+      if (!fields) throw new Error(gitMessage("gitHost.unknownGitStatusRecord"));
       const match = new RegExp(`^((?:[^ ]+ ){${fields}})([\\s\\S]+)$`).exec(
         entry,
       );
-      if (!match) throw new Error("Неполная запись Git status.");
+      if (!match) throw new Error(gitMessage("gitHost.incompleteGitStatusRecord"));
       const meta = match[1].trimEnd().split(" ");
       if (
         !/^[.MADRCUT?!]{2}$/.test(meta[1]) ||
         !/^(N\.\.\.|S[.C][.M][.U])$/.test(meta[2])
       )
-        throw new Error("Некорректная запись Git status.");
+        throw new Error(gitMessage("gitHost.invalidGitStatusRecord"));
       const file: GitWorkspaceFile = {
         path: gitFilePathSchema.parse(match[2]),
         indexStatus: meta[1][0],
@@ -173,7 +175,7 @@ function parseStatus(raw: string): ParsedStatus {
   if (
     new Set(result.files.map((file) => file.path)).size !== result.files.length
   )
-    throw new Error("Повторяющиеся пути в Git status.");
+    throw new Error(gitMessage("gitHost.duplicatePathsInGitStatus"));
   return { value: result, unsupportedPaths };
 }
 
@@ -209,7 +211,7 @@ export class GitWorkspaceReader {
       (await fs.realpath(this.root)) !== this.root
     )
       throw new Error(
-        "Рабочая папка Git недоступна или является символической ссылкой.",
+        gitMessage("gitHost.theGitWorkingFolderIsUnavailableOrIsA"),
       );
     if (
       !gitstat?.isDirectory() ||
@@ -217,7 +219,7 @@ export class GitWorkspaceReader {
       (await fs.realpath(gitdir)) !== gitdir
     )
       throw new Error(
-        "Git: требуется обычный каталог .git; связанные worktree в этом режиме пока не поддерживаются.",
+        gitMessage("gitHost.gitRequiresANormalGitDirectoryLinkedWorktreesAre"),
       );
     // Reading a split index can freshen sharedindex timestamps even with
     // --no-optional-locks, including through a symlink outside this root.
@@ -230,7 +232,7 @@ export class GitWorkspaceReader {
       )
     )
       throw new Error(
-        "Git split-index (sharedindex.*) пока не поддерживается в режиме безопасного чтения: Git может изменять его метаданные.",
+        gitMessage("gitHost.safeReadsDoNotSupportAGitSplitIndex"),
       );
     const metadata: string[] = [];
     for (const name of [
@@ -263,7 +265,7 @@ export class GitWorkspaceReader {
     ]) {
       const value = await stat(path.join(gitdir, name));
       if (value?.isSymbolicLink())
-        throw new Error("Небезопасная символическая ссылка в каталоге Git.");
+        throw new Error(gitMessage("gitHost.unsafeSymbolicLinkInTheGitDirectory"));
       if (value) {
         const directory = [
           "refs",
@@ -276,7 +278,7 @@ export class GitWorkspaceReader {
           "sequencer",
         ].includes(name);
         if (directory ? !value.isDirectory() : !value.isFile())
-          throw new Error("Недопустимый тип файла метаданных Git.");
+          throw new Error(gitMessage("gitHost.invalidGitMetadataFileType"));
       }
       if (
         value &&
@@ -287,7 +289,7 @@ export class GitWorkspaceReader {
         ].includes(name)
       )
         throw new Error(
-          "Git с внешним хранилищем объектов пока не поддерживается.",
+          gitMessage("gitHost.externalGitObjectStoresAreNotSupportedYet"),
         );
       // Native Git may add/repack unused objects without changing the worktree.
       // Keep physical storage identity and the full audit, not directory mtime.
@@ -317,21 +319,21 @@ export class GitWorkspaceReader {
         value.isSymbolicLink() ||
         (await fs.realpath(directory)) !== directory
       )
-        throw new Error("Небезопасная ссылка или каталог в метаданных Git.");
+        throw new Error(gitMessage("gitHost.unsafeLinkOrDirectoryInGitMetadata"));
       if (depth > 8)
         throw new Error(
-          "Структура метаданных Git превышает предел безопасного просмотра.",
+          gitMessage("gitHost.theGitMetadataStructureExceedsTheSafePreviewLimit"),
         );
       for (const entry of await fs.readdir(directory, {
         withFileTypes: true,
       })) {
         if (++count > 100000)
           throw new Error(
-            "Метаданные Git превышают предел безопасного просмотра.",
+            gitMessage("gitHost.gitMetadataExceedsTheSafePreviewLimit"),
           );
         if (entry.isSymbolicLink() || (!entry.isFile() && !entry.isDirectory()))
           throw new Error(
-            "Небезопасная ссылка или специальный файл в метаданных Git.",
+            gitMessage("gitHost.unsafeLinkOrSpecialFileInGitMetadata"),
           );
         const filename = path.join(directory, entry.name);
         if (record)
@@ -384,7 +386,7 @@ export class GitWorkspaceReader {
       if (i === parts.length - 1) return value;
       if (value.isSymbolicLink() || !value.isDirectory())
         throw new Error(
-          "Небезопасный путь Git: родитель файла не является обычным каталогом.",
+          gitMessage("gitHost.unsafeGitPathTheFileSParentIsNot"),
         );
     }
     return null;
@@ -437,7 +439,7 @@ export class GitWorkspaceReader {
         entries[i],
       );
       if (!entry || !entries[i + 1])
-        throw new Error("Некорректный ответ Git diff.");
+        throw new Error(gitMessage("gitHost.invalidGitDiffResponse"));
       if (entry[1] !== "160000" && entry[2] !== "160000") continue;
       const name = gitFilePathSchema.parse(entries[i + 1]);
       const existing = parsed.files.find((file) => file.path === name);
@@ -519,10 +521,10 @@ export class GitWorkspaceReader {
     const before = await this.fileStat(name);
     if (!before?.isFile() || before.isSymbolicLink())
       return unavailable(
-        "Предпросмотр ссылок, каталогов и специальных файлов недоступен.",
+        gitMessage("gitHost.cannotPreviewLinksDirectoriesOrSpecialFiles"),
       );
     if (before.size > BigInt(LIMIT))
-      return unavailable("Файл превышает предел предпросмотра 1 МиБ.");
+      return unavailable(gitMessage("gitHost.theFileExceedsThe1MibPreviewLimit"));
     const handle = await fs.open(
       path.join(this.root, name),
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
@@ -550,10 +552,10 @@ export class GitWorkspaceReader {
       )
         throw stale();
       if (size > LIMIT)
-        return unavailable("Файл превышает предел предпросмотра 1 МиБ.");
+        return unavailable(gitMessage("gitHost.theFileExceedsThe1MibPreviewLimit"));
       const bytes = buffer.subarray(0, size);
       if (!size) return EMPTY;
-      if (bytes.includes(0)) return { kind: "binary", text: "Двоичный файл." };
+      if (bytes.includes(0)) return { kind: "binary", text: gitMessage("gitHost.binaryFile") };
       try {
         return {
           kind: "text",
@@ -563,7 +565,7 @@ export class GitWorkspaceReader {
           }).decode(bytes),
         };
       } catch {
-        return { kind: "binary", text: "Файл не является текстом UTF-8." };
+        return { kind: "binary", text: gitMessage("gitHost.theFileIsNotUtf8Text") };
       }
     } finally {
       await handle.close();
@@ -594,14 +596,13 @@ export class GitWorkspaceReader {
       // Runner aborts instead of returning a truncated >8 MiB stream. Do not
       // swallow timeouts, cancellation, invalid ownership or other Git errors.
       if (
-        error instanceof Error &&
-        error.message === "Ответ команды слишком большой"
+        error instanceof CommandOutputLimitError
       )
-        return unavailable("Изменения превышают предел предпросмотра 1 МиБ.");
+        return unavailable(gitMessage("gitHost.theChangesExceedThe1MibPreviewLimit"));
       throw error;
     }
     if (Buffer.byteLength(output) > LIMIT)
-      return unavailable("Изменения превышают предел предпросмотра 1 МиБ.");
+      return unavailable(gitMessage("gitHost.theChangesExceedThe1MibPreviewLimit"));
     if (!output) return EMPTY;
     if (
       output.includes("\ufffd") ||
@@ -610,14 +611,14 @@ export class GitWorkspaceReader {
     )
       return {
         kind: "binary",
-        text: "Двоичный файл или текст с неподдерживаемой кодировкой.",
+        text: gitMessage("gitHost.binaryFileOrUnsupportedTextEncoding"),
       };
     return { kind: "patch", text: output };
   }
   async diff(input: GitDiffRequest): Promise<GitWorkspaceDiff> {
     const request = gitDiffRequestSchema.parse(input);
     if (JSON.stringify(request.scope) !== JSON.stringify(this.scope))
-      throw new Error("Запрошен другой контекст Git.");
+      throw new Error(gitMessage("gitHost.aDifferentGitContextWasRequested"));
     return this.withRead((context) => this.diffState(request, context));
   }
   private async diffState(
@@ -630,7 +631,7 @@ export class GitWorkspaceReader {
       before = state.value;
     if (before.revision !== request.revision) throw stale();
     const file = before.files.find((entry) => entry.path === request.path);
-    if (!file) throw new Error("Файла нет в списке изменений Git.");
+    if (!file) throw new Error(gitMessage("gitHost.theFileIsNotInTheListOfGit"));
     const info = await this.fileStat(file.path);
     let changes: GitDiffPart;
     if (
@@ -642,8 +643,8 @@ export class GitWorkspaceReader {
     ) {
       changes = unavailable(
         file.kind === "conflict"
-          ? "Файл содержит конфликт. Обычный diff недоступен."
-          : "Предпросмотр ссылок, подмодулей, каталогов и специальных файлов недоступен.",
+          ? gitMessage("gitHost.thisFileHasConflictsARegularDiffIsUnavailable")
+          : gitMessage("gitHost.cannotPreviewLinksSubmodulesDirectoriesOrSpecialFiles"),
       );
     } else if (file.kind === "untracked" || before.head === null) {
       // Without a first commit every current file is new. Reuse the bounded,

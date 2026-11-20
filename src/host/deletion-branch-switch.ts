@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import path from "node:path";
 import { lstat } from "node:fs/promises";
 import { z } from "zod";
@@ -34,7 +35,7 @@ async function clean(git: Git) {
       .length
   )
     throw Error(
-      "В основной папке есть незакоммиченные изменения. Сохраните их перед переключением; ничего не сбрасывается.",
+      tr("host.theOriginalFolderHasUncommittedChangesSaveThemBeforeSwitching"),
     );
 }
 export async function prepareDeletionSwitch(
@@ -44,7 +45,7 @@ export async function prepareDeletionSwitch(
   to: string,
 ): Promise<DeletionSwitch> {
   if (!to || to.startsWith("-") || normalize(from) === normalize(to))
-    throw Error("Выберите другую локальную ветку.");
+    throw Error(tr("host.selectAnotherLocalBranch"));
   await git(["check-ref-format", "--branch", to]);
   const plan: DeletionSwitch = {
     from,
@@ -71,7 +72,7 @@ export async function verifyDeletionSwitch(
 ) {
   if (plan.state !== "pending")
     throw Error(
-      "Состояние переключения требует проверки; автоматический повтор запрещён.",
+      tr("host.theBranchSwitchNeedsVerificationItWillNotBeRetried"),
     );
   if (
     (await git(["branch", "--show-current"])).trim() !== plan.from ||
@@ -83,7 +84,7 @@ export async function verifyDeletionSwitch(
     ).trim() !== plan.toHead
   )
     throw Error(
-      "Ветки изменились после выбора. Обновите подтверждение удаления.",
+      tr("host.branchesChangedAfterSelectionConfirmRemovalAgain"),
     );
   await clean(git);
   for (const name of [
@@ -105,7 +106,7 @@ export async function verifyDeletionSwitch(
     }
     if (exists)
       throw Error(
-        "В основной папке не завершена операция Git. Сначала завершите её; удаление не начато.",
+        tr("host.anUnfinishedGitOperationWasFoundInTheOriginalFolder"),
       );
   }
   await assertTopicBranchesAvailable(git, root, [plan.to], "delete");
@@ -140,7 +141,7 @@ export async function verifyDeletionSwitch(
       parts.some((_, i) => files.has(parts.slice(0, i + 1).join("/")))
     )
       throw Error(
-        "В основной папке есть ignored-файлы, которые перекрываются с выбранной веткой. Переключение остановлено; файлы сохранены.",
+        tr("host.ignoredFilesInTheOriginalFolderOverlapWithTheSelected"),
       );
   }
   // -n is a read-only checkout feasibility check: no index or worktree writes.
@@ -172,7 +173,7 @@ export async function verifyAppliedDeletionSwitch(
     (await git(["rev-parse", "HEAD"])).trim() !== plan.toHead
   )
     throw Error(
-      "Результат переключения ветки изменился. Удаление остановлено.",
+      tr("host.theResultOfSwitchingBranchesChangedRemovalStopped"),
     );
   await clean(git);
 }

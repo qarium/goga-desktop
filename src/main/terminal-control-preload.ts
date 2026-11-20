@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import type { TerminalPresetAPI } from "../shared/terminal-preset-control";
 import {
   terminalChangedSchema,
@@ -29,7 +30,7 @@ export function createTerminalControlAPI(
           value,
         )
       )
-        throw Error("Не удалось подключить управление терминалом.");
+        throw Error(t("native.terminalControlUnavailable"));
       documentId = value;
       return value;
     }));

@@ -592,9 +592,7 @@ it("reconciles stale project-wide settings after another scope saved without los
   api.saveProjectSettings.mockImplementation(
     async (scope: ScopeRef, value: any, version: string) => {
       if (version !== current.version)
-        throw Error(
-          "Error invoking remote method 'goga:save-project-settings': Error: Настройки изменены извне. Откройте их заново.",
-        );
+        return { code: "settings-version-conflict" } as const;
       current = { ...settings(scope, "registry-v3"), value };
       return structuredClone(current);
     },
@@ -632,9 +630,7 @@ it.each(["Оставить мои значения", "Использовать �
     api.saveProjectSettings.mockImplementation(
       async (scope: ScopeRef, value: any, version: string) => {
         if (version !== current.version)
-          throw Error(
-            "Error invoking remote method 'goga:save-project-settings': Error: Настройки изменены извне. Откройте их заново.",
-          );
+          return { code: "settings-version-conflict" } as const;
         current = { ...settings(scope, "registry-v3"), value };
         return structuredClone(current);
       },
@@ -717,7 +713,7 @@ it("re-reads between CAS races, bounds retry and never retries unrelated save fa
   const api = {
     readProjectSettings: vi.fn(async () => ({ ...base, version: "fresh" })),
     saveProjectSettings: vi.fn(async () => {
-      throw Error("Настройки изменены извне. Откройте их заново.");
+      return { code: "settings-version-conflict" } as const;
     }),
   };
   await expect(
@@ -736,4 +732,14 @@ it("re-reads between CAS races, bounds retry and never retries unrelated save fa
   ).rejects.toThrow("read only");
   expect(api.saveProjectSettings).toHaveBeenCalledTimes(1);
   expect(api.readProjectSettings).not.toHaveBeenCalled();
+});
+
+it("does not retry an error solely because it matches a translated version-conflict message", async () => {
+  const {saveProjectSettingsReconciled}=await import("../src/renderer/project-settings-save");
+  const base=settings(a);
+  const read=vi.fn(async()=>base);
+  const save=vi.fn(async()=>{throw Error("Настройки изменены извне. Откройте их заново.");});
+  await expect(saveProjectSettingsReconciled({readProjectSettings:read,saveProjectSettings:save},a,base,base.value)).rejects.toThrow("извне");
+  expect(read).not.toHaveBeenCalled();
+  expect(save).toHaveBeenCalledTimes(1);
 });

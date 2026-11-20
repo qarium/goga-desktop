@@ -1,3 +1,4 @@
+import { CommandOutputLimitError } from "../src/host/process";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -1211,7 +1212,7 @@ describe("read-only Git workspace", () => {
       verify: f.verify,
       git: async (args) => {
         if (args.includes("diff") && !args.includes("--raw"))
-          throw new Error("Ответ команды слишком большой");
+          throw new CommandOutputLimitError();
         return f.git(args);
       },
     });

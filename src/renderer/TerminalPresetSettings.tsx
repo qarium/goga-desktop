@@ -1,3 +1,6 @@
+import { HintButton } from "./ActionHint";
+import { t } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import {
   ChevronDown,
@@ -35,6 +38,7 @@ interface Editor {
 }
 const fresh = (): Editor => ({ name: "", command: "", rows: [] });
 export function TerminalPresetSettings() {
+  useLocale();
   const api = window.goga.terminalPresets,
     active = useViewActive();
   const [items, setItems] = useState<TerminalPresetSummary[]>([]),
@@ -145,7 +149,7 @@ export function TerminalPresetSettings() {
             v.name.toLowerCase() === clean.name.toLowerCase(),
         )
       )
-        throw Error("Пресет с таким названием уже есть.");
+        throw Error(t("general.aPresetWithThisNameAlreadyExists"));
     } catch (e) {
       setError(preparationErrorMessage(e));
       if (draft.rows.length) setOpen(true);
@@ -179,7 +183,7 @@ export function TerminalPresetSettings() {
       );
       setLoaded(true);
       reset();
-      setMsg("Сохранено. Пресет доступен в меню терминала.");
+      setMsg(t("general.savedThePresetIsAvailableInTheTerminalMenu"));
       setAttempt((v) => v + 1);
     });
   }
@@ -192,7 +196,7 @@ export function TerminalPresetSettings() {
       ++reading.current;
       setItems((v) => v.filter((i) => i.id !== target.id));
       reset();
-      setMsg("Пресет удалён.");
+      setMsg(t("general.presetDeleted"));
       setAttempt((v) => v + 1);
     });
   }
@@ -207,11 +211,11 @@ export function TerminalPresetSettings() {
   }
   const locked = busy || !!remove || !!draft;
   return (
-    <section className="terminal-presets" aria-label="Пресеты терминала">
+    <section className="terminal-presets" aria-label={t("general.terminalPresets")}>
       <div className="terminal-presets-head">
         <div>
-          <h3>Пресеты вкладок</h3>
-          <p>Личные команды для всех проектов и топиков.</p>
+          <h3>{t("general.tabPresets")}</h3>
+          <p>{t("general.personalCommandsForAllProjectsAndTopics")}</p>
         </div>
         <button
           type="button"
@@ -223,12 +227,10 @@ export function TerminalPresetSettings() {
             setDraft(fresh());
           }}
         >
-          <Plus size={16} />
-          Новый пресет
-        </button>
+          <Plus size={16} />{t("general.newPreset")}</button>
       </div>
       {!api ? (
-        <p role="alert">Настройки пресетов недоступны.</p>
+        <p role="alert">{t("general.presetSettingsAreUnavailable")}</p>
       ) : listError ? (
         <div role="alert">
           {listError}{" "}
@@ -236,14 +238,12 @@ export function TerminalPresetSettings() {
             type="button"
             disabled={busy}
             onClick={() => setAttempt((v) => v + 1)}
-          >
-            Повторить загрузку
-          </button>
+          >{t("general.retryLoading")}</button>
         </div>
       ) : !loaded ? (
-        <p role="status">Загружаем пресеты…</p>
+        <p role="status">{t("general.loadingPresets")}</p>
       ) : null}
-      {loaded && !listError && !items.length && <p>Пресетов пока нет.</p>}
+      {loaded && !listError && !items.length && <p>{t("general.noPresetsYet")}</p>}
       {items.length > 0 && (
         <ul className="terminal-presets-list">
           {items.map((p) => (
@@ -252,24 +252,24 @@ export function TerminalPresetSettings() {
               <div className="terminal-preset-summary">
                 <strong>{p.name}</strong>
                 <code>{p.command}</code>
-                <small>Переменных: {p.envCount}</small>
+                <small>{t("general.variables")} {p.envCount}</small>
               </div>
-              <button
+              <HintButton
                 type="button"
                 className="icon-button"
                 disabled={locked}
-                aria-label={"Редактировать " + p.name}
-                title="Редактировать"
+                aria-label={t("general.editPresetNamed",{name:p.name})}
+                hint={t("general.edit2")}
                 onClick={() => edit(p.id)}
               >
                 <Pencil size={16} />
-              </button>
-              <button
+              </HintButton>
+              <HintButton
                 type="button"
                 className="icon-button"
                 disabled={locked}
-                aria-label={"Удалить " + p.name}
-                title="Удалить"
+                aria-label={t("general.deletePresetNamed",{name:p.name})}
+                hint={t("general.delete")}
                 onClick={() => {
                   reset();
                   setMsg("");
@@ -277,7 +277,7 @@ export function TerminalPresetSettings() {
                 }}
               >
                 <Trash2 size={16} />
-              </button>
+              </HintButton>
             </li>
           ))}
         </ul>
@@ -288,21 +288,17 @@ export function TerminalPresetSettings() {
           onSubmit={save}
           autoComplete="off"
         >
-          <h3>{draft.id ? "Редактирование пресета" : "Новый пресет"}</h3>
+          <h3>{draft.id ? t("general.editPreset") : t("general.newPreset")}</h3>
           <div className="terminal-preset-fields">
-            <label>
-              Название вкладки
-              <input
+            <label>{t("general.tabName")}<input
                 ref={field}
                 disabled={busy}
                 value={draft.name}
                 onChange={(e) => setDraft({ ...draft, name: e.target.value })}
-                placeholder="Например, Dev-сервер"
+                placeholder={t("general.eGDevServer")}
               />
             </label>
-            <label>
-              Команда
-              <input
+            <label>{t("general.command")}<input
                 disabled={busy}
                 value={draft.command}
                 onChange={(e) =>
@@ -324,22 +320,16 @@ export function TerminalPresetSettings() {
                 setShown(new Set());
               }}
             >
-              {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
-              Переменные окружения{" "}
-              <small>· {draft.rows.length || "необязательно"}</small>
+              {open ? <ChevronDown size={15} /> : <ChevronRight size={15} />}{t("general.environmentVariables")}{" "}
+              <small>· {draft.rows.length || t("general.optional")}</small>
             </button>
             {open && (
               <>
-                <p>
-                  Только для этой вкладки и запущенных в ней команд. Значения
-                  передаются без подстановки.
-                </p>
+                <p>{t("general.appliesOnlyToThisTabAndItsCommandsValues")}</p>
                 {draft.rows.map((r, i) => (
                   <div key={r.uid} className="terminal-preset-env-row">
-                    <label>
-                      Имя
-                      <input
-                        aria-label={`Имя переменной ${i + 1}`}
+                    <label>{t("general.name")}<input
+                        aria-label={t("general.variableName", { value1: i + 1 })}
                         value={r.key}
                         disabled={busy}
                         onChange={(e) =>
@@ -350,10 +340,8 @@ export function TerminalPresetSettings() {
                         placeholder="PORT"
                       />
                     </label>
-                    <label>
-                      Значение
-                      <input
-                        aria-label={`Значение ${i + 1}`}
+                    <label>{t("general.value")}<input
+                        aria-label={t("general.value2", { value1: i + 1 })}
                         value={r.value}
                         disabled={busy}
                         type={shown.has(r.uid) ? "text" : "password"}
@@ -369,9 +357,7 @@ export function TerminalPresetSettings() {
                         type="button"
                         className="icon-button"
                         aria-label={
-                          (shown.has(r.uid) ? "Скрыть" : "Показать") +
-                          " значение " +
-                          (i + 1)
+                          t(shown.has(r.uid) ? "general.hideValueAt" : "general.showValueAt",{position:i+1})
                         }
                         aria-pressed={shown.has(r.uid)}
                         disabled={busy}
@@ -393,7 +379,7 @@ export function TerminalPresetSettings() {
                         type="button"
                         className="icon-button"
                         disabled={busy}
-                        aria-label={`Удалить переменную ${i + 1}`}
+                        aria-label={t("general.deleteVariable", { value1: i + 1 })}
                         onClick={() =>
                           setDraft({
                             ...draft,
@@ -420,9 +406,7 @@ export function TerminalPresetSettings() {
                     })
                   }
                 >
-                  <Plus size={15} />
-                  Добавить переменную
-                </button>
+                  <Plus size={15} />{t("general.addVariable")}</button>
               </>
             )}
           </div>
@@ -432,44 +416,36 @@ export function TerminalPresetSettings() {
             </p>
           )}
           <div className="terminal-preset-actions">
-            <button type="submit" className="primary" disabled={busy}>
-              Сохранить
-            </button>
+            <button type="submit" className="primary" disabled={busy}>{t("general.save")}</button>
             <button
               type="button"
               className="quiet"
               disabled={busy}
               onClick={reset}
-            >
-              Отмена
-            </button>
+            >{t("general.cancel")}</button>
           </div>
         </form>
       )}
       {remove && (
         <section
           className="terminal-preset-editor"
-          aria-label="Подтверждение удаления пресета"
+          aria-label={t("general.confirmPresetDeletion")}
         >
-          <h3>Удалить пресет «{remove.name}»?</h3>
-          <p>Уже открытые вкладки останутся.</p>
+          <h3>{t("general.deletePresetConfirm", {name: remove.name})}</h3>
+          <p>{t("general.existingTabsWillStayOpen")}</p>
           <div className="terminal-preset-actions">
             <button
               type="button"
               className="danger"
               disabled={busy}
               onClick={confirmDelete}
-            >
-              Удалить пресет
-            </button>
+            >{t("general.deletePreset2")}</button>
             <button
               type="button"
               className="quiet"
               disabled={busy}
               onClick={reset}
-            >
-              Отмена
-            </button>
+            >{t("general.cancel")}</button>
           </div>
         </section>
       )}

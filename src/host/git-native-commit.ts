@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import type { NativeGitOperationResult } from "../shared/git-native-operation";
 import {
   GitWorkspaceActions,
@@ -27,7 +28,7 @@ import { NativeGitPreflightRejection } from "./git-native-journal";
 
 const stale = () =>
   Error(
-    "Состояние Git изменилось. Обновите список и подтвердите коммит заново.",
+    gitMessage("gitHost.gitStateChangedRefreshTheListAndConfirmThe"),
   );
 const text = (bytes: Buffer) =>
   new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -231,14 +232,14 @@ export class NativeGitWorkspaceActions extends GitWorkspaceActions {
     this.tickets.delete(token);
     this.nativeTickets.delete(token);
     if (!t || !n || t.preview.expiresAt <= this.now())
-      throw Error("Подтверждение истекло или уже использовано.");
+      throw Error(gitMessage("gitHost.thisConfirmationHasExpiredOrWasAlreadyUsed"));
     let finalize: (() => Promise<NativeGitOperationResult>) | undefined;
     let observed: GitCommitResult | undefined;
     const uncertain = (result: GitCommitResult): GitCommitResult => ({
       ...result,
       status: "uncertain",
       message:
-        "Результат коммита требует проверки. Не повторяйте операцию; материалы восстановления сохранены.",
+        gitMessage("gitHost.theCommitNeedsReviewDoNotRepeatTheOperation"),
     });
     try {
       const response = await this.options.context(
@@ -246,7 +247,7 @@ export class NativeGitWorkspaceActions extends GitWorkspaceActions {
         async (c) => {
           const p = t.preview;
           if (p.expiresAt <= this.now())
-            throw Error("Подтверждение истекло. Подтвердите коммит заново.");
+            throw Error(gitMessage("gitHost.confirmationExpiredConfirmTheCommitAgain"));
           if (
             c.root !== p.root ||
             c.ownerKey !== t.ownerKey ||
@@ -365,14 +366,14 @@ export class NativeGitWorkspaceActions extends GitWorkspaceActions {
                 .run(c, async () => {
                   if (p.expiresAt <= this.now())
                     throw new NativeGitPreflightRejection(
-                      "Подтверждение коммита истекло.",
+                      gitMessage("gitHost.commitConfirmationExpired"),
                     );
                   if (
                     JSON.stringify(await this.capture(c, p.paths)) !==
                     JSON.stringify(t.state)
                   )
                     throw new NativeGitPreflightRejection(
-                      "Предпросмотр коммита устарел.",
+                      gitMessage("gitHost.commitPreviewExpired"),
                     );
                   assertNativeGitState(confirmed, await guard.capture());
                   return client.inTemporaryIndex(async (indexed) => {
@@ -685,10 +686,10 @@ export class NativeGitWorkspaceActions extends GitWorkspaceActions {
               : {}),
             log,
             message: success
-              ? "Локальный коммит создан. Остальные подготовленные изменения сохранены."
+              ? gitMessage("gitHost.localCommitCreatedOtherStagedChangesWerePreserved")
               : result.outcome === "rejected"
-                ? "Git не создал коммит. Исходные данные и индекс проверены и сохранены."
-                : "Результат коммита требует проверки. Не повторяйте операцию; материалы восстановления сохранены.",
+                ? gitMessage("gitHost.gitDidNotCreateTheCommitTheOriginalData")
+                : gitMessage("gitHost.theCommitNeedsReviewDoNotRepeatTheOperation"),
           });
         },
       );
@@ -705,7 +706,7 @@ export class NativeGitWorkspaceActions extends GitWorkspaceActions {
       // publication/recovery facts, never raw child output or cleanup errors.
       return uncertain({
         ...observed,
-        log: "Завершающая проверка коммита или освобождение контекста завершились ошибкой. Диагностика окружения скрыта.",
+        log: gitMessage("gitHost.finalCommitVerificationOrContextReleaseFailedEnvironmentDiagnostics"),
       });
     }
   }

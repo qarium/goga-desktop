@@ -1,3 +1,4 @@
+import { t as gitMessage } from "./i18n";
 import { z } from "zod";
 import { scopeRefSchema, type ScopeRef } from "./context";
 import type { NativeGitOperationResult } from "./git-native-operation";
@@ -15,7 +16,7 @@ export const gitMergeOperationRequestSchema = z.discriminatedUnion("action", [
         .max(16384)
         .refine(
           (value) => !!value.trim() && !value.includes("\0"),
-          "Введите сообщение коммита.",
+          { error: () => gitMessage("gitHost.enterCommitMessage") },
         )
         .optional(),
     })

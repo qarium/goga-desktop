@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { TerminalAdmissionClosedError } from "./terminal-errors";
 import type { PreparedShutdown } from "./shutdown";
 import {
@@ -110,7 +111,7 @@ function selection(tab: TerminalTab, scope: ScopeRef) {
   const parsedTab = terminalTabSchema.safeParse(tab),
     parsedScope = scopeRefSchema.safeParse(scope);
   if (!parsedTab.success || !parsedScope.success)
-    throw Error("Недопустимая вкладка терминала.");
+    throw Error(t("hostTerminal.tabInvalid"));
   let context: TerminalContext;
   if (typeof parsedScope.data === "string")
     context = { kind: "primary", projectId: parsedScope.data };
@@ -119,7 +120,7 @@ function selection(tab: TerminalTab, scope: ScopeRef) {
     context = { kind: "topic", ...owner };
   }
   if (!terminalTabMatches(parsedTab.data, context))
-    throw Error("Эта вкладка недоступна в выбранном контексте.");
+    throw Error(t("hostTerminal.tabOutsideContext"));
   return {
     tab: parsedTab.data,
     scope: parsedScope.data,
@@ -193,7 +194,7 @@ export class TerminalSessions {
     const current = this.entries.get(selected.key);
     if (!current) return this.start(selected);
     if (current.view.state === "stopping")
-      throw Error("Сессия останавливается.");
+      throw Error(t("hostTerminal.sessionStopping"));
     if (current.opening) return current.opening;
     return this.verifyExisting(selected, current);
   }
@@ -206,7 +207,7 @@ export class TerminalSessions {
     const selected = selection(tab, scope);
     this.assertOpen(selected);
     if (tab.scope.kind !== "context" || this.entries.has(selected.key))
-      throw Error("Нельзя выполнить пресет в существующей сессии.");
+      throw Error(t("hostTerminal.presetInActiveSession"));
     return this.start(selected, undefined, command);
   }
   /** Revalidate a known screen without any path capable of spawning a PTY. */
@@ -224,7 +225,7 @@ export class TerminalSessions {
       !["running", "exited"].includes(current.view.state) ||
       current.view.screen === "lost"
     )
-      throw Error("Сессия изменилась или недоступна.");
+      throw Error(t("hostTerminal.sessionChanged"));
     await this.verifyExisting(selected, current);
     if (
       this.entries.get(selected.key) !== current ||
@@ -233,7 +234,7 @@ export class TerminalSessions {
       !["running", "exited"].includes(current.view.state) ||
       current.view.screen === "lost"
     )
-      throw Error("Сессия изменилась или недоступна.");
+      throw Error(t("hostTerminal.sessionChanged"));
   }
   private async verifyExisting(
     selected: ReturnType<typeof selection>,
@@ -242,7 +243,7 @@ export class TerminalSessions {
     this.assertOpen(selected);
     if (current.transportFailed && current.view.state !== "exited")
       throw Error(
-        "Терминальный транспорт недоступен. Требуется безопасное обновление сессии.",
+        t("hostTerminal.sessionNeedsRefresh"),
       );
     if (current.view.state === "running") {
       try {
@@ -251,12 +252,12 @@ export class TerminalSessions {
       } catch {
         current.rootValid = false;
         throw Error(
-          "Рабочая папка терминала недоступна или заменена. Обновите сессию.",
+          t("hostTerminal.sessionDirectoryMissing"),
         );
       }
       // An exit or refresh may have happened during the asynchronous check.
       if (this.entries.get(selected.key) !== current)
-        throw Error("Сессия изменилась.");
+        throw Error(t("hostTerminal.sessionReplaced"));
     }
     this.assertOpen(selected);
     current.scope = selected.scope;
@@ -284,12 +285,12 @@ export class TerminalSessions {
       .map((entry) => {
         if (entry.view.state !== "running" || !entry.control)
           throw Error(
-            "Дождитесь завершения операции терминала перед удалением топика.",
+            t("hostTerminal.waitBeforeTopicDeletion"),
           );
         const plan = entry.control.prepare();
         if (plan.jobs.length)
           throw Error(
-            `В терминале «${entry.tab.name}» выполняется команда. Завершите её перед удалением топика.`,
+            t("hostTerminal.deleteJobRunning", { name: entry.tab.name }),
           );
         this.assertIdlePrompt(entry, plan);
         return { entry, plan };
@@ -298,7 +299,7 @@ export class TerminalSessions {
   private assertIdlePrompt(entry: Entry, plan: TerminalProcessPlan) {
     if (!entry.lease?.launch.activity?.idle(plan.anchor.pid))
       throw Error(
-        `Не удалось подтвердить ожидание ввода в терминале «${entry.tab.name}». Завершите команду или закройте эту сессию перед удалением топика. Если команда не выполняется, нажмите Enter на пустой строке.`,
+        t("hostTerminal.deletePromptUncertain", { name: entry.tab.name }),
       );
   }
   /** Read-only: an idle shell is not an active job. Unknown ownership fails closed. */
@@ -321,14 +322,14 @@ export class TerminalSessions {
       )
     )
       throw Error(
-        "Дождитесь завершения операции терминала перед удалением топика.",
+        t("hostTerminal.waitBeforeTopicDeletion"),
       );
     const planned = this.idleContextPlans(parsed);
     this.deletionContexts.add(key);
     let released = false;
     const validate = () => {
       if (released)
-        throw Error("Подготовка терминала к удалению уже завершена.");
+        throw Error(t("hostTerminal.deletionAlreadyPrepared"));
       const current = this.contextEntries(parsed).filter(
         (e) => e.view.state !== "exited",
       );
@@ -363,7 +364,7 @@ export class TerminalSessions {
     };
   }
   prepareClose(request: TerminalCloseRequest): TerminalClosePreview {
-    if (this.shutdown) throw Error("Приложение готовится к выходу.");
+    if (this.shutdown) throw Error(t("hostTerminal.quitting"));
     return this.coordinator.prepare(request);
   }
   cancelClose(token: string): void {
@@ -373,7 +374,7 @@ export class TerminalSessions {
     token: string,
     confirmed: boolean,
   ): Promise<TerminalCloseResult> {
-    if (this.shutdown) throw Error("Приложение готовится к выходу.");
+    if (this.shutdown) throw Error(t("hostTerminal.quitting"));
     return this.coordinator.confirm(token, confirmed);
   }
   /** Host-only gate held through the entire app-wide confirmation/stop sequence. */
@@ -383,7 +384,7 @@ export class TerminalSessions {
       this.closing.size ||
       this.deletionContexts.size
     )
-      throw Error("Дождитесь завершения текущей операции терминала.");
+      throw Error(t("hostTerminal.waitCurrentAction"));
     this.shutdown = true;
     let used = false,
       released = false;
@@ -394,7 +395,7 @@ export class TerminalSessions {
         // signal the sessions whose completion was already observed.
         const validate = () => {
           if (released || this.list().some((view) => view.state !== "exited"))
-            throw Error("Состояние завершённых сессий терминала изменилось.");
+            throw Error(t("hostTerminal.exitedSessionsChanged"));
         };
         validate();
         return {
@@ -418,7 +419,7 @@ export class TerminalSessions {
         deferDisposal: true,
       });
       const assertLease = () => {
-        if (released) throw Error("Подготовка к выходу уже завершена.");
+        if (released) throw Error(t("hostTerminal.quitAlreadyPrepared"));
       };
       const identity = (view: TerminalSessionView) =>
         `terminal:${view.sessionId}:${view.generation}`;
@@ -427,7 +428,7 @@ export class TerminalSessions {
           .filter((view) => view.state !== "exited")
           .map((view) => ({
             id: identity(view),
-            label: `${this.find(view).tab.name} — ${view.context.kind === "primary" ? "Без топика" : view.context.topic}`,
+            label: `${this.find(view).tab.name} — ${view.context.kind === "primary" ? t("hostTerminal.noTopic") : view.context.topic}`,
           })),
         requiresConfirmation: preview.requiresConfirmation,
         validate: () => {
@@ -459,7 +460,7 @@ export class TerminalSessions {
   }
   finalizeShutdown(): void {
     if (!this.shutdown || this.list().some((view) => view.state !== "exited"))
-      throw Error("Сначала требуется безопасно завершить сессии терминала.");
+      throw Error(t("hostTerminal.mustStopSessions"));
     if (this.closed) return;
     for (const entry of this.entries.values()) entry.screen?.dispose();
     this.closed = true;
@@ -469,12 +470,12 @@ export class TerminalSessions {
     if (request.kind === "refresh") {
       const entry = this.find(request.ref);
       if (selection(entry.tab, request.scope).key !== entry.key)
-        throw Error("Обновление другого контекста запрещено.");
+        throw Error(t("hostTerminal.wrongContextRefresh"));
       return [entry];
     }
-    if (request.kind !== "tab") throw Error("Недопустимая операция терминала.");
+    if (request.kind !== "tab") throw Error(t("hostTerminal.invalidOperation"));
     const parsed = terminalTabSchema.safeParse(request.tab);
-    if (!parsed.success) throw Error("Недопустимая вкладка терминала.");
+    if (!parsed.success) throw Error(t("hostTerminal.tabInvalid"));
     return [...this.entries.values()].filter(
       (e) =>
         e.tab.projectId === parsed.data.projectId &&
@@ -488,14 +489,14 @@ export class TerminalSessions {
     }));
   }
   private freeze(request: TerminalCloseRequest): () => void {
-    if (this.closed) throw Error("Приложение завершает работу.");
+    if (this.closed) throw Error(t("hostTerminal.appExiting"));
     const entries = this.closeEntries(request);
     if (
       entries.some((e) =>
         this.deletionContexts.has(terminalContextKey(e.view.context)),
       )
     )
-      throw Error("Терминал участвует в удалении топика.");
+      throw Error(t("hostTerminal.topicDeletionBusy"));
     const lock =
       request.kind === "exit"
         ? {}
@@ -516,7 +517,7 @@ export class TerminalSessions {
             (!other.key || !("key" in lock) || other.key === lock.key)),
       )
     )
-      throw Error("Операция завершения уже выполняется.");
+      throw Error(t("hostTerminal.stopInProgress"));
     this.closing.add(lock);
     return () => {
       this.closing.delete(lock);
@@ -775,7 +776,7 @@ export class TerminalSessions {
     const entry = this.entries.get(selection(tab, scope).key);
     if (!entry) return;
     if (entry.view.state !== "starting")
-      throw Error("Сессия уже запущена; требуется безопасное завершение.");
+      throw Error(t("hostTerminal.sessionAlreadyStarted"));
     entry.cancelled = true;
   }
   write(ref: TerminalSessionRef, data: string): void {
@@ -783,7 +784,7 @@ export class TerminalSessions {
       !terminalInputSchema.safeParse({ ...this.validatedRef(ref), text: data })
         .success
     )
-      throw Error("Недопустимый ввод терминала.");
+      throw Error(t("hostTerminal.invalidInput"));
     const entry = this.running(ref);
     entry.lease?.launch.activity?.input(data);
     entry.pty!.write(data);
@@ -793,7 +794,7 @@ export class TerminalSessions {
       !terminalResizeSchema.safeParse({ ...this.validatedRef(ref), cols, rows })
         .success
     )
-      throw Error("Недопустимый размер терминала.");
+      throw Error(t("hostTerminal.invalidSize"));
     const entry = this.find(ref);
     if (
       this.admissionClosed(selection(entry.tab, entry.scope)) &&
@@ -815,7 +816,7 @@ export class TerminalSessions {
         e.view.sessionId === ref?.sessionId &&
         e.view.generation === ref?.generation,
     );
-    if (!entry) throw Error("Сессия терминала устарела или отсутствует.");
+    if (!entry) throw Error(t("hostTerminal.sessionMissing"));
     return entry;
   }
   private flushSizes(): void {
@@ -850,7 +851,7 @@ export class TerminalSessions {
       (entry.view.state === "running" &&
         (!entry.rootValid || entry.transportFailed))
     )
-      throw Error("Терминал недоступен.");
+      throw Error(t("hostTerminal.terminalUnavailable"));
   }
   private running(ref: TerminalSessionRef) {
     const entry = this.find(ref);
@@ -860,7 +861,7 @@ export class TerminalSessions {
       !entry.rootValid ||
       entry.transportFailed
     )
-      throw Error("Терминал недоступен для ввода.");
+      throw Error(t("hostTerminal.inputUnavailable"));
     return entry;
   }
   private ref(entry: Entry): TerminalSessionRef {

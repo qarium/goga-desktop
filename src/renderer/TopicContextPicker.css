@@ -60,10 +60,6 @@
   width: 420px;
   max-width: calc(100vw - 32px);
   padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface);
-  box-shadow: 0 12px 32px #0006;
   text-align: left;
 }
 .topic-context-popup > label {
@@ -274,7 +270,7 @@
   animation: topic-context-creation-spin 0.9s linear infinite;
 }
 .topic-context-creation-feedback.is-error {
-  color: #efb1a0;
+  color: var(--feedback-error-fg);
 }
 .topic-context-creation-error {
   display: flex;

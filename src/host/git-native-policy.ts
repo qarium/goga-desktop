@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import { AsyncLocalStorage } from "node:async_hooks";
 
 export type NativeGitPolicy =
@@ -140,14 +141,14 @@ export function nativeGitArguments(
       (arg) => typeof arg !== "string" || arg.includes("\0"),
     )
   )
-    throw Error("Недопустимая команда Git.");
+    throw Error(gitMessage("gitHost.invalidGitCommand"));
   const config: string[] = [];
   for (const [key, value] of configuration) {
     if (
       !/^[A-Za-z][A-Za-z0-9-]*\.[^\0\r\n=]+$/.test(key) ||
       value.includes("\0")
     )
-      throw Error("Недопустимая конфигурация Git.");
+      throw Error(gitMessage("gitHost.invalidGitConfiguration"));
     // Admission captured the fully expanded effective configuration. Replaying
     // include directives has no original config-file location for relative paths
     // and can re-read a different file. Keep the flattened values, not directives.

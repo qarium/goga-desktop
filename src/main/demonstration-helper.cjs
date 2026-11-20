@@ -1,3 +1,4 @@
+const { getLocale, isSupportedLocale, setLocale, t } = require("../shared/i18n.ts");
 // This process contains *only* untrusted demonstration pages. No Goga host,
 // privileged preload, Node inspector, Desktop window or per-user registry.
 const { app, BrowserWindow, session, Menu } = require("electron");
@@ -13,6 +14,8 @@ if (
   resolve(app.commandLine.getSwitchValue("user-data-dir")) !== profile
 )
   throw Error("Invalid isolated demonstration process");
+const language = app.commandLine.getSwitchValue("goga-interface-language");
+if (isSupportedLocale(language)) setLocale(language);
 app.setPath("userData", profile);
 app.setPath("sessionData", profile);
 app.setPath("temp", process.env.TMPDIR);
@@ -120,13 +123,13 @@ const validParams = (p, keys) => {
     typeof p !== "object" ||
     Object.keys(p).some((k) => !keys.includes(k))
   )
-    throw Error("Неподдерживаемые параметры команды показа.");
+    throw Error("GOGA_DEMO_HELPER:helperParams");
 };
 function byContext(id) {
   if (id === undefined || id === defaultContextId)
     return session.defaultSession;
   const ses = contexts.get(id);
-  if (!ses) throw Error("Неизвестный контекст браузера.");
+  if (!ses) throw Error("GOGA_DEMO_HELPER:browserContextUnknown");
   return ses;
 }
 async function handle(method, p) {
@@ -134,7 +137,7 @@ async function handle(method, p) {
     case "Browser.setDownloadBehavior":
       // Parent acknowledges only the deny policy. Enforced on all sessions here.
       if (p.behavior !== "deny")
-        throw Error("Загрузки демонстрации запрещены.");
+        throw Error("GOGA_DEMO_HELPER:downloadsForbidden");
       byContext(p.browserContextId);
       return {};
     case "Storage.getCookies":
@@ -180,8 +183,8 @@ async function handle(method, p) {
         p.disposeOnDetach !== undefined &&
         typeof p.disposeOnDetach !== "boolean"
       )
-        throw Error("Некорректное время жизни контекста.");
-      if (contexts.size >= 64) throw Error("Слишком много контекстов показа.");
+        throw Error("GOGA_DEMO_HELPER:contextLifetimeInvalid");
+      if (contexts.size >= 64) throw Error("GOGA_DEMO_HELPER:contextLimit");
       const ses = session.fromPartition("goga-demo-" + randomUUID());
       secure(ses);
       // Electron doesn't publish the BrowserContextID of a Session. Ask
@@ -192,7 +195,7 @@ async function handle(method, p) {
         dbg.attach("1.3");
         const { targetInfo } = await dbg.sendCommand("Target.getTargetInfo");
         const id = targetInfo.browserContextId;
-        if (!id) throw Error("Не удалось создать контекст.");
+        if (!id) throw Error("GOGA_DEMO_HELPER:contextCreationFailed");
         contexts.set(id, ses);
         return { browserContextId: id };
       } finally {
@@ -202,7 +205,7 @@ async function handle(method, p) {
     case "Target.disposeBrowserContext": {
       validParams(p, ["browserContextId"]);
       if (!contexts.has(p.browserContextId))
-        throw Error("Неизвестный контекст браузера.");
+        throw Error("GOGA_DEMO_HELPER:browserContextUnknown");
       const ses = contexts.get(p.browserContextId);
       contexts.delete(p.browserContextId);
       for (const win of [...pages.values()])
@@ -229,10 +232,10 @@ async function handle(method, p) {
           (k) => p[k] !== undefined && typeof p[k] !== "boolean",
         )
       )
-        throw Error("Такой тип вкладки или состояние окна не поддерживается.");
-      if (pages.size >= maxPages) throw Error("Слишком много вкладок показа.");
+        throw Error("GOGA_DEMO_HELPER:tabTypeUnsupported");
+      if (pages.size >= maxPages) throw Error("GOGA_DEMO_HELPER:tabLimit");
       const url = p.url === "" ? "about:blank" : p.url;
-      if (!safeURL(url)) throw Error("Адрес недоступен для демонстрации.");
+      if (!safeURL(url)) throw Error("GOGA_DEMO_HELPER:addressUnavailable");
       const win = newWindow(byContext(p.browserContextId));
       // Publish immediately like CDP; navigation progresses asynchronously.
       void win.loadURL(url).catch(() => {});
@@ -242,7 +245,7 @@ async function handle(method, p) {
     case "Target.activateTarget": {
       validParams(p, ["targetId"]);
       const win = pages.get(p.targetId);
-      if (!win || win.isDestroyed()) throw Error("Вкладка недоступна.");
+      if (!win || win.isDestroyed()) throw Error("GOGA_DEMO_HELPER:tabMissing");
       if (method === "Target.closeTarget") {
         win.destroy();
         return { success: true };
@@ -251,7 +254,7 @@ async function handle(method, p) {
       return {};
     }
     default:
-      throw Error("Команда показа недоступна.");
+      throw Error("GOGA_DEMO_HELPER:commandUnavailable");
   }
 }
 app
@@ -270,7 +273,7 @@ app
     } finally {
       initialDebugger.detach();
     }
-    await initial.loadURL(startPage);
+    await initial.loadURL(startPage(getLocale(), t("hostTerminal.startPageTitle"), t("hostTerminal.startPageHint")));
     const parser = createInterface({ input: process.stdin });
     let tail = Promise.resolve();
     parser.on("line", (line) => {

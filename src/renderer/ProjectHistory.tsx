@@ -1,3 +1,6 @@
+import { HintButton } from "./ActionHint";
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { SearchablePicker } from "./SearchablePicker";
 import { HistoryEntryPicker } from "./HistoryEntryPicker";
 import { HistoryPrune } from "./HistoryPrune";
@@ -78,6 +81,7 @@ export function ProjectHistory({
   project: Project;
   owner?: TopicContextRef;
 }) {
+  useLocale();
   const active = useViewActive();
   const scope = owner ? contextRef(owner) : project.id;
   const scopeKey = typeof scope === "string" ? scope : contextKey(scope);
@@ -122,20 +126,17 @@ export function ProjectHistory({
     setRefresh((value) => value + 1);
   };
   return (
-    <section className="history-view" aria-label="История проекта">
+    <section className="history-view" aria-label={msg("project.projectHistory")}>
       <LoadingBoundary
         pending={years.pending}
         error={years.error}
         onRetry={years.retry}
-        label="Загружаем историю…"
+        label={msg("project.loadingHistory")}
       >
         {!availableYears.length ? (
           <div className="empty-file">
-            <h3>История пока пуста</h3>
-            <p>
-              Здесь появятся записи из .goga/history выбранного проекта или
-              топика.
-            </p>
+            <h3>{msg("project.historyIsEmpty")}</h3>
+            <p>{msg("project.entriesFromGogaHistoryForTheSelectedProjectOrTopic")}</p>
           </div>
         ) : (
           <>
@@ -143,15 +144,15 @@ export function ProjectHistory({
               <SearchablePicker
                 key={JSON.stringify([scopeKey, active])}
                 className="history-year-picker"
-                label="Год"
+                label={msg("project.year")}
                 entries={availableYears}
                 value={year}
                 disabled={!active}
-                placeholder="Выберите год"
-                emptyLabel="Нет годов"
-                searchLabel="Найти год"
-                searchPlaceholder="Год"
-                listLabel="Годы истории"
+                placeholder={msg("project.selectAYear")}
+                emptyLabel={msg("project.noYears")}
+                searchLabel={msg("project.findAYear")}
+                searchPlaceholder={msg("project.year")}
+                listLabel={msg("project.historyYears")}
                 onChange={(value) =>
                   setChoices((old) => ({ ...old, [scopeKey]: value }))
                 }
@@ -178,27 +179,25 @@ export function ProjectHistory({
                   onClick={() => {
                     setPrune({ scopeKey, year });
                   }}
-                >
-                  Очистить историю…
-                </button>
+                >{msg("project.clearHistory2")}</button>
               )}
-              <span className="history-readonly">Только просмотр</span>
+              <span className="history-readonly">{msg("project.readOnly")}</span>
             </div>
             <LoadingBoundary
               pending={entries.pending}
               error={entries.error}
               onRetry={entries.retry}
-              label="Загружаем записи истории…"
+              label={msg("project.loadingHistoryEntries")}
             >
               {!availableEntries.length ? (
                 <div className="empty-file">
-                  <h3>За {year} год записей нет</h3>
-                  <p>Выберите другой год.</p>
+                  <h3>{msg("project.noHistoryForYear", { year })}</h3>
+                  <p>{msg("project.chooseAnotherYear")}</p>
                 </div>
               ) : !entry ? (
                 <div className="empty-file">
-                  <h3>Выберите запись истории</h3>
-                  <p>Затем выберите файл для просмотра.</p>
+                  <h3>{msg("project.selectAHistoryEntry")}</h3>
+                  <p>{msg("project.thenSelectAFileToView")}</p>
                 </div>
               ) : null}
             </LoadingBoundary>
@@ -251,6 +250,7 @@ export function HistoryArtifacts({
   active?: boolean;
   refreshKey?: number;
 }) {
+  useLocale();
   const active = useViewActive() && enabled;
   const key = JSON.stringify([
     typeof scope === "string" ? scope : contextKey(scope),
@@ -279,7 +279,7 @@ export function HistoryArtifacts({
   const choose = useCallback(
     (path: string) => {
       if (!files.some((item) => item.kind === "file" && item.path === path)) {
-        setLinkError({ key, text: `Файл «${path}» не найден в этой записи.` });
+        setLinkError({ key, text: msg("project.fileWasNotFoundInThisEntry", { path: String(path) }) });
         return;
       }
       setLinkError(null);
@@ -305,7 +305,7 @@ export function HistoryArtifacts({
   const relative = `.goga/history/${year}/${entry}/${file?.path ?? ""}`;
   const mismatch =
     doc.data && doc.data.relativePath !== relative
-      ? "Файл относится к другой записи истории. Повторите загрузку."
+      ? msg("project.theFileBelongsToAnotherHistoryEntryReloadIt")
       : undefined;
   function branch(prefix = "") {
     return (
@@ -323,13 +323,13 @@ export function HistoryArtifacts({
               <li key={item.path}>
                 {item.kind === "directory" ? (
                   <>
-                    <button
+                    <HintButton
                       type="button"
                       className="folder-row"
-                      aria-label={`Папка ${item.path}`}
+                      aria-label={msg("project.folder", { path: String(item.path) })}
                       aria-expanded={open}
                       disabled={!!item.reason}
-                      title={item.reason}
+                      hint={item.reason}
                       onClick={() =>
                         setExpanded((old) => ({ ...old, [folderKey]: !open }))
                       }
@@ -339,14 +339,14 @@ export function HistoryArtifacts({
                       </span>
                       <span className="folder-mark" aria-hidden="true" />
                       <span>{item.path.split("/").pop()}</span>
-                    </button>
+                    </HintButton>
                     {open && <div>{branch(item.path + "/")}</div>}
                   </>
                 ) : (
                   <button
                     type="button"
                     className={`file-row ${file?.path === item.path ? "selected" : ""}`}
-                    aria-label={`Файл ${item.path}`}
+                    aria-label={msg("project.file2", { path: String(item.path) })}
                     aria-pressed={file?.path === item.path}
                     onClick={() => choose(item.path)}
                   >
@@ -366,27 +366,27 @@ export function HistoryArtifacts({
         pending={tree.pending}
         error={tree.error}
         onRetry={tree.retry}
-        label="Загружаем артефакты…"
+        label={msg("project.loadingArtifacts")}
       >
         <p className="history-root">
           .goga/history/{year}/{entry}/
         </p>
         {!files.length ? (
           <div className="empty-file">
-            <h3>Артефактов пока нет</h3>
-            <p>В этой записи нет файлов для просмотра.</p>
+            <h3>{msg("project.noArtifactsYet")}</h3>
+            <p>{msg("project.thereAreNoFilesToViewInThisEntry")}</p>
           </div>
         ) : (
           <HistoryViewport active={active}>
             <div className="item-list tree-pane">
-              <span className="eyebrow">АРТЕФАКТЫ</span>
+              <span className="eyebrow">{msg("project.artifacts")}</span>
               <HistoryScrollPane
                 positionKey={JSON.stringify([key, "tree"])}
                 positions={scrollPositions.current}
                 active={active && !!tree.data}
-                label="Прокрутка списка файлов"
+                label={msg("project.scrollFileList")}
               >
-                <nav className="file-tree" aria-label="Файлы записи истории">
+                <nav className="file-tree" aria-label={msg("project.historyEntryFiles")}>
                   {branch()}
                 </nav>
               </HistoryScrollPane>
@@ -409,8 +409,8 @@ export function HistoryArtifacts({
                   doc.data?.format === "markdown"
                     ? "MARKDOWN"
                     : file.readable
-                      ? "ТЕКСТ"
-                      : "ФАЙЛ"
+                      ? msg("project.text")
+                      : msg("project.file3")
                 }
                 contextLabel={`${year} / ${entry} / ${file.path}`}
               >
@@ -421,10 +421,10 @@ export function HistoryArtifacts({
                 )}
                 {!file.readable ? (
                   <div className="empty-file">
-                    <h3>Предпросмотр недоступен</h3>
+                    <h3>{msg("project.previewUnavailable")}</h3>
                     <p>
                       {file.reason ||
-                        "Этот формат не поддерживает текстовый просмотр."}
+                        msg("project.thisFormatDoesNotSupportTextPreviews")}
                     </p>
                   </div>
                 ) : (
@@ -432,12 +432,12 @@ export function HistoryArtifacts({
                     pending={doc.pending}
                     error={doc.error || mismatch}
                     onRetry={doc.retry}
-                    label="Загружаем файл…"
+                    label={msg("project.loadingFile")}
                   >
                     {doc.data && !mismatch && (
                       <div className="history-preview">
                         {doc.data.text === "" ? (
-                          <p className="history-empty">Файл пуст</p>
+                          <p className="history-empty">{msg("project.fileIsEmpty")}</p>
                         ) : doc.data.format === "markdown" ? (
                           <HistoryMarkdown
                             text={doc.data.text}
@@ -455,11 +455,11 @@ export function HistoryArtifacts({
             ) : (
               <div className="history-document">
                 <div className="empty-file">
-                  <h3>Выберите файл</h3>
+                  <h3>{msg("project.selectAFile")}</h3>
                   <p>
                     {current
-                      ? "Выбранный файл больше недоступен. Выберите другой файл."
-                      : "Выберите артефакт в списке слева для просмотра."}
+                      ? msg("project.theSelectedFileIsNoLongerAvailableSelectAnotherFile")
+                      : msg("project.selectAnArtifactOnTheLeftToViewIt")}
                   </p>
                 </div>
               </div>

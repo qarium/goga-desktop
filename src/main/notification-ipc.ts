@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import {dashboardRecoveryAllowed} from "../shared/dashboard-connection";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -86,7 +87,7 @@ export class NotificationNavigation {
   ) {}
   async setViewedRun(id: string | null): Promise<void> {
     const run = id === null ? null : this.d.runs().find((r) => r.id === id);
-    if (id !== null && !run) throw Error("Неизвестный запуск");
+    if (id !== null && !run) throw Error(t("native.unknownRun"));
     this.viewedRun = run ? { id: run.id, owner: owner(run) } : null;
     await this.readViewed();
   }
@@ -123,15 +124,15 @@ export class NotificationNavigation {
   }
 
   prepare(notificationId: string) {
-    for (const [key, t] of this.tickets)
-      if (t.expires <= Date.now()) this.tickets.delete(key);
+    for (const [key, entry] of this.tickets)
+      if (entry.expires <= Date.now()) this.tickets.delete(key);
     if (this.tickets.size >= 64)
-      throw Error("Завершите предыдущий переход к уведомлению.");
+      throw Error(t("native.noticeOpenBusy"));
     const n = this.d.center.find(notificationId),
       r = n && this.d.runs().find((r) => r.id === n.runId);
     if (!n || !r)
       throw Error(
-        "Запуск уже закрыт. Уведомление можно отметить прочитанным отдельно.",
+        t("native.noticeRunClosed"),
       );
     if (
       r.projectId !== n.projectId ||
@@ -141,7 +142,7 @@ export class NotificationNavigation {
       r.context?.revision !== n.context?.revision
     )
       throw Error(
-        "Контекст запуска изменился. Уведомление не отмечено прочитанным.",
+        t("native.noticeContextChanged"),
       );
     const ticket = randomUUID();
     this.d.cancelStage?.();
@@ -158,15 +159,15 @@ export class NotificationNavigation {
     return { ticket, run: r, stageId: n.stageId };
   }
   async complete(ticket: string) {
-    const t = this.tickets.get(ticket);
+    const entry = this.tickets.get(ticket);
     this.tickets.delete(ticket);
-    if (!t || t.expires <= Date.now() || t.generation !== this.generation)
-      throw Error("Переход к уведомлению отменён. Откройте его снова.");
-    const getRun = () => this.d.runs().find((r) => r.id === t.runId);
+    if (!entry || entry.expires <= Date.now() || entry.generation !== this.generation)
+      throw Error(t("native.noticeOpenAgain"));
+    const getRun = () => this.d.runs().find((r) => r.id === entry.runId);
     let r = getRun();
-    const n = this.d.center.find(t.id);
-    if (!n || !r || owner(r) !== t.owner)
-      throw Error("Запуск или его контекст уже недоступен.");
+    const n = this.d.center.find(entry.id);
+    if (!n || !r || owner(r) !== entry.owner)
+      throw Error(t("native.noticeRunMissing"));
     const live = () =>
       !!r &&
       r.status === "running" &&
@@ -175,20 +176,20 @@ export class NotificationNavigation {
       r.dashboardOpened !== false;
     if (live()) {
       if (!this.d.isSelected(r.id))
-        throw Error("Нужный запуск не открыт. Уведомление не прочитано.");
+        throw Error(t("native.noticeRunNotOpen"));
       if (n.stageId && !(await this.d.focusStage(r.id, n.stageId)))
         throw Error(
-          "Не удалось открыть стадию. Уведомление не отмечено прочитанным.",
+          t("native.noticeStageFailedOpen"),
         );
       r = getRun();
-      if (!r || owner(r) !== t.owner || (live() && !this.d.isSelected(r.id)))
-        throw Error("Переход к уведомлению отменён.");
+      if (!r || owner(r) !== entry.owner || (live() && !this.d.isSelected(r.id)))
+        throw Error(t("native.noticeOpenCancelled"));
     }
-    if (t.generation !== this.generation)
-      throw Error("Переход к уведомлению отменён.");
-    if (this.d.center.find(t.id)?.sequence !== t.sequence)
+    if (entry.generation !== this.generation)
+      throw Error(t("native.noticeOpenCancelled"));
+    if (this.d.center.find(entry.id)?.sequence !== entry.sequence)
       return this.d.center.snapshot();
-    return this.d.center.markRead(t.id, t.sequence);
+    return this.d.center.markRead(entry.id, entry.sequence);
   }
 }
 export function notificationWindowForeground(
@@ -262,7 +263,7 @@ export function registerNotificationIPC(
           e.senderFrame?.parent === null,
         )
       )
-        throw Error("IPC: доступ запрещён");
+        throw Error(t("native.ipcDenied"));
       return fn(...args);
     });
   };

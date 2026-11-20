@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import { z } from "zod";
 import { topicContextRefSchema } from "./worktrees";
 
@@ -36,7 +37,7 @@ export function terminalContextKey(context: TerminalContext): string {
   );
 }
 export function terminalContextFromKey(key: string): TerminalContext {
-  if (key.length > 8192) throw Error("Недопустимый контекст терминала.");
+  if (key.length > 8192) throw Error(t("hostTerminal.badContext"));
   try {
     const a: unknown = JSON.parse(key);
     if (!Array.isArray(a)) throw Error();
@@ -57,7 +58,7 @@ export function terminalContextFromKey(key: string): TerminalContext {
     if (terminalContextKey(context) !== key) throw Error();
     return context;
   } catch {
-    throw Error("Недопустимый контекст терминала.");
+    throw Error(t("hostTerminal.badContext"));
   }
 }
 export const terminalTabScopeSchema = z.discriminatedUnion("kind", [
@@ -105,7 +106,7 @@ export const terminalProjectTabsSchema = z
     const fail = () =>
       ctx.addIssue({
         code: "custom",
-        message: "Недопустимый список вкладок терминала.",
+        message: t("hostTerminal.badTabList"),
       });
     if (new Set(p.tabs.map((t) => t.id)).size !== p.tabs.length) fail();
     if (
@@ -136,7 +137,7 @@ export const terminalRegistrySchema = z
     if (Object.keys(r.projects).length > 10000)
       ctx.addIssue({
         code: "custom",
-        message: "Слишком много проектов терминала.",
+        message: t("hostTerminal.projectLimit"),
       });
     const usedSnapshots = new Set<string>();
     for (const [projectId, p] of Object.entries(r.projects)) {
@@ -145,7 +146,7 @@ export const terminalRegistrySchema = z
           if (usedSnapshots.has(tab.envSnapshotId))
             ctx.addIssue({
               code: "custom",
-              message: "Снимок окружения должен принадлежать одной вкладке.",
+              message: t("hostTerminal.snapshotOwner"),
             });
           usedSnapshots.add(tab.envSnapshotId);
         }
@@ -161,7 +162,7 @@ export const terminalRegistrySchema = z
       ) {
         ctx.addIssue({
           code: "custom",
-          message: "Владелец вкладки терминала не совпадает с проектом.",
+          message: t("hostTerminal.projectMismatch"),
         });
       }
     }

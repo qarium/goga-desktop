@@ -1,3 +1,5 @@
+import { t } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import { useEffect, useId, useRef } from "react";
 
 export function DemoConfirm({
@@ -14,6 +16,7 @@ export function DemoConfirm({
   cancel: () => void;
   submit: () => void;
 }) {
+  useLocale();
   const ref = useRef<HTMLDialogElement>(null),
     title = useId(),
     description = useId();
@@ -38,9 +41,7 @@ export function DemoConfirm({
       <h2 id={title}>{q.title}</h2>
       <p id={description}>{q.detail}</p>
       <div className="form-actions">
-        <button data-testid="demo-cancel" onClick={cancel}>
-          Отмена
-        </button>
+        <button data-testid="demo-cancel" onClick={cancel}>{t("general.cancel")}</button>
         <button
           className={q.action === "stop" ? "danger" : "primary"}
           data-testid="demo-confirm"

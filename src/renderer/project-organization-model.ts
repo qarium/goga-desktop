@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 /** Presentation order only. Never authorizes an operation on a project. */
 export interface ProjectGroup {
   id: string;
@@ -73,7 +74,7 @@ export function applyOrganizationCommand(
     case "renameGroup": {
       const name = c.name.trim();
       if (!validGroupName(name))
-        throw Error("Введите название группы — от 1 до 40 символов.");
+        throw Error(msg("workspace.enterAGroupNameBetween1And40Characters"));
       if (
         o.groups.some(
           (g) =>
@@ -81,9 +82,9 @@ export function applyOrganizationCommand(
             !(c.type === "renameGroup" && g.id === c.id),
         )
       )
-        throw Error("Группа с таким названием уже есть.");
+        throw Error(msg("workspace.aGroupWithThisNameAlreadyExists"));
       if (c.type === "createGroup") {
-        if (!c.id || group) throw Error("Такая группа уже существует.");
+        if (!c.id || group) throw Error(msg("workspace.thisGroupAlreadyExists"));
         return {
           ...o,
           groups: [

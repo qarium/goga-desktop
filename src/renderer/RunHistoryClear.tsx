@@ -1,3 +1,6 @@
+import { HintButton } from "./ActionHint";
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useRef, useState } from "react";
 import { Trash2 } from "lucide-react";
 import type { ScopeRef } from "../shared/context";
@@ -23,6 +26,7 @@ export function RunHistoryClear({
   label: string;
   clear: (request: ClearRunHistoryRequest) => Promise<ClearRunHistoryResult>;
 }) {
+  useLocale();
   const [confirmedIds, setConfirmedIds] = useState<string[] | null>(null);
   const [busy, setBusy] = useState(false),
     [message, setMessage] = useState(""),
@@ -57,9 +61,9 @@ export function RunHistoryClear({
       const result = await clear({ scope, kind, runIds });
       if (!mounted.current) return;
       setMessage(
-        `Удалено записей: ${result.removedRunIds.length}.` +
+        tr("launch.recordsRemovedLength", { length: result.removedRunIds.length }) +
           (result.retained.length
-            ? ` Сохранено записей: ${result.retained.length} — завершение или синхронизация ещё не подтверждены.`
+            ? tr("launch.recordsKeptLengthCompletionOrSyncHasNot", { length: result.retained.length })
             : ""),
       );
     } catch (failure) {
@@ -71,16 +75,16 @@ export function RunHistoryClear({
   }
   return (
     <>
-      <button
+      <HintButton
         type="button"
         disabled={busy || !eligible.length}
-        title={
+        hint={
           !eligible.length &&
           runs.some((run) => run.syncPending || run.recovery === "unverified")
-            ? "Часть записей ещё нужна для подтверждения процесса или завершения синхронизации."
+            ? tr("launch.someRecordsAreStillNeededToVerifyProcesses")
             : !eligible.length
-              ? "Нет завершённых записей для очистки."
-              : "Удалить завершённые записи выбранного раздела."
+              ? tr("launch.noCompletedRecordsToClear")
+              : tr("launch.removeCompletedRecordsInTheSelectedSection")
         }
         onClick={() => {
           setError("");
@@ -88,9 +92,7 @@ export function RunHistoryClear({
           setConfirmedIds(eligible.map((run) => run.id));
         }}
       >
-        <Trash2 size={16} aria-hidden="true" />
-        Очистить историю…
-      </button>
+        <Trash2 size={16} aria-hidden="true" />{tr("launch.clearHistory")}</HintButton>
       {(busy || error || message) && (
         <span
           className="run-history-feedback"
@@ -98,9 +100,7 @@ export function RunHistoryClear({
         >
           {busy ? (
             <>
-              <span className="loading-spinner" aria-hidden="true" />
-              Очищаем историю…
-            </>
+              <span className="loading-spinner" aria-hidden="true" />{tr("launch.clearingHistory")}</>
           ) : (
             error || message
           )}
@@ -108,35 +108,26 @@ export function RunHistoryClear({
       )}
       {confirmedIds && (
         <TopicModal
-          title={`Очистить историю ${kind === "pipeline" ? "конвейеров" : "сборок"}?`}
+          title={tr("launch.clearValue1History", { value1: kind === "pipeline" ? tr("launch.pipeline2") : tr("launch.build2") })}
           className="run-history-clear-dialog"
           onClose={() => setConfirmedIds(null)}
-          closeLabel="Закрыть подтверждение очистки"
+          closeLabel={tr("launch.closeClearHistoryConfirmation")}
         >
           <div className="run-history-clear-body">
             <p className="hint">{label}</p>
             <p>
-              <strong>Записей к удалению: {confirmedIds.length}</strong>
+              <strong>{tr("launch.recordsToRemove")}{confirmedIds.length}</strong>
             </p>
-            <p>
-              Удаляются только завершённые записи истории Desktop. Файлы проекта
-              и исходные журналы Goga не изменятся.
-            </p>
-            <p className="hint">
-              Активные запуски и подключённые панели останутся.
-            </p>
+            <p>{tr("launch.onlyCompletedDesktopHistoryEntriesWillBeRemoved")}</p>
+            <p className="hint">{tr("launch.activeRunsAndAttachedDashboardsWillRemain")}</p>
           </div>
           <footer className="form-actions">
-            <button type="button" onClick={() => setConfirmedIds(null)}>
-              Отмена
-            </button>
+            <button type="button" onClick={() => setConfirmedIds(null)}>{tr("launch.cancel")}</button>
             <button
               type="button"
               className="danger"
               onClick={() => void submit()}
-            >
-              Очистить историю
-            </button>
+            >{tr("launch.clearHistory2")}</button>
           </footer>
         </TopicModal>
       )}

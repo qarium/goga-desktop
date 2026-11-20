@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import type { ScopeRef } from "../shared/context";
 import type { HomeSessions } from "./home/session-summary";
 import type { OverviewStore } from "./overview/store";
@@ -34,14 +35,14 @@ export function overviewLeaveFile(
     const file = current();
     if (!file)
       throw Error(
-        "Файл или его рабочий контекст изменился. Вернитесь в редактор.",
+        msg("workspace.theFileOrItsWorkspaceHasChangedReturnToThe"),
       );
     if (
       file.text !== file.document.text && file.dirtyOrigin &&
       documentScopeId(file.dirtyOrigin) !== documentScopeId(scope)
     )
       throw Error(
-        "Рабочая копия изменилась после начала редактирования. Проверьте файл и сохраните правки в редакторе.",
+        msg("workspace.theWorkingCopyHasChangedSinceEditingBeganReviewThe"),
       );
     return file;
   };
@@ -49,7 +50,7 @@ export function overviewLeaveFile(
     const file = requireFile();
     if (file.text !== file.document.text)
       throw Error(
-        "Во время сохранения появились новые правки. Они остались в редакторе.",
+        msg("workspace.newEditsWereMadeWhileSavingTheyRemainInThe"),
       );
   };
   let alreadyOnDisk = false;
@@ -77,7 +78,7 @@ export function overviewLeaveFile(
       } else if (!(await store.save(path, file.text))) {
         throw Error(
           current()?.error ||
-            "Не удалось сохранить файл. Правки остались в редакторе.",
+            msg("workspace.couldNotSaveTheFileYourEditsRemainInThe"),
         );
       }
       checkSaved();

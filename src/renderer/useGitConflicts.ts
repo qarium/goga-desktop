@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import { useEffect, useRef, useState } from "react";
 import { ChangeSet } from "@codemirror/state";
 import type { ScopeRef } from "../shared/context";
@@ -124,7 +125,7 @@ export function useGitConflicts({
           doc.revision !== issuedRevision
         )
           throw Error(
-            "Ответ конфликта устарел или относится к другому файлу/контексту.",
+            msg("git.theConflictResponseIsStaleOrBelongsToADifferent"),
           );
         files.current.set(issuedPath, {
           document: doc,
@@ -145,7 +146,7 @@ export function useGitConflicts({
         ) {
           setReadFailed(issuedPath);
           setMessage({
-            title: "Не удалось прочитать конфликт",
+            title: msg("git.couldNotReadConflict2"),
             text: topicError(error),
           });
         }
@@ -162,7 +163,7 @@ export function useGitConflicts({
       repaint();
     } catch (error) {
       setMessage({
-        title: "Не удалось изменить блок",
+        title: msg("git.couldNotUpdateBlock"),
         text: topicError(error),
       });
     }
@@ -219,13 +220,13 @@ export function useGitConflicts({
         value.canonicalization !== "git-text-attributes"
       )
         throw Error(
-          "Подтверждение относится к другому файлу/контексту или разрешению.",
+          msg("git.theConfirmationBelongsToAnotherFileContextOrResolution"),
         );
       setPreview(value);
     } catch (error) {
       if (alive.current && !controller.signal.aborted)
         setMessage({
-          title: "Не удалось подготовить разрешение",
+          title: msg("git.couldNotPrepareResolution"),
           text: topicError(error),
         });
     } finally {
@@ -251,7 +252,7 @@ export function useGitConflicts({
         value.path !== submitted.path
       )
         throw Error(
-          "Результат относится к другому файлу/контексту. Проверьте состояние Git.",
+          msg("git.theResultBelongsToADifferentFileOrContextCheck"),
         );
       const saved =
         value.status === "saved" &&
@@ -268,23 +269,23 @@ export function useGitConflicts({
       state.log = [
         value.message,
         value.log,
-        value.recoveryPath && `Материалы восстановления: ${value.recoveryPath}`,
+        value.recoveryPath && msg("git.recoveryFiles", { recoveryPath: String(value.recoveryPath) }),
       ]
         .filter(Boolean)
         .join("\n\n");
       if (saved) done.current(submitted.scope);
       setMessage({
-        title: "Результат разрешения файла",
+        title: msg("git.fileResolutionResult"),
         text:
           state.log ||
-          (saved ? "Файл и индекс сохранены." : "Файл не сохранён."),
+          (saved ? msg("git.fileAndIndexSaved") : msg("git.fileNotSaved")),
       });
       repaint();
     } catch (error) {
       if (alive.current) {
         state.uncertain = true;
-        state.log = `${topicError(error)}\n\nОтвет не подтверждает отсутствие записи. Проверьте состояние Git; автоматического повтора не будет.`;
-        setMessage({ title: "Результат разрешения файла", text: state.log });
+        state.log = msg("git.theResponseDoesNotConfirmThatNothingWasWrittenCheck", { value1: String(topicError(error)) });
+        setMessage({ title: msg("git.fileResolutionResult"), text: state.log });
         repaint();
       }
     } finally {
@@ -329,7 +330,7 @@ export function useGitConflicts({
     closeMessage: () => setMessage(null),
     showLog: () =>
       entry?.log &&
-      setMessage({ title: "Результат разрешения файла", text: entry.log }),
+      setMessage({ title: msg("git.fileResolutionResult"), text: entry.log }),
     closePreview: () => setPreview(null),
     cancelPrepare: () => preparing.current?.abort(),
     requestReload: () => {
@@ -408,8 +409,8 @@ export function useGitConflicts({
       preparing.current?.abort();
       setPreview(null);
       setMessage({
-        title: "Не удалось применить блок",
-        text: "Текст редактора изменился до применения блока. Фактический текст, курсор и история сохранены; проверьте результат вручную. Автоматическая замена не выполнена.",
+        title: msg("git.couldNotApplyBlock"),
+        text: msg("git.editorTextChangedBeforeTheBlockCouldBeAppliedThe"),
       });
       repaint();
     },

@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 import type { GitUpdateHandoffCandidate } from "./git-update-handoff";
 import { z } from "zod";
 import { topicContextRefSchema } from "./worktrees";
@@ -34,7 +35,7 @@ export const repositoryActionRequestSchema = z
   .refine(
     (value) => !value.context || value.context.projectId === value.projectId,
     {
-      message: "Контекст относится к другому проекту.",
+      error: () => tr("host.theContextBelongsToAnotherProject"),
     },
   )
   .refine(
@@ -43,11 +44,11 @@ export const repositoryActionRequestSchema = z
       !!value.context ||
       (value.action === "propagate" && !!value.propagation),
     {
-      message: "Действие доступно только в выбранном контексте топика.",
+      error: () => tr("host.thisActionRequiresASelectedTopicContext"),
     },
   )
   .refine((value) => !value.propagation || value.action === "propagate", {
-    message: "Выбор ветки публикации доступен только для propagate.",
+    error: () => tr("host.selectingAPublicationBranchIsOnlyAvailableForPropagation"),
   })
   .refine(
     (value) =>
@@ -59,7 +60,7 @@ export const repositoryActionRequestSchema = z
           value.context![key as "year" | "topic" | "branch"],
       ),
     {
-      message: "Контекст не совпадает с выбранным топиком.",
+      error: () => tr("host.theContextDoesNotMatchTheSelectedTopic"),
     },
   );
 export type RepositoryAction = z.infer<typeof repositoryActionSchema>;

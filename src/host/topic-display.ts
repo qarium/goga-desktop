@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { randomUUID } from "node:crypto";
 import type { TopicsContext } from "./topics";
 import type {
@@ -26,7 +27,7 @@ const slug = (name: string) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "");
 const changed = () =>
-  Error("Ветка или задача изменились во время чтения. Откройте задачу заново.");
+  Error(tr("host.theBranchOrTaskChangedWhileBeingReadOpenThe"));
 
 /** Display data only: never computes a mutation fingerprint or reads per-host/remote boards. */
 export async function readTopicTableDisplay(
@@ -48,12 +49,12 @@ export async function readTopicTableDisplay(
         todo: null,
       }));
   } catch {
-    throw Error("Goga вернула некорректный JSON каталог топиков");
+    throw Error(tr("host.gogaReturnedAnInvalidJsonTopicCatalog"));
   }
   const keys = new Set<string>();
   for (const row of entries) {
     const key = JSON.stringify([row.topic, row.branch]);
-    if (keys.has(key)) throw Error("Топик неоднозначен. Обновите каталог.");
+    if (keys.has(key)) throw Error(tr("host.theTopicIsAmbiguousRefreshTheCatalog"));
     keys.add(key);
   }
   const own = entries.filter(
@@ -101,7 +102,7 @@ export async function readTopicTaskOverview(
       d.owner.branch !== target.branch ||
       target.remote)
   )
-    throw Error("Топик относится к другому контексту.");
+    throw Error(tr("host.theTopicBelongsToAnotherContext"));
   const snapshot = async () => {
     assertReadActive();
     await guardedProject(root);
@@ -117,7 +118,7 @@ export async function readTopicTaskOverview(
       .filter((line) => line.split("\0")[0] === full);
     const commit = matches[0]?.split("\0")[1];
     if (matches.length !== 1 || !commit || !/^[a-f0-9]{40,64}$/.test(commit))
-      throw Error("Ветка отсутствует или неоднозначна. Обновите каталог.");
+      throw Error(tr("host.theBranchIsMissingOrAmbiguousRefreshTheCatalog"));
     if (!/^[a-f0-9]{40,64}$/.test(head.trim())) throw changed();
     return { commit, current: branch.trim(), head: head.trim() };
   };
@@ -161,8 +162,8 @@ export async function readTopicTaskOverview(
     ...(!editable
       ? {
           reason: working
-            ? "Во время активного запуска задача доступна только для чтения."
-            : "Задача из коммита доступна только для чтения. Для редактирования выберите рабочий контекст топика.",
+            ? tr("host.duringAnActiveRunTheTaskIsReadOnly")
+            : tr("host.theTaskFromACommitIsReadOnlySelectThe"),
         }
       : {}),
   };

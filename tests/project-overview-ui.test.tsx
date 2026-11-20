@@ -259,7 +259,8 @@ it("offers a graph action next to the contract for the current tree slice", asyn
   const contract = screen.getByRole("button", {
     name: "Показать контракт папки src/api",
   });
-  expect(contract.nextElementSibling).toBe(action);
+  const actions = Array.from(contract.closest(".ov-file-scope")!.querySelectorAll("button"));
+  expect(actions.findIndex(button => button === contract) + 1).toBe(actions.findIndex(button => button === action));
   fireEvent.click(screen.getByRole("button", { name: "Свернуть схему" }));
   fireEvent.click(action);
   expect(screen.getByRole("button", { name: "Свернуть схему" })).toBeTruthy();
@@ -389,7 +390,11 @@ it("keeps all source actions in one nonwrapping file toolbar with a truncating p
     ]) {
       const button = within(toolbar).getByRole("button", { name });
       expect(button.closest(".ov-file-toolbar")).toBe(toolbar);
-      expect(button.getAttribute("title")).toBeTruthy();
+      fireEvent.mouseEnter(button.parentElement!);
+      const hint = screen.getByRole("tooltip");
+      expect(hint.textContent).toContain(name);
+      expect(button.getAttribute("aria-describedby")).toBe(hint.id);
+      fireEvent.keyDown(document, { key: "Escape" });
     }
     expect(document.querySelector(".ov-editor-tools")).toBeNull();
     expect(getComputedStyle(toolbar).flexWrap).toBe("nowrap");

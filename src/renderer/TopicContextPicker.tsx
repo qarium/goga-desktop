@@ -1,3 +1,5 @@
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { TopicRepositoryNotice, type TopicRepositoryState } from "./topic-repository";
 import type { DisplayCatalog } from "./topic-display-cache";
 import {
@@ -46,16 +48,17 @@ export function TopicCreationFeedback({
   disabled?: boolean;
   onShow: () => void;
 }) {
+  useLocale();
   if (progress.state === "busy") {
-    const label = `Создаётся «${progress.identity.branch}»…`;
-    return <ContextOperationProgress label={label} message="Создаётся…" />;
+    const label = tr("topics.creatingBranch", { branch: progress.identity.branch });
+    return <ContextOperationProgress label={label} message={tr("topics.creating")} />;
   }
   return (
     <div className="topic-context-creation-feedback is-error" role="alert">
       <button
         type="button"
         className="topic-context-creation-error"
-        aria-label={`Показать ошибку создания топика ${progress.identity.branch}`}
+        aria-label={tr("topics.showTopicCreationErrorForBranch", { branch: progress.identity.branch })}
         title={progress.message}
         disabled={disabled}
         onClick={onShow}
@@ -63,7 +66,7 @@ export function TopicCreationFeedback({
         <span className="topic-context-creation-warning" aria-hidden="true">
           !
         </span>
-        <span className="topic-context-creation-message">Ошибка создания</span>
+        <span className="topic-context-creation-message">{tr("topics.creationFailed")}</span>
         <span aria-hidden="true">↗</span>
       </button>
     </div>
@@ -129,31 +132,25 @@ const identityKey = (identity: TopicContextIdentity) =>
   ]);
 const ownerKey = (record: WorktreeRecord) =>
   JSON.stringify([identityKey(record), record.contextId]);
-function copyStatus(record?: WorktreeRecord): string {
-  if (!record) return "Копия подготовится при переходе";
-  if (
-    record.compatibility === "legacy-linked" ||
-    record.storageKind === "linked"
-  )
-    return "Копия прежнего формата";
-  if (record.preparation) return "Подготовка не завершена";
-  if (record.state === "missing") return "Копия недоступна";
-  if (record.state === "conflict") return "Конфликт копии";
-  if (record.state === "deleting") return "Копия удаляется";
-  return record.ownership === "primary" ? "Основная копия" : "Рабочая копия";
+const readiness = {
+  notPrepared: ["topics.theCopyWillBePreparedWhenYouSwitch", "topics.noCopy"],
+  legacy: ["topics.legacyCopy", "topics.legacy"],
+  preparing: ["topics.preparationIncomplete", "topics.preparing"],
+  missing: ["topics.copyUnavailable", "topics.unavailable"],
+  conflict: ["topics.copyConflict", "topics.conflict"],
+  deleting: ["topics.copyBeingRemoved", "topics.removing"],
+  primary: ["topics.originalCopy", "topics.original"],
+  ready: ["topics.workingCopy", "topics.copyAvailable"],
+} as const;
+function copyStatus(record?: WorktreeRecord): keyof typeof readiness {
+  if (!record) return "notPrepared";
+  if (record.compatibility === "legacy-linked" || record.storageKind === "linked") return "legacy";
+  if (record.preparation) return "preparing";
+  if (record.state === "missing" || record.state === "conflict" || record.state === "deleting") return record.state;
+  return record.ownership === "primary" ? "primary" : "ready";
 }
-const readinessLabel: Record<string, string> = {
-  "Копия подготовится при переходе": "Нет копии",
-  "Копия прежнего формата": "Старый формат",
-  "Подготовка не завершена": "Подготовка",
-  "Копия недоступна": "Недоступна",
-  "Конфликт копии": "Конфликт",
-  "Копия удаляется": "Удаление",
-  "Основная копия": "Исходная",
-  "Рабочая копия": "Есть копия",
-};
-const timeoutMessage =
-  "Подготовка заняла больше 300 с. Результат подготовки ещё может завершиться; повтор сначала проверит копию. Предыдущий контекст сохранён.";
+const timeoutMessage = () =>
+  tr("topics.preparationTookMoreThan300SecondsAndMay");
 
 /** Selecting waits for a host-validated copy; viewing a card never changes cwd. */
 export function TopicContextPicker({
@@ -179,6 +176,7 @@ export function TopicContextPicker({
   requestedSelection,
   onSelectionRequestHandled,
 }: TopicContextPickerProps) {
+  const locale = useLocale();
   const nativePopup = useNativeTopicPopup();
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
@@ -354,7 +352,7 @@ export function TopicContextPicker({
         (other) => identityKey(other.identity) === identityKey(topic.identity),
       );
       if (sameIdentity.length > 1)
-        topic.ownerLabel = `Копия ${sameIdentity.indexOf(topic) + 1}`;
+        topic.ownerLabel = tr("topics.copyValue1", { value1: sameIdentity.indexOf(topic) + 1 });
     }
     const term = query.trim().toLocaleLowerCase();
     return all
@@ -365,7 +363,7 @@ export function TopicContextPicker({
           .includes(term),
       )
       .sort((a, b) => Number(b.isCurrent) - Number(a.isCurrent));
-  }, [snapshot, knownContexts, current, project.id, query, selectedKey]);
+  }, [snapshot, knownContexts, current, project.id, query, selectedKey, locale]);
   const primaryIndex = 0;
   const activeIndex = Math.min(focused, topics.length);
   const activeOption = activeIndex >= 0 ? optionId(activeIndex) : undefined;
@@ -452,13 +450,13 @@ export function TopicContextPicker({
                   identity.year,
                 );
                 if (!mounted.current || token !== epoch.current)
-                  throw Error("Создание отменено до изменения проекта");
+                  throw Error(tr("topics.creationCanceledBeforeTheProjectChanged"));
                 if (
                   fresh.projectId !== project.id ||
                   fresh.year !== identity.year
                 )
                   throw Error(
-                    "Настройки базы относятся к другому проекту или году",
+                    tr("topics.baseSettingsBelongToAnotherProjectOrYear"),
                   );
                 return window.goga.createTopicContext({
                   projectId: project.id,
@@ -472,7 +470,7 @@ export function TopicContextPicker({
                 ? window.goga.resolveTopicContext(contextRef(owner))
                 : Promise.reject(
                     Error(
-                      "Точная проверка рабочей копии недоступна в этой версии хоста.",
+                      tr("topics.thisHostVersionCannotVerifyTheExactWorking"),
                     ),
                   )
               : window.goga.ensureTopicContext(identity),
@@ -504,11 +502,11 @@ export function TopicContextPicker({
       const ref = topicContextRefSchema.safeParse(contextRef(record));
       if (!ref.success)
         throw Error(
-          "Получена некорректная ссылка рабочей копии. Повторное создание не выполняется.",
+          tr("topics.invalidWorkingCopyReferenceNoCopyWillBe"),
         );
       if (typeof window.goga.resolveTopicContext !== "function")
         throw Error(
-          "Точная проверка рабочей копии недоступна в этой версии хоста.",
+          tr("topics.thisHostVersionCannotVerifyTheExactWorking"),
         );
       const resolved = await window.goga.resolveTopicContext(ref.data);
       if (
@@ -518,7 +516,7 @@ export function TopicContextPicker({
         resolved.revision !== record.revision
       )
         throw Error(
-          "Ответ проверки не соответствует подготовленной рабочей копии. Предыдущий контекст сохранён.",
+          tr("topics.theVerificationResponseDoesNotMatchThePrepared"),
         );
       return resolved;
     });
@@ -531,8 +529,8 @@ export function TopicContextPicker({
         create,
         owner,
         message: owner
-          ? "Проверка рабочей копии заняла больше 300 с. Предыдущий контекст сохранён."
-          : timeoutMessage,
+          ? tr("topics.workingCopyVerificationTookMoreThan300Seconds")
+          : timeoutMessage(),
       });
     }, TOPIC_CONTEXT_PREPARE_TIMEOUT_MS);
     void verified.then(
@@ -547,7 +545,7 @@ export function TopicContextPicker({
             create,
             owner,
             message:
-              "Ответ подготовки не соответствует выбранному топику. Предыдущий контекст сохранён.",
+              tr("topics.thePreparationResponseDoesNotMatchTheSelected"),
           });
         } else if (
           record.state !== "ready" ||
@@ -564,7 +562,7 @@ export function TopicContextPicker({
             create,
             owner,
             message:
-              "Рабочая копия пока недоступна. Проверьте конфликт ветки, папку проекта и регистрацию Git; предыдущий контекст сохранён.",
+              tr("topics.theWorkingCopyIsUnavailableCheckBranchConflicts"),
           });
         } else {
           if (flights.current.get(key) === flight) flights.current.delete(key);
@@ -582,13 +580,13 @@ export function TopicContextPicker({
         const message =
           error instanceof Error
             ? error.message
-            : "Не удалось подготовить рабочую копию.";
+            : tr("topics.couldNotPrepareTheWorkingCopy");
         setPreparation({
           state: "error",
           identity,
           create,
           owner,
-          message: `${message} Предыдущий контекст сохранён.`,
+          message: tr("topics.messageThePreviousContextWasKept", { message: message }),
         });
       },
     );
@@ -684,7 +682,7 @@ export function TopicContextPicker({
       <div
         id={optionId(primaryIndex)}
         role="row"
-        aria-label="Без топика — исходная папка проекта, текущая ветка"
+        aria-label={tr("topics.noTopicOriginalProjectFolderCurrentBranch")}
         aria-selected={!current}
         className={`topic-context-option${primaryIndex === activeIndex ? " is-focused" : ""}`}
         onPointerDown={(event) => event.preventDefault()}
@@ -692,9 +690,9 @@ export function TopicContextPicker({
         onClick={() => choose(primaryIndex)}
       >
         <div className="topic-context-lines" role="gridcell">
-          <strong>Без топика</strong>
-          <small>Исходная папка · текущая ветка</small>
-          {!current && <span className="topic-context-current">Текущий</span>}
+          <strong>{tr("launch.noTopic")}</strong>
+          <small>{tr("topics.originalFolderCurrentBranch")}</small>
+          {!current && <span className="topic-context-current">{tr("topics.current")}</span>}
         </div>
       </div>
     );
@@ -755,8 +753,8 @@ export function TopicContextPicker({
           disabled={disabled}
           aria-label={
             headerTarget
-              ? `Открыть карточку топика ${headerTarget.topic}`
-              : "Без топика"
+              ? tr("topics.openTopicCardForTopic", { topic: headerTarget.topic })
+              : tr("launch.noTopic")
           }
           onClick={() => {
             if (headerTarget && headerYear)
@@ -764,13 +762,13 @@ export function TopicContextPicker({
             else if (!headerTarget) show();
           }}
         >
-          {headerTarget?.topic ?? "Без топика"}
+          {headerTarget?.topic ?? tr("launch.noTopic")}
         </button>
         <button
           type="button"
           className="topic-context-trigger"
           ref={trigger}
-          aria-label="Выбрать другой топик"
+          aria-label={tr("topics.selectAnotherTopic")}
           aria-haspopup={repository === "available" ? "grid" : "dialog"}
           aria-expanded={expanded}
           aria-controls={expanded ? (repository === "available" ? listId : id) : undefined}
@@ -806,28 +804,26 @@ export function TopicContextPicker({
             ref={popup}
             className="topic-context-popup"
             role="region"
-            aria-label="Выбор топика"
+            aria-label={tr("topics.topicPicker")}
             onKeyDown={keyDown}
           >
             {repository !== "available" ? (
-              <div id={id} role="dialog" aria-label="Доступность топиков">
+              <div id={id} role="dialog" aria-label={tr("topics.topicAvailability")}>
                 {repository === "checking"
-                  ? <p role="status">Проверяем Git в проекте…</p>
+                  ? <p role="status">{tr("topics.checkingGitInProject")}</p>
                   : <TopicRepositoryNotice popup />}
-                {current && <button type="button" onClick={() => choose(primaryIndex)}>Перейти в исходную папку</button>}
+                {current && <button type="button" onClick={() => choose(primaryIndex)}>{tr("topics.goToOriginalFolder")}</button>}
               </div>
             ) : <>
             {catalogError && (
               <div className="context-board-error">
                 <p role="alert">{catalogError}</p>
                 {onRetryCatalog && (
-                  <button type="button" onClick={onRetryCatalog}>
-                    Повторить загрузку топиков
-                  </button>
+                  <button type="button" onClick={onRetryCatalog}>{tr("topics.retryLoadingTopics")}</button>
                 )}
               </div>
             )}
-            <label htmlFor={`${id}-search`}>Найти топик</label>
+            <label htmlFor={`${id}-search`}>{tr("topics.findTopic")}</label>
             <input
               id={`${id}-search`}
               ref={search}
@@ -840,7 +836,7 @@ export function TopicContextPicker({
               aria-activedescendant={activeOption}
               autoComplete="off"
               value={query}
-              placeholder="Название топика или ветки"
+              placeholder={tr("topics.topicOrBranchName")}
               onChange={(event) => {
                 setQuery(event.target.value);
                 setFocused(0);
@@ -850,18 +846,19 @@ export function TopicContextPicker({
               className="topic-context-options"
               id={listId}
               role="grid"
-              aria-label="Топики проекта"
+              aria-label={tr("topics.projectTopics")}
               ref={list}
             >
               {primaryRow()}
               {topics.map((topic, topicIndex) => {
                 const index = topicIndex + 1;
                 const isCurrent = topic.isCurrent;
-                const status = copyStatus(topic.record);
+                const [longLabel, shortLabel] = readiness[copyStatus(topic.record)];
+                const status = tr(longLabel);
                 const activity = contextRunActivity(runs, topic.record ?? null);
                 const active = activity.activeBuild ?? activity.activePipeline;
                 const activityLabel = active
-                  ? `● ${active.kind === "build" ? "Сборка" : "Конвейер"}${active.kind !== "build" && active.pipelineName ? ` «${active.pipelineName}»` : ""}${activity.activeCount > 1 ? ` · ещё ${activity.activeCount - 1}` : ""}`
+                  ? `● ${active.kind === "build" ? tr("launch.build") : tr("launch.pipeline")}${active.kind !== "build" && active.pipelineName ? ` «${active.pipelineName}»` : ""}${activity.activeCount > 1 ? tr("topics.value1More", { value1: activity.activeCount - 1 }) : ""}`
                   : null;
                 const pending =
                   preparation?.state === "busy" &&
@@ -873,7 +870,7 @@ export function TopicContextPicker({
                     key={topic.key}
                     id={optionId(index)}
                     role="row"
-                    aria-label={`${topic.identity.topic} ${topic.identity.branch} ${topic.identity.year}${topic.ownerLabel ? ` ${topic.record?.contextId}` : ""} ${status}${isCurrent ? " Текущий" : ""}${activity.activeCount ? ` Активных: ${activity.activeCount}` : ""}`}
+                    aria-label={`${topic.identity.topic} ${topic.identity.branch} ${topic.identity.year}${topic.ownerLabel ? ` ${topic.record?.contextId}` : ""} ${status}${isCurrent ? tr("topics.current2") : ""}${activity.activeCount ? tr("topics.activeActivecount", { activeCount: activity.activeCount }) : ""}`}
                     aria-selected={isCurrent}
                     aria-disabled={pending}
                     className={`topic-context-option${index === activeIndex ? " is-focused" : ""}`}
@@ -906,10 +903,10 @@ export function TopicContextPicker({
                           className="topic-context-readiness"
                           title={status}
                         >
-                          {readinessLabel[status]}
+                          {tr(shortLabel)}
                         </span>
                         {isCurrent && (
-                          <span className="topic-context-current">Текущий</span>
+                          <span className="topic-context-current">{tr("topics.current")}</span>
                         )}
                       </small>
                       {activity.activeCount > 0 && (
@@ -934,8 +931,8 @@ export function TopicContextPicker({
               {topics.length === 0 && (
                 <p className="topic-context-empty">
                   {!snapshot && !knownContexts.length
-                    ? "Список топиков пока недоступен."
-                    : "Совпадений нет."}
+                    ? tr("topics.theTopicListIsNotAvailableYet")
+                    : tr("topics.noMatches")}
                 </p>
               )}
             </div>
@@ -945,8 +942,8 @@ export function TopicContextPicker({
                 role={preparation.create ? undefined : "status"}
               >
                 {preparation.owner
-                  ? "Проверяем рабочую копию…"
-                  : "Подготавливаем рабочую копию…"}
+                  ? tr("topics.checkingWorkingCopy")
+                  : tr("topics.preparingWorkingCopy")}
               </p>
             )}
             {preparation?.state === "error" && (
@@ -963,9 +960,7 @@ export function TopicContextPicker({
                       preparation.owner,
                     )
                   }
-                >
-                  Повторить
-                </button>
+                >{tr("launch.retry")}</button>
               </div>
             )}
             {newName && !hasExact && (
@@ -990,15 +985,13 @@ export function TopicContextPicker({
                     )
                   }
                   aria-describedby={`${id}-creation-reason`}
-                >
-                  Создать «{newName}» и подготовить конвейер
-                </button>
+                >{tr("topics.createAndPreparePipeline", { topic: newName })}</button>
                 <small id={`${id}-creation-reason`}>
                   {!creationAvailable
-                    ? "Создание топика недоступно в этой версии хоста."
+                    ? tr("topics.creatingTopicsIsUnavailableInThisHostVersion")
                     : validNewName
-                      ? "Задачу можно описать на следующем шаге. Конвейер сам не запустится."
-                      : "Используйте буквы, цифры, дефис, подчёркивание или /. До 80 символов."}
+                      ? tr("topics.describeTheTaskInTheNextStepThe")
+                      : tr("topics.useLettersDigitsHyphensUnderscoresOrUpTo")}
                 </small>
               </div>
             )}

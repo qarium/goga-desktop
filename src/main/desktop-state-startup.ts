@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { execFile } from "node:child_process";
 import path from "node:path";
 import {
@@ -52,8 +53,7 @@ export async function handleDesktopStartupFailure(
   if (!(error instanceof LegacyDesktopStateLockError)) {
     try {
       d.showError(
-        "Не удалось запустить приложение: " +
-          (error instanceof Error ? error.message : "неизвестная ошибка"),
+        t("native.startupFailed", { reason: error instanceof Error ? error.message : t("native.unknownError") }),
       );
     } finally {
       d.exit(1);
@@ -77,7 +77,7 @@ export async function handleDesktopStartupFailure(
   } catch {
     try {
       d.showError(
-        "Восстановление не выполнено. Файл блокировки изменился, используется другим процессом или его состояние не удалось проверить. Настройки не сброшены. Закройте другие экземпляры Goga Desktop и повторите запуск.",
+        t("native.recoveryFailed"),
       );
     } finally {
       d.exit(1);

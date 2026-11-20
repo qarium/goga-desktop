@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import path from "node:path";
 import {
   createDiscardGuard,
@@ -42,7 +43,7 @@ import { ByteCommandError } from "./process";
 
 const stale = () =>
   Error(
-    "Состояние Git изменилось. Материалы восстановления сохранены; требуется проверка.",
+    gitMessage("gitHost.gitStateChangedRecoveryDataWasKeptReviewIs"),
   );
 const equal = (a: unknown, b: unknown) =>
   JSON.stringify(a) === JSON.stringify(b);
@@ -108,7 +109,7 @@ export class NativeGitDiscardActions extends GitDiscardActions {
       ) > 65536
     )
       throw Error(
-        "Слишком большой список для безопасного восстановления отмены. Выберите меньше файлов и подтвердите их отдельно.",
+        gitMessage("gitHost.tooManyFilesForSafeDiscardRecoverySelectFewer"),
       );
     const message = await this.recovery().bindDiscard(preview);
     return message ? { ...preview, recoveryMessage: message } : preview;
@@ -144,7 +145,7 @@ export class NativeGitDiscardActions extends GitDiscardActions {
     const intent = nativeIntent(["discard", names, t.preview.items]);
     const details = JSON.stringify(["discard", names, t.preview.items]);
     if (Buffer.byteLength(details) > 65536)
-      throw Error("Слишком большой список: выберите меньше файлов для отмены.");
+      throw Error(gitMessage("gitHost.tooManyFilesSelectFewerFilesToDiscard"));
     const token = guard.journal.prepare("discard", before, intent, details);
     const changedPaths: string[] = [],
       trashedPaths: string[] = [];
@@ -438,13 +439,13 @@ export class NativeGitDiscardActions extends GitDiscardActions {
     const success = result.outcome === "completed";
     if (result.outcome === "uncertain") {
       const steps = {
-        "discard-preview": "проверка выбранных файлов до записи",
-        "discard-owner": "проверка владельца рабочей папки",
-        "discard-worktree": "восстановление рабочих файлов",
-        "discard-index": "обновление индекса",
-        "discard-result": "проверка результата",
+        "discard-preview": gitMessage("gitHost.checkingSelectedFilesBeforeWriting"),
+        "discard-owner": gitMessage("gitHost.checkingTheWorkingFolderOwner"),
+        "discard-worktree": gitMessage("gitHost.restoringWorkingFiles"),
+        "discard-index": gitMessage("gitHost.updatingTheIndex"),
+        "discard-result": gitMessage("gitHost.verifyingTheResult"),
       };
-      log += `\nОтмена остановилась на шаге: ${steps[failureStep]}. Состояние будет проверено без повторного выполнения отмены.`;
+      log += gitMessage("gitHost.discardStoppedAtStateWillBeCheckedWithoutRepeating", { value1: steps[failureStep] });
     }
     if (finalize)
       onVerified(async () => {
@@ -473,9 +474,9 @@ export class NativeGitDiscardActions extends GitDiscardActions {
         ? { recoveryPath: result.recoveryPath ?? staging }
         : {}),
       message: success
-        ? "Выбранные изменения отменены. Остальные файлы и подготовленные изменения сохранены."
-        : "Отмена изменений требует проверки. Не повторяйте её автоматически; материалы восстановления сохранены.",
-      log: log + (staging ? `\nСлужебные материалы: ${staging}` : ""),
+        ? gitMessage("gitHost.selectedChangesDiscardedOtherFilesAndStagedChangesWere")
+        : gitMessage("gitHost.discardNeedsReviewDoNotRepeatItAutomaticallyRecovery"),
+      log: log + (staging ? gitMessage("gitHost.internalRecoveryData", { staging }) : ""),
     };
   }
 }

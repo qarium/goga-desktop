@@ -1,3 +1,5 @@
+import { t } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import { useEffect, useState } from "react";
 import { type DemoDirectory, useDemoValue } from "./directory";
 
@@ -10,6 +12,7 @@ export function DemoLaunchItem({
   scopeKey: string;
   enter: (start: boolean) => void;
 }) {
+  useLocale();
   const showId = useDemoValue(store, () => store.showFor(scopeKey)?.showId);
   const busy = useDemoValue(store, () => store.starting.has(scopeKey));
   const [read, setRead] = useState<"loading" | "ready" | "failed">("loading"),
@@ -39,22 +42,22 @@ export function DemoLaunchItem({
       }
     >
       {read === "failed"
-        ? "Проверить демонстрацию снова"
+        ? t("general.checkDemonstrationAgain")
         : busy
-          ? "Запускаем демонстрацию…"
+          ? t("general.startingDemonstration")
           : read === "loading"
-            ? "Демонстрация"
+            ? t("general.demonstration")
             : showId
-              ? "Открыть демонстрацию"
-              : "Начать демонстрацию"}
+              ? t("general.openDemonstration")
+              : t("general.startDemonstration")}
       <small>
         {read === "failed"
-          ? "Не удалось получить состояние показа"
+          ? t("general.couldNotGetTheDemonstrationStatus")
           : read === "loading"
-            ? "Проверяем состояние показа…"
+            ? t("general.checkingDemonstrationStatus")
             : showId
-              ? "Вернуться к странице показа"
-              : "Открыть страницу для совместной работы"}
+              ? t("general.returnToDemonstrationPage")
+              : t("general.openAPageForCollaboration")}
       </small>
     </button>
   );

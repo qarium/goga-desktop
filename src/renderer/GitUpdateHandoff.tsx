@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { nativeResultSchema } from "./git-native-sequence-result";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
@@ -84,6 +86,7 @@ interface Props {
 }
 /** Each exact candidate owns its reads, confirmation and non-cancellable write. */
 export function GitUpdateHandoff(props: Props) {
+  useLocale();
   return <HandoffConfirmation key={candidateKey(props.candidate)} {...props} />;
 }
 function HandoffConfirmation({
@@ -92,6 +95,7 @@ function HandoffConfirmation({
   onChanged,
   autoPrepare = false,
 }: Props) {
+  useLocale();
   const [open, setOpen] = useState(false);
   const [closed, setClosed] = useState(false);
   const [pending, setPending] = useState<"prepare" | "execute" | null>(null);
@@ -117,7 +121,7 @@ function HandoffConfirmation({
       () => {
         setPreview(null);
         setError(
-          "Срок подтверждения истёк. Закройте окно и проверьте состояние заново.",
+          msg("git.confirmationExpiredCloseThisDialogAndCheckTheStateAgain"),
         );
       },
       Math.max(
@@ -146,7 +150,7 @@ function HandoffConfirmation({
         !candidateSchema.safeParse(candidate).success ||
         candidate.expiresAt <= Date.now()
       )
-        throw Error("Предложение устарело или содержит непроверенные поля.");
+        throw Error(msg("git.theProposalIsOutOfDateOrContainsUnverifiedFields"));
       const raw = await readWithSignal(
         controller.signal,
         "readGitWorkspace",
@@ -172,7 +176,7 @@ function HandoffConfirmation({
         snapshot.data.branch !== candidate.targetBranch
       )
         throw Error(
-          "Состояние Git устарело или относится к другому контексту. Обновите изменения.",
+          msg("git.theGitStateIsOutOfDateOrBelongsTo"),
         );
       const request = gitUpdateHandoffRequestSchema.parse({
         scope: candidate.scope,
@@ -193,7 +197,7 @@ function HandoffConfirmation({
         candidate.expiresAt <= Date.now()
       )
         throw Error(
-          "Подтверждение устарело или относится к другому контексту, состоянию либо алгоритму. Его данные не показаны.",
+          msg("git.confirmationIsOutOfDateOrBelongsToADifferent"),
         );
       setPreview(checked.data);
     } catch (e) {
@@ -230,7 +234,7 @@ function HandoffConfirmation({
         identity.data.algorithm !== candidate.algorithm
       )
         throw Error(
-          "Результат относится к другому контексту, рабочей папке или алгоритму; его данные не показаны.",
+          msg("git.theResultBelongsToAnotherContextWorkingDirectoryOrAlgorithm"),
         );
       const checked = resultSchema.safeParse(value);
       const n = checked.success ? checked.data.native : undefined;
@@ -267,23 +271,23 @@ function HandoffConfirmation({
         [
           verified
             ? n?.outcome === "completed"
-              ? "Локальная Git-операция завершена. Публикация и завершение всего обновления Goga не подтверждаются."
-              : "Конфликт подтверждён. Разрешите файлы в редакторе конфликтов; операция ещё не завершена."
-            : "Результат не подтверждён. Проверьте состояние Git: изменения могли произойти. Автоматического повтора не будет.",
+              ? msg("git.theLocalGitOperationFinishedPublicationAndCompletionOfThe")
+              : msg("git.conflictConfirmedResolveFilesInTheConflictEditorTheOperation")
+            : msg("git.resultUnconfirmedCheckTheGitStateChangesMayHaveBeen"),
           typeof diagnostics.message === "string"
             ? diagnostics.message
-            : "Сообщение не получено.",
-          n?.recoveryPath ? `Материалы восстановления: ${n.recoveryPath}` : "",
+            : msg("git.noMessageReceived"),
+          n?.recoveryPath ? msg("git.recoveryFiles", { recoveryPath: String(n.recoveryPath) }) : "",
           typeof diagnostics.log === "string"
             ? diagnostics.log
-            : "Журнал не получен.",
+            : msg("git.noLogReceived"),
         ].join("\n\n"),
       );
       if (verified) callbacks.current.onChanged(candidate.scope);
     } catch (e) {
       if (current())
         setError(
-          `${topicError(e)}\n\nРезультат не подтверждён. Проверьте состояние Git: операция могла выполниться. Автоматического повтора не будет.`,
+          msg("git.resultUnconfirmedCheckTheGitStateTheOperationMayHave2", { value1: String(topicError(e)) }),
         );
     } finally {
       flight.current = false;
@@ -307,8 +311,8 @@ function HandoffConfirmation({
       {!autoPrepare && (
         <button type="button" disabled={open} onClick={() => void prepare()}>
           {candidate.conflicts.length
-            ? "Разрешить конфликт вручную…"
-            : "Обновить через Git…"}
+            ? msg("git.resolveConflictManually")
+            : msg("git.updateUsingGit")}
         </button>
       )}
       {open && (
@@ -322,20 +326,17 @@ function HandoffConfirmation({
           }}
         >
           <TopicModal
-            title="Переход к ручному разрешению конфликта"
-            closeLabel="Закрыть подтверждение перехода"
+            title={msg("git.switchToManualConflictResolution")}
+            closeLabel={msg("git.closeTransitionConfirmation")}
             className="git-merge-operation-modal"
             onClose={close}
           >
             <div className="git-merge-operation-form">
               {pending === "prepare" && (
-                <p role="status">Проверяем состояние Git…</p>
+                <p role="status">{msg("git.checkingGitState")}</p>
               )}
               {pending === "execute" && (
-                <p role="status">
-                  Создаём конфликт… Просмотр можно закрыть; запись не
-                  отменяется.
-                </p>
+                <p role="status">{msg("git.creatingConflictYouCanCloseThisViewWritingContinues")}</p>
               )}
               {error && <pre role="alert">{error}</pre>}
               {report && <pre role="status">{report}</pre>}
@@ -343,36 +344,31 @@ function HandoffConfirmation({
                 <>
                   <div className="git-merge-operation-details">
                     <dl>
-                      <dt>Контекст</dt>
+                      <dt>{msg("git.context")}</dt>
                       <dd>
                         {typeof p.scope === "string"
                           ? p.scope
                           : `${p.scope.projectId} / ${p.scope.year} / ${p.scope.topic} · ${p.scope.contextId}`}
                       </dd>
-                      <dt>Рабочая папка</dt>
+                      <dt>{msg("git.workingDirectory")}</dt>
                       <dd>{p.root}</dd>
-                      <dt>Целевая ветка</dt>
+                      <dt>{msg("git.targetBranch")}</dt>
                       <dd>{p.targetBranch}</dd>
-                      <dt>Текущий HEAD</dt>
+                      <dt>{msg("git.currentHEAD")}</dt>
                       <dd>{p.targetHead}</dd>
-                      <dt>Источник</dt>
+                      <dt>{msg("git.source")}</dt>
                       <dd>{p.sourceRef}</dd>
-                      <dt>Коммит источника</dt>
+                      <dt>{msg("git.sourceCommit")}</dt>
                       <dd>{p.sourceOid}</dd>
-                      <dt>Базовая ветка</dt>
+                      <dt>{msg("git.baseBranch")}</dt>
                       <dd>{p.baseRef}</dd>
-                      <dt>Стратегия обновления</dt>
+                      <dt>{msg("git.updateStrategy")}</dt>
                       <dd>{p.strategy}</dd>
-                      <dt>Алгоритм</dt>
+                      <dt>{msg("git.algorithm")}</dt>
                       <dd>{p.algorithm}</dd>
                     </dl>
                     <p className="git-conflict-warning">{preview.effects}</p>
-                    <p>
-                      В текущей рабочей папке начнётся {p.algorithm}. Файлы и
-                      индекс могут измениться; Git может завершить операцию или
-                      остановиться на конфликте. Продолжение или отмена
-                      потребует отдельного подтверждения.
-                    </p>
+                    <p>{msg("git.updateEffect", { algorithm: p.algorithm })}</p>
                     <ul>
                       {p.conflicts.map((path) => (
                         <li key={path}>
@@ -380,23 +376,19 @@ function HandoffConfirmation({
                         </li>
                       ))}
                     </ul>
-                    <p className="hint">
-                      Git-хуки отключены. Результат не публикуется на сервер.
-                    </p>
+                    <p className="hint">{msg("git.gitHooksAreDisabledNothingIsPushedToTheServer")}</p>
                   </div>
                   <div className="git-merge-operation-confirm">
                     <div className="git-branch-dialog-actions">
-                      <button type="button" onClick={close}>
-                        Отмена
-                      </button>
+                      <button type="button" onClick={close}>{msg("git.cancel")}</button>
                       <button
                         type="button"
                         className="primary"
                         onClick={() => void execute()}
                       >
                         {candidate.conflicts.length
-                          ? "Подтвердить переход к конфликту"
-                          : "Начать локальное обновление"}
+                          ? msg("git.confirmTransitionToConflict")
+                          : msg("git.startLocalUpdate")}
                       </button>
                     </div>
                   </div>

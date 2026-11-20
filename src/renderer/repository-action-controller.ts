@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import { useSyncExternalStore } from "react";
 import type { ScopeRef } from "../shared/context";
 import type { DesktopAPI } from "../shared/bridge";
@@ -71,7 +72,7 @@ class RepositoryActionController {
         typeof result.log !== "string"
       )
         throw Error(
-          "Ответ операции относится к другому проекту или контексту.",
+          msg("workspace.theOperationResponseBelongsToAnotherProjectOrContext"),
         );
       if (result.status === "error")
         this.update({
@@ -99,7 +100,7 @@ class RepositoryActionController {
               contextId: request.context?.contextId,
               action: request.action,
               status: "error",
-              log: "Не удалось завершить запрос операции.",
+              log: msg("workspace.couldNotCompleteTheOperationRequest"),
               error,
             },
           },

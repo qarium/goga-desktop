@@ -127,10 +127,6 @@
   width: 280px;
   max-width: calc(100vw - 32px);
   padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface);
-  box-shadow: 0 12px 32px #0006;
 }
 /* Native stacking belongs to TopicPickerPopup, not the shell's z-index. */
 .topic-context-native-root .context-launch-menu {
@@ -221,7 +217,7 @@
   overflow-wrap: anywhere;
 }
 .run-history-feedback[role="alert"] {
-  color: #efb2a4;
+  color: var(--feedback-error-fg);
 }
 .run-history-clear-dialog[open] {
   display: grid;
@@ -265,10 +261,8 @@
   }
 }
 .context-run-identity small svg {vertical-align:-2px}
-.attach-panel-dialog {width:min(460px,90vw);max-height:90vh;padding:24px;border:1px solid var(--line);border-radius:12px;background:var(--surface);color:var(--text);overflow:auto}
-.attach-panel-dialog::backdrop {background:#050911ad}
+.attach-panel-dialog {width:min(460px,90vw);max-height:90vh;padding:24px;overflow:auto}
 .attach-panel-dialog header {color:var(--teal)}
-.attach-panel-dialog header button {display:grid;place-items:center;padding:6px}
 .attach-panel-dialog h2 {margin:16px 0 10px}
 .attach-panel-dialog label {display:grid;gap:7px;font-weight:600;margin-top:18px}
 .attach-panel-dialog input {width:100%}

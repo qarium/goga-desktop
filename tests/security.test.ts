@@ -96,3 +96,26 @@ describe("AFM isolation policy", () => {
     });
   });
 });
+
+describe("local Desktop language preference", () => {
+  it("defaults to English, preserves an explicit language on restart, and rejects unsupported writes", async () => {
+    const { mkdtemp, writeFile, rm } = await import("node:fs/promises");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const { DesktopLanguagePreference } = await import("../src/main/interface-language");
+    const dir = await mkdtemp(join(tmpdir(), "desktop-language-"));
+    try {
+      const fresh = new DesktopLanguagePreference(dir);
+      expect(fresh.read()).toBe("en");
+      expect(fresh.write("ru")).toBe("ru");
+      const restored = new DesktopLanguagePreference(dir);
+      expect(restored.read()).toBe("ru");
+      expect(() => restored.write("../../other")).toThrow();
+      expect(fresh.read()).toBe("ru");
+      await writeFile(join(dir, "interface-language.json"), JSON.stringify({ language: "xx" }));
+      expect(fresh.read()).toBe("en");
+      await writeFile(join(dir, "interface-language.json"), "corrupt");
+      expect(fresh.read()).toBe("en");
+    } finally { await rm(dir, { force: true, recursive: true }); }
+  });
+});

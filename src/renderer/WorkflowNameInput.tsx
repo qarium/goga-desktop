@@ -1,3 +1,5 @@
+import { t } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import type { TopicContextRef } from "../shared/worktrees";
 import { contextRef, contextRequestKey } from "./topic-context";
 import { readRequest } from "./read-request";
@@ -39,6 +41,7 @@ export function WorkflowNameInput({
   value: string;
   onChange: (value: string) => void;
 }) {
+  useLocale();
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
   const input = useRef<HTMLInputElement>(null);
@@ -117,7 +120,7 @@ export function WorkflowNameInput({
     const viewport = root.current?.closest(".scroll-area");
     const tabs = root.current
       ?.closest(".project-settings-panel")
-      ?.querySelector(":scope > .section-tabs");
+      ?.querySelector(":scope > [data-settings-tabs]");
     const measure = () => {
       if (!root.current || !input.current) return;
       const bounds = input.current.getBoundingClientRect();
@@ -242,18 +245,16 @@ export function WorkflowNameInput({
     }
   }
   const hint = !current
-    ? "Загружаем подсказки… Имя можно ввести вручную."
+    ? t("general.loadingSuggestionsYouCanEnterANameManually")
     : current.status === "error"
-      ? "Подсказки недоступны. Имя можно ввести вручную."
+      ? t("general.suggestionsAreUnavailableYouCanEnterANameManually")
       : !options.length
-        ? "Нет доступных подсказок. Имя можно ввести вручную."
-        : "Выбор подставляет ID конвейера, но не проверяет содержимое рабочего процесса. Можно ввести своё имя.";
+        ? t("general.noSuggestionsAvailableYouCanEnterANameManually")
+        : t("general.choosingAPipelineFillsInItsIdItDoes");
 
   return (
     <div className="workflow-name-input" ref={root}>
-      <label htmlFor={`${id}-input`}>
-        Имя рабочего процесса
-        <input
+      <label htmlFor={`${id}-input`}>{t("general.workflowName")}<input
           id={`${id}-input`}
           ref={input}
           value={value}
@@ -295,7 +296,7 @@ export function WorkflowNameInput({
           id={`${id}-listbox`}
           ref={listbox}
           role="listbox"
-          aria-label="Подсказки имени рабочего процесса"
+          aria-label={t("general.workflowNameSuggestions")}
           className="workflow-name-popup"
           data-placement={popup.above ? "above" : "below"}
           style={{

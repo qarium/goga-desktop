@@ -1,3 +1,5 @@
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import { GitBranch } from "lucide-react";
 import { gitSummaryCacheFor } from "./git-summary-cache";
@@ -45,6 +47,7 @@ export function useTopicRepository(
 }
 
 export function TopicRepositoryNotice({ popup = false }: { popup?: boolean }) {
+  useLocale();
   const note = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (popup) note.current?.focus({ preventScroll: true });
@@ -58,11 +61,8 @@ export function TopicRepositoryNotice({ popup = false }: { popup?: boolean }) {
     >
       <GitBranch size={20} aria-hidden="true" />
       <div>
-        <strong>Топики доступны только в Git-репозитории</strong>
-        <p>
-          Инициализируйте Git в исходной папке проекта, чтобы работать с
-          топиками. Файлы проекта доступны и без Git.
-        </p>
+        <strong>{tr("topics.topicsRequireAGitRepository")}</strong>
+        <p>{tr("topics.initializeGitInTheOriginalProjectFolderTo")}</p>
       </div>
     </div>
   );

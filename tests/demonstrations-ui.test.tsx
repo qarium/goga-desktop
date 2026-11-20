@@ -281,7 +281,8 @@ it("lists open shows only on request; confirms by exact instance with safe cance
   fireEvent.click(summary);
   const close = () =>
     screen.getByRole("button", { name: "Завершить показ: Второй" });
-  expect(close().title).toBe("Завершить показ: Второй");
+  fireEvent.mouseEnter(close());
+  expect(close().ownerDocument.getElementById(close().getAttribute("aria-describedby")!)?.textContent).toBe("Завершить показ: Второй");
   expect(screen.queryByRole("link")).toBeNull();
   fireEvent.click(close());
   const dialog = screen.getByRole("dialog", { name: "Завершить показ?" });
@@ -420,7 +421,9 @@ it("keeps tabs, address and essential icon actions in one compact toolbar in bot
     const transfer = controls.getByRole("button", {
       name: "Передать управление",
     });
-    expect(transfer.title).toBe("Передать управление");
+    fireEvent.mouseEnter(transfer);
+  expect(transfer.ownerDocument.getElementById(transfer.getAttribute("aria-describedby")!)?.textContent).toBe("Передать управление");
+    fireEvent.keyDown(transfer, { key: "Escape" });
     expect(transfer.textContent).toBe("");
     const toggle = controls.getByRole("button", {
       name: expanded ? "Свернуть показ" : "Развернуть показ",

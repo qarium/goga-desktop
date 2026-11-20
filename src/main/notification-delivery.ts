@@ -1,3 +1,5 @@
+import type { MessageKey } from "../shared/locale-packs.generated";
+import { t } from "../shared/i18n";
 import type {
   NotificationRecord,
   NotificationSnapshot,
@@ -8,15 +10,15 @@ interface NativeNotice {
   on(event: string, listener: (...args: any[]) => void): unknown;
   removeAllListeners?(): unknown;
 }
-const titles: Record<NotificationRecord["kind"], string> = {
-  question: "Нужен ваш ответ",
-  approval: "Нужно подтверждение",
-  "stage-failed": "Ошибка стадии",
-  paused: "Стадия приостановлена",
-  "assistant-decision": "Помощнику нужно решение",
-  "run-finished": "Конвейер завершён",
-  "run-failed": "Конвейер завершился с ошибкой",
-  "process-exited": "Процесс конвейера завершён",
+const titles: Record<NotificationRecord["kind"], Extract<MessageKey, `native.${string}`>> = {
+  question: "native.noticeQuestion",
+  approval: "native.noticeApproval",
+  "stage-failed": "native.noticeStageFailed",
+  paused: "native.noticePaused",
+  "assistant-decision": "native.noticeAssistant",
+  "run-finished": "native.noticeFinished",
+  "run-failed": "native.noticeFailed",
+  "process-exited": "native.noticeProcessExited",
 };
 /** Native delivery is a consumer, never the source of unread state. */
 export class NotificationDelivery {
@@ -59,7 +61,7 @@ export class NotificationDelivery {
       this.d.badge(s.unreadCount ? String(s.unreadCount) : "");
     } catch {
       this.d.onError(
-        "Не удалось обновить индикатор Dock. Уведомления внутри Goga сохранены.",
+        t("native.badgeFailed"),
       );
     }
     for (const [id, n] of this.notices)
@@ -82,14 +84,14 @@ export class NotificationDelivery {
     try {
       this.notices.get(added.id)?.close();
       // No task/question/agent text or executable paths are copied to the OS.
-      const body = [added.pipeline, added.stageId, added.topic || "Без топика"]
+      const body = [added.pipeline, added.stageId, added.topic || t("native.noTopic")]
         .filter(Boolean)
         .join(" · ")
         .replace(/[\x00-\x1f\x7f-\x9f]/g, "")
         .slice(0, 160);
       const notice = this.d.create({
         id: added.id,
-        title: titles[added.kind],
+        title: t(titles[added.kind]),
         body,
       });
       this.notices.set(added.id, notice);
@@ -97,13 +99,13 @@ export class NotificationDelivery {
       notice.on("show", () => this.d.onError(""));
       notice.on("failed", () =>
         this.d.onError(
-          "Не удалось показать системное уведомление. Проверьте разрешения macOS; внутри Goga событие сохранено.",
+          t("native.bannerFailed"),
         ),
       );
       notice.show();
     } catch {
       this.d.onError(
-        "Системные уведомления недоступны. События внутри Goga сохранены.",
+        t("native.bannersUnavailable"),
       );
     }
   }

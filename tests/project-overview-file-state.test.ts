@@ -1,3 +1,4 @@
+import { DOCUMENT_SAVE_CONFLICT_PREFIX } from "../src/shared/project-documents";
 import { it, expect, vi } from "vitest";
 import { createOverviewStore } from "../src/renderer/overview/store";
 function setup() {
@@ -113,7 +114,7 @@ it("keeps source text, baseline and editor memory after a readable save conflict
     "Конфликт сохранения: файл изменился после открытия. Файл не перезаписан. Обновите файл перед повторным сохранением.";
   api.saveOverviewFile.mockRejectedValueOnce(
     Error(
-      `Error invoking remote method 'goga:save-overview-file': Error: ${reason}`,
+      `Error invoking remote method 'goga:save-overview-file': Error: ${DOCUMENT_SAVE_CONFLICT_PREFIX}${reason}`,
     ),
   );
   expect(await store.save("src/a.ts")).toBe(false);

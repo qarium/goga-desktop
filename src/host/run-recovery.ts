@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, realpath, link, unlink } from "node:fs/promises";
 import path from "node:path";
@@ -85,15 +86,15 @@ function unverified(
 ): RunRecoveryResult {
   const messages = {
     legacy:
-      "Старый запуск не содержит проверяемого владельца процесса. Автоматическое снятие блокировки невозможно: после ручного завершения в исходном терминале нужна ручная проверка или миграция журнала. Новый запуск не допускается без доказательства завершения; Desktop не останавливает процессы по PID.",
+      tr("host.thisOlderRunHasNoVerifiableProcessOwnerTheLock"),
     "identity-mismatch":
-      "Владелец, каталог или идентичность процесса не совпадают. Никакой процесс не остановлен; восстановите исходный контекст и повторите проверку.",
+      tr("host.theOwnerFolderOrProcessIdentityDoesNotMatchNo"),
     "missing-evidence":
-      "Нет надёжного подтверждения допуска или завершения запуска. Повторите проверку; при отсутствии supervisor проверьте процесс в исходном контексте вручную.",
+      tr("host.thereIsNoReliableProofOfRunAdmissionOrCompletion"),
     unreachable:
-      "Supervisor не отвечает. Повторите проверку; Desktop не отправляет сигнал по непроверенному PID.",
+      tr("host.theSupervisorIsNotRespondingCheckAgainDesktopDoesNot"),
     "group-unverified":
-      "Осталась группа процессов без подтверждаемого supervisor. Проверьте её в исходном контексте вручную; автоматическая остановка по PID запрещена.",
+      tr("host.aProcessGroupRemainsWithoutAVerifiableSupervisorCheckIt"),
   };
   return { state: "unverified", reason, message: messages[reason] };
 }
@@ -121,7 +122,7 @@ async function groupExists(pgid: number): Promise<boolean> {
   const rows = await ps(["-axo", "pid=,pgid=,stat="]);
   const entries = rows.split("\n").map((row) => row.trim().split(/\s+/));
   if (!entries.some(([pid]) => Number(pid) === process.pid))
-    throw Error("Не удалось подтвердить таблицу процессов");
+    throw Error(tr("host.couldNotVerifyTheProcessTable"));
   return entries.some(
     ([pid, group, state]) =>
       Number(group) === pgid && Number(pid) > 0 && !state?.startsWith("Z"),
@@ -161,7 +162,7 @@ export class RunRecoveryManager {
         (process.getuid && st.uid !== process.getuid()) ||
         (index >= 3 && st.mode & 0o077)
       )
-        throw Error("Небезопасный каталог восстановления запусков");
+        throw Error(tr("host.unsafeRunRecoveryDirectory"));
     }
   }
   private async valid(
@@ -202,7 +203,7 @@ export class RunRecoveryManager {
         st.mode & 0o077 ||
         (process.getuid && st.uid !== process.getuid())
       )
-        throw Error("Небезопасная запись восстановления");
+        throw Error(tr("host.unsafeRecoveryRecord"));
       return JSON.parse(await handle.readFile("utf8"));
     } finally {
       await handle.close();
@@ -219,7 +220,7 @@ export class RunRecoveryManager {
       !dashboardServerId(serverRunId) ||
       !(await this.valid(metadata, metadata.ownerHash, metadata.cwd))
     )
-      throw Error("Недопустимая связь панели с запуском.");
+      throw Error(tr("host.invalidLinkBetweenTheDashboardAndRun"));
     await this.directories(metadata, false);
     const claim = {
       version: 1 as const,
@@ -237,7 +238,7 @@ export class RunRecoveryManager {
         existing.origin !== claim.origin ||
         existing.serverRunId !== serverRunId
       )
-        throw Error("Источник панели изменился. Переподключение отменено.");
+        throw Error(tr("host.theDashboardSourceChangedReconnectionCanceled"));
       return;
     }
     const target = path.join(this.dir(metadata), "dashboard.json"),
@@ -270,7 +271,7 @@ export class RunRecoveryManager {
         current?.origin !== claim.origin ||
         current.serverRunId !== serverRunId
       )
-        throw Error("Источник панели изменился. Переподключение отменено.");
+        throw Error(tr("host.theDashboardSourceChangedReconnectionCanceled"));
     } finally {
       await unlink(temp);
     }
@@ -290,7 +291,7 @@ export class RunRecoveryManager {
     cwd: string,
   ): Promise<{ origin: string; serverRunId: string } | undefined> {
     if (!(await this.valid(metadata, ownerHash, cwd)))
-      throw Error("Владелец панели не подтверждён.");
+      throw Error(tr("host.dashboardOwnerCouldNotBeVerified"));
     await this.directories(metadata, false);
     const value = await this.document(metadata, "dashboard.json");
     if (value === undefined) return;
@@ -304,7 +305,7 @@ export class RunRecoveryManager {
       .strict()
       .parse(value);
     if (!same(claim.metadata, metadata))
-      throw Error("Владелец панели изменился.");
+      throw Error(tr("host.dashboardOwnerChanged"));
     return { origin: claim.origin, serverRunId: claim.serverRunId };
   }
   private async request(
@@ -318,10 +319,10 @@ export class RunRecoveryManager {
       st.mode & 0o077 ||
       (process.getuid && st.uid !== process.getuid())
     )
-      throw Error("Небезопасный канал восстановления");
+      throw Error(tr("host.unsafeRecoveryChannel"));
     const lease = (await this.document(metadata, "lease.json")) as Lease;
     if (!lease || !same(lease.metadata, metadata))
-      throw Error("Нет проверяемого допуска supervisor");
+      throw Error(tr("host.supervisorAdmissionCouldNotBeVerified"));
     const challenge = randomBytes(24).toString("hex");
     const proof = (value: string) =>
       createHmac("sha256", metadata.nonce).update(value).digest("hex");
@@ -348,16 +349,16 @@ export class RunRecoveryManager {
         error ? reject(error) : resolve(value);
       };
       const timer = setTimeout(
-        () => finish(Error("Supervisor не ответил")),
+        () => finish(Error(tr("host.theSupervisorDidNotRespond"))),
         2500,
       );
       helper.stdin.on("error", () => {});
       helper.stdout.on("data", (b) => {
         buffer += b;
         if (buffer.length > 16384)
-          finish(Error("Некорректный ответ supervisor"));
+          finish(Error(tr("host.invalidSupervisorResponse")));
       });
-      helper.once("error", () => finish(Error("Supervisor недоступен")));
+      helper.once("error", () => finish(Error(tr("host.supervisorUnavailable"))));
       helper.once("close", (code) => {
         try {
           if (code !== 0) throw Error();
@@ -385,7 +386,7 @@ export class RunRecoveryManager {
             throw Error();
           finish(undefined, { metadata, state: reply.state });
         } catch {
-          finish(Error("Supervisor не подтвердил идентичность"));
+          finish(Error(tr("host.theSupervisorDidNotConfirmItsIdentity")));
         }
       });
       helper.stdin.end(JSON.stringify(request));
@@ -397,13 +398,13 @@ export class RunRecoveryManager {
   }> {
     if (process.platform === "win32")
       throw Error(
-        "Безопасное восстановление групп процессов поддерживается на macOS и Linux.",
+        tr("host.safeProcessGroupRecoveryIsSupportedOnMacosAndLinux"),
       );
     if (
       (await realpath(this.home)) !== this.home ||
       (await realpath(options.cwd)) !== options.cwd
     )
-      throw Error("Каталог запуска должен быть каноническим");
+      throw Error(tr("host.theRunDirectoryMustBeCanonical"));
     const metadata = runRecoveryMetadataSchema.parse({
       version: 1,
       runId: options.runId,
@@ -449,7 +450,7 @@ export class RunRecoveryManager {
       if (spawnError || child.exitCode !== null || Date.now() > until) {
         child.stdin.end();
         throw Error(
-          "Не удалось подготовить безопасный supervisor запуска; повторите проверку записи.",
+          tr("host.couldNotPrepareASafeRunSupervisorCheckTheRecord"),
         );
       }
       await pause(15);
@@ -613,7 +614,7 @@ export class RunRecoveryManager {
       state: string;
     };
     if (!same(reply.metadata, metadata) || reply.state !== "stopping")
-      throw Error("Supervisor не подтвердил владельца остановки.");
+      throw Error(tr("host.theSupervisorDidNotConfirmOwnershipForStoppingTheProcess"));
     const until = Date.now() + 15000;
     do {
       const result = await this.reconcile(metadata, ownerHash, cwd);
@@ -621,7 +622,7 @@ export class RunRecoveryManager {
       await pause(30);
     } while (Date.now() < until);
     throw Error(
-      "Группа процессов ещё не подтвердила остановку; повторите проверку.",
+      tr("host.theProcessGroupHasNotConfirmedThatItStoppedCheck"),
     );
   }
 }

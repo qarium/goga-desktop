@@ -1,3 +1,4 @@
+import { t as msg } from "../../../shared/i18n";
 import {
   StateEffect,
   StateField,
@@ -442,27 +443,27 @@ export function createNavigation(
 function unavailableMessage(reason?: string): string {
   switch (reason) {
     case "analysis-error":
-      return "Локальный анализ недоступен. Редактирование доступно.";
+      return msg("workspace.localAnalysisIsUnavailableYouCanStillEditTheFile");
     case "parser-mismatch-or-missing":
-      return "Переход недоступен: анализатор языка не загружен.";
+      return msg("workspace.navigationUnavailableTheLanguageParserIsNotLoaded");
     case "document-limit":
     case "candidate-limit":
     case "index-budget-exceeded":
     case "parse-budget-exceeded":
-      return "Переход недоступен: превышен лимит локального анализа.";
+      return msg("workspace.navigationUnavailableTheLocalAnalysisLimitWasExceeded");
     case "unsupported-language":
-      return "Переход недоступен для этого языка.";
+      return msg("workspace.navigationIsUnavailableForThisLanguage");
     case "unsupported-syntax-region":
     case "opaque-raw-string":
     case "untrustworthy-scope":
     case "incomplete-call":
-      return "Переход недоступен: этот фрагмент нельзя надёжно разобрать.";
+      return msg("workspace.navigationUnavailableThisFragmentCouldNotBeReliablyParsed");
     case "shadowed-or-dynamic-binding":
     case "dynamic-with-scope":
     case "wildcard-import":
-      return "Переход недоступен: локальное определение затенено или неоднозначно.";
+      return msg("workspace.navigationUnavailableTheLocalDefinitionIsShadowedOrAmbiguous");
     case "unknown-receiver-no-local-candidates":
-      return "Переход недоступен: тип объекта неизвестен, локальных кандидатов нет.";
+      return msg("workspace.navigationUnavailableTheObjectTypeIsUnknownAndThereAre");
     case "not-a-supported-identifier":
     case "not-an-expression-reference":
     case "non-expression-position":
@@ -471,8 +472,8 @@ function unavailableMessage(reason?: string): string {
     case "outside-identifier":
     case "invalid-position":
     case "string-content":
-      return "Установите курсор на имя в месте использования.";
+      return msg("workspace.placeTheCursorOnANameWhereItIsUsed");
     default:
-      return "Переход недоступен: определение в этом файле не найдено.";
+      return msg("workspace.navigationUnavailableNoDefinitionWasFoundInThisFile");
   }
 }

@@ -1,4 +1,7 @@
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
 import "./style.css";
-createRoot(document.getElementById("root")!).render(<App />);
+import { initializeInterfaceLanguage } from "./useLocale";
+void initializeInterfaceLanguage(window.goga).then(() => {
+  createRoot(document.getElementById("root")!).render(<App />);
+});

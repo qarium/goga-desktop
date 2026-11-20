@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { randomUUID } from "node:crypto";
 import { TerminalStopError } from "./terminal-processes";
 import type { ScopeRef } from "../shared/context";
@@ -63,9 +64,9 @@ export class TerminalCloseCoordinator {
     const request = structuredClone(input);
     const targets = this.host.targets(request).map((target) => {
       if (target.view.state === "starting" || target.view.state === "stopping")
-        throw Error("Дождитесь завершения текущей операции терминала.");
+        throw Error(t("hostTerminal.waitCurrentAction"));
       if (target.view.state !== "exited" && !target.control)
-        throw Error("Принадлежность процессов терминала не подтверждена.");
+        throw Error(t("hostTerminal.ownershipUnknown"));
       return {
         view: structuredClone(target.view),
         plan:
@@ -98,13 +99,13 @@ export class TerminalCloseCoordinator {
   }
   cancel(token: string): void {
     if (!this.tickets.delete(token))
-      throw Error("Подтверждение отсутствует или уже использовано.");
+      throw Error(t("hostTerminal.confirmationUsed"));
   }
   /** Read-only revalidation for unified shutdown before any other participant stops. */
   validate(token: string): void {
     const ticket = this.tickets.get(token);
     if (!ticket || ticket.expires <= this.now())
-      throw Error("Подтверждение отсутствует или устарело.");
+      throw Error(t("hostTerminal.confirmationExpired"));
     this.validateTicket(ticket);
   }
   private validateTicket(ticket: Ticket): TerminalCloseTarget[] {
@@ -139,7 +140,7 @@ export class TerminalCloseCoordinator {
       ticket.expires <= this.now() ||
       (ticket.required && confirmed !== true)
     )
-      throw Error("Подтверждение отсутствует, устарело или не получено.");
+      throw Error(t("hostTerminal.confirmationMissing"));
     let unfreeze: (() => void) | undefined;
     const stopped = new Map<string, TerminalSessionRef>();
     try {
@@ -198,7 +199,7 @@ export class TerminalCloseCoordinator {
         message:
           error instanceof TerminalStopError
             ? error.message
-            : "Операция терминала не завершена. Вкладки сохранены; завершённые команды не запускаются повторно.",
+            : t("hostTerminal.actionIncomplete"),
       };
     } finally {
       unfreeze?.();

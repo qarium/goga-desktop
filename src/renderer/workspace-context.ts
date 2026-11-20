@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import type { Project, Run } from "../shared/types";
 import type { WorktreeRecord } from "../shared/worktrees";
 import {
@@ -40,8 +41,8 @@ export function workspacePath(
   let display =
     full ||
     (owner
-      ? "Путь рабочей копии недоступен"
-      : "Выберите папку существующего проекта");
+      ? msg("workspace.workingCopyPathUnavailable")
+      : msg("workspace.chooseAnExistingProjectFolder"));
   if (owner?.storageKind === "clone" && owner.ownership === "managed")
     display = display.replace(
       /^\/(?:Users|home)\/[^/]+\/(?=\.goga\/desktop\/)/,
@@ -63,8 +64,8 @@ export function workspaceLaunchBlockReason(
       (run.status === "starting" || run.status === "running"),
   );
   if (active.some((run) => run.recovery === "unverified"))
-    return "Сначала проверьте состояние процесса после перезапуска.";
+    return msg("workspace.checkTheProcessStatusAfterRestartFirst");
   if (kind === "build" && active.some((run) => run.kind === "build"))
-    return "В этой рабочей копии уже выполняется сборка.";
+    return msg("workspace.aBuildIsAlreadyRunningInThisWorkingCopy");
   return "";
 }

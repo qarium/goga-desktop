@@ -34,10 +34,6 @@
   width: 420px;
   max-width: calc(100vw - 32px);
   padding: 16px;
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  box-shadow: 0 12px 32px #0006;
   overflow-wrap: anywhere;
 }
 .repository-operation-popup header {
@@ -73,7 +69,7 @@
   overflow-y: auto;
 }
 .repository-operation-error {
-  color: var(--red);
+  color: var(--feedback-error-fg);
   margin-bottom: 0;
 }
 .topic-context-native-root .repository-operation-popup {
@@ -91,7 +87,7 @@
   border-radius: 6px;
 }
 .repository-action-anchor:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--overlay-focus);
   outline-offset: 2px;
 }
 .repository-action-anchor > button:disabled {
@@ -101,15 +97,7 @@
   z-index: 1000;
   box-sizing: border-box;
   width: max-content;
-  padding: 8px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  background: var(--surface);
   color: var(--text);
-  box-shadow: 0 6px 20px #0005;
-  font-size: 12px;
-  line-height: 1.4;
-  overflow-wrap: anywhere;
   overflow: auto;
   pointer-events: auto;
 }
@@ -118,22 +106,15 @@
   display: inline;
 }
 .repository-action-tooltip:focus-visible {
-  outline: 2px solid var(--accent);
+  outline: 2px solid var(--overlay-focus);
   outline-offset: 2px;
 }
 
 .repository-operation-dialog {
   padding: 0;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  background: var(--surface);
-  color: var(--text);
   width: min(520px, calc(100vw - 32px));
   max-height: calc(100dvh - 32px);
   overflow: auto;
-}
-.repository-operation-dialog::backdrop {
-  background: #0006;
 }
 .repository-operation-dialog .repository-operation-popup {
   position: static;

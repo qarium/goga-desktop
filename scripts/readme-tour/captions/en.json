@@ -1,0 +1,15 @@
+{
+  "eyebrow": "GOGA DESKTOP  /  PRODUCT TOUR",
+  "scenes": {
+    "projects": ["Find your projects", "The sidebar keeps local projects together. Select a project to open its workspace."],
+    "add-project": ["Add a project", "Use the + beside Projects to open an existing folder or create a new project."],
+    "move-project": ["Move a project", "Open the menu on Field Notes and select Studio as its group."],
+    "group": ["Organize the sidebar", "Field Notes is now in the Studio group, alongside its related projects."],
+    "overview": ["Explore the project", "Inspect its files, architecture and contracts in Overview."],
+    "board": ["Track work by topic", "The board groups topics by status so you can see what is planned, active or finished."],
+    "launch-menu": ["Choose what to launch", "Run stages with Pipeline, execute a build plan with Build, or show a web page with Demonstration."],
+    "choose-refinement": ["Select refinement", "Choose the refinement pipeline from the project's pipeline catalog."],
+    "refinement": ["Review the stages", "Check define, discover, specify and review, then launch the sample run."],
+    "run": ["View the sample run", "This run uses simulated output to show the run tab. No real pipeline or container was started."]
+  }
+}

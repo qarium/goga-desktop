@@ -1,3 +1,5 @@
+import { ProjectSettingsVersionConflict } from "../host/desktop-state";
+import { t } from "../shared/i18n";
 import { projectRemovalRequestSchema } from "../shared/project-registration";
 import { clearRunHistoryRequestSchema } from "../shared/run-history";
 import { projectCreationRequestSchema, projectCreationIdSchema } from "../shared/project-creation";
@@ -209,7 +211,7 @@ const launch = pipeline
       // A version denotes an actual task edit, not a launch admission ticket.
       value.topic.mode === "existing" || value.taskVersion === undefined,
     {
-      message: "Версия записи задачи допустима только для существующего топика",
+      error: () => t("native.topicVersionInvalid"),
       path: ["taskVersion"],
     },
   )
@@ -219,9 +221,10 @@ const launch = pipeline
       (value.task === "" &&
         !value.confirmEmptyTask &&
         !value.confirmBranchSwitch),
-    { message: "Запуск без топика не сохраняет задачу и не переключает ветку" },
+    { error: () => t("native.noTopicInvalid") },
   );
 interface Dependencies {
+  interfaceLanguage?: { get(): string; set(tag: unknown): string };
   overviewCloseState?: (paths: string[], busy: boolean) => void;
   topicPopup?: {
     setBounds(id: string, bounds: TopicPopupBounds): void;
@@ -259,11 +262,16 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
             event.senderFrame?.parent === null,
           )
         )
-          throw new Error("IPC: доступ запрещён");
+          throw new Error(t("native.ipcDenied"));
         return fn(...args);
       },
     );
   }
+  handle("get-interface-language", () => d.interfaceLanguage?.get() ?? "en");
+  handle("set-interface-language", (tag: unknown) => {
+    if (!d.interfaceLanguage) throw Error(t("native.missingPreference"));
+    return d.interfaceLanguage.set(tag);
+  });
   handle("set-topic-popup-bounds", (id, bounds) => {
     const popupId = topicPopupIdSchema.parse(id);
     const parsedBounds = topicPopupBoundsSchema.parse(bounds);
@@ -277,7 +285,7 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
     d.service.prepareBuildRepeat(id.parse(runId)),
   );
   handle("repeat-pipeline", (runId) => d.service.repeatPipeline(id.parse(runId)));
-  const panels=()=>{if(!d.panels)throw Error("Подключение панелей недоступно.");return d.panels};
+  const panels=()=>{if(!d.panels)throw Error(t("native.dashboardBridgeUnavailable"));return d.panels};
   handle("attached-dashboards",()=>panels().list());
   handle("attach-dashboard",(scope,url,key)=>panels().connect(scopeRefSchema.parse(scope),z.string().trim().min(1).max(256).parse(url),z.string().uuid().parse(key)));
   handle("cancel-dashboard-attach",key=>panels().cancel(z.string().uuid().parse(key)));
@@ -286,12 +294,12 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   handle("refresh-dashboard",(key,scope,recover)=>{
     const value=id.parse(key);
     if(scope!==undefined)return panels().refresh(scopeRefSchema.parse(scope),value,z.boolean().optional().parse(recover)??false);
-    if(!d.service.hasRun(value)||!d.refreshDashboard)throw Error("Панель запуска недоступна.");
+    if(!d.service.hasRun(value)||!d.refreshDashboard)throw Error(t("native.runDashboardUnavailable"));
     return d.refreshDashboard(value);
   });
   handle("restore-dashboard", (runId) => {
     const value=id.parse(runId);
-    if(!d.service.hasRun(value)||!d.restoreDashboard)throw Error("Панель запуска недоступна.");
+    if(!d.service.hasRun(value)||!d.restoreDashboard)throw Error(t("native.runDashboardUnavailable"));
     return d.restoreDashboard(value);
   });
   handle("reconcile-run", (runId) => d.service.reconcileRun(id.parse(runId)));
@@ -311,20 +319,20 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
     const handler = readHandlers.get(readChannel(method));
     if (!handler || reads.has(id) || reads.size >= 64)
       throw Error(
-        "Чтение временно недоступно: дождитесь завершения предыдущих запросов.",
+        t("native.readBusy"),
       );
     const controller = new AbortController();
     reads.set(id, { controller });
     const budget = READ_BUDGETS[method];
     let abort!: () => void;
     const aborted = new Promise<never>((_resolve, reject) => {
-      abort = () => reject(Error(readCancelledMessage));
+      abort = () => reject(Error(readCancelledMessage()));
       controller.signal.addEventListener("abort", abort, { once: true });
     });
     const timer = setTimeout(() => controller.abort(), budget);
     const physical = Promise.resolve().then(() =>
       withReadScope(controller.signal, () => {
-        if (controller.signal.aborted) throw Error(readCancelledMessage);
+        if (controller.signal.aborted) throw Error(readCancelledMessage());
         return handler(...args);
       }),
     );
@@ -544,7 +552,7 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
     .refine((v) => !/[\x00-\x1f\x7f]/.test(v));
   handle("build-context", (projectId, selection) => {
     const result = buildSelectionSchema.optional().safeParse(selection);
-    if (!result.success) throw new Error("Некорректный выбор сборки");
+    if (!result.success) throw new Error(t("native.invalidBuildSelection"));
     return d.service.buildContext(scopeRefSchema.parse(projectId), result.data);
   });
   handle("list-build-files", (projectId, directory) =>
@@ -561,7 +569,7 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   );
   handle("launch-build", (request) => {
     const result = buildRequestSchema.safeParse(request);
-    if (!result.success) throw new Error("Некорректный запрос сборки");
+    if (!result.success) throw new Error(t("native.invalidBuildRequest"));
     return d.service.launchBuild(result.data);
   });
   handle("repeat-build", (runId, confirmClean) =>
@@ -804,7 +812,7 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
     return folder ? d.service.addProject(folder) : null;
   });
   handle("choose-project-location", () => {
-    if (!d.chooseProjectLocation) throw Error("Выбор расположения недоступен.");
+    if (!d.chooseProjectLocation) throw Error(t("native.locationUnavailable"));
     return d.chooseProjectLocation();
   });
   handle("create-project", (request) => d.service.createProject(projectCreationRequestSchema.parse(request)));
@@ -838,12 +846,18 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
       })
       .strict();
     const result = schema.safeParse(value);
-    if (!result.success) throw new Error("Некорректные настройки проекта");
-    return d.service.saveProjectSettings(
+    if (!result.success) throw new Error(t("native.invalidProjectSettings"));
+    return Promise.resolve(d.service.saveProjectSettings(
       scopeRefSchema.parse(projectId),
       result.data,
       id.parse(version),
-    );
+    )).catch((error: unknown) => {
+      // Electron strips custom fields from thrown errors. Only a verified host
+      // CAS rejection authorizes a fresh read and reconciliation.
+      if (error instanceof ProjectSettingsVersionConflict)
+        return { code: "settings-version-conflict" } as const;
+      throw error;
+    });
   });
   handle("discover", (value, options) => {
     const scope = scopeRefSchema.parse(value);
@@ -866,7 +880,7 @@ export function registerIPC(ipc: Pick<IpcMain, "handle">, d: Dependencies) {
   handle("select-run", (value) => {
     const runId = id.nullable().parse(value);
     if (runId !== null && !d.service.hasRun(runId))
-      throw new Error("Неизвестный запуск");
+      throw new Error(t("native.unknownRun"));
     d.select(runId);
   });
   handle("close-run", (value) =>

@@ -1,3 +1,4 @@
+import { getLocale, isSupportedLocale, setLocale, t } from "../shared/i18n";
 import { terminalConfirmation } from "./confirmation";
 import { TerminalScreens, type TerminalScreenSurface } from "./screens";
 import {
@@ -38,6 +39,12 @@ export function mountTerminalRenderer(
   bridge: TerminalScreenBridge,
   libraries: TerminalLibraries,
 ): () => void {
+  const languageChanged = new Set<() => void>();
+  const updateTitle = () => {
+    document.documentElement.lang = getLocale();
+    document.title = t("native.terminalTitle");
+  };
+  updateTitle();
   const screens = new TerminalScreens({
     ...bridge,
     create: (grant, options): TerminalScreenSurface => {
@@ -78,7 +85,12 @@ export function mountTerminalRenderer(
       term.open(content);
       const inputStatus = document.createElement("div");
       inputStatus.setAttribute("role", "status");
-      inputStatus.textContent = "Только просмотр — ввод недоступен";
+      const updateText = () => {
+        inputStatus.textContent = t("native.terminalReadOnly");
+        container.querySelector(".xterm-helper-textarea")?.setAttribute("aria-label", t("native.terminalPrompt"));
+      };
+      updateText();
+      languageChanged.add(updateText);
       inputStatus.style.cssText =
         "display:none;position:absolute;right:8px;top:8px;background:#162136;color:#a9b8ce;padding:4px 8px;font:12px sans-serif;pointer-events:none;z-index:2";
       container.append(inputStatus);
@@ -101,16 +113,14 @@ export function mountTerminalRenderer(
           root,
           tooLarge
             ? {
-                title: "Вставка недоступна",
-                message:
-                  "Текст слишком большой: предел вставки — 1 МиБ. Разделите его на части; ничего не отправлено.",
+                titleKey: "native.pasteUnavailable",
+                messageKey: "native.pasteTooLarge",
               }
             : {
-                title: "Вставить несколько строк?",
-                message:
-                  "Текст может выполнить команды в текущей сессии. Проверьте его перед вставкой.",
+                titleKey: "native.pasteMultiline",
+                messageKey: "native.pasteMultilineDetail",
                 preview: text,
-                confirm: "Вставить",
+                confirmKey: "native.paste",
               },
           (confirmed) => {
             decided = true;
@@ -168,6 +178,7 @@ export function mountTerminalRenderer(
         dispose: () => {
           disposed = true;
           cancelConfirmation?.();
+          languageChanged.delete(updateText);
           clipboard.dispose();
           container.removeEventListener("paste", paste, true);
           term.dispose();
@@ -181,6 +192,14 @@ export function mountTerminalRenderer(
     const result = terminalScreenCommandSchema.safeParse(value);
     if (!result.success) return;
     const command = result.data;
+    if (command.kind === "language") {
+      if (isSupportedLocale(command.language)) {
+        setLocale(command.language);
+        updateTitle();
+        for (const update of languageChanged) update();
+      }
+      return;
+    }
     try {
       switch (command.kind) {
         case "grant":

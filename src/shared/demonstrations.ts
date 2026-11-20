@@ -5,7 +5,7 @@ export const demoEngineSchema = z.enum(["embedded", "system"]);
 export type DemoEngine = z.infer<typeof demoEngineSchema>;
 export const DEMO_DEFAULT_ENGINE = "embedded" as const;
 export const DEMO_EMBEDDED_START_ERROR =
-  "Не удалось запустить встроенный Chromium: ";
+  "[GOGA_DEMO_EMBEDDED_START] ";
 export const demoPortSchema = z.number().int().min(1024).max(65535);
 export const demoIdSchema = z.string().regex(/^[a-zA-Z0-9_-]{1,100}$/);
 export const demoPageRequestSchema = z

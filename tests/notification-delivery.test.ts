@@ -100,3 +100,17 @@ it("never sends a banner for an arrival already read while viewing, even after f
   delivery.update({ ...snapshot, unreadCount: 0, records: [read] }, read);
   expect(d.create).not.toHaveBeenCalled();
 });
+
+it("uses the current Desktop language only for new notifications and never translates user names", async () => {
+  const { setLocale } = await import("../src/shared/i18n");
+  const { delivery, d } = setup();
+  const sample = { ...n, pipeline: "Работает", topic: "" };
+  setLocale("en");
+  delivery.update(snapshot, sample);
+  expect(d.create).toHaveBeenLastCalledWith({ id: n.id, title: "Your response is needed", body: "Работает · worker · No topic" });
+  setLocale("ru");
+  delivery.update(snapshot, sample);
+  expect(d.create).toHaveBeenCalledOnce();
+  delivery.update({ ...snapshot, revision: 2 }, { ...sample, id: "n2", sequence: 2 });
+  expect(d.create).toHaveBeenLastCalledWith({ id: "n2", title: "Нужен ваш ответ", body: "Работает · worker · Без топика" });
+});

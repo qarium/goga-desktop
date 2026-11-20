@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useRef } from "react";
 import type { EditorView } from "@codemirror/view";
 import {
@@ -14,6 +16,7 @@ export function GitConflictEditor({
 }: {
   conflicts: GitConflictsState;
 }) {
+  useLocale();
   const views = useRef<
     Partial<Record<"current" | "result" | "incoming", EditorView>>
   >({});
@@ -43,14 +46,12 @@ export function GitConflictEditor({
   if (conflicts.loading)
     return (
       <div className="git-conflict-loading">
-        <LoadingState label="Загрузка конфликта" />
+        <LoadingState label={msg("git.loadingConflict")} />
       </div>
     );
   if (!entry)
     return (
-      <div className="git-workspace-empty">
-        Не удалось прочитать конфликт.
-        <button onClick={conflicts.requestReload}>Перечитать файл…</button>
+      <div className="git-workspace-empty">{msg("git.couldNotReadConflict")}<button onClick={conflicts.requestReload}>{msg("git.reloadFile")}</button>
       </div>
     );
   const { document: doc, draft } = entry;
@@ -77,21 +78,21 @@ export function GitConflictEditor({
                   ...(["current", "incoming"] as const)
                     .filter((sourceSide) => !block.source[sourceSide].range)
                     .map((sourceSide) => ({
-                      label: `Блок ${i + 1}: принять ${sourceSide === "current" ? "текущую" : "входящую"}`,
+                      label: msg("git.blockAccept", { value1: String(i + 1), value2: String(sourceSide === "current" ? msg("git.current2") : msg("git.incoming")) }),
                       symbol: sourceSide === "current" ? "→" : "←",
                       disabled: blocked || !block.mapped,
                       selected: block.choice === sourceSide,
                       run: () => conflicts.apply(block.id, sourceSide),
                     })),
                   {
-                    label: `Блок ${i + 1}: принять обе`,
+                    label: msg("git.blockAcceptBoth", { value1: String(i + 1) }),
                     symbol: "⇉",
                     disabled: blocked || !block.mapped,
                     selected: block.choice === "both",
                     run: () => conflicts.apply(block.id, "both"),
                   },
                   {
-                    label: `Блок ${i + 1}: решён вручную`,
+                    label: msg("git.blockResolvedManually", { value1: String(i + 1) }),
                     symbol: "✓",
                     disabled: blocked || !block.mapped,
                     selected: block.choice === "manual",
@@ -100,7 +101,7 @@ export function GitConflictEditor({
                 ]
               : [
                   {
-                    label: `Блок ${i + 1}: принять ${side === "current" ? "текущую" : "входящую"}`,
+                    label: msg("git.blockAccept", { value1: String(i + 1), value2: String(side === "current" ? msg("git.current2") : msg("git.incoming")) }),
                     symbol: side === "current" ? "→" : "←",
                     disabled: blocked || !block.mapped,
                     selected: block.choice === side,
@@ -113,72 +114,47 @@ export function GitConflictEditor({
   return (
     <section
       className="git-conflict-editor"
-      aria-label={`Разрешение конфликта: ${doc.path}`}
+      aria-label={msg("git.resolveConflict", { path: String(doc.path) })}
     >
       <div className="git-conflict-toolbar">
         <strong title={doc.path}>{doc.path}</strong>
         <button
           disabled={blocked || doc.generated.kind !== "text" || !supported}
           onClick={conflicts.requestReconstruct}
-        >
-          Восстановить блоки…
-        </button>
-        <button disabled={conflicts.locked} onClick={conflicts.requestReload}>
-          Перечитать файл…
-        </button>
+        >{msg("git.restoreBlocks")}</button>
+        <button disabled={conflicts.locked} onClick={conflicts.requestReload}>{msg("git.reloadFile")}</button>
       </div>
       {supported &&
         draft &&
         !draft.blocks.length &&
         doc.generated.kind === "text" &&
         doc.generated.blocks.length > 0 && (
-          <p className="git-conflict-warning" role="note">
-            Рабочий файл отличается от модели конфликта. Ручные правки
-            сохранены; для применения блоков нажмите «Восстановить блоки…» и
-            подтвердите замену черновика, либо завершите разрешение вручную.
-          </p>
+          <p className="git-conflict-warning" role="note">{msg("git.theWorkingFileDiffersFromTheConflictModelManualEdits")}</p>
         )}
       {!!draft?.blocks.length && (
         <details className="git-conflict-help">
-          <summary>Как применять блоки</summary>
-          <p>
-            → принять текущую · ← принять входящую · ⇉ принять обе · ✓ решено
-            вручную. Применение меняет только черновик; запись — по кнопке
-            «Сохранить файл…».
-          </p>
+          <summary>{msg("git.howToApplyBlocks")}</summary>
+          <p>{msg("git.acceptCurrentAcceptIncomingAcceptBothResolvedManuallyApplyingChanges")}</p>
         </details>
       )}
       {conflicts.stale && (
-        <p className="git-conflict-warning" role="note">
-          Черновик относится к предыдущему состоянию Git. Текст сохранён в
-          памяти, полномочия не обновлены. Для новой версии явно перечитайте
-          файл.
-        </p>
+        <p className="git-conflict-warning" role="note">{msg("git.thisDraftBelongsToAnEarlierGitStateItsText")}</p>
       )}
       {!supported && (
-        <p className="git-conflict-warning">
-          Этот вид конфликта не поддерживается для записи:{" "}
+        <p className="git-conflict-warning">{msg("git.writingIsNotSupportedForThisConflictType")}{" "}
           {doc.working.reason ||
             [doc.base, doc.current, doc.incoming, doc.working]
               .filter((s) => !["text", "absent"].includes(s.kind))
               .map((s) => s.reason || s.kind)
-              .join("; ")}
-          . Файл не помечен решённым.
-        </p>
+              .join("; ")}{msg("git.theFileHasNotBeenMarkedAsResolved")}</p>
       )}
       {draft?.blocks.some((b) => !b.mapped) && (
-        <p className="git-conflict-warning">
-          Правка пересекла границу блока. Автоматическое применение недоступно;
-          сохраните текст и проверьте результат вручную.
-        </p>
+        <p className="git-conflict-warning">{msg("git.theEditCrossedABlockBoundaryAutomaticResolutionIsUnavailable")}</p>
       )}
       {draft?.blocks.some(
         (b) => !b.source.current.range || !b.source.incoming.range,
       ) && (
-        <p className="git-conflict-warning">
-          Позиция части исходных блоков неоднозначна. Для них кнопки принятия
-          текущей и входящей версии доступны рядом с блоком результата.
-        </p>
+        <p className="git-conflict-warning">{msg("git.someOriginalBlockPositionsAreAmbiguousChooseTheCurrentOr")}</p>
       )}
       <div className="git-conflict-panes">
         {(["current", "result", "incoming"] as const).map((side) => {
@@ -186,10 +162,10 @@ export function GitConflictEditor({
           const value = side === "result" ? draft?.text : content.text;
           const label =
             side === "current"
-              ? "Текущая версия"
+              ? msg("git.currentVersion")
               : side === "incoming"
-                ? "Входящая версия"
-                : "Результат разрешения";
+                ? msg("git.incomingVersion")
+                : msg("git.resolutionResult");
           return (
             <section
               key={side}
@@ -197,13 +173,13 @@ export function GitConflictEditor({
               aria-label={label}
             >
               <header>
-                <strong>{side === "result" ? "Результат" : label}</strong>
+                <strong>{side === "result" ? msg("git.result") : label}</strong>
                 <small>
                   {side === "result"
                     ? entry.reconstructed
-                      ? "Реконструкция · редактируется"
-                      : "Фактический рабочий файл"
-                    : "Только чтение"}
+                      ? msg("git.reconstructedEditable")
+                      : msg("git.actualWorkingFile")
+                    : msg("git.readOnly")}
                 </small>
               </header>
               <div className="git-conflict-code">
@@ -229,8 +205,8 @@ export function GitConflictEditor({
                 ) : (
                   <div className="git-workspace-empty">
                     {content.kind === "absent"
-                      ? "Файл отсутствует"
-                      : content.reason || `Текст недоступен: ${content.kind}`}
+                      ? msg("git.fileMissing")
+                      : content.reason || msg("git.textUnavailable", { kind: String(content.kind) })}
                   </div>
                 )}
               </div>
@@ -249,6 +225,7 @@ export function GitConflictFooter({
   conflicts: GitConflictsState;
   disabled: boolean;
 }) {
+  useLocale();
   const entry = conflicts.entry;
   const blocked =
     disabled ||
@@ -273,28 +250,26 @@ export function GitConflictFooter({
               checked={entry.ready}
               disabled={blocked}
               onChange={(e) => conflicts.setReady(e.target.checked)}
-            />
-            Результат проверен вручную
-          </label>
+            />{msg("git.resultCheckedManually")}</label>
         )}
         <span role="status">
           {conflicts.pending?.kind === "execute"
-            ? `Записываем ${conflicts.pending.path}… Просмотр можно закрыть.`
+            ? msg("git.writingYouCanCloseThisView", { path: String(conflicts.pending.path) })
             : conflicts.pending?.kind === "prepare"
-              ? "Проверяем разрешение…"
+              ? msg("git.checkingResolution")
               : entry?.saved
-                ? "Файл и индекс сохранены."
+                ? msg("git.fileAndIndexSaved")
                 : entry?.uncertain
-                  ? "Исход записи требует проверки. Повтор заблокирован до явного перечитывания."
+                  ? msg("git.theWriteOutcomeMustBeVerifiedExplicitlyReloadTheFile")
                   : entry?.reconstructed || !!entry?.draft?.blocks.length
-                    ? `Нерешённых блоков: ${entry.draft?.blocks.filter((b) => !b.choice).length ?? 0}`
-                    : "Ручной режим: маркеры в тексте не считаются решениями автоматически."}
+                    ? msg("git.unresolvedBlocks", { value1: String(entry.draft?.blocks.filter((b) => !b.choice).length ?? 0) })
+                    : msg("git.manualModeConflictMarkersInTheTextDoNotCount")}
         </span>
         {conflicts.pending?.kind === "prepare" && (
-          <button onClick={conflicts.cancelPrepare}>Отменить проверку</button>
+          <button onClick={conflicts.cancelPrepare}>{msg("git.cancelCheck")}</button>
         )}
         {entry?.log && (
-          <button onClick={conflicts.showLog}>Журнал записи</button>
+          <button onClick={conflicts.showLog}>{msg("git.writeLog")}</button>
         )}
         <button
           className="primary"
@@ -303,36 +278,25 @@ export function GitConflictFooter({
             if (entry?.draft)
               void conflicts.prepare({ kind: "text", text: entry.draft.text });
           }}
-        >
-          Сохранить файл…
-        </button>
+        >{msg("git.saveFile")}</button>
       </div>
       {entry && supportedConflict(entry.document) && (
         <details className="git-conflict-whole-file">
-          <summary>Решение для файла целиком</summary>
+          <summary>{msg("git.resolveEntireFile")}</summary>
           <div>
             <button
               disabled={blocked}
               onClick={() => void conflicts.prepare({ kind: "current" })}
-            >
-              Принять текущий файл…
-            </button>
+            >{msg("git.acceptCurrentFile")}</button>
             <button
               disabled={blocked}
               onClick={() => void conflicts.prepare({ kind: "incoming" })}
-            >
-              Принять входящий файл…
-            </button>
+            >{msg("git.acceptIncomingFile")}</button>
             <button
               disabled={blocked}
               onClick={() => void conflicts.prepare({ kind: "delete" })}
-            >
-              Удалить файл…
-            </button>
-            <small>
-              Заменяет весь файл, включая ручные правки; требуется
-              подтверждение.
-            </small>
+            >{msg("git.deleteFile")}</button>
+            <small>{msg("git.replacesTheEntireFileIncludingManualEditsConfirmationIsRequired")}</small>
           </div>
         </details>
       )}
@@ -344,78 +308,73 @@ export function GitConflictDialogs({
 }: {
   conflicts: GitConflictsState;
 }) {
+  useLocale();
   return (
     <>
       {conflicts.confirmation && (
         <TopicModal
           title={
             conflicts.confirmation === "reload"
-              ? "Перечитать конфликт?"
-              : "Восстановить проверенные блоки?"
+              ? msg("git.reloadConflict")
+              : msg("git.restoreVerifiedBlocks")
           }
-          closeLabel="Закрыть подтверждение конфликта"
+          closeLabel={msg("git.closeConflictConfirmation")}
           onClose={conflicts.closeConfirmation}
         >
           <div className="git-conflict-modal-body">
             <p>
               {conflicts.confirmation === "reload"
-                ? "Текущий черновик и история редактирования будут отброшены. Рабочий файл на диске не изменится."
-                : "Реконструкция заменит текущий черновик и может удалить ручные правки. Она строится из сохранённых версий Git, а не из маркеров в рабочем файле. Файл на диске не изменится."}
+                ? msg("git.theCurrentDraftAndItsEditHistoryWillBeDiscarded")
+                : msg("git.reconstructionReplacesTheCurrentDraftAndMayRemoveManualEdits")}
             </p>
             <button className="primary" onClick={conflicts.confirm}>
               {conflicts.confirmation === "reload"
-                ? "Отбросить черновик и перечитать"
-                : "Заменить черновик реконструкцией"}
+                ? msg("git.discardDraftAndReload")
+                : msg("git.replaceDraftWithReconstruction")}
             </button>
           </div>
         </TopicModal>
       )}
       {conflicts.preview && (
         <TopicModal
-          title="Подтвердить разрешение файла"
-          closeLabel="Закрыть подтверждение разрешения"
+          title={msg("git.confirmFileResolution")}
+          closeLabel={msg("git.closeResolutionConfirmation")}
           onClose={conflicts.closePreview}
         >
           <div className="git-conflict-modal-body">
             <dl>
-              <dt>Файл</dt>
+              <dt>{msg("git.file2")}</dt>
               <dd>{conflicts.preview.path}</dd>
-              <dt>Ветка</dt>
-              <dd>{conflicts.preview.branch ?? "Отсоединённый HEAD"}</dd>
-              <dt>Решение</dt>
+              <dt>{msg("git.branch2")}</dt>
+              <dd>{conflicts.preview.branch ?? msg("git.detachedHEAD")}</dd>
+              <dt>{msg("git.resolution")}</dt>
               <dd>
                 {
                   {
-                    text: "Точный текст результата",
+                    text: msg("git.exactResultText"),
                     current:
-                      "Текущий файл целиком (или удаление, если отсутствует)",
+                      msg("git.entireCurrentFileDeleteIfMissing"),
                     incoming:
-                      "Входящий файл целиком (или удаление, если отсутствует)",
-                    delete: "Удалить файл",
+                      msg("git.entireIncomingFileDeleteIfMissing"),
+                    delete: msg("git.deleteFile2"),
                   }[conflicts.preview.resolution]
                 }
               </dd>
-              <dt>Размер</dt>
-              <dd>{conflicts.preview.bytes} байт</dd>
+              <dt>{msg("git.size")}</dt>
+              <dd>{conflicts.preview.bytes}{msg("git.bytes")}</dd>
             </dl>
-            <p>
-              Будут изменены рабочий файл и индекс. Git-хуки отключены.
-              Канонизация индекса — по текстовым атрибутам Git. Продолжение
-              операции и публикация не выполняются.
-            </p>
+            <p>{msg("git.theWorkingFileAndIndexWillChangeGitHooksAre")}</p>
             <button
               className="primary"
               onClick={() => void conflicts.execute()}
-            >
-              Записать файл и индекс
-            </button>
+            >{msg("git.writeFileAndIndex")}</button>
           </div>
         </TopicModal>
       )}
       {conflicts.message && (
         <TopicModal
           title={conflicts.message.title}
-          closeLabel="Закрыть результат разрешения"
+          closeLabel={msg("git.closeResolutionResult")}
           className="git-workspace-error"
           onClose={conflicts.closeMessage}
         >

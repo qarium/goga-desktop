@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import {
   dashboardViewportSchema,
   type DashboardViewport,
@@ -92,7 +93,7 @@ export class DashboardViews {
     )
       return;
     if (!allowedDashboardURL(url))
-      throw new Error("Недопустимый адрес панели конвейера");
+      throw new Error(t("native.invalidDashboardURL"));
     const restoring = this.restoring.get(id);
     if (restoring) {
       await restoring;
@@ -105,7 +106,7 @@ export class DashboardViews {
   restore(id: string, url: string): Promise<boolean> {
     if (!this.canRestore(id)) return Promise.resolve(false);
     if (!allowedDashboardURL(url))
-      return Promise.reject(new Error("Недопустимый адрес панели конвейера"));
+      return Promise.reject(new Error(t("native.invalidDashboardURL")));
     const pending = this.restoring.get(id);
     if (pending) return pending;
     // Install the flight before any cleanup can yield or another ensure can run.
@@ -227,7 +228,7 @@ export class DashboardViews {
           if (alive())
             this.onError(
               id,
-              "Не удалось применить оформление встроенной панели конвейера.",
+              t("native.dashboardStylesFailed"),
             );
         });
       }
@@ -264,14 +265,14 @@ export class DashboardViews {
       this.win.focus();
     });
     wc.on("render-process-gone", () =>
-      failed("Панель конвейера завершила работу. Процесс Goga не перезапущен."),
+      failed(t("native.dashboardProcessGone")),
     );
     wc.on("did-fail-load", (_event, code, _description, target, isMainFrame) => {
       // A policy-blocked navigation never replaced the current trusted document.
       if (isMainFrame && code !== -3 && alive() &&
           !(code === -20 && entry.loaded && !sameDashboardOrigin(url, target) && sameDashboardOrigin(url, wc.getURL())))
         failed(
-          "Не удалось загрузить панель конвейера. Проверьте состояние процесса.",
+          t("native.dashboardLoadFailed"),
         );
     });
     const entry: DashboardPage = {
@@ -311,13 +312,13 @@ export class DashboardViews {
         // System consent is a single Desktop preference, never a load prerequisite.
         if (external) {
           if (!(await navigateDocument(entry, url))) {
-            failed("Не удалось открыть подключённую панель конвейера.");
+            failed(t("native.attachedOpenFailed"));
             return;
           }
         } else await wc.loadURL(url);
         if (!alive() || entry.failed) return;
         if (!sameDashboardOrigin(url, wc.getURL())) {
-          failed("Не удалось открыть доверенную страницу Dashboard.");
+          failed(t("native.trustedPageFailed"));
           return;
         }
         const opened = await this.onOpened(id, url);
@@ -331,13 +332,13 @@ export class DashboardViews {
           return;
         }
         if (!sameDashboardOrigin(url, wc.getURL())) {
-          failed("Адрес панели изменился во время подключения.");
+          failed(t("native.dashboardURLChanged"));
           return;
         }
         entry.loaded = true;
         view.setVisible(this.selected === id);
       } catch {
-        failed("Не удалось открыть панель конвейера.");
+        failed(t("native.dashboardOpenFailed"));
       }
     })();
     return entry.loading;
@@ -399,7 +400,7 @@ export class DashboardViews {
         if (!trusted()) throw Error();
         return current() && selected();
       } catch {
-        if (current()) this.failPage(id, page, "Не удалось подтвердить и обновить страницу панели. Процесс не перезапускался.");
+        if (current()) this.failPage(id, page, t("native.dashboardRefreshUnverified"));
         return false;
       }
     };

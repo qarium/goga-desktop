@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -112,7 +113,7 @@ const TOTAL = 32 * 1024 * 1024,
   FILE = 8 * 1024 * 1024;
 const stale = () =>
   Error(
-    "Состояние или владелец Git изменились. Требуется новое подтверждение.",
+    gitMessage("gitHost.gitStateOrOwnershipChangedConfirmTheOperationAgain"),
   );
 function validatePaths(paths: readonly string[]) {
   if (paths.length > 4096 || new Set(paths).size !== paths.length)
@@ -258,7 +259,7 @@ async function fileSnapshot(root: string, relative: string, remaining: number) {
       before.size > BigInt(Math.min(FILE, remaining))
     )
       throw Error(
-        "Небезопасный файл или превышен предел защитного снимка Git.",
+        gitMessage("gitHost.unsafeFileOrGitSnapshotLimitExceeded"),
       );
     const buffer = Buffer.alloc(Number(before.size) + 1);
     let offset = 0;
@@ -384,7 +385,7 @@ export async function assertNoNativeGitLocks(root: string) {
       if ((e as NodeJS.ErrnoException).code === "ENOENT") continue;
       throw e;
     }
-    throw Error("Git занят: обнаружена чужая блокировка.");
+    throw Error(gitMessage("gitHost.gitIsBusyAnotherLockWasFound"));
   }
   let count = 0;
   const visit = async (dir: string, depth: number): Promise<void> => {

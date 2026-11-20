@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import * as fs from "node:fs/promises";
@@ -62,7 +63,7 @@ export const digest = (value: string | Buffer) =>
   createHash("sha256").update(value).digest("hex");
 export const stale = () =>
   Error(
-    "Предпросмотр Git устарел или изменился владелец. Обновите список и подтвердите заново.",
+    gitMessage("gitHost.theGitPreviewExpiredOrItsOwnerChangedRefresh"),
   );
 const safeArgs = [
   "--no-pager",
@@ -110,7 +111,7 @@ export const mixedOperations = [
 ];
 export const oid = (value: string) => {
   if (!/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/.test(value))
-    throw Error("Некорректный OID Git.");
+    throw Error(gitMessage("gitHost.invalidGitObjectId"));
   return value;
 };
 const rows = (raw: string): Row[] =>
@@ -140,7 +141,7 @@ export async function fileIdentity(file: string) {
     s.nlink !== 1n ||
     s.size > 256n * 1024n * 1024n
   )
-    throw Error("Небезопасные метаданные Git.");
+    throw Error(gitMessage("gitHost.unsafeGitMetadata"));
   const handle = await fs.open(
     file,
     constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
@@ -163,7 +164,7 @@ export async function contentIdentity(file: string): Promise<string> {
   else if (before.isDirectory()) value = "directory";
   else {
     if (!before.isFile() || before.size > 256n * 1024n * 1024n)
-      throw Error("Файл превышает безопасный предел проверки содержимого Git.");
+      throw Error(gitMessage("gitHost.theFileExceedsTheSafeGitContentVerificationLimit"));
     const handle = await fs.open(
       file,
       constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
@@ -192,7 +193,7 @@ export async function auditMetadata(root: string) {
       s.isSymbolicLink() ||
       (!s.isDirectory() && (!s.isFile() || s.nlink !== 1n))
     )
-      throw Error("Небезопасная ссылка или тип записываемых метаданных Git.");
+      throw Error(gitMessage("gitHost.unsafeLinkOrFileTypeInWritableGitMetadata"));
     if (s.isDirectory())
       for (const name of await fs.readdir(file))
         await visit(path.join(file, name), depth + 1);
@@ -208,7 +209,7 @@ export class GitMetadataLockCleanupError extends Error {
     readonly unchecked = false,
   ) {
     super(
-      `Не подтверждена очистка блокировки ${lock}: ${cause instanceof Error ? cause.message : String(cause)}${unchecked ? ". Состояние блокировки не удалось проверить." : ""}`,
+      gitMessage("gitHost.couldNotVerifyCleanupOfLock", { lock, value2: cause instanceof Error ? cause.message : String(cause), value3: unchecked ? gitMessage("gitHost.couldNotCheckTheLockState") : "" }),
       { cause },
     );
   }
@@ -246,7 +247,7 @@ export class GitMergeSafety {
       delete value.recoveryUnverified;
     } catch (error) {
       value.recoveryUnverified = true;
-      value.log += `\nНе удалось проверить последний известный путь материалов восстановления: ${error instanceof Error ? error.message : String(error)}`;
+      value.log += gitMessage("gitHost.couldNotVerifyTheLastKnownRecoveryDataPath", { value1: error instanceof Error ? error.message : String(error) });
     }
     return value;
   }
@@ -352,7 +353,7 @@ export class GitMergeSafety {
       !path.isAbsolute(ctx.root) ||
       path.resolve(ctx.root) !== ctx.root
     )
-      throw Error("Область операции Git не соответствует владельцу.");
+      throw Error(gitMessage("gitHost.theGitOperationScopeDoesNotMatchItsOwner"));
     await ctx.verify();
     const snapshot = await ctx.snapshot();
     if (
@@ -392,14 +393,14 @@ export class GitMergeSafety {
     for (const line of raw.split("\n").filter(Boolean)) {
       const [ref, object, symref, upstream, ...rest] = line.split("\0");
       if (rest.length || upstream === undefined)
-        throw Error("Некорректный список веток Git.");
+        throw Error(gitMessage("gitHost.invalidGitBranchList"));
       if (symref) continue;
       const target = ref.startsWith("refs/heads/")
         ? local
         : ref.startsWith("refs/remotes/")
           ? remote
           : null;
-      if (!target) throw Error("Неожиданная ссылка Git.");
+      if (!target) throw Error(gitMessage("gitHost.unexpectedGitRef"));
       target.push({
         ref,
         name: ref.slice(target === local ? 11 : 13),
@@ -496,7 +497,7 @@ export class GitMergeSafety {
   ) {
     const fail = () =>
       Error(
-        "Переключение и pull для деревьев с подмодулями (gitlink) пока не поддерживаются: состояние подмодулей не проверяется.",
+        gitMessage("gitHost.switchAndPullAreNotSupportedForTreesWith"),
       );
     const index = (await this.git(ctx, ["ls-files", "--stage", "-z"])).stdout;
     if (index.split("\0").some((row) => row.startsWith("160000 ")))
@@ -568,11 +569,11 @@ export class GitMergeSafety {
   /** A native pending merge, not merely a status label or a failed command. */
   protected async mergeState(ctx: GitMergeContext, state: State) {
     if (state.snapshot.operation !== "merge" || !state.snapshot.head)
-      throw Error("Отмена доступна только для незавершённого слияния Git.");
+      throw Error(gitMessage("gitHost.abortIsAvailableOnlyForAnUnfinishedGitMerge"));
     for (const name of [...mixedOperations, "MERGE_AUTOSTASH"])
       if (await stat(path.join(ctx.root, ".git", name)))
         throw Error(
-          "Смешанная операция Git или внешний autostash: автоматическая отмена запрещена.",
+          gitMessage("gitHost.mixedGitOperationOrExternalAutostashAutomaticAbortIs"),
         );
     const readOid = async (name: string) => {
       const file = path.join(ctx.root, ".git", name);
@@ -583,20 +584,20 @@ export class GitMergeSafety {
       original = await readOid("ORIG_HEAD");
     if (original !== state.snapshot.head)
       throw Error(
-        "ORIG_HEAD не совпадает с текущим HEAD: безопасная отмена слияния невозможна.",
+        gitMessage("gitHost.origHeadDoesNotMatchHeadTheMergeCannot"),
       );
     for (const object of [source, original])
       if (
         (await this.git(ctx, ["cat-file", "-t", object])).stdout.trim() !==
         "commit"
       )
-        throw Error("Метаданные слияния не указывают на коммит.");
+        throw Error(gitMessage("gitHost.mergeMetadataDoesNotPointToACommit"));
     const unmerged = (await this.git(ctx, ["ls-files", "--unmerged", "-z"]))
       .stdout;
     const paths = new Set<string>();
     for (const row of unmerged.split("\0").filter(Boolean)) {
       const match = /^\d{6} [a-f0-9]+ [123]\t(.+)$/s.exec(row);
-      if (!match) throw Error("Некорректный конфликтный индекс Git.");
+      if (!match) throw Error(gitMessage("gitHost.invalidGitConflictIndex"));
       paths.add(match[1]);
     }
     return { source, conflictCount: paths.size };
@@ -673,11 +674,11 @@ export class GitMergeSafety {
         );
       } catch {
         throw Error(
-          "Установленный Git не умеет безопасно определять источники attributes. Обновите Git для слияния.",
+          gitMessage("gitHost.theInstalledGitCannotDetermineAttributeSourcesSafelyUpdate"),
         );
       }
       if (!raw || /[\0\r\n]/.test(raw))
-        throw Error("Недопустимый путь attributes Git.");
+        throw Error(gitMessage("gitHost.invalidGitAttributesPath"));
       if (raw !== "/dev/null") {
         const file = path.resolve(ctx.root, raw);
         files.add(file);
@@ -752,7 +753,7 @@ export class GitMergeSafety {
     for (const row of output.split("\0").slice(1).filter(Boolean)) {
       const match = /^(\d{6}) ([a-f0-9]+) [123]\t(.+)$/s.exec(row);
       if (!match)
-        throw Error("Неподдерживаемый вывод merge-tree; операция остановлена.");
+        throw Error(gitMessage("gitHost.unsupportedMergeTreeOutputOperationStopped"));
       oid(match[2]);
       conflicts.add(gitFilePathSchema.parse(match[3]));
     }
@@ -779,11 +780,11 @@ export class GitMergeSafety {
     const auto = path.join(ctx.root, ".git/AUTO_MERGE");
     if ((await fileIdentity(auto)) === "missing")
       throw Error(
-        "Отсутствует исходное дерево AUTO_MERGE. Безопасная отмена без риска потери изменений не подтверждена.",
+        gitMessage("gitHost.theOriginalAutoMergeTreeIsMissingItIs"),
       );
     if (oid((await fs.readFile(auto, "utf8")).trim()) !== expected.tree)
       throw Error(
-        "Исходное слияние нельзя воспроизвести: изменились attributes/настройки или исходная операция не поддерживается. Операция не выполнялась; индекс, ветки и рабочие файлы не изменялись.",
+        gitMessage("gitHost.theOriginalMergeCannotBeReproducedAttributesOrSettings"),
       );
     const baseline = new Map<string, string>();
     for (const row of (
@@ -792,7 +793,7 @@ export class GitMergeSafety {
       .split("\0")
       .filter(Boolean)) {
       const match = /^(\d{6}) blob ([a-f0-9]+)\t(.+)$/s.exec(row);
-      if (!match) throw Error("Неподдерживаемое исходное дерево слияния.");
+      if (!match) throw Error(gitMessage("gitHost.unsupportedOriginalMergeTree"));
       baseline.set(
         gitFilePathSchema.parse(match[3]),
         `${match[1]} ${oid(match[2])}`,
@@ -805,12 +806,12 @@ export class GitMergeSafety {
       .split("\0")
       .filter(Boolean)) {
       const match = /^(\d{6}) ([a-f0-9]+) ([0123])\t(.+)$/s.exec(row);
-      if (!match) throw Error("Некорректный индекс Git.");
+      if (!match) throw Error(gitMessage("gitHost.invalidGitIndex"));
       const name = gitFilePathSchema.parse(match[4]);
       if (expected.conflicts.has(name)) continue;
       if (match[3] !== "0" || actual.has(name))
         throw Error(
-          "Конфликтный индекс не соответствует исходному слиянию. Отмена запрещена.",
+          gitMessage("gitHost.theConflictIndexDoesNotMatchTheOriginalMerge"),
         );
       actual.set(name, `${match[1]} ${oid(match[2])}`);
     }
@@ -820,7 +821,7 @@ export class GitMergeSafety {
         baseline.get(name) !== actual.get(name)
       )
         throw Error(
-          "В индексе есть изменения вне исходных конфликтов. Native abort может их потерять; сохраните их самостоятельно. Отмена не выполнялась.",
+          gitMessage("gitHost.theIndexContainsChangesOutsideTheOriginalConflictsA"),
         );
   }
   /** A native D/F conflict may create a directory where HEAD had a file.
@@ -834,7 +835,7 @@ export class GitMergeSafety {
   ) {
     const unsafe = () =>
       Error(
-        "В каталоге исходного конфликта есть посторонние или изменённые данные. Безопасная отмена невозможна; сохраните их самостоятельно.",
+        gitMessage("gitHost.theOriginalConflictDirectoryContainsUnrelatedOrModifiedData"),
       );
     let count = 0;
     const visit = async (name: string, depth: number): Promise<void> => {
@@ -906,13 +907,13 @@ export class GitMergeSafety {
             : !value.isDirectory() || value.isSymbolicLink()
         )
           throw Error(
-            "На месте отслеживаемого файла или его родителя находится пользовательский каталог/другой тип. Git может удалить его при восстановлении; сначала сохраните данные самостоятельно.",
+            gitMessage("gitHost.aUserDirectoryOrAnotherFileTypeOccupiesA"),
           );
       }
     }
     const conflict = () =>
       Error(
-        "Слияние может перезаписать неотслеживаемый или игнорируемый файл/каталог. Переместите его самостоятельно и подтвердите новый предпросмотр.",
+        gitMessage("gitHost.theMergeMayOverwriteAnUntrackedOrIgnoredFile"),
       );
     for (const name of incoming) {
       if (current.has(name)) continue; // Tracked overwrites remain native Git's responsibility.
@@ -940,7 +941,7 @@ export class GitMergeSafety {
           throw conflict();
         if (await stat(path.join(ctx.root, prefix, ".git")))
           throw Error(
-            "Слияние затрагивает вложенный репозиторий; его файлы не проверяются и не изменяются.",
+            gitMessage("gitHost.theMergeAffectsANestedRepositoryItsFilesAre"),
           );
       }
     }

@@ -1,3 +1,6 @@
+import { PopupClose } from "./PopupClose";
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import type { GitUpdateHandoffCandidate } from "../shared/git-update-handoff";
 import type { ScopeRef } from "../shared/context";
 import { documentScopeId } from "./settings-documents";
@@ -23,7 +26,7 @@ export function TopicModal({
   className = "",
   children,
   busy = false,
-  closeLabel = "Закрыть карточку",
+  closeLabel = tr("topics.closeCard"),
   onClose,
 }: {
   title: string;
@@ -33,6 +36,7 @@ export function TopicModal({
   closeLabel?: string;
   onClose: () => void;
 }) {
+  useLocale();
   const active = useViewActive();
   const node = useRef<HTMLDialogElement>(null),
     id = useId();
@@ -58,15 +62,7 @@ export function TopicModal({
     >
       <header>
         <h2 id={id}>{title}</h2>
-        <button
-          type="button"
-          className="icon-button"
-          aria-label={closeLabel}
-          disabled={busy}
-          onClick={onClose}
-        >
-          ×
-        </button>
+        <PopupClose label={closeLabel} onClick={onClose} disabled={busy} />
       </header>
       {children}
     </dialog>
@@ -83,6 +79,7 @@ export function TopicSwitch({
   onChange: () => void;
   disabled?: boolean;
 }) {
+  useLocale();
   return (
     <button
       type="button"
@@ -183,6 +180,7 @@ export function TopicConfirmation({
   operation: ReturnType<typeof useTopicOperation>;
   onSuccess?: () => void;
 }) {
+  useLocale();
   const plan = operation.plan!;
   return (
     <section className="topic-confirm">
@@ -192,19 +190,14 @@ export function TopicConfirmation({
           <li key={i}>{line}</li>
         ))}
       </ul>
-      <p className="hint">
-        Подтверждение действует 5 минут. Перед выполнением повторно проверим
-        состояние проекта.
-      </p>
+      <p className="hint">{tr("topics.confirmationIsValidForFiveMinutesProjectState")}</p>
       <div className="form-actions">
         <button
           type="button"
           autoFocus
           disabled={operation.busy}
           onClick={operation.cancel}
-        >
-          Отмена
-        </button>
+        >{tr("launch.cancel")}</button>
         <button
           type="button"
           className={plan.action === "delete" ? "danger" : "primary"}
@@ -212,10 +205,10 @@ export function TopicConfirmation({
           onClick={() => void operation.execute(onSuccess)}
         >
           {operation.busy
-            ? "Выполняем…"
+            ? tr("topics.working")
             : plan.action === "delete"
-              ? "Удалить без корзины"
-              : "Подтвердить"}
+              ? tr("topics.deleteWithoutTrash")
+              : tr("topics.confirm")}
         </button>
       </div>
     </section>
@@ -230,6 +223,7 @@ export function TopicFeedback({
   handoffScope?: ScopeRef;
   onHandoff?: (candidate: GitUpdateHandoffCandidate) => void;
 }) {
+  useLocale();
   const notice = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (operation.error || operation.result)
@@ -248,9 +242,7 @@ export function TopicFeedback({
   return (
     <div ref={notice} className="topic-feedback">
       {eligible && onHandoff && (
-        <button type="button" onClick={() => onHandoff(candidate!)}>
-          Разрешить конфликт вручную…
-        </button>
+        <button type="button" onClick={() => onHandoff(candidate!)}>{tr("topics.resolveConflictManually")}</button>
       )}
       {operation.error && (
         <p role="alert" className="error">

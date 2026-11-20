@@ -1,3 +1,4 @@
+import { t as tr } from "../../shared/i18n";
 import { constants } from "node:fs";
 import { lstat, mkdir, open, rename, unlink } from "node:fs/promises";
 import path from "node:path";
@@ -56,7 +57,7 @@ const missing = (error: unknown) =>
   (error as NodeJS.ErrnoException)?.code === "ENOENT";
 const safeError = () =>
   new Error(
-    "Не удалось прочитать или сохранить историю уведомлений. История не удалена.",
+    tr("host.couldNotReadOrSaveNotificationHistoryTheHistoryWas"),
   );
 const terminalSeverity: Partial<Record<NotificationKind, number>> = {
   "process-exited": 1,

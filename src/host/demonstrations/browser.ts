@@ -1,3 +1,4 @@
+import { getLocale, t } from "../../shared/i18n";
 import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import { createEmbeddedControl } from "./embedded-control.cjs";
@@ -5,10 +6,11 @@ import { constants } from "node:fs";
 import { access, mkdir, mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { isAbsolute, join } from "node:path";
-import { createPipeTarget } from "./transport.cjs";
+import { createPipeTarget, installDemoFormatter } from "./transport.cjs";
 import { createPageDisplay } from "./display";
 
 import { startPage } from "./start-page.cjs";
+installDemoFormatter(t);
 async function browserPath(explicit?: string) {
   const paths = explicit
     ? [explicit]
@@ -40,7 +42,7 @@ async function browserPath(explicit?: string) {
         /* next installed browser */
       }
   }
-  throw new Error("Для демонстрации установите Google Chrome или Chromium.");
+  throw new Error(t("hostTerminal.installBrowser"));
 }
 async function within<T>(
   operation: Promise<T>,
@@ -91,7 +93,7 @@ async function launch(
 ) {
   signal.throwIfAborted();
   if (embedded && !process.versions.electron)
-    throw Error("Встроенный браузер доступен только в Desktop.");
+    throw Error(t("hostTerminal.embeddedNeedsDesktop"));
   const path = embedded ? process.execPath : await browserPath(explicit);
   // Resolve Electron only inside its live main process, never in Node tests.
   const helperArgs = embedded
@@ -104,11 +106,12 @@ async function launch(
             ]
           : []),
         "--goga-demonstration-helper",
+        "--goga-interface-language=" + getLocale(),
       ]
     : [];
   const home = await mkdtemp(join(tmpdir(), "goga-demonstration-")).catch(
     () => {
-      throw Error("Не удалось создать временный профиль демонстрации.");
+      throw Error(t("hostTerminal.profileCreationFailed"));
     },
   );
   let pageLost = false;
@@ -137,7 +140,7 @@ async function launch(
         }
         if (!ended)
           throw Error(
-            "Не удалось завершить браузер демонстрации. Повторите закрытие.",
+            t("hostTerminal.browserCloseFailed"),
           );
       }
       await releases;
@@ -148,7 +151,7 @@ async function launch(
         retryDelay: 120,
       }).catch(() => {
         throw Error(
-          "Не удалось удалить временный профиль демонстрации. Повторите закрытие.",
+          t("hostTerminal.profileRemovalFailed"),
         );
       });
     })().catch((error) => {
@@ -168,7 +171,7 @@ async function launch(
     const profile = join(home, "profile"),
       temp = join(home, "tmp");
     await mkdir(temp, { mode: 0o700 }).catch(() => {
-      throw Error("Не удалось подготовить временный профиль демонстрации.");
+      throw Error(t("hostTerminal.profileSetupFailed"));
     });
     // Do not hand inherited terminal/project secrets or the user's profile to
     // a browser controlled over CDP. No debugging socket is opened by Chrome.
@@ -209,7 +212,7 @@ async function launch(
         ...(embedded ? [] : ["--headless=new"]),
         "--hide-scrollbars",
         "--force-device-scale-factor=2",
-        ...(embedded ? helperArgs : [startPage]),
+        ...(embedded ? helperArgs : [startPage(getLocale(), t("hostTerminal.startPageTitle"), t("hostTerminal.startPageHint"))]),
       ],
       {
         stdio: [
@@ -267,11 +270,11 @@ async function launch(
           }
           await new Promise((r) => setTimeout(r, 50));
         }
-        throw Error("Браузер демонстрации закрыт.");
+        throw Error(t("hostTerminal.browserClosed"));
       })(),
       12000,
       () => {
-        throw Error("Браузер не ответил при открытии.");
+        throw Error(t("hostTerminal.browserTimeout"));
       },
     );
     return {

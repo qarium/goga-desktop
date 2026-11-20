@@ -1,3 +1,7 @@
+import { HintButton } from "./ActionHint";
+import type { MessageKey } from "../shared/locale-packs.generated";
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import {
   formatGitDiagnostics,
   hasGitDiagnostics,
@@ -19,15 +23,15 @@ import { useViewActive } from "./RetainedViews";
 import "./GitBranchPicker.css";
 import { useGitBranchMenu } from "./useGitBranchMenu";
 import { remoteBranchTarget } from "./git-branch-targets";
-const labels: Record<GitBranchRequest["action"], string> = {
-  create: "Создать ветку",
-  "switch-local": "Переключить ветку",
-  "switch-remote": "Создать отслеживающую ветку",
-  fetch: "Обновить список из remote",
-  pull: "Подтянуть текущую ветку",
-  merge: "Подтвердить слияние",
-  "abort-merge": "Отменить слияние?",
-};
+const labels = {
+  create: "git.createBranch",
+  "switch-local": "git.switchBranch",
+  "switch-remote": "git.createTrackingBranch",
+  fetch: "git.fetchBranchesFromRemote",
+  pull: "git.pullCurrentBranch",
+  merge: "git.confirmMerge",
+  "abort-merge": "git.abortMerge",
+} as const satisfies Record<GitBranchRequest["action"], MessageKey>;
 const short = (ref: string | null) =>
   ref?.replace(/^refs\/(heads|remotes)\//, "") ?? "—";
 interface Props {
@@ -45,6 +49,7 @@ interface Props {
 }
 /** Instance belongs to one retained primary project, never the current selector. */
 export function GitBranchPicker(props: Props) {
+  useLocale();
   return <BranchOwner key={props.projectId} {...props} />;
 }
 function BranchOwner({
@@ -60,6 +65,7 @@ function BranchOwner({
   operation,
   abortContainer,
 }: Props) {
+  useLocale();
   const active = useViewActive();
   const [open, setOpen] = useState(false),
     [group, setGroup] = useState<"local" | "remote">("local"),
@@ -185,7 +191,7 @@ function BranchOwner({
         );
         if (controller.signal.aborted || !alive.current) return;
         if (current.projectId !== projectId)
-          throw Error("Список веток относится к другому проекту.");
+          throw Error(msg("git.theBranchListBelongsToAnotherProject"));
         request = {
           projectId,
           revision: current.revision,
@@ -199,7 +205,7 @@ function BranchOwner({
       );
       if (!alive.current || controller.signal.aborted) return;
       if (value.projectId !== projectId || value.action !== request.action)
-        throw Error("Подтверждение относится к другой операции.");
+        throw Error(msg("git.theConfirmationBelongsToAnotherOperation"));
       setPreview(value);
     } catch (error) {
       if (alive.current && !controller.signal.aborted)
@@ -221,7 +227,7 @@ function BranchOwner({
       if (!alive.current) return;
       if (value.projectId !== projectId || value.action !== submitted.action)
         throw Error(
-          "Результат относится к другой операции. Проверьте состояние Git.",
+          msg("git.theResultBelongsToAnotherOperationCheckTheGitState"),
         );
       if (hasGitDiagnostics(value)) {
         setResultConflict(value.status === "conflict");
@@ -230,7 +236,7 @@ function BranchOwner({
     } catch (error) {
       if (alive.current)
         setResult(
-          `${topicError(error)}\n\nПроверьте состояние Git: ответ не подтверждает отсутствие изменений. Автоматического повтора не будет.`,
+          msg("git.checkTheGitStateTheResponseDoesNotConfirmThat", { value1: String(topicError(error)) }),
         );
     } finally {
       flight.current = false;
@@ -255,7 +261,7 @@ function BranchOwner({
         ref={anchor}
         type="button"
         className="git-workspace-trigger git-branch-trigger"
-        aria-label={`Ветка: ${branch}`}
+        aria-label={msg("git.branch", { branch: String(branch) })}
         title={branch}
         aria-expanded={open}
         aria-haspopup="dialog"
@@ -283,9 +289,7 @@ function BranchOwner({
         <span>{branch}</span>
       </button>
       {pending === "execute" && (
-        <span className="git-branch-running" role="status">
-          Операция Git…
-        </span>
+        <span className="git-branch-running" role="status">{msg("git.gitOperation")}</span>
       )}
       {active &&
         operation === "merge" &&
@@ -296,16 +300,14 @@ function BranchOwner({
             className="danger"
             disabled={disabled || !!pending || !!mutationBlockedReason}
             onClick={() => void prepare("abort-merge")}
-          >
-            Отменить слияние…
-          </button>,
+          >{msg("git.abortMerge2")}</button>,
           abortContainer,
         )}
       {active && open && (
         <TopicPickerPopup
           anchor={anchor}
           onClose={() => setOpen(false)}
-          label="Выбор ветки"
+          label={msg("git.selectBranch")}
           domPortal
           width={376}
         >
@@ -313,7 +315,7 @@ function BranchOwner({
             ref={menu}
             className="git-branch-menu"
             role="dialog"
-            aria-label="Выбор ветки"
+            aria-label={msg("git.selectBranch")}
             onKeyDown={(event) => {
               if (event.key === "Escape") {
                 event.preventDefault();
@@ -345,12 +347,12 @@ function BranchOwner({
             <div
               className="git-branch-groups"
               role="tablist"
-              aria-label="Источник веток"
+              aria-label={msg("git.branchSource")}
             >
               {(
                 [
-                  ["local", "Локальные"],
-                  ["remote", "Удалённые"],
+                  ["local", msg("git.local")],
+                  ["remote", msg("git.remote")],
                 ] as const
               ).map(([key, label]) => (
                 <button
@@ -370,17 +372,17 @@ function BranchOwner({
             <div className="git-branch-searchbar">
               <input
                 type="search"
-                aria-label="Найти ветку"
-                placeholder="Найти ветку"
+                aria-label={msg("git.findABranch")}
+                placeholder={msg("git.findABranch")}
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
                 autoFocus
               />
-              <button
+              <HintButton
                 type="button"
                 className="git-branch-refresh"
-                aria-label="Обновить из origin"
-                title="Обновить из origin"
+                aria-label={msg("git.fetchFromOrigin")}
+                hint={msg("git.fetchFromOrigin")}
                 aria-busy={fetching}
                 disabled={
                   fetching ||
@@ -401,34 +403,26 @@ function BranchOwner({
                     fetching ? "git-branch-refresh-spinning" : undefined
                   }
                 />
-              </button>
+              </HintButton>
             </div>
             {fetching && (
-              <p className="hint" role="status">
-                Обновляем список веток origin…
-              </p>
+              <p className="hint" role="status">{msg("git.fetchingBranchesFromOrigin")}</p>
             )}
             {menuState.error && (
               <div className="git-branch-refresh-error" role="alert">
                 <pre>{menuState.error}</pre>
-                <button type="button" onClick={() => setOpen(false)}>
-                  Закрыть меню
-                </button>
+                <button type="button" onClick={() => setOpen(false)}>{msg("git.closeMenu")}</button>
               </div>
             )}
             {menuState.stale && (
-              <p className="hint">
-                Показан прежний список. Обновите состояние перед переключением.
-              </p>
+              <p className="hint">{msg("git.showingThePreviousListRefreshTheStateBeforeSwitching")}</p>
             )}
             {(menuState.reviewRequired || menuState.stale) && (
               <button
                 type="button"
                 disabled={fetching}
                 onClick={() => void menuState.checkState()}
-              >
-                Проверить состояние
-              </button>
+              >{msg("git.checkState")}</button>
             )}
             {menuState.notice && (
               <p className="hint" role="status">
@@ -438,27 +432,24 @@ function BranchOwner({
             {!!newRefs.length &&
               (group !== "remote" ||
                 newRefs.some((ref) => !rows.some((r) => r.ref === ref))) && (
-                <p className="hint">
-                  Новые ветки скрыты текущей вкладкой или поиском.{" "}
+                <p className="hint">{msg("git.newBranchesAreHiddenByTheCurrentTabOrSearch")}{" "}
                   <button
                     type="button"
                     onClick={() => {
                       setGroup("remote");
                       setQuery("");
                     }}
-                  >
-                    Показать новые ветки
-                  </button>
+                  >{msg("git.showNewBranches")}</button>
                 </p>
               )}
             {loading && !inventory ? (
-              <LoadingState label="Загружаем ветки…" />
+              <LoadingState label={msg("git.loadingBranches")} />
             ) : (
               <div
                 className="git-branch-list"
                 role="tabpanel"
                 aria-label={
-                  group === "local" ? "Локальные ветки" : "Удалённые ветки"
+                  group === "local" ? msg("git.localBranches") : msg("git.remoteBranches")
                 }
               >
                 {rows.map((row) => {
@@ -484,7 +475,7 @@ function BranchOwner({
                             type="button"
                             aria-label={
                               choices.length > 1
-                                ? `Переключиться на ${choice.name}`
+                                ? msg("git.switchTo", { name: String(choice.name) })
                                 : row.name
                             }
                             disabled={
@@ -508,19 +499,19 @@ function BranchOwner({
                             <span>
                               {choices.length > 1 ? choice.name : row.name}{" "}
                               {newRefs.includes(row.ref) && (
-                                <small className="git-branch-new">Новая</small>
+                                <small className="git-branch-new">{msg("git.new")}</small>
                               )}
                             </span>
                             <small>
                               {current
-                                ? "Текущая"
+                                ? msg("git.current")
                                 : choice.checkedOut
-                                  ? "Открыта в другой копии"
+                                  ? msg("git.checkedOutInAnotherWorkingCopy")
                                   : collision
-                                    ? `Имя ${collision} уже занято локальной веткой с другой или отсутствующей связью upstream.`
+                                    ? msg("git.aLocalBranchNamedAlreadyExistsWithADifferentUpstream", { collision: String(collision) })
                                     : local
-                                      ? `Переключиться${target?.kind === "tracking" ? ` на ${choice.name}` : ""}`
-                                      : "Создать локальную и переключиться"}
+                                      ? msg("git.switch", { value1: String(target?.kind === "tracking" ? msg("git.to", { name: String(choice.name) }) : "") })
+                                      : msg("git.createLocalBranchAndSwitch")}
                             </small>
                           </button>
                         );
@@ -532,14 +523,13 @@ function BranchOwner({
                             setGroup("local");
                             setQuery(collision);
                           }}
-                        >
-                          Показать локальную {collision}
+                        >{msg("git.showLocalBranch")}{collision}
                         </button>
                       )}
                     </div>
                   );
                 })}
-                {!rows.length && <p className="hint">Ветки не найдены</p>}
+                {!rows.length && <p className="hint">{msg("git.noBranchesFound")}</p>}
               </div>
             )}
             {mutationBlockedReason && (
@@ -548,15 +538,10 @@ function BranchOwner({
               </p>
             )}
             {inventory?.operation !== "none" && inventory && (
-              <p className="hint">
-                Завершите текущую операцию Git перед изменением веток.
-              </p>
+              <p className="hint">{msg("git.finishTheCurrentGitOperationBeforeChangingBranches")}</p>
             )}
             {inventory?.dirty && (
-              <p className="hint">
-                Для переключения сохраните изменения коммитом. Создание ветки
-                без переключения доступно.
-              </p>
+              <p className="hint">{msg("git.commitYourChangesBeforeSwitchingYouCanCreateABranch")}</p>
             )}
             <div className="git-branch-menu-actions">
               {ready && inventory?.operation === "merge" && (
@@ -564,9 +549,7 @@ function BranchOwner({
                   type="button"
                   className="danger"
                   onClick={() => void prepare("abort-merge")}
-                >
-                  Отменить слияние…
-                </button>
+                >{msg("git.abortMerge2")}</button>
               )}
               {group === "local" ? (
                 <>
@@ -583,9 +566,7 @@ function BranchOwner({
                         setResult(topicError(e));
                       }
                     }}
-                  >
-                    Создать ветку…
-                  </button>
+                  >{msg("git.createBranch2")}</button>
                   <button
                     type="button"
                     disabled={!mutable || !inventory?.branch || !inventory.head}
@@ -598,9 +579,7 @@ function BranchOwner({
                         if (alive.current) setResult(topicError(e));
                       }
                     }}
-                  >
-                    Влить ветку в текущую…
-                  </button>
+                  >{msg("git.mergeBranchIntoCurrent")}</button>
                   <button
                     type="button"
                     disabled={
@@ -610,18 +589,12 @@ function BranchOwner({
                       basicRequest &&
                       void prepare({ ...basicRequest, action: "pull" })
                     }
-                  >
-                    Подтянуть текущую ветку
-                  </button>
-                  <small>
-                    Только fast-forward из настроенной upstream-ветки.
-                  </small>
+                  >{msg("git.pullCurrentBranch")}</button>
+                  <small>{msg("git.fastForwardOnlyFromTheConfiguredUpstream")}</small>
                 </>
               ) : (
                 <>
-                  <small>
-                    Из origin. Рабочие файлы и текущая ветка не меняются.
-                  </small>
+                  <small>{msg("git.fromOriginWorkingFilesAndTheCurrentBranchWillNot")}</small>
                 </>
               )}
             </div>
@@ -639,7 +612,7 @@ function BranchOwner({
         />
       )}
       {active && creating && (
-        <TopicModal title="Создать ветку" onClose={() => setCreating(false)}>
+        <TopicModal title={msg("git.createBranch")} onClose={() => setCreating(false)}>
           <form
             className="git-branch-form"
             onSubmit={(event) => {
@@ -653,11 +626,9 @@ function BranchOwner({
                 });
             }}
           >
-            <label>
-              Название ветки
-              <input
+            <label>{msg("git.branchName")}<input
                 autoFocus
-                aria-label="Название ветки"
+                aria-label={msg("git.branchName")}
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 required
@@ -670,39 +641,27 @@ function BranchOwner({
                 checked={switchTo && !inventory?.dirty}
                 disabled={inventory?.dirty}
                 onChange={(event) => setSwitchTo(event.target.checked)}
-              />
-              Переключиться на новую ветку
-            </label>
-            <p className="hint">
-              От текущего HEAD · {inventory?.head?.slice(0, 8)}. Создание
-              Git-ветки не создаёт топик.
-            </p>
+              />{msg("git.switchToNewBranch")}</label>
+            <p className="hint">{msg("git.createBranchFromHead", { head: inventory?.head?.slice(0, 8) ?? "" })}</p>
             {inventory?.dirty && (
-              <p className="hint">
-                Есть незакоммиченные изменения. Ветка будет создана без
-                переключения.
-              </p>
+              <p className="hint">{msg("git.thereAreUncommittedChangesTheBranchWillBeCreatedWithout")}</p>
             )}
             <div className="git-branch-dialog-actions">
-              <button type="button" onClick={() => setCreating(false)}>
-                Отмена
-              </button>
-              <button type="submit" className="primary" disabled={!name.trim()}>
-                Продолжить
-              </button>
+              <button type="button" onClick={() => setCreating(false)}>{msg("git.cancel")}</button>
+              <button type="submit" className="primary" disabled={!name.trim()}>{msg("git.continue")}</button>
             </div>
           </form>
         </TopicModal>
       )}
       {active && pending === "prepare" && (
         <TopicModal
-          title="Проверяем операцию Git"
+          title={msg("git.checkingGitOperation")}
           onClose={() => {
             preparing.current?.abort();
             setPending(null);
           }}
         >
-          <LoadingState label="Проверяем операцию Git…" />
+          <LoadingState label={msg("git.checkingGitOperation2")} />
         </TopicModal>
       )}
       {active &&
@@ -719,28 +678,28 @@ function BranchOwner({
         preview.action !== "merge" &&
         preview.action !== "abort-merge" && (
           <TopicModal
-            title={labels[preview.action]}
+            title={msg(labels[preview.action])}
             onClose={() => setPreview(null)}
           >
             <div className="git-branch-form">
               <p className="context-path">{preview.root}</p>
               <dl className="git-branch-summary">
-                <dt>Текущая ветка</dt>
+                <dt>{msg("git.currentBranch")}</dt>
                 <dd>
                   {short(preview.fromRef)} ·{" "}
                   {preview.fromOid?.slice(0, 8) ?? "—"}
                 </dd>
                 {preview.action === "pull" ? (
                   <>
-                    <dt>Источник</dt>
+                    <dt>{msg("git.source")}</dt>
                     <dd>{short(preview.sourceRef)}</dd>
-                    <dt>Последний известный коммит</dt>
-                    <dd>{preview.toOid?.slice(0, 8) ?? "Ещё не загружен"}</dd>
+                    <dt>{msg("git.lastKnownCommit")}</dt>
+                    <dd>{preview.toOid?.slice(0, 8) ?? msg("git.notFetchedYet")}</dd>
                   </>
                 ) : (
                   preview.toRef && (
                     <>
-                      <dt>Целевая ветка</dt>
+                      <dt>{msg("git.targetBranch")}</dt>
                       <dd>
                         {short(preview.toRef)}{" "}
                         {preview.toOid && `· ${preview.toOid.slice(0, 8)}`}
@@ -750,34 +709,28 @@ function BranchOwner({
                 )}
                 {preview.remote && (
                   <>
-                    <dt>Remote</dt>
+                    <dt>{msg("git.remoteRepository")}</dt>
                     <dd>{preview.remote}</dd>
                   </>
                 )}
               </dl>
               <p>
                 {preview.action === "fetch"
-                  ? "Обновится список веток origin. Рабочие файлы останутся без изменений."
+                  ? msg("git.theOriginBranchListWillBeRefreshedWorkingFilesWill")
                   : preview.action === "pull"
-                    ? "Получим свежие изменения upstream и применим только fast-forward. При расхождении операция остановится."
+                    ? msg("git.fetchUpstreamAndFastForwardOnlyIfTheBranchesHave")
                     : preview.switchesBranch
-                      ? "Переключение изменит файлы основной папки. Незакоммиченные изменения блокируют переключение."
-                      : "Ветка будет создана без изменения рабочих файлов."}
+                      ? msg("git.switchingChangesFilesInTheOriginalProjectFolderUncommittedChanges")
+                      : msg("git.theBranchWillBeCreatedWithoutChangingWorkingFiles")}
               </p>
-              <p className="hint">
-                Без force, stash и сброса изменений. Git-хуки отключены.
-              </p>
+              <p className="hint">{msg("git.noForceStashOrResetGitHooksAreDisabled")}</p>
               <div className="git-branch-dialog-actions">
-                <button type="button" onClick={() => setPreview(null)}>
-                  Отмена
-                </button>
+                <button type="button" onClick={() => setPreview(null)}>{msg("git.cancel")}</button>
                 <button
                   type="button"
                   className="primary"
                   onClick={() => void execute()}
-                >
-                  Подтвердить
-                </button>
+                >{msg("git.confirm")}</button>
               </div>
             </div>
           </TopicModal>
@@ -786,8 +739,8 @@ function BranchOwner({
         <TopicModal
           title={
             resultConflict
-              ? "Слияние остановлено: конфликты"
-              : "Результат операции Git"
+              ? msg("git.mergePausedConflicts")
+              : msg("git.gitOperationResult")
           }
           onClose={closeResult}
         >
@@ -800,13 +753,9 @@ function BranchOwner({
                   closeResult();
                   onShowChanges();
                 }}
-              >
-                Просмотреть конфликты
-              </button>
+              >{msg("git.viewConflicts")}</button>
             )}
-            <button type="button" onClick={closeResult}>
-              Закрыть
-            </button>
+            <button type="button" onClick={closeResult}>{msg("git.close")}</button>
           </div>
         </TopicModal>
       )}

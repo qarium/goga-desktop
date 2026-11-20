@@ -1,3 +1,6 @@
+import { HintButton } from "../ActionHint";
+import { getLocale, t } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import { useEffect, useRef } from "react";
 import {
   Bell,
@@ -16,16 +19,16 @@ import { TopicPickerPopup, dismissActiveTopicPopup } from "../TopicPickerPopup";
 import type { NotificationsController } from "./useNotifications";
 import "./Notifications.css";
 
-export const notificationTitles: Record<NotificationRecord["kind"], string> = {
-  question: "Нужен ваш ответ",
-  approval: "Нужно подтверждение",
-  "stage-failed": "Стадия завершилась с ошибкой",
-  paused: "Стадия приостановлена",
-  "assistant-decision": "Помощнику нужно решение",
-  "run-finished": "Конвейер завершён",
-  "run-failed": "Конвейер завершился с ошибкой",
-  "process-exited": "Процесс конвейера завершён",
-};
+const titleKeys = {
+  question: "general.yourResponseIsNeeded",
+  approval: "general.approvalRequired",
+  "stage-failed": "general.stageFailed",
+  paused: "general.stagePaused",
+  "assistant-decision": "general.theAssistantNeedsADecision",
+  "run-finished": "general.pipelineCompleted",
+  "run-failed": "general.pipelineFailed",
+  "process-exited": "general.pipelineProcessExited",
+} as const satisfies Record<NotificationRecord["kind"], string>;
 function EventIcon({ kind }: { kind: NotificationRecord["kind"] }) {
   if (
     kind === "question" ||
@@ -46,6 +49,7 @@ export function NotificationBell({
   projects: Project[];
   onOpen: (id: string) => Promise<void>;
 }) {
+  useLocale();
   const anchor = useRef<HTMLButtonElement>(null),
     panel = useRef<HTMLElement>(null);
   const close = () => {
@@ -83,14 +87,14 @@ export function NotificationBell({
   };
   return (
     <div className="notifications-anchor">
-      <button
+      <HintButton
         ref={anchor}
         type="button"
         className="notification-bell"
-        aria-label={`Уведомления: ${s.unreadCount} непрочитанных`}
+        aria-label={t("general.notificationsUnread", { unreadCount: s.unreadCount })}
         aria-expanded={c.open}
         onClick={() => c.setOpen(!c.open)}
-        title="Уведомления"
+        hint={t("general.notifications")}
       >
         <Bell size={18} />
         {s.unreadCount > 0 && (
@@ -98,18 +102,18 @@ export function NotificationBell({
             {s.unreadCount > 99 ? "99+" : s.unreadCount}
           </span>
         )}
-      </button>
+      </HintButton>
       {c.open && (
         <TopicPickerPopup
           anchor={anchor}
           onClose={close}
-          label="Уведомления"
+          label={t("general.notifications")}
           width={400}
         >
           <section
             ref={panel}
             className="topic-context-popup notifications-panel"
-            aria-label="Список уведомлений"
+            aria-label={t("general.notificationList")}
             onKeyDown={(e) => {
               if (e.key === "Escape") {
                 e.stopPropagation();
@@ -119,41 +123,39 @@ export function NotificationBell({
           >
             <header className="notifications-heading">
               <div>
-                <h2>Уведомления</h2>
+                <h2>{t("general.notifications")}</h2>
                 <p aria-live="polite">
                   {s.unreadCount
-                    ? `Непрочитанных: ${s.unreadCount}`
-                    : "Всё прочитано"}
+                    ? t("general.unread", { unreadCount: s.unreadCount })
+                    : t("general.allCaughtUp")}
                 </p>
               </div>
               <div className="notifications-heading-actions">
-                <button
+                <HintButton
                   type="button"
                   className="notification-icon"
-                  aria-label="Отметить все прочитанными"
-                  title="Отметить все прочитанными"
+                  aria-label={t("general.markAllAsRead")}
+                  hint={t("general.markAllAsRead")}
                   disabled={c.busy || !s.unreadCount}
                   onClick={() => void c.readAll()}
                 >
                   <CheckCheck size={17} />
-                </button>
-                <button
+                </HintButton>
+                <HintButton
                   type="button"
                   className="notification-icon"
-                  aria-label="Закрыть уведомления"
-                  title="Закрыть уведомления"
+                  aria-label={t("general.closeNotifications")}
+                  hint={t("general.closeNotifications")}
                   onClick={close}
                 >
                   <X size={17} />
-                </button>
+                </HintButton>
               </div>
             </header>
             {c.error && (
               <p className="notifications-error" role="alert">
                 {c.error}
-                <button type="button" onClick={() => void c.latest()}>
-                  Повторить
-                </button>
+                <button type="button" onClick={() => void c.latest()}>{t("general.retry")}</button>
               </p>
             )}
             <div className="notification-events">
@@ -165,7 +167,7 @@ export function NotificationBell({
                   <button
                     type="button"
                     className="notification-event-open"
-                    aria-label={`Открыть уведомление: ${notificationTitles[n.kind]}, ${projects.find((p) => p.id === n.projectId)?.name ?? n.projectId}, ${n.pipeline}`}
+                    aria-label={t("general.openNotification", { value1: t(titleKeys[n.kind]), projectId: projects.find((p) => p.id === n.projectId)?.name ?? n.projectId, pipeline: n.pipeline })}
                     onClick={() => void open(n.id)}
                   >
                     <span className="notification-symbol">
@@ -173,7 +175,7 @@ export function NotificationBell({
                     </span>
                     <span className="notification-event-copy">
                       <strong>
-                        {notificationTitles[n.kind]}
+                        {t(titleKeys[n.kind])}
                         {!n.readAt && <i className="notification-new-dot" />}
                       </strong>
                       <span>
@@ -183,75 +185,67 @@ export function NotificationBell({
                       <span className="notification-owner">
                         {projects.find((p) => p.id === n.projectId)?.name ??
                           n.projectId}{" "}
-                        / {n.topic || "Без топика"}
+                        / {n.topic || t("general.noTopic")}
                       </span>
                       <small>
                         <time dateTime={n.occurredAt}>
-                          {new Date(n.occurredAt).toLocaleString("ru-RU", {
+                          {new Date(n.occurredAt).toLocaleString(getLocale(), {
                             day: "numeric",
                             month: "short",
                             hour: "2-digit",
                             minute: "2-digit",
                           })}
                         </time>
-                        {n.readAt && " · Прочитано"}
-                        {n.kind === "question" && " · Запрос ответа"}
+                        {n.readAt && t("general.read")}
+                        {n.kind === "question" && t("general.responseRequested")}
                       </small>
                     </span>
                   </button>
                   {n.readAt ? (
                     <span
                       className="notification-read-mark"
-                      aria-label="Прочитано"
+                      aria-label={t("general.read2")}
                     >
                       <CheckCheck size={16} />
                     </span>
                   ) : (
-                    <button
+                    <HintButton
                       type="button"
                       className="notification-icon"
-                      aria-label={`Отметить ${n.pipeline} прочитанным`}
-                      title="Отметить прочитанным"
+                      aria-label={t("general.markAsRead", { pipeline: n.pipeline })}
+                      hint={t("general.markAsRead2")}
                       disabled={c.busy}
                       onClick={() => void c.read(n.id, n.sequence)}
                     >
                       <Check size={16} />
-                    </button>
+                    </HintButton>
                   )}
                 </article>
               ))}
               {!s.records.length && (
-                <p className="notifications-empty">Уведомлений пока нет</p>
+                <p className="notifications-empty">{t("general.noNotificationsYet")}</p>
               )}
             </div>
             {(s.hasMore || c.older) && (
               <div className="notifications-pagination">
                 {c.older && (
-                  <button type="button" onClick={() => void c.latest()}>
-                    К новым
-                  </button>
+                  <button type="button" onClick={() => void c.latest()}>{t("general.newer")}</button>
                 )}
                 {s.hasMore && (
-                  <button type="button" onClick={() => void c.earlier()}>
-                    Более ранние
-                  </button>
+                  <button type="button" onClick={() => void c.earlier()}>{t("general.older")}</button>
                 )}
               </div>
             )}
             <footer className="notifications-footer">
               <span>
-                <Info size={14} />
-                Открытие списка не отмечает уведомления прочитанными.
-              </span>
+                <Info size={14} />{t("general.openingThisListDoesNotMarkNotificationsAsRead")}</span>
               <label>
                 <input
                   type="checkbox"
                   checked={s.systemEnabled}
                   disabled={c.busy}
                   onChange={(e) => void c.setSystem(e.target.checked)}
-                />
-                Системные уведомления
-              </label>
+                />{t("general.systemNotifications")}</label>
             </footer>
           </section>
         </TopicPickerPopup>

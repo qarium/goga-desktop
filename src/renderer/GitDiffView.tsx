@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useMemo } from "react";
 import type { GitDiffPart } from "../shared/git-workspace";
 const DIFF_PAGE_SIZE = 500;
@@ -18,12 +20,12 @@ export function PageControls({
   next: string;
   onPage(page: number): void;
 }) {
+  useLocale();
   if (total <= size) return null;
   return (
     <div className="git-page-controls">
       <span>
-        {label} {page * size + 1}–{Math.min((page + 1) * size, total)} из{" "}
-        {total}
+        {msg("git.pageRange", { label, start: page * size + 1, end: Math.min((page + 1) * size, total), total })}
       </span>
       <div>
         <button
@@ -55,6 +57,7 @@ export function GitDiffView({
   page: number;
   onPage(page: number): void;
 }) {
+  useLocale();
   // The host byte limit alone doesn't bound DOM size: 1 MiB may contain a
   // million empty lines. Page the complete content; never silently truncate.
   const lines = useMemo(
@@ -71,15 +74,15 @@ export function GitDiffView({
   const start = visiblePage * DIFF_PAGE_SIZE;
   if (part.kind === "empty")
     return (
-      <div className="git-workspace-empty">В этой версии изменений нет.</div>
+      <div className="git-workspace-empty">{msg("git.noChangesInThisVersion")}</div>
     );
   if (part.kind === "binary" || part.kind === "unavailable")
     return (
       <div className="git-workspace-empty">
         {part.text ||
           (part.kind === "binary"
-            ? "Двоичный файл. Текстовое сравнение недоступно."
-            : "Просмотр содержимого недоступен.")}
+            ? msg("git.binaryFileTextComparisonIsUnavailable")
+            : msg("git.contentPreviewUnavailable"))}
       </div>
     );
   return (
@@ -88,14 +91,14 @@ export function GitDiffView({
         total={lines.length}
         page={visiblePage}
         size={DIFF_PAGE_SIZE}
-        label="Строки"
-        previous="Предыдущие строки"
-        next="Следующие строки"
+        label={msg("git.lines")}
+        previous={msg("git.previousLines")}
+        next={msg("git.nextLines")}
         onPage={onPage}
       />
       <pre
         className="git-diff-code"
-        aria-label={part.kind === "patch" ? "Различия файла" : "Новый файл"}
+        aria-label={part.kind === "patch" ? msg("git.fileDiff") : msg("git.newFile")}
       >
         {lines.slice(start, start + DIFF_PAGE_SIZE).map((line, i) => (
           <span

@@ -1,6 +1,8 @@
+import { t as tr } from "../shared/i18n";
 import { z } from "zod";
 import {
   defaultBoardPreferences,
+  migrateColumn,
   type TopicsBoardPreferences,
 } from "./topics-board-model";
 const schema = z
@@ -17,6 +19,7 @@ const schema = z
               .max(128)
               .refine((s) => s !== "unassigned"),
             name: z.string().trim().min(1).max(64),
+            builtInName: z.boolean().optional(),
           })
           .strict(),
       )
@@ -65,12 +68,13 @@ export function readBoardPreferences(
   try {
     const text = storage.getItem(boardPreferencesKey(projectId));
     if (text === null) return { value: defaultBoardPreferences() };
-    return { value: schema.parse(JSON.parse(text)) };
+    const value = schema.parse(JSON.parse(text));
+    return { value: { ...value, columns: value.columns.map(migrateColumn) } };
   } catch {
     return {
       value: defaultBoardPreferences(),
       error:
-        "Не удалось прочитать настройки доски. Используется начальная раскладка.",
+        tr("topics.couldNotReadBoardSettingsUsingTheDefault"),
     };
   }
 }
@@ -88,7 +92,7 @@ export function writeBoardPreferences(
   } catch {
     return {
       error:
-        "Настройки доски не сохранены. Изменения доступны до закрытия окна.",
+        tr("topics.boardSettingsCouldNotBeSavedChangesRemain"),
     };
   }
 }

@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import { z } from "zod";
 import {
   applyOrganizationCommand,
@@ -42,12 +43,11 @@ type Snapshot = { organization: ProjectOrganization; issue: Issue | null };
 type StorageAccess = Pick<Storage, "getItem" | "setItem">;
 const protectedIssue: Issue = {
   kind: "protected",
-  message:
-    "Не удалось прочитать раскладку. Для этого окна используется временный порядок.",
+  get message() { return msg("workspace.couldNotReadTheLayoutThisWindowIsUsingA"); },
 };
 const unsavedIssue: Issue = {
   kind: "unsaved",
-  message: "Порядок проектов не сохранён; изменения доступны до закрытия окна.",
+  get message() { return msg("workspace.projectOrderWasNotSavedYourChangesRemainUntilYou"); },
 };
 /** Sole writer for sidebar preferences. Mutations run against current state, not
  * captured React snapshots. A corrupt/future version requires explicit recovery. */
@@ -117,7 +117,7 @@ export function createOrganizationStore(storage: () => StorageAccess) {
       }
     },
     dispatch(command: OrganizationCommand) {
-      if (!catalogReady) throw Error("Дождитесь загрузки списка проектов.");
+      if (!catalogReady) throw Error(msg("workspace.waitForTheProjectListToLoad"));
       const next = applyOrganizationCommand(snapshot.organization, command);
       if (next !== snapshot.organization) {
         sessionEdits = true;

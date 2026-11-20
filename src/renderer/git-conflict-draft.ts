@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import { ChangeSet, Text } from "@codemirror/state";
 import type {
   GitConflictBlock,
@@ -23,7 +24,7 @@ export interface ConflictDraft {
 }
 const unmapped = () =>
   Error(
-    "Позиция блока изменилась. Сохраните ручные правки; автоматическое применение этого блока недоступно.",
+    msg("git.theBlockMovedKeepYourManualEditsAutomaticApplicationIs"),
   );
 
 interface ParsedConflict {
@@ -186,7 +187,7 @@ export function openConflictDraft(
   document: GitConflictDocument,
 ): ConflictDraft {
   if (document.working.kind !== "text" || document.working.text === undefined)
-    throw Error("Рабочий файл недоступен как текст.");
+    throw Error(msg("git.theWorkingFileIsUnavailableAsText"));
   return {
     fingerprint: document.fingerprint,
     text: document.working.text,
@@ -212,7 +213,7 @@ export function reconstructConflictDraft(
       to < from ||
       to > generated.text.length
     )
-      throw Error("Некорректные позиции блоков конфликта.");
+      throw Error(msg("git.invalidConflictBlockPositions"));
     ids.add(source.id);
     end = to;
     return { source, id: source.id, from, to, mapped: true, choice: null };
@@ -225,7 +226,7 @@ export function editConflictDraft(
   changes: ChangeSet,
 ): ConflictDraft {
   if (changes.length !== draft.text.length)
-    throw Error("Изменение относится к другой версии документа.");
+    throw Error(msg("git.thisChangeBelongsToAnotherDocumentVersion"));
   if (changes.empty) return draft;
   const text = changes.apply(Text.of(draft.text.split("\n"))).toString();
   const blocks = draft.blocks.map((block) => {

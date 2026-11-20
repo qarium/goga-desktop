@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import path from "node:path";
 import {
   constants,
@@ -484,9 +485,10 @@ export class NativeGitConflictActions extends GitConflictActions {
       recoveryPath: result.recoveryPath ?? staging,
       message:
         result.outcome === "completed"
-          ? "Решение конфликта сохранено. Операцию можно продолжить после решения остальных конфликтов."
-          : "Сохранение требует проверки. Материалы восстановления сохранены; не повторяйте запись автоматически.",
-      log: log + (staging ? `\nМатериалы восстановления: ${staging}` : ""),
+          ? gitMessage("gitHost.conflictResolutionSavedContinueTheOperationAfterResolvingRemaining")
+          : gitMessage("gitHost.savingNeedsReviewRecoveryDataWasKeptDoNot"),
+      // Recovery metadata is separate from Git output and its host-side redactions.
+      log,
     };
     if (result.outcome === "completed")
       onVerified(async () => {
@@ -501,10 +503,6 @@ export class NativeGitConflictActions extends GitConflictActions {
           throw stale();
         // A parent operation still owns its original recovery, not this file save.
         delete output.recoveryPath;
-        output.log = output.log.replace(
-          `\nМатериалы восстановления: ${staging}`,
-          "",
-        );
       });
     return output;
   }

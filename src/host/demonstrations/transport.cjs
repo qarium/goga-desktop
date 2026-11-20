@@ -1,4 +1,5 @@
 "use strict";
+const { text: t } = require("./messages.cjs");
 
 // A dedicated Chromium process per show, with NO debugging
 // TCP listener. The browser's fd3/fd4 carry NUL-delimited DevTools messages.
@@ -534,7 +535,7 @@ function createPipeTarget(child, onLost, control) {
 // The fixed loopback port is the only listener; all upstream communication is over private FDs.
 const WS_PATH = "/devtools/browser";
 const stale = () =>
-  Object.assign(Error("Запрос уже завершён или относится к другому показу."), {
+  Object.assign(Error(t("hostTerminal.requestStale")), {
     status: 409,
   });
 const conflict = (text) => Object.assign(Error(text), { status: 409 });
@@ -579,13 +580,13 @@ function allowed(req, port) {
 }
 function createAgentBroker({ resolveUpstream, attachTimeoutMs = 10000 } = {}) {
   if (typeof resolveUpstream !== "function")
-    throw TypeError("Не указан браузер показа.");
+    throw TypeError(t("hostTerminal.browserMissing"));
   if (
     !Number.isSafeInteger(attachTimeoutMs) ||
     attachTimeoutMs < 1 ||
     attachTimeoutMs > 2147483647
   )
-    throw RangeError("Недопустимое время подключения к браузеру.");
+    throw RangeError(t("hostTerminal.attachmentTimeoutInvalid"));
   const upgrades = new WebSocketServer({
     noServer: true,
     clientTracking: false,
@@ -655,7 +656,7 @@ function createAgentBroker({ resolveUpstream, attachTimeoutMs = 10000 } = {}) {
     if (req.url === "/")
       return send(
         200,
-        "Это порт агента, не панель управления. К показу подключается один агент.\n",
+        t("hostTerminal.agentPort"),
       );
     if (req.url !== "/json/version" && req.url !== "/json/version/")
       return send(404);
@@ -703,13 +704,13 @@ function createAgentBroker({ resolveUpstream, attachTimeoutMs = 10000 } = {}) {
   }
   async function arm(slotId, port) {
     if (typeof slotId !== "string" || !slotId)
-      throw TypeError("Не указан контекст показа.");
+      throw TypeError(t("hostTerminal.contextMissing"));
     if (!Number.isInteger(port) || port < 1 || port > 65535)
-      throw RangeError("Порт должен быть целым числом от 1 до 65535.");
+      throw RangeError(t("hostTerminal.fullPortRange"));
     const draining = current?.dead ? current.stopped : null;
-    if (closed) throw conflict("Панель закрыта.");
+    if (closed) throw conflict(t("hostTerminal.panelClosed"));
     if (current && !current.dead)
-      throw conflict("Сначала освободите порт текущего показа.");
+      throw conflict(t("hostTerminal.releasePort"));
     const l = { phase: "arming", slotId, port };
     current = l;
     const server = (l.server = http.createServer((req, res) =>
@@ -744,7 +745,7 @@ function createAgentBroker({ resolveUpstream, attachTimeoutMs = 10000 } = {}) {
       await retire(l);
       if (e.code === "EADDRINUSE")
         throw Object.assign(
-          conflict("Порт уже занят. Освободите его или укажите другой."),
+          conflict(t("hostTerminal.portBusy")),
           { code: e.code },
         );
       throw e;
@@ -754,7 +755,7 @@ function createAgentBroker({ resolveUpstream, attachTimeoutMs = 10000 } = {}) {
     const target = await resolveUpstream(c.slotId);
     if (!owns(l, c)) return;
     const open = openPipe.get(target);
-    if (!open) throw Error("Нет закрытого соединения с браузером показа.");
+    if (!open) throw Error(t("hostTerminal.privateConnectionMissing"));
     const channel = await open(
       (frame) => {
         if (!owns(l, c) || !c.ws) return;
@@ -810,7 +811,7 @@ function createAgentBroker({ resolveUpstream, attachTimeoutMs = 10000 } = {}) {
     if (!l || !alive(l) || l.phase !== "armed" || l.slotId !== fromSlotId)
       throw stale();
     if (typeof toSlotId !== "string" || !toSlotId)
-      throw TypeError("Не указан контекст показа.");
+      throw TypeError(t("hostTerminal.contextMissing"));
     if (l.client) drop(l, l.client, 410);
     // Forget pre-handoff HTTP keepalives/partial handshakes as well. Keep the
     // listening socket bound throughout so another process cannot steal the port.
@@ -840,4 +841,4 @@ function createAgentBroker({ resolveUpstream, attachTimeoutMs = 10000 } = {}) {
     },
   };
 }
-module.exports = { createPipeTarget, createAgentBroker };
+module.exports = { createPipeTarget, createAgentBroker, installDemoFormatter: require("./messages.cjs").install };

@@ -1,3 +1,5 @@
+import { t as msg, getLocale } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { ScopeRef } from "../shared/context";
@@ -29,6 +31,7 @@ interface Props {
 type Job = "list" | "details" | "files" | "diff";
 const short = (ref: string) => ref.replace(/^refs\/(heads|remotes)\//, "");
 export function GitHistory(props: Props) {
+  useLocale();
   return <HistoryOwner key={documentScopeId(props.scope)} {...props} />;
 }
 function HistoryOwner({
@@ -40,6 +43,7 @@ function HistoryOwner({
   disabled = false,
   onOverlayChange,
 }: Props) {
+  useLocale();
   const active = useViewActive() && open;
   const ref = "HEAD";
   const [page, setPage] = useState<GitHistoryPage | null>(null);
@@ -85,7 +89,7 @@ function HistoryOwner({
   }, [revision, requestKey]);
   const verifyScope = (received: ScopeRef) => {
     if (JSON.stringify(received) !== requestKey)
-      throw Error("История относится к другому контексту.");
+      throw Error(msg("git.historyBelongsToAnotherContext"));
   };
   const run = <T,>(
     key: Job,
@@ -148,7 +152,7 @@ function HistoryOwner({
       (value) => {
         verifyScope(value.scope);
         if (value.ref !== target || (append && value.tip !== page!.tip))
-          throw Error("Снимок истории Git устарел. Обновите историю коммитов.");
+          throw Error(msg("git.theGitHistorySnapshotIsOutOfDateRefreshCommit"));
         setPage(
           append
             ? { ...value, commits: [...page!.commits, ...value.commits] }
@@ -188,7 +192,7 @@ function HistoryOwner({
           value.commit.oid !== oid ||
           value.parentIndex !== parentIndex
         )
-          throw Error("Сравнение относится к другому коммиту.");
+          throw Error(msg("git.theComparisonBelongsToADifferentCommit"));
         setDetails(
           append
             ? { ...value, files: [...details!.files, ...value.files] }
@@ -222,7 +226,7 @@ function HistoryOwner({
           result.path !== value.path ||
           result.parent !== details.parent
         )
-          throw Error("Сравнение относится к другому файлу или родителю.");
+          throw Error(msg("git.theComparisonBelongsToADifferentFileOrParent"));
         setDiff(result);
       },
     );
@@ -237,25 +241,25 @@ function HistoryOwner({
     <section
       className="git-history"
       hidden={!active}
-      aria-label="История коммитов"
+      aria-label={msg("git.commitHistory")}
     >
       <header className="git-workspace-heading">
         <div>
-          <h2>Коммиты</h2>
-          <p>История текущего состояния Git · только просмотр</p>
+          <h2>{msg("git.commits")}</h2>
+          <p>{msg("git.currentGitHistoryReadOnly")}</p>
         </div>
         <div className="git-workspace-heading-actions">
-          <span className="git-history-ref" aria-label="Текущее состояние Git">
+          <span className="git-history-ref" aria-label={msg("git.currentGitState")}>
             <span>
-              {page ? (page.currentBranch ?? "HEAD (без ветки)") : "HEAD"}
+              {page ? (page.currentBranch ?? msg("git.headNoBranch")) : "HEAD"}
             </span>
             {page?.tip && <code>{page.tip.slice(0, 8)}</code>}
           </span>
           <TooltipButton
-            label="Обновить историю коммитов"
+            label={msg("git.refreshCommitHistory")}
             busy={false}
-            tooltipLabel="Обновить историю"
-            description="Перечитать локальную историю, без fetch и переключения ветки."
+            tooltipLabel={msg("git.refreshHistory")}
+            description={msg("git.rereadLocalHistoryWithoutFetchingOrSwitchingBranches")}
             disabled={disabled || !!pending.list}
             onClick={() => loadPage()}
           >
@@ -264,11 +268,11 @@ function HistoryOwner({
             </span>
           </TooltipButton>
           <TooltipButton
-            label="Закрыть историю коммитов"
+            label={msg("git.closeCommitHistory")}
             disabled={false}
             busy={false}
-            tooltipLabel="Закрыть историю"
-            description="Вернуться в предыдущий раздел. Выбор коммита сохраняется."
+            tooltipLabel={msg("git.closeHistory")}
+            description={msg("git.returnToThePreviousSectionAndKeepTheSelectedCommit")}
             onClick={onClose}
           >
             ×
@@ -276,16 +280,10 @@ function HistoryOwner({
         </div>
       </header>
       {stale && (
-        <div className="git-history-notice">
-          История могла измениться. Сохранённый снимок остаётся доступен до
-          обновления.
-        </div>
+        <div className="git-history-notice">{msg("git.historyMayHaveChangedTheSavedSnapshotIsAvailableUntil")}</div>
       )}
       {disabled && (
-        <div className="git-history-notice">
-          Контекст недоступен. Сохранённый просмотр не даёт доступа к другим
-          папкам.
-        </div>
+        <div className="git-history-notice">{msg("git.contextUnavailableTheSavedViewDoesNotGrantAccessTo")}</div>
       )}
       <div className="git-history-layout" ref={layout}>
         <div
@@ -293,17 +291,17 @@ function HistoryOwner({
           style={selected ? { flexBasis: `${split}%`, flexGrow: 0 } : undefined}
         >
           {pending.list && !page ? (
-            <LoadingState label="Загрузка истории коммитов" />
+            <LoadingState label={msg("git.loadingCommitHistory")} />
           ) : (
             <div
               className="git-history-list"
               data-testid="git-history-list-scroll"
             >
               <div className="git-history-columns" aria-hidden="true">
-                <span>Сообщение</span>
-                <span>Автор</span>
-                <span>Дата</span>
-                <span>Хеш</span>
+                <span>{msg("git.message")}</span>
+                <span>{msg("git.author")}</span>
+                <span>{msg("git.date")}</span>
+                <span>{msg("git.hash")}</span>
               </div>
               {page?.commits.map((commit) => (
                 <button
@@ -315,14 +313,14 @@ function HistoryOwner({
                   onClick={() => chooseCommit(commit.oid)}
                 >
                   <span className="git-history-subject">
-                    <span>{commit.subject || "Без сообщения"}</span>
+                    <span>{commit.subject || msg("git.noMessage")}</span>
                     {commit.refs.length > 0 && (
                       <small>{commit.refs.map(short).join(" · ")}</small>
                     )}
                   </span>
                   <span className="git-history-author">{commit.author}</span>
                   <time dateTime={commit.authoredAt}>
-                    {new Date(commit.authoredAt).toLocaleDateString("ru-RU")}
+                    {new Date(commit.authoredAt).toLocaleDateString(getLocale())}
                   </time>
                   <code>{commit.oid.slice(0, 8)}</code>
                 </button>
@@ -330,8 +328,8 @@ function HistoryOwner({
               {!page?.commits.length && (
                 <div className="git-workspace-empty">
                   {page
-                    ? "Коммитов пока нет."
-                    : "История не загружена. Нажмите обновить."}
+                    ? msg("git.noCommitsYet")
+                    : msg("git.historyHasNotBeenLoadedSelectRefresh")}
                 </div>
               )}
               {page?.nextOffset != null && (
@@ -340,12 +338,10 @@ function HistoryOwner({
                   className="git-history-more"
                   disabled={pending.list || disabled}
                   onClick={() => loadPage(ref, true)}
-                >
-                  Ещё коммиты
-                </button>
+                >{msg("git.moreCommits")}</button>
               )}
               {pending.list && page && (
-                <LoadingState label="Обновление истории коммитов" />
+                <LoadingState label={msg("git.refreshingCommitHistory")} />
               )}
             </div>
           )}
@@ -355,7 +351,7 @@ function HistoryOwner({
             <div
               role="separator"
               tabIndex={0}
-              aria-label="Размер списка коммитов"
+              aria-label={msg("git.commitListSize")}
               aria-orientation="horizontal"
               aria-valuemin={25}
               aria-valuemax={70}
@@ -423,8 +419,8 @@ function HistoryOwner({
       </div>
       {active && error !== null && (
         <TopicModal
-          title="Не удалось прочитать историю"
-          closeLabel="Закрыть ошибку истории"
+          title={msg("git.couldNotReadHistory")}
+          closeLabel={msg("git.dismissHistoryError")}
           onClose={() => setError(null)}
         >
           <pre className="git-history-error">{error}</pre>

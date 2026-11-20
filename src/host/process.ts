@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { childEnvironment } from "./process-environment";
 import { readSignal, assertReadActive, withReadScope } from "./read-scope";
@@ -69,7 +70,7 @@ export class ByteCommandError extends Error {
     readonly signal: NodeJS.Signals | null = null,
   ) {
     super(
-      `Не удалось завершить команду (${reason}). Результат операции требует проверки.`,
+      tr("host.couldNotStopTheCommandReasonCheckTheResultOf", { reason: reason }),
     );
     this.name = "ByteCommandError";
   }
@@ -110,8 +111,8 @@ export class RunnerShutdownError extends Error {
   constructor(readonly phase: "closing" | "interrupted") {
     super(
       phase === "closing"
-        ? "Приложение завершает работу; команда не запущена."
-        : "Команда прервана при завершении работы приложения.",
+        ? tr("host.theAppIsShuttingDownTheCommandWasNotStarted")
+        : tr("host.theCommandWasInterruptedDuringAppShutdown"),
     );
     this.name = "RunnerShutdownError";
   }
@@ -126,7 +127,11 @@ export class CommandSpawnError extends Error {
     super(message);
   }
 }
-/** Structured process outcome; public message stays sanitized and unchanged. */
+/** Detect truncated output without comparing a localized message. */
+export class CommandOutputLimitError extends Error {
+  constructor() { super(tr("host.theCommandResponseIsTooLarge")); }
+}
+/** Structured process outcome; its public message contains no raw process output. */
 export class CommandExitError extends Error {
   constructor(
     message: string,
@@ -209,7 +214,7 @@ export class NodeRunner implements Runner {
         process.kill(-child.pid!, value);
       } catch (error) {
         if ((error as NodeJS.ErrnoException).code !== "ESRCH")
-          throw new Error("Не удалось остановить группу процессов Goga");
+          throw new Error(tr("host.couldNotStopTheGogaProcessGroup"));
       }
     };
     const waitGone = async (ms: number) => {
@@ -223,7 +228,7 @@ export class NodeRunner implements Runner {
       signal("SIGKILL");
       if (!(await waitGone(2000)))
         throw new Error(
-          "Группа процессов Goga ещё работает; повторите остановку.",
+          tr("host.theGogaProcessGroupIsStillRunningTryStoppingIt"),
         );
     }
     this.children.delete(child);
@@ -280,7 +285,7 @@ export class NodeRunner implements Runner {
         (arg) => typeof arg === "string" && !arg.includes("\0"),
       )
     )
-      throw Error("Недопустимые параметры команды.");
+      throw Error(tr("host.invalidCommandParameters"));
     const prepared = command.verifyPrepared;
     if (prepared) {
       const input =
@@ -293,7 +298,7 @@ export class NodeRunner implements Runner {
         !input ||
         (input[1] && input[1].length !== input[2].length)
       )
-        throw Error("Недопустимая подготовленная транзакция Git.");
+        throw Error(tr("host.invalidPreparedGitTransaction"));
     }
     const verificationScope: PreparedCommands = {
       controller: new AbortController(),
@@ -378,7 +383,7 @@ export class NodeRunner implements Runner {
         this.preparedStops.set(child, async () => {
           if (!(await failure("shutdown")))
             throw Error(
-              "Не удалось подтвердить остановку подготовленной транзакции.",
+              tr("host.couldNotVerifyThatThePreparedTransactionStopped"),
             );
         });
       const abort = () => {
@@ -415,7 +420,7 @@ export class NodeRunner implements Runner {
           child.exitCode !== null ||
           child.signalCode !== null
         )
-          throw Error("Подготовленная транзакция Git уже не активна.");
+          throw Error(tr("host.thePreparedGitTransactionIsNoLongerActive"));
       };
       child.stdout.on("data", (chunk: Buffer) => {
         receive(out, chunk);
@@ -446,7 +451,7 @@ export class NodeRunner implements Runner {
                   verificationScope.pending.size ||
                   verificationScope.unsettled
                 )
-                  throw Error("Проверка оставила незавершённые команды.");
+                  throw Error(tr("host.theCheckLeftUnfinishedCommands"));
                 verificationScope.controller.abort();
                 commitSent = true;
                 child.stdin.end("commit\n");
@@ -543,7 +548,7 @@ export class NodeRunner implements Runner {
       args.at(-1) !== "--stdin" ||
       !args.includes("update-ref")
     )
-      throw Error("Недопустимая транзакция ссылок Git.");
+      throw Error(tr("host.invalidGitRefTransaction"));
     const signal = readSignal(),
       deadline = Date.now() + this.timeoutMs;
     return new Promise((resolve, reject) => {
@@ -590,9 +595,9 @@ export class NodeRunner implements Runner {
           (stopError) => reject(failure(stopError)),
         );
       };
-      const abort = () => fail(Error("Транзакция Git отменена."));
+      const abort = () => fail(Error(tr("host.gitTransactionCanceled")));
       const timer = setTimeout(
-        () => fail(Error("Транзакция Git не ответила вовремя.")),
+        () => fail(Error(tr("host.theGitTransactionTimedOut"))),
         this.timeoutMs,
       );
       this.pendingCommands.set(child, () => {
@@ -605,13 +610,13 @@ export class NodeRunner implements Runner {
       child.stdout.on("data", (chunk) => {
         stdout += chunk;
         if (stdout.length > 8 * 1024 * 1024) {
-          fail(Error("Ответ транзакции Git слишком большой."));
+          fail(Error(tr("host.theGitTransactionResponseIsTooLarge")));
           return;
         }
         if (!verifying && stdout.includes("prepare: ok\n")) {
           verifying = true;
           if (stdout !== "start: ok\nprepare: ok\n") {
-            fail(Error("Неожиданный протокол транзакции Git."));
+            fail(Error(tr("host.unexpectedGitTransactionProtocol")));
             return;
           }
           void Promise.resolve()
@@ -623,14 +628,14 @@ export class NodeRunner implements Runner {
                   signal?.aborted ||
                   Date.now() >= deadline
                 )
-                  throw Error("Подготовленная транзакция Git уже не активна.");
+                  throw Error(tr("host.thePreparedGitTransactionIsNoLongerActive"));
               }),
             )
             .then(
               () => {
                 if (done || interrupted) return;
                 if (Date.now() >= deadline || signal?.aborted) {
-                  fail(Error("Транзакция Git не ответила вовремя."));
+                  fail(Error(tr("host.theGitTransactionTimedOut")));
                   return;
                 }
                 // Mark before writing: a lost acknowledgement is never proof that
@@ -649,7 +654,7 @@ export class NodeRunner implements Runner {
       child.stderr.on("data", (chunk) => {
         stderr += chunk;
         if (stderr.length > 1024 * 1024)
-          fail(Error("Ошибка транзакции Git слишком большая."));
+          fail(Error(tr("host.theGitTransactionErrorIsTooLarge")));
       });
       child.on("error", (error) => fail(error));
       child.on("close", (code) => {
@@ -663,7 +668,7 @@ export class NodeRunner implements Runner {
           reject(
             failure(
               new CommandExitError(
-                "Транзакция Git завершилась с ошибкой.",
+                tr("host.theGitTransactionFailed"),
                 code,
                 stdout,
                 stderr,
@@ -675,7 +680,7 @@ export class NodeRunner implements Runner {
           stdout !== "start: ok\nprepare: ok\ncommit: ok\n"
         )
           reject(
-            failure(Error("Git не подтвердил завершение транзакции ссылок.")),
+            failure(Error(tr("host.gitDidNotConfirmCompletionOfTheRefTransaction"))),
           );
         else resolve({ stdout, stderr });
       });
@@ -723,7 +728,7 @@ export class NodeRunner implements Runner {
         )
           interrupted = true;
       });
-      const fail = (message: string, spawnCode?: string) => {
+      const fail = (message: string | Error, spawnCode?: string) => {
         if (done) return;
         done = true;
         this.pendingCommands.delete(child);
@@ -732,8 +737,8 @@ export class NodeRunner implements Runner {
         const error = interrupted
           ? new RunnerShutdownError("interrupted")
           : spawnCode
-            ? new CommandSpawnError(message, spawnCode)
-            : new Error(message);
+            ? new CommandSpawnError(String(message), spawnCode)
+            : message instanceof Error ? message : new Error(message);
         void this.kill(child).then(
           () => reject(error),
           (failure) => {
@@ -743,10 +748,10 @@ export class NodeRunner implements Runner {
         );
       };
       const abort = () =>
-        fail("Чтение отменено; остановлена только его команда.");
+        fail(tr("host.readCanceledOnlyItsCommandWasStopped"));
       signal?.addEventListener("abort", abort, { once: true });
       const timer = setTimeout(
-        () => fail("Команда не ответила вовремя. Проверьте Goga / Docker."),
+        () => fail(tr("host.theCommandTimedOutCheckGogaAndDocker")),
         this.timeoutMs,
       );
       if (signal?.aborted) abort();
@@ -754,7 +759,7 @@ export class NodeRunner implements Runner {
       child.stderr.setEncoding("utf8");
       child.stdout.on("data", (chunk) => {
         out += chunk;
-        if (out.length > 8 * 1024 * 1024) fail("Ответ команды слишком большой");
+        if (out.length > 8 * 1024 * 1024) fail(new CommandOutputLimitError());
       });
       child.stderr.on("data", (chunk) => {
         err += chunk;
@@ -762,14 +767,14 @@ export class NodeRunner implements Runner {
       });
       child.on("error", (error: NodeJS.ErrnoException) =>
         fail(
-          `Не удалось запустить ${exe.includes("git") ? "Git" : "Goga"}. Проверьте установку и PATH.`,
+          tr("host.couldNotStartValue1CheckTheInstallationAndPath", { value1: exe.includes("git") ? "Git" : "Goga" }),
           error.code ?? "UNKNOWN",
         ),
       );
       child.on("close", (code) => {
         if (done) return;
         if (scope && this.groupExists(child.pid)) {
-          fail("Проверка оставила работающую группу процессов.");
+          fail(tr("host.theCheckLeftAProcessGroupRunning"));
           return;
         }
         done = true;
@@ -781,8 +786,8 @@ export class NodeRunner implements Runner {
           reject(
             new CommandExitError(
               /No such option:\s*--profile\b/.test(err)
-                ? "Установленная версия Goga не поддерживает --profile. Обновите Goga; профиль не был проигнорирован."
-                : `Команда завершилась с кодом ${code ?? "signal"}. Проверьте Goga, Docker и конфигурацию проекта.`,
+                ? tr("host.theInstalledVersionOfGogaDoesNotSupportProfileUpdate")
+                : tr("host.theCommandExitedWithCodeValue1CheckGogaDockerAnd", { value1: code ?? "signal" }),
               code,
               out,
               err,
@@ -885,7 +890,7 @@ export function watchDashboard(
       : setTimeout(
           () =>
             fail(
-              "Панель конвейера не стала доступна вовремя (120 с). Проверьте Docker и pipeline.",
+              tr("host.thePipelineDashboardWasNotAvailableWithin120SecondsCheck"),
             ),
           callbacks.timeoutMs ?? 120000,
         );
@@ -907,13 +912,13 @@ export function watchDashboard(
     });
   }
   child.on("error", () =>
-    fail("Не удалось запустить Goga. Проверьте установку и PATH."),
+    fail(tr("host.couldNotStartGogaCheckTheInstallationAndPath")),
   );
   child.on("close", (code) => {
     if (cancelled) return;
     if (!ready) {
       fail(
-        `Goga завершилась до готовности панели конвейера (код ${code ?? "signal"}). Проверьте Docker и конфигурацию.`,
+        tr("host.gogaExitedBeforeThePipelineDashboardWasReadyCodeValue1", { value1: code ?? "signal" }),
       );
       return;
     }

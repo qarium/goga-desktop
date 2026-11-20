@@ -1,3 +1,6 @@
+import { HintButton } from "../ActionHint";
+import { t } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import { useEffect, useLayoutEffect, useRef, type KeyboardEvent } from "react";
 import { Plus, X } from "lucide-react";
 import type { DemoTab } from "../../shared/demonstrations";
@@ -18,6 +21,7 @@ export function DemoTabs({
   close: (tabId: string) => void;
   create: () => void;
 }) {
+  useLocale();
   const buttons = useRef(new Map<string, HTMLButtonElement>()),
     scroller = useRef<HTMLDivElement>(null),
     createButton = useRef<HTMLButtonElement>(null),
@@ -80,13 +84,13 @@ export function DemoTabs({
         className="demo-tabs"
         ref={scroller}
         role="tablist"
-        aria-label="Вкладки показа"
+        aria-label={t("general.demonstrationTabs")}
       >
         {tabs.map((tab, index) => {
           const label =
             tab.title === "about:blank" && tab.url === null
-              ? "Новая вкладка"
-              : tab.title.trim() || tab.url || "Новая вкладка";
+              ? t("general.newTab")
+              : tab.title.trim() || tab.url || t("general.newTab");
           const selected = tab.tabId === activeTabId;
           return (
             <div
@@ -114,11 +118,11 @@ export function DemoTabs({
               >
                 <span>{label}</span>
               </button>
-              <button
+              <HintButton
                 type="button"
                 className="workspace-tab-close demo-tab-close"
-                aria-label={"Закрыть вкладку: " + label}
-                title={"Закрыть вкладку: " + label}
+                aria-label={t("general.closeTabNamed",{name:label})}
+                hint={t("general.closeTabNamed",{name:label})}
                 disabled={disabled}
                 onClick={(e) => {
                   if (document.activeElement === e.currentTarget)
@@ -127,22 +131,22 @@ export function DemoTabs({
                 }}
               >
                 <X size={16} strokeWidth={1.75} aria-hidden />
-              </button>
+              </HintButton>
             </div>
           );
         })}
       </div>
-      <button
+      <HintButton
         type="button"
         className="workspace-tab-create demo-tab-create"
-        aria-label="Создать вкладку"
-        title="Создать вкладку"
+        aria-label={t("general.createTab")}
+        hint={t("general.createTab")}
         disabled={disabled}
         ref={createButton}
         onClick={create}
       >
         <Plus size={16} strokeWidth={1.75} aria-hidden />
-      </button>
+      </HintButton>
     </div>
   );
 }

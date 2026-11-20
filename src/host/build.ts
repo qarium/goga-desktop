@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import path from "node:path";
 import { constants } from "node:fs";
 import { access, open, realpath, readdir, stat } from "node:fs/promises";
@@ -119,9 +120,9 @@ export async function listBuildFiles(
   input = "",
 ): Promise<BuildFileList> {
   const p = await buildPath(root, input);
-  if (!(await stat(p.absolute)).isDirectory()) throw Error("Выберите папку");
+  if (!(await stat(p.absolute)).isDirectory()) throw Error(tr("host.chooseAFolder"));
   const names = await readdir(p.absolute, { withFileTypes: true });
-  if (names.length > 5000) throw Error("В папке слишком много файлов");
+  if (names.length > 5000) throw Error(tr("host.thisFolderContainsTooManyFiles"));
   const entries: BuildFileList["entries"] = [];
   for (const e of names) {
     try {
@@ -138,7 +139,7 @@ export async function listBuildFiles(
     }
   }
   const after = await buildPath(root, input);
-  if (after.absolute !== p.absolute) throw Error("Папка изменилась");
+  if (after.absolute !== p.absolute) throw Error(tr("host.theFolderChanged"));
   return {
     directory: p.relative,
     entries: entries.sort(
@@ -165,7 +166,7 @@ export function buildArgs(
   const add = (flag: string, value?: string) => {
     if (!capabilities.includes(flag))
       throw Error(
-        `Выбранная версия Goga не поддерживает --${flag}. Параметр не был проигнорирован.`,
+        tr("host.thisVersionOfGogaDoesNotSupportFlagTheOption", { flag: flag }),
       );
     args.push("--" + flag);
     if (value !== undefined) args.push(value);
@@ -195,7 +196,7 @@ export function buildArgs(
 }
 function yaml(text: string): any {
   const doc = parseDocument(text);
-  if (doc.errors.length) throw Error("Некорректная конфигурация сборки");
+  if (doc.errors.length) throw Error(tr("host.invalidBuildConfiguration"));
   return doc.toJS({ maxAliasCount: 100 }) ?? {};
 }
 /** The selected CLI owns config amendments. Workflow overlays never change review.skip.
@@ -208,7 +209,7 @@ export function buildReviewDefault(output: string): boolean {
     .match(/^# build\.review\.skip\r?\n(null|true|false)$/i);
   if (!match)
     throw Error(
-      "Goga вернула некорректное значение настройки ревью. Проверьте версию и конфигурацию или выберите режим явно.",
+      tr("host.gogaReturnedAnInvalidReviewSettingCheckTheVersionAnd"),
     );
   return match[1].toLowerCase() === "true";
 }
@@ -225,7 +226,7 @@ export async function buildHomeEnvironment(
     Array.isArray(value) ||
     Object.values(value).some((v) => typeof v !== "string")
   )
-    throw Error("Некорректное домашнее окружение Goga");
+    throw Error(tr("host.invalidGogaHomeEnvironment"));
   return value;
 }
 
@@ -241,7 +242,7 @@ export async function buildConfigurationSecrets(
       () => true,
       (error: NodeJS.ErrnoException) => {
         if (error.code === "ENOENT") return false;
-        throw Error("Не удалось безопасно прочитать конфигурацию сборки");
+        throw Error(tr("host.couldNotSafelyReadTheBuildConfiguration"));
       },
     );
     if (!exists) continue;
@@ -249,7 +250,7 @@ export async function buildConfigurationSecrets(
     try {
       config = yaml((await readBuildPlan(base, ".goga/config.yml")).text);
     } catch {
-      throw Error("Не удалось безопасно прочитать конфигурацию сборки");
+      throw Error(tr("host.couldNotSafelyReadTheBuildConfiguration"));
     }
     const envs =
       base === home

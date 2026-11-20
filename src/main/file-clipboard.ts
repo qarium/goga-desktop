@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import path from "node:path";
 import type { FileClipboard } from "../shared/project-overview";
@@ -13,7 +14,7 @@ interface FileClipboardTransport<T extends FileClipboardItem> {
   write(items: T[]): Promise<void>;
 }
 const invalid = () =>
-  Error("В буфере нет подходящих локальных файлов или список слишком большой.");
+  Error(t("native.clipboardFilesUnavailable"));
 function localFile(value: string): string {
   try {
     const url = new URL(value);

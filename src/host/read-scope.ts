@@ -6,7 +6,7 @@ export function withReadScope<T>(signal: AbortSignal, fn: () => T): T {
   return reads.run(signal, fn);
 }
 export function assertReadActive() {
-  if (readSignal()?.aborted) throw Error(readCancelledMessage);
+  if (readSignal()?.aborted) throw Error(readCancelledMessage());
 }
 
 // Narrow request-local policy for History, not a global change to clone workflows.

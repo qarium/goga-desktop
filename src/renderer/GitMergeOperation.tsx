@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useRef, useState } from "react";
 import type { ScopeRef } from "../shared/context";
 import {
@@ -171,7 +173,7 @@ export function useGitMergeOperation(options: Options) {
             (message !== undefined && value.message !== message)))
       )
         throw Error(
-          "Подтверждение устарело или относится к другому контексту, состоянию либо действию. Обновите изменения и повторите проверку.",
+          msg("git.confirmationIsOutdatedOrBelongsToADifferentContextState"),
         );
       boundFreshness.current = issued.freshness;
       if (nextAction === "continue") {
@@ -225,7 +227,7 @@ export function useGitMergeOperation(options: Options) {
         value.operation !== "merge" ||
         value.action !== submitted.action
       )
-        throw Error("Результат относится к другому контексту или действию.");
+        throw Error(msg("git.theResultBelongsToAnotherContextOrAction"));
       const verified = verifiedNativeSequenceResult(value, {
         scope: issuedScope,
         operation: "merge",
@@ -256,7 +258,7 @@ export function useGitMergeOperation(options: Options) {
       if (alive.current) {
         setRereadAfter(latest.current.getIssuedReadVersion());
         setResult(
-          `${topicError(error)}\n\nПроверьте состояние Git. Ответ не подтверждает отсутствие изменений; операция могла выполниться. Автоматического повтора не будет.`,
+          msg("git.checkTheGitStateTheResponseDoesNotConfirmThat2", { value1: String(topicError(error)) }),
         );
       }
     } finally {
@@ -309,20 +311,21 @@ export function GitMergeOperationFooter({
   merge: MergeState;
   unresolved: boolean;
 }) {
+  useLocale();
   if (!merge.supported)
     return (
-      <p>Продолжение и отмена слияния недоступны в этой версии подключения.</p>
+      <p>{msg("git.continuingAndAbortingAMergeAreUnavailableWithThisConnection")}</p>
     );
   return (
     <div className="git-merge-operation-footer">
       <p role={merge.pending === "execute" ? "status" : undefined}>
         {merge.pending === "execute"
-          ? "Выполняется операция слияния… Просмотр можно закрыть; запись не отменяется."
+          ? msg("git.mergeInProgressYouCanCloseThisViewTheWrite")
           : merge.needsRefresh
-            ? "Сначала обновите изменения и проверьте состояние Git. Для повторной попытки нужна новая проверка."
+            ? msg("git.refreshChangesAndCheckTheGitStateFirstANew")
             : unresolved
-              ? "Сначала разрешите и отдельно сохраните все файлы: остались конфликты или несохранённые черновики."
-              : "Сохранение файла и завершение слияния — отдельные действия. Завершение использует проверенное дерево индекса, не несохранённые правки."}
+              ? msg("git.resolveAndSaveEachFileFirstConflictsOrUnsavedDrafts")
+              : msg("git.savingAFileAndFinishingAMergeAreSeparateActions")}
       </p>
       <div>
         <button
@@ -330,22 +333,19 @@ export function GitMergeOperationFooter({
           className="danger"
           disabled={!merge.canStart}
           onClick={() => void merge.prepare("abort")}
-        >
-          Отменить слияние…
-        </button>
+        >{msg("git.abortMerge2")}</button>
         <button
           type="button"
           className="primary"
           disabled={!merge.canStart || unresolved}
           onClick={() => void merge.prepare("continue")}
-        >
-          Завершить слияние…
-        </button>
+        >{msg("git.finishMerge")}</button>
       </div>
     </div>
   );
 }
 export function GitMergeOperationDialogs({ merge }: { merge: MergeState }) {
+  useLocale();
   const closeOnEscape = (event: React.KeyboardEvent, close: () => void) => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -360,30 +360,26 @@ export function GitMergeOperationDialogs({ merge }: { merge: MergeState }) {
           <TopicModal
             title={
               merge.action === "continue"
-                ? "Завершить слияние"
-                : "Отменить слияние?"
+                ? msg("git.finishMerge2")
+                : msg("git.abortMerge")
             }
-            closeLabel="Закрыть подтверждение слияния"
+            closeLabel={msg("git.closeMergeConfirmation")}
             className="git-merge-operation-modal"
             onClose={merge.close}
           >
             <div className="git-merge-operation-form">
               {merge.pending === "prepare" ? (
-                <LoadingState label="Проверяем операцию слияния…" />
+                <LoadingState label={msg("git.checkingMerge")} />
               ) : (
                 <>
                   <div className="git-merge-operation-details">
                     {merge.action === "abort" && (
-                      <p className="git-conflict-warning">
-                        Ручные решения конфликтов будут потеряны. Посторонние
-                        изменения должны быть сохранены: если безопасная отмена
-                        не доказана, операция будет отклонена.
-                      </p>
+                      <p className="git-conflict-warning">{msg("git.manualConflictResolutionsWillBeLostUnrelatedChangesMustBe")}</p>
                     )}
                     {merge.preview && (
                       <>
                         <dl>
-                          <dt>Контекст</dt>
+                          <dt>{msg("git.context")}</dt>
                           <dd
                             title={
                               typeof merge.preview.scope === "string"
@@ -392,37 +388,36 @@ export function GitMergeOperationDialogs({ merge }: { merge: MergeState }) {
                             }
                           >
                             {typeof merge.preview.scope === "string"
-                              ? `Основная папка · ${merge.preview.scope}`
+                              ? msg("git.originalFolder", { scope: String(merge.preview.scope) })
                               : `${merge.preview.scope.projectId} / ${merge.preview.scope.year} / ${merge.preview.scope.topic} · ${merge.preview.scope.contextId.slice(0, 12)}…`}
                           </dd>
-                          <dt>Рабочая папка</dt>
+                          <dt>{msg("git.workingDirectory")}</dt>
                           <dd>{merge.preview.root}</dd>
-                          <dt>Ветка</dt>
+                          <dt>{msg("git.branch2")}</dt>
                           <dd>{merge.preview.branch}</dd>
                           <dt>HEAD</dt>
                           <dd>{merge.preview.head}</dd>
-                          <dt>Входящий коммит</dt>
+                          <dt>{msg("git.incomingCommit")}</dt>
                           <dd>{merge.preview.sourceOid}</dd>
                           {merge.action === "continue" && (
                             <>
-                              <dt>Автор</dt>
-                              <dd>{merge.preview.author ?? "Не определён"}</dd>
-                              <dt>Коммиттер</dt>
+                              <dt>{msg("git.author")}</dt>
+                              <dd>{merge.preview.author ?? msg("git.unknown")}</dd>
+                              <dt>{msg("git.committer")}</dt>
                               <dd>
-                                {merge.preview.committer ?? "Не определён"}
+                                {merge.preview.committer ?? msg("git.unknown")}
                               </dd>
-                              <dt>Подпись</dt>
+                              <dt>{msg("git.signing")}</dt>
                               <dd>
                                 {merge.preview.signing
-                                  ? "По настройкам Git"
-                                  : "Не настроена"}
+                                  ? msg("git.fromGitConfiguration")
+                                  : msg("git.notConfigured")}
                               </dd>
                             </>
                           )}
                         </dl>
                         <p>{merge.preview.effects}</p>
-                        <strong>
-                          Затронутые пути: {merge.preview.paths.length}
+                        <strong>{msg("git.affectedPaths")}{merge.preview.paths.length}
                         </strong>
                         <ul>
                           {merge.preview.paths.map((path) => (
@@ -433,20 +428,13 @@ export function GitMergeOperationDialogs({ merge }: { merge: MergeState }) {
                         </ul>
                       </>
                     )}
-                    <p>
-                      Непроверяемые стратегии или состояние слияния могут быть
-                      отклонены без записи.
-                    </p>
+                    <p>{msg("git.unsupportedStrategiesOrUnverifiedMergeStateMayBeRejectedWithout")}</p>
                   </div>
                   <div className="git-merge-operation-confirm">
-                    <p className="hint">
-                      Git-хуки отключены. Результат не публикуется на сервер.
-                    </p>
+                    <p className="hint">{msg("git.gitHooksAreDisabledNothingIsPushedToTheServer")}</p>
                     {merge.action === "continue" && (
-                      <label>
-                        Сообщение merge-коммита
-                        <textarea
-                          aria-label="Сообщение merge-коммита"
+                      <label>{msg("git.mergeCommitMessage")}<textarea
+                          aria-label={msg("git.mergeCommitMessage")}
                           rows={4}
                           value={merge.draft ?? ""}
                           onChange={(event) => merge.edit(event.target.value)}
@@ -456,14 +444,12 @@ export function GitMergeOperationDialogs({ merge }: { merge: MergeState }) {
                     {!merge.preview && (
                       <p>
                         {merge.expired
-                          ? "Срок подтверждения истёк. Проверьте операцию заново."
-                          : "Сообщение изменено. Перед записью требуется новая проверка."}
+                          ? msg("git.confirmationExpiredCheckTheOperationAgain")
+                          : msg("git.theMessageChangedCheckItAgainBeforeWriting")}
                       </p>
                     )}
                     <div className="git-branch-dialog-actions">
-                      <button type="button" onClick={merge.close}>
-                        Отмена
-                      </button>
+                      <button type="button" onClick={merge.close}>{msg("git.cancel")}</button>
                       {!merge.preview && (
                         <button
                           type="button"
@@ -473,8 +459,8 @@ export function GitMergeOperationDialogs({ merge }: { merge: MergeState }) {
                           onClick={() => void merge.prepare(merge.action!)}
                         >
                           {merge.action === "continue"
-                            ? "Проверить сообщение"
-                            : "Проверить отмену"}
+                            ? msg("git.checkMessage")
+                            : msg("git.checkAbort")}
                         </button>
                       )}
                       <button
@@ -486,8 +472,8 @@ export function GitMergeOperationDialogs({ merge }: { merge: MergeState }) {
                         onClick={() => void merge.execute()}
                       >
                         {merge.action === "continue"
-                          ? "Создать merge-коммит"
-                          : "Отменить слияние"}
+                          ? msg("git.createMergeCommit")
+                          : msg("git.abortMerge3")}
                       </button>
                     </div>
                   </div>
@@ -500,8 +486,8 @@ export function GitMergeOperationDialogs({ merge }: { merge: MergeState }) {
       {!!merge.result && (
         <div onKeyDown={(event) => closeOnEscape(event, merge.closeResult)}>
           <TopicModal
-            title="Результат операции слияния"
-            closeLabel="Закрыть результат слияния"
+            title={msg("git.mergeResult")}
+            closeLabel={msg("git.closeMergeResult")}
             className="git-workspace-error"
             onClose={merge.closeResult}
           >

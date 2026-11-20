@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import type { SafeStorage } from "electron";
 import type { TerminalPresetCrypto } from "../host/terminal-preset-store";
 /** No keychain access at construction or catalog navigation; no fallback provider. */
@@ -17,7 +18,7 @@ export function createTerminalPresetCrypto(
     }
     if (!ready)
       throw Error(
-        "Защита пресетов недоступна. Проверьте доступ к связке ключей macOS.",
+        t("native.presetKeychain"),
       );
   }
   return {
@@ -29,20 +30,20 @@ export function createTerminalPresetCrypto(
         return result.toString("base64");
       } catch {
         throw Error(
-          "Не удалось зашифровать данные пресета. Исходные данные не сохранены.",
+          t("native.presetEncryptFailed"),
         );
       }
     },
     open(sealed) {
       const data = Buffer.from(sealed, "base64");
       if (!data.length || data.toString("base64") !== sealed)
-        throw Error("Защищённые данные терминала повреждены.");
+        throw Error(t("native.presetDataInvalid"));
       requireProtection();
       try {
         return native.decryptString(data);
       } catch {
         throw Error(
-          "Не удалось расшифровать данные терминала. Проверьте связку ключей macOS.",
+          t("native.presetDecryptFailed"),
         );
       }
     },

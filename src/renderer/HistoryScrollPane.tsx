@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import {
   useImperativeHandle,
   useLayoutEffect,
@@ -54,6 +56,7 @@ export function HistoryScrollPane({
   showTopButton = false,
   actions,
 }: Props) {
+  useLocale();
   const region = useRef<HTMLDivElement>(null);
   const content = useRef<HTMLDivElement>(null);
   const restoration = useRef<Position | null>(null);
@@ -180,9 +183,7 @@ export function HistoryScrollPane({
       {(showTopButton || actions) && (
         <div className="history-scroll-toolbar">
           {showTopButton && (
-            <button type="button" onClick={goToTop} disabled={!active}>
-              Наверх
-            </button>
+            <button type="button" onClick={goToTop} disabled={!active}>{msg("project.backToTop")}</button>
           )}
           {actions}
         </div>

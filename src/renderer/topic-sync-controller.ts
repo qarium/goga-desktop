@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { useMemo, useSyncExternalStore } from "react";
 import type { DesktopAPI } from "../shared/bridge";
 import type { ContextSyncState } from "../shared/context-sync";
@@ -7,11 +8,11 @@ import { readRequest } from "./read-request";
 
 export const contextSyncLabels = {
   // Host `new` is also the default before any import; it does not prove newly authored commits.
-  new: "Ещё не синхронизировано",
-  waiting: "Ожидает завершения запуска",
-  syncing: "Синхронизация…",
-  synced: "Синхронизировано",
-  error: "Ошибка синхронизации",
+  get new() { return tr("topics.notYetSynced"); },
+  get waiting() { return tr("topics.waitingForTheRunToFinish"); },
+  get syncing() { return tr("topics.syncing"); },
+  get synced() { return tr("topics.synced"); },
+  get error() { return tr("topics.syncFailed"); },
 };
 export interface TopicSyncSnapshot {
   state: ContextSyncState | null;
@@ -40,25 +41,25 @@ export function assertSyncOwner(
     value.revision !== owner.revision
   )
     throw Error(
-      "Ответ синхронизации относится к другой рабочей копии или её ревизии.",
+      tr("topics.theSyncResponseBelongsToAnotherWorkingCopy"),
     );
 }
 /** Eligibility is host-issued inventory only. Never ensure, restore, or guess a copy. */
 export function topicSyncUnavailable(record?: WorktreeRecord | null): string {
-  if (!record) return "Рабочая копия ещё не создана. Переносить пока нечего";
+  if (!record) return tr("topics.theWorkingCopyHasNotBeenCreatedYet");
   if (
     record.compatibility === "legacy-linked" ||
     record.storageKind === "linked"
   )
-    return "Рабочая копия прежнего формата. Для переноса нужен подтверждённый автономный клон.";
+    return tr("topics.thisIsALegacyWorkingCopyTransferRequires");
   if (record.deletedAt || record.state === "missing")
-    return "Рабочая копия недоступна. Её отсутствие не означает, что она не создавалась.";
+    return tr("topics.theWorkingCopyIsUnavailableThatDoesNot");
   if (record.state !== "ready")
-    return "Рабочая копия не прошла проверку. Перенос недоступен.";
+    return tr("topics.theWorkingCopyCouldNotBeVerifiedTransfer");
   if (record.preparation)
-    return "Подготовка рабочей копии не завершена. Перенос недоступен.";
+    return tr("topics.theWorkingCopyHasNotFinishedPreparationTransfer");
   if (record.storageKind !== "clone" || record.ownership !== "managed")
-    return "Автономный управляемый клон не подтверждён. Перенос недоступен.";
+    return tr("topics.theIndependentManagedCloneCouldNotBeVerified");
   return "";
 }
 export function topicSyncLabel(snapshot: TopicSyncSnapshot): string {
@@ -66,10 +67,10 @@ export function topicSyncLabel(snapshot: TopicSyncSnapshot): string {
   if (snapshot.error)
     return snapshot.failedAction
       ? contextSyncLabels.error
-      : "Статус недоступен";
+      : tr("topics.statusUnavailable");
   return snapshot.state
     ? contextSyncLabels[snapshot.state.status]
-    : "Читаем состояние синхронизации…";
+    : tr("topics.readingSyncStatus");
 }
 export function topicSyncPending(snapshot: TopicSyncSnapshot): boolean {
   return (
@@ -105,7 +106,7 @@ class TopicSyncReadScheduler {
   prune() {
     this.queue = this.queue.filter((job) => {
       if (job.current()) return true;
-      job.reject(new ObsoleteSyncRead("Чтение состояния больше не требуется."));
+      job.reject(new ObsoleteSyncRead(tr("topics.syncStatusIsNoLongerNeeded")));
       return false;
     });
     this.drain();
@@ -115,7 +116,7 @@ class TopicSyncReadScheduler {
       const job = this.queue.shift()!;
       if (!job.current()) {
         job.reject(
-          new ObsoleteSyncRead("Чтение состояния больше не требуется."),
+          new ObsoleteSyncRead(tr("topics.syncStatusIsNoLongerNeeded")),
         );
         continue;
       }

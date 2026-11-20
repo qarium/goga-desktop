@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import {
   useCallback,
   useEffect,
@@ -112,7 +114,7 @@ export function useGitDiscard(
             value.revision !== snapshot.revision
           ) {
             setInspectionError(
-              "Состояние отмены изменилось во время проверки. Повторите проверку отмены.",
+              msg("git.discardStateChangedDuringVerificationCheckAgain"),
             );
             return;
           }
@@ -179,7 +181,7 @@ export function useGitDiscard(
       );
       if (!current(epoch)) return;
       if (documentScopeId(value.scope) !== owner)
-        throw Error("Подтверждение относится к другому контексту.");
+        throw Error(msg("git.theConfirmationBelongsToAnotherContext"));
       setPreview(value);
       setPreviewRevision(snapshot.revision);
     } catch (error) {
@@ -204,7 +206,7 @@ export function useGitDiscard(
     if (submitted.expiresAt <= Date.now()) {
       setPreview(null);
       setResult(
-        "Подтверждение устарело. Обновите изменения и проверьте выбранные файлы заново.",
+        msg("git.theConfirmationIsOutOfDateRefreshChangesAndCheck"),
       );
       return;
     }
@@ -220,7 +222,7 @@ export function useGitDiscard(
       if (!current(epoch)) return;
       if (documentScopeId(value.scope) !== owner)
         throw Error(
-          "Результат относится к другому контексту. Проверьте состояние Git.",
+          msg("git.theResultBelongsToAnotherContextCheckTheGitState"),
         );
       const succeeded =
         value.status === "discarded" &&
@@ -241,7 +243,7 @@ export function useGitDiscard(
           value.message,
           value.log,
           value.recoveryPath &&
-            `Материалы восстановления: ${value.recoveryPath}`,
+            msg("git.recoveryFiles", { recoveryPath: String(value.recoveryPath) }),
         ]
           .filter(Boolean)
           .join("\n\n"),
@@ -250,7 +252,7 @@ export function useGitDiscard(
       if (current(epoch)) {
         setUncertain(true);
         setResult(
-          `${topicError(error)}\n\nПроверьте состояние Git перед новой попыткой: ответ не подтверждает, что файлы не были изменены. Автоматического повтора не будет.`,
+          msg("git.checkTheGitStateBeforeRetryingTheResponseDoesNot2", { value1: String(topicError(error)) }),
         );
       }
     } finally {
@@ -292,7 +294,7 @@ export function useGitDiscard(
         inspectedRevision.current !== snapshot.revision
       )
         throw Error(
-          "Подтверждение сохранения относится к другому или устаревшему контексту.",
+          msg("git.theConfirmationBelongsToADifferentOrOutdatedContext"),
         );
       setRecoveryPreview(value);
     } catch (error) {
@@ -318,7 +320,7 @@ export function useGitDiscard(
       inspectedRevision.current !== submitted.revision
     ) {
       setRecoveryPreview(null);
-      setResult("Подтверждение устарело. Проверьте состояние отмены заново.");
+      setResult(msg("git.confirmationIsOutOfDateCheckTheDiscardStateAgain"));
       return;
     }
     const epoch = generation.current;
@@ -335,7 +337,7 @@ export function useGitDiscard(
         value.status !== "recovered"
       )
         throw Error(
-          "Сохранение текущего состояния не подтверждено для этого контекста.",
+          msg("git.keepingTheCurrentStateWasNotConfirmedForThisContext"),
         );
       setResult(value.message);
     } catch (error) {
@@ -414,6 +416,7 @@ export function GitDiscardFooter({
   visible: boolean;
   ready?: boolean;
 }) {
+  useLocale();
   useEffect(() => {
     if (
       (!visible || disabled) &&
@@ -463,34 +466,30 @@ export function GitDiscardFooter({
           onClick={() => {
             if (snapshot) void discard.prepare(snapshot, selectedPaths);
           }}
-        >
-          Отменить изменения…
-        </button>
+        >{msg("git.discardChanges")}</button>
         <p role={discard.pending ? "status" : undefined}>
           {discard.pending === "prepare"
-            ? "Проверяем выбранные файлы для отмены…"
+            ? msg("git.checkingSelectedFilesForDiscard")
             : discard.pending === "execute"
-              ? "Отменяем выбранные изменения…"
+              ? msg("git.discardingSelectedChanges")
               : discard.pending === "recovery-prepare"
-                ? "Проверяем сохранение текущего состояния…"
+                ? msg("git.verifyingTheCurrentState")
                 : discard.pending === "recovery-execute"
-                  ? "Завершаем проверку прежней отмены…"
+                  ? msg("git.finishingVerificationOfThePreviousDiscard")
                   : discard.inspecting
-                    ? "Проверяем состояние прежней отмены…"
+                    ? msg("git.checkingThePreviousDiscard")
                     : discard.inspectionError ||
                       discard.recovery?.message ||
                       (discard.uncertain
-                        ? "Результат прежней отмены не подтверждён. Автоматического повтора не будет."
-                        : "Отмена затронет выбранные файлы целиком, включая подготовленные изменения.")}
+                        ? msg("git.thePreviousDiscardIsUnconfirmedThereWillBeNoAutomatic")
+                        : msg("git.discardAffectsEntireSelectedFilesIncludingTheirStagedChanges"))}
         </p>
         {discard.inspectionError && (
           <button
             type="button"
             disabled={!!discard.pending || !ready}
             onClick={discard.retryInspection}
-          >
-            Повторить проверку отмены
-          </button>
+          >{msg("git.checkDiscardAgain")}</button>
         )}
         {discard.recovery?.state === "partial" && (
           <button
@@ -504,50 +503,36 @@ export function GitDiscardFooter({
             onClick={() => {
               if (snapshot) void discard.prepareRecovery(snapshot);
             }}
-          >
-            Оставить текущее состояние…
-          </button>
+          >{msg("git.keepCurrentState")}</button>
         )}
         {(discard.recovery?.state === "partial" ||
           discard.recovery?.state === "blocked") && (
           <div className="git-discard-recovery-details">
-            <p>
-              Новая отмена недоступна до проверки прежней попытки.
-              Автоматического повтора не будет.
-            </p>
+            <p>{msg("git.checkThePreviousAttemptBeforeDiscardingAnythingElseThereWill")}</p>
             <RecoveryPaths paths={discard.recovery.paths} />
             {discard.recovery.state === "blocked" && (
               <button
                 type="button"
                 disabled={!!discard.pending || discard.inspecting || !ready}
                 onClick={discard.retryInspection}
-              >
-                Повторить проверку отмены
-              </button>
+              >{msg("git.checkDiscardAgain")}</button>
             )}
           </div>
         )}
       </div>
       {visible && discard.recoveryPreview && (
         <TopicModal
-          title="Оставить текущее состояние"
-          closeLabel="Закрыть подтверждение текущего состояния"
+          title={msg("git.keepCurrentState2")}
+          closeLabel={msg("git.closeCurrentStateConfirmation")}
           className="git-commit-modal git-discard-confirmation"
           onClose={discard.closeRecoveryPreview}
         >
           <div className="git-commit-preview">
             <p>{discard.recoveryPreview.message}</p>
-            <p>
-              Будет удалён служебный снимок прежней отмены и снята её
-              блокировка. Файлы, индекс и HEAD не изменятся. Прежняя отмена не
-              будет повторена.
-            </p>
-            <p>
-              Текущее состояние файлов останется как есть. Это не восстановление
-              отменённых изменений.
-            </p>
+            <p>{msg("git.thisRemovesTheRecoverySnapshotAndReleasesThePreviousDiscard")}</p>
+            <p>{msg("git.filesWillRemainAsTheyAreNowThisDoesNot")}</p>
             <dl>
-              <dt>Рабочая папка</dt>
+              <dt>{msg("git.workingDirectory")}</dt>
               <dd>{discard.recoveryPreview.root}</dd>
             </dl>
             <RecoveryPaths paths={discard.recoveryPreview.paths} />
@@ -563,43 +548,33 @@ export function GitDiscardFooter({
                     documentScopeId(discard.recoveryPreview.scope)
                 }
                 onClick={() => void discard.executeRecovery()}
-              >
-                Оставить текущее состояние и продолжить
-              </button>
+              >{msg("git.keepCurrentStateAndContinue")}</button>
             </div>
           </div>
         </TopicModal>
       )}
       {visible && discard.preview && (
         <TopicModal
-          title="Подтвердить отмену изменений"
-          closeLabel="Закрыть подтверждение отмены"
+          title={msg("git.confirmDiscard")}
+          closeLabel={msg("git.closeDiscardConfirmation")}
           className="git-commit-modal git-discard-confirmation"
           onClose={discard.closePreview}
         >
           <div className="git-commit-preview">
-            <p>
-              Выбранные файлы будут восстановлены целиком из HEAD.
-              Подготовленные изменения выбранных файлов тоже будут отменены.
-              Остальные файлы и их подготовленные изменения сохранятся.
-            </p>
-            <p>
-              Новые файлы, которых нет в HEAD, будут перемещены в системную
-              Корзину. Для переименований ниже перечислены оба затрагиваемых
-              пути.
-            </p>
+            <p>{msg("git.selectedFilesWillBeFullyRestoredFromHEADIncludingTheir")}</p>
+            <p>{msg("git.newFilesNotInHEADWillBeMovedToThe")}</p>
             <dl>
-              <dt>Рабочая папка</dt>
+              <dt>{msg("git.workingDirectory")}</dt>
               <dd>{discard.preview.root}</dd>
-              <dt>Ветка</dt>
-              <dd>{discard.preview.branch ?? "Отсоединённый HEAD"}</dd>
+              <dt>{msg("git.branch2")}</dt>
+              <dd>{discard.preview.branch ?? msg("git.detachedHEAD")}</dd>
               <dt>HEAD</dt>
-              <dd>{discard.preview.head ?? "Нет коммитов"}</dd>
+              <dd>{discard.preview.head ?? msg("git.noCommits")}</dd>
             </dl>
             {discard.preview.recoveryMessage && (
               <p>{discard.preview.recoveryMessage}</p>
             )}
-            <strong>Восстановить из HEAD</strong>
+            <strong>{msg("git.restoreFromHEAD")}</strong>
             <ul>
               {discard.preview.items
                 .filter((item) => item.action === "restore")
@@ -609,7 +584,7 @@ export function GitDiscardFooter({
                   </li>
                 ))}
             </ul>
-            <strong>Переместить в Корзину</strong>
+            <strong>{msg("git.moveToTrash")}</strong>
             <ul>
               {discard.preview.items
                 .filter((item) => item.action === "trash")
@@ -619,20 +594,10 @@ export function GitDiscardFooter({
                   </li>
                 ))}
             </ul>
-            <p>
-              Коммит не создаётся, публикация и синхронизация не выполняются.
-              При изменении состояния Git потребуется новое подтверждение.
-            </p>
-            <p>
-              После успешной проверки резервная копия удаляется. Отменённые
-              изменения отслеживаемых файлов из неё восстановить будет нельзя.
-              При ошибке материалы восстановления сохраняются.
-            </p>
+            <p>{msg("git.noCommitPublicationOrSyncWillTakePlaceIfThe")}</p>
+            <p>{msg("git.theBackupIsRemovedAfterSuccessfulVerificationYouWillNot")}</p>
             {stale && (
-              <p role="alert">
-                Подтверждение устарело. Закройте его и проверьте выбранные файлы
-                заново.
-              </p>
+              <p role="alert">{msg("git.confirmationIsOutOfDateCloseItAndCheckThe")}</p>
             )}
             <div className="git-discard-confirm-actions">
               <button
@@ -647,17 +612,15 @@ export function GitDiscardFooter({
                   !!discard.inspectionError
                 }
                 onClick={() => void discard.execute()}
-              >
-                Отменить выбранные изменения
-              </button>
+              >{msg("git.discardSelectedChanges")}</button>
             </div>
           </div>
         </TopicModal>
       )}
       {visible && discard.result && (
         <TopicModal
-          title="Результат отмены изменений"
-          closeLabel="Закрыть результат отмены"
+          title={msg("git.discardResult")}
+          closeLabel={msg("git.closeDiscardResult")}
           className="git-workspace-error"
           onClose={discard.closeResult}
         >
@@ -669,10 +632,11 @@ export function GitDiscardFooter({
 }
 
 function RecoveryPaths({ paths }: { paths: GitDiscardRecovery["paths"] }) {
+  useLocale();
   const labels = {
-    unchanged: "совпадает со снимком до прежней попытки",
-    restored: "соответствует версии HEAD прежней попытки",
-    changed: "отличается от прежнего снимка",
+    unchanged: msg("git.matchesTheSnapshotBeforeThePreviousAttempt"),
+    restored: msg("git.matchesHEADFromThePreviousAttempt"),
+    changed: msg("git.differsFromThePreviousSnapshot"),
   };
   return (
     <ul>

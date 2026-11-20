@@ -116,3 +116,19 @@ it("keeps a project-removal refusal readable without the Electron envelope", () 
     ),
   ).toBe("Сначала закройте терминалы этого проекта.");
 });
+
+it("never treats an untagged error from an older host as a conflict by its wording", () => {
+  const reason = "Конфликт сохранения: подробность сторонней команды";
+  expect(documentSaveErrorMessage(Error(reason))).toBe(reason);
+});
+
+it("uses the current language for a tagged write conflict without reading host wording", async () => {
+  const { setLocale } = await import("../src/shared/i18n");
+  const { DOCUMENT_SAVE_CONFLICT_PREFIX } = await import("../src/shared/project-documents");
+  const reason = Error(`Error invoking remote method 'goga:save-overview-file': Error: ${DOCUMENT_SAVE_CONFLICT_PREFIX}older host wording`);
+  setLocale("en");
+  expect(documentSaveErrorMessage(reason)).toMatch(/draft .*editor/i);
+  setLocale("ru");
+  expect(documentSaveErrorMessage(reason)).toContain("Ваш черновик остался в редакторе");
+  expect(documentSaveErrorMessage(reason)).not.toContain("older host wording");
+});

@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 /** Fixed diagnostic codes survive Electron's error serialization without copying
  * native exceptions, cwd, environment, commands or output into a UI/log. */
 export type TerminalStartupPhase =
@@ -27,14 +28,14 @@ export class TerminalStartupError extends Error {
   ) {
     super(
       (cancelled
-        ? "Открытие терминала отменено."
+        ? t("hostTerminal.openCancelled")
         : retained
-          ? "Терминальный транспорт недоступен. Процесс сохранён; требуется безопасное завершение."
+          ? t("hostTerminal.transportRetained")
           : phase === "preset-environment"
-            ? "Не удалось открыть сохранённое окружение вкладки. Терминал не запущен."
+            ? t("hostTerminal.presetEnvironmentFailed")
             : phase === "preset-command"
-              ? "Не удалось подготовить запуск команды пресета. Команда не отправлена."
-              : "Не удалось запустить терминал. Проверьте контекст и оболочку; значения окружения скрыты.") +
+              ? t("hostTerminal.presetCommandFailed")
+              : t("hostTerminal.startupFailed")) +
         " [terminal:" +
         phase +
         "]",
@@ -46,7 +47,7 @@ export class TerminalStartupError extends Error {
 /** Admission refusal is not a renderer/transport failure. Never replay rejected input. */
 export class TerminalAdmissionClosedError extends Error {
   constructor() {
-    super("Терминал завершает операцию закрытия или обновления.");
+    super(t("hostTerminal.closingOrRefreshing"));
     this.name = "TerminalAdmissionClosedError";
   }
 }
@@ -56,8 +57,8 @@ export class TerminalInspectorError extends Error {
   constructor(readonly code: "changed" | "unavailable") {
     super(
       code === "changed"
-        ? "Служебный файл проверки терминальных процессов изменился после запуска приложения. Безопасная остановка не подтверждена."
-        : "Системный адаптер процессов терминала недоступен. Безопасная остановка не подтверждена.",
+        ? t("hostTerminal.inspectorChanged")
+        : t("hostTerminal.inspectorUnavailable"),
     );
     this.name = "TerminalInspectorError";
   }

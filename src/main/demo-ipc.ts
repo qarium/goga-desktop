@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import type { BrowserWindow, IpcMain, IpcMainInvokeEvent } from "electron";
 import {
   demoCommandSchema,
@@ -46,7 +47,7 @@ export function registerDemoIPC(
     const name = "demo-" + operation,
       channel = "goga:" + name;
     if (!Object.hasOwn(IPC_SCOPES, name))
-      throw Error("Не задана область операции");
+      throw Error(t("native.scopeMissing"));
     channels.push(channel);
     ipc.handle(channel, (e: IpcMainInvokeEvent, ...args: unknown[]) => {
       if (
@@ -56,30 +57,30 @@ export function registerDemoIPC(
         e.senderFrame !== e.sender.mainFrame ||
         e.senderFrame.url !== d.shellURL
       )
-        throw Error("Доступ к показам запрещён.");
-      if (args.length !== n) throw Error("Некорректный запрос демонстрации.");
+        throw Error(t("native.demoDenied"));
+      if (args.length !== n) throw Error(t("native.demoBadRequest"));
       return fn(args[0]);
     });
   };
   const showId = (v: unknown) => {
     const r = demoIdSchema.safeParse(v);
-    if (!r.success) throw Error("Некорректный показ.");
+    if (!r.success) throw Error(t("native.demoInvalid"));
     return r.data;
   };
   bind("state", 0, () => d.runtime.state());
   bind("execute", 1, (value) => {
     const parsed = demoCommandSchema.safeParse(value);
-    if (!parsed.success) throw Error("Некорректные параметры демонстрации.");
+    if (!parsed.success) throw Error(t("native.demoBadParams"));
     const cmd = parsed.data;
     if (cmd.action === "input" && !cmd.tabId)
-      throw Error("Не указана вкладка ввода.");
+      throw Error(t("native.demoInputTabMissing"));
     return cmd.action === "open"
       ? d.withOwner(cmd.scope, (label) => d.runtime.execute(cmd, label))
       : d.runtime.execute(cmd);
   });
   bind("next-frame", 1, (value) => {
     const request = demoFrameRequestSchema.safeParse(value);
-    if (!request.success) throw Error("Некорректный запрос кадра.");
+    if (!request.success) throw Error(t("native.demoBadFrame"));
     const { showId, tabId, after } = request.data;
     return d.runtime.nextFrame(showId, tabId, after);
   });
@@ -88,7 +89,7 @@ export function registerDemoIPC(
       .extend({ requestId: demoIdSchema })
       .safeParse(value);
     if (!request.success)
-      throw Error("Некорректный запрос копирования выделения.");
+      throw Error(t("native.demoBadCopySelection"));
     return d.copySelection(
       request.data.showId,
       request.data.tabId,
@@ -101,7 +102,7 @@ export function registerDemoIPC(
   bind("copy-url", 1, (value) => {
     const request = demoPageRequestSchema.safeParse(value);
     if (!request.success)
-      throw Error("Некорректный запрос копирования адреса.");
+      throw Error(t("native.demoBadCopyURL"));
     return d.copyURL(request.data.showId, request.data.tabId);
   });
   bind("frame", 1, (value) => d.runtime.frame(showId(value)));
@@ -126,24 +127,24 @@ export async function copyDemoPageURL(
     show.activeTabId !== tabId ||
     !show.tabs?.some((t) => t.tabId === tabId)
   )
-    throw Error("Вкладка показа закрыта или заменена.");
+    throw Error(t("native.demoTabGone"));
   if (!show.url || show.url.length > 8192 || /[\x00-\x20\x7f]/.test(show.url))
-    throw Error("У страницы нет адреса для копирования.");
+    throw Error(t("native.demoPageHasNoURL"));
   let url: URL;
   try {
     url = new URL(show.url);
   } catch {
-    throw Error("У страницы нет адреса для копирования.");
+    throw Error(t("native.demoPageHasNoURL"));
   }
   if (
     !["http:", "https:"].includes(url.protocol) ||
     url.username ||
     url.password
   )
-    throw Error("Этот адрес страницы нельзя скопировать.");
+    throw Error(t("native.demoURLNotAllowed"));
   try {
     await writeText(url.href);
   } catch {
-    throw Error("Не удалось скопировать адрес страницы. Повторите попытку.");
+    throw Error(t("native.demoURLCopyFailed"));
   }
 }

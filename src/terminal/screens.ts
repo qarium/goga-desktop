@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import {
   TERMINAL_SOURCE_BYTES,
   terminalGrantSchema,
@@ -49,11 +50,11 @@ export class TerminalScreens {
   grant(raw: TerminalGrant): void {
     const grant = terminalGrantSchema.parse(raw);
     if (this.lost || this.retired.has(this.key(grant)))
-      throw Error("Экран терминала утрачен; требуется новая сессия.");
+      throw Error(t("native.terminalNewSession"));
     const old = this.entries.get(grant.sessionId);
     if (old) {
       if (sameTerminalGrant(old.grant, grant)) return;
-      throw Error("Нельзя заменять экран работающей сессии.");
+      throw Error(t("native.terminalActiveScreen"));
     }
     const surface = this.dependencies.create(
       { ...grant },

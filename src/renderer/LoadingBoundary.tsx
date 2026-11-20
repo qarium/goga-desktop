@@ -1,3 +1,5 @@
+import { t } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useLayoutEffect, useRef, type ReactNode } from "react";
 import "./LoadingBoundary.css";
 
@@ -23,7 +25,7 @@ export function LoadingBoundary({
   label,
   error,
   onRetry,
-  retryLabel = "Повторить загрузку",
+  retryLabel = t("general.retryLoading"),
   children,
 }: {
   pending: boolean;
@@ -34,6 +36,7 @@ export function LoadingBoundary({
   retryLabel?: string;
   children: ReactNode;
 }) {
+  useLocale();
   const loading = pending && !error;
   const content = useRef<HTMLDivElement>(null);
   const focus = useRef<HTMLElement | null>(null);

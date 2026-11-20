@@ -1,8 +1,9 @@
+import { t as tr } from "../shared/i18n";
 import { stripVTControlCharacters } from "node:util";
 import type { Pipeline, Stage, PipelineRequest } from "../shared/types";
 export function safeName(
   value: unknown,
-  label = "имя",
+  label = tr("host.name"),
 ): asserts value is string {
   if (
     typeof value !== "string" ||
@@ -12,7 +13,7 @@ export function safeName(
     /[\/\\\x00-\x20]/.test(value) ||
     value.includes("..")
   )
-    throw new Error(`Недопустимое ${label}`);
+    throw new Error(tr("host.invalidLabel", { label: label }));
 }
 export function profileName(value: unknown): asserts value is string {
   if (
@@ -20,7 +21,7 @@ export function profileName(value: unknown): asserts value is string {
     !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) ||
     value.length > 180
   )
-    throw new Error("Недопустимое имя профиля");
+    throw new Error(tr("host.invalidProfileName"));
 }
 export function parseCatalog(text: string): Pipeline[] {
   const result: Pipeline[] = [];
@@ -46,7 +47,7 @@ export function parseCard(text: string): Stage[] {
     const m = line.match(/^\* ([^\s]+):\s*$/);
     if (m) {
       safeName(m[1], "stage ID");
-      if (stages.some((s) => s.id === m[1])) throw new Error("Повтор stage ID");
+      if (stages.some((s) => s.id === m[1])) throw new Error(tr("host.duplicateStageId"));
       current = { id: m[1]!, title: "" };
       stages.push(current);
     } else {
@@ -57,19 +58,19 @@ export function parseCard(text: string): Stage[] {
   return stages;
 }
 export function pipelineArgs(r: PipelineRequest, info: boolean): string[] {
-  safeName(r.pipeline, "имя конвейера");
+  safeName(r.pipeline, tr("host.pipelineName"));
   if (
     typeof r.workflow !== "string" ||
     typeof r.profile !== "string" ||
     !Array.isArray(r.skips) ||
     r.skips.length > 1000
   )
-    throw new Error("Некорректные параметры");
+    throw new Error(tr("host.invalidOptions"));
   const args = ["pipeline", r.pipeline];
   if (r.workflow === "none") args.push("--no-workflow");
   else if (r.workflow !== "auto") {
     const name = workflowName(r.workflow);
-    safeName(name, "имя рабочего процесса");
+    safeName(name, tr("host.workflowName"));
     args.push("--workflow", name);
   }
   if (r.profile) {

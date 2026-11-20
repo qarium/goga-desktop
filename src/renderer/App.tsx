@@ -1,3 +1,7 @@
+import { HintButton } from "./ActionHint";
+import type { MessageKey } from "../shared/locale-packs.generated";
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import {RunActionButton} from "./RunActionButton";
 import {Activity, Cable, RotateCcw, Square} from "lucide-react";
 import {AttachPanelDialog,PanelRefreshButton,useAttachedPanels} from "./AttachedPanels";
@@ -97,7 +101,7 @@ import {
 import { LaunchForm } from "./LaunchForm";
 import { LoadingBoundary, LoadingState } from "./LoadingBoundary";
 import { RunOutput, dashboardReady } from "./RunOutput";
-import { Settings } from "./Settings";
+import { DEFAULT_SETTINGS_TAB, Settings } from "./Settings";
 import { createSettingsDocuments, documentScopeId } from "./settings-documents";
 import {
   ProjectSettings,
@@ -140,13 +144,13 @@ import type {
   TopicTarget,
 } from "../shared/topics";
 import { version } from "../../package.json";
-const labels: Record<string, string> = {
-  starting: "Запускается",
-  running: "Работает",
-  exited: "Процесс завершён",
-  failed: "Ошибка",
-  stopped: "Остановлен",
-};
+const statusKeys = {
+  starting: "shell.starting",
+  running: "shell.running",
+  exited: "shell.processFinished",
+  failed: "shell.error",
+  stopped: "shell.stopped",
+} as const satisfies Record<RunWithContext["status"], MessageKey>;
 const message = (e: unknown) => (e instanceof Error ? e.message : String(e));
 type FileTransition = "section" | "workspace" | "pipeline" | "build" | "stay";
 
@@ -191,8 +195,8 @@ function initialOwnerFor(
     ambiguous: distinct.size > 1,
   };
 }
-const ambiguousContextReason =
-  "Несколько рабочих копий соответствуют этому топику. Выберите конкретную проверенную копию в шапке; запуск не будет назначен автоматически.";
+const ambiguousContextReason = () =>
+  msg("shell.severalWorkingCopiesMatchThisTopicChooseAVerifiedCopy");
 
 /** Independent retained contexts may report pending work for one project. */
 function gitOwnerFlag(
@@ -210,6 +214,7 @@ function gitOwnerFlag(
 }
 
 export function App() {
+  useLocale();
   const notifications = useNotifications();
   const notificationIntent = useRef(0);
   const [notificationOpen, setNotificationOpen] = useState<{ticket:string;runId:string;nonce:number}|null>(null);
@@ -255,7 +260,7 @@ export function App() {
   const settingsBack = useRef<"home" | "project-settings" | "terminal" | "demonstration">("home");
   const [demoCloseOpen, setDemoCloseOpen] = useState(false);
   const settingsTerminalOwner = useRef<string | null>(null);
-  const [globalSettingsTab, setGlobalSettingsTab] = useState("config");
+  const [globalSettingsTab, setGlobalSettingsTab] = useState<string>(DEFAULT_SETTINGS_TAB);
   const [projectRemoval, setProjectRemoval] = useState<{
     project: Project;
     busy: boolean;
@@ -427,7 +432,7 @@ export function App() {
   );
   function openContextRun(target: Run, verifiedOwner?: WorktreeRecord) {
     if (!projectsRef.current.some(project => project.id === target.projectId)) {
-      setError("Проект убран из списка. Добавьте его папку обратно, чтобы открыть запуск. История запусков сохранена.");
+      setError(msg("shell.thisProjectWasRemovedFromTheListAddItsFolder"));
       return false;
     }
     const ref = (target as RunWithContext).context;
@@ -520,7 +525,7 @@ export function App() {
       : undefined);
   const cardOwnerError =
     !cardOwner && matchingCardOwners.length > 1
-      ? "У топика несколько рабочих контекстов. Выберите нужный в селекторе топиков."
+      ? msg("shell.thisTopicHasMultipleWorkingContextsChooseOneInThe")
       : contextsError;
   const TopicCardComponent =
     topicCard?.context.kind === "topic" || topicCard?.context.kind === "current"
@@ -1073,7 +1078,7 @@ export function App() {
           : previous,
       );
       setError(
-        `Не удалось восстановить выбранный топик «${saved.topic}»: ${message(e)}. Основная папка не выбрана вместо него.`,
+        msg("shell.couldNotRestoreTheSelectedTopicTheOriginalProjectFolder", { topic: String(saved.topic), value2: String(message(e)) }),
       );
     };
     void readRequest("resolveTopicContext", contextRef(saved))
@@ -1089,7 +1094,7 @@ export function App() {
           record.preparation ||
           record.deletedAt
         )
-          throw Error("Сохранённая копия недоступна или изменилась");
+          throw Error(msg("shell.theSavedWorkingCopyIsUnavailableOrHasChanged"));
         if (!alive || contextSelectionsRef.current[projectId] !== saved) return;
         restoration.current.delete(projectId);
         setContextSelections((previous) =>
@@ -1271,7 +1276,7 @@ export function App() {
       .map(([, state]) => state);
   const projectRemovalBlocked = (id: string) => {
     if (projectOverviewStates(id).some((state) => state.busy))
-      return "Дождитесь завершения файловой операции в Обзоре этого проекта.";
+      return msg("shell.waitForTheFileOperationInThisProjectSOverview");
     if (
       runsRef.current.some(
         (run) =>
@@ -1280,7 +1285,7 @@ export function App() {
             run.recovery === "unverified"),
       )
     )
-      return "Сначала завершите запуск этого проекта или проверьте его состояние. Никакие процессы не будут остановлены автоматически.";
+      return msg("shell.stopTheProjectSRunFirstOrCheckItsStatus");
     return undefined;
   };
   function requestProjectRemoval(target: Project) {
@@ -1397,12 +1402,12 @@ export function App() {
           preparation.projectId !== target.projectId
         )
           throw Error(
-            "Параметры повторной сборки не соответствуют выбранному запуску.",
+            msg("shell.theBuildParametersDoNotMatchTheSelectedRun"),
           );
         let owner: WorktreeRecord | undefined;
         if (preparation.context) {
           if (typeof window.goga.resolveTopicContext !== "function")
-            throw Error("Не удалось проверить рабочую копию повторной сборки.");
+            throw Error(msg("shell.couldNotVerifyTheWorkingCopyForThisBuild"));
           owner = await window.goga.resolveTopicContext(preparation.context);
           if (
             contextKey(owner) !== contextKey(preparation.context) ||
@@ -1411,14 +1416,14 @@ export function App() {
             owner.storageKind !== "clone"
           )
             throw Error(
-              "Рабочая копия повторной сборки недоступна. Подготовьте повтор заново.",
+              msg("shell.theWorkingCopyForThisBuildIsUnavailablePrepareThe"),
             );
         }
         const ownerDraftId = owner
           ? draftKey(owner, "build")
           : preparation.projectId;
         if (buildBusy[ownerDraftId])
-          throw Error("Дождитесь завершения подготовки текущего запуска.");
+          throw Error(msg("shell.waitForTheCurrentRunPreparationToFinish"));
         // A repeat is its own preparation, never a replacement for an unsaved
         // owner draft (including another repeat). Cancellation only closes it.
         const nonce = ++repeatNonce.current;
@@ -1464,7 +1469,7 @@ export function App() {
     try {
       const next = await window.goga.repeatPipeline(target.id);
       if (next.id === target.id || next.kind === "build" || next.pipeline !== target.pipeline || next.branch !== target.branch || !runMatchesWorkspace(next, target.projectId, target.context ?? null))
-        throw Error("Повторный запуск не соответствует исходному контексту.");
+        throw Error(msg("shell.theNewRunDoesNotMatchTheOriginalContext"));
       if (!runsRef.current.some((run) => run.id === next.id)) applyRuns([...runsRef.current, next]);
       setContextOpenRuns((previous) => new Set(previous).add(next.id));
       // A late launch result owns its own tab, never the user's new section.
@@ -1513,7 +1518,7 @@ export function App() {
         if (!alive) return;
         if (b.projectId !== project.id || b.year !== year) {
           setCurrentTopicsError(
-            "Список топиков относится к другому проекту или году.",
+            msg("shell.theTopicListBelongsToADifferentProjectOrYear"),
           );
           return;
         }
@@ -1559,7 +1564,7 @@ export function App() {
   // Only an explicit selection owns clone actions. Null is the original folder.
   const displayOwner = selectedContext;
 
-  const headerTopic = selectedContext?.topic ?? "Без топика";
+  const headerTopic = selectedContext?.topic ?? msg("shell.noTopic");
   const primaryRuns = runs.filter(
     (value) =>
       value.projectId === projectId && !(value as RunWithContext).context,
@@ -1572,15 +1577,15 @@ export function App() {
     : { activeCount: primaryActive.length };
   const contextUnavailable = displayOwner
     ? displayOwner.state !== "ready"
-      ? "Рабочая копия недоступна. История запусков сохранена."
+      ? msg("shell.theWorkingCopyIsUnavailableRunHistoryHasBeenKept")
       : displayOwner.storageKind !== "clone" ||
           displayOwner.compatibility === "legacy-linked"
-        ? "Прежняя linked-worktree копия доступна только для просмотра. Для запуска требуется автономный клон."
+        ? msg("shell.theOldLinkedWorktreeIsReadOnlyUseAStandalone")
         : displayOwner.ownership !== "managed" ||
             displayOwner.preparation ||
             displayOwner.deletedAt ||
             !topicContextRefSchema.safeParse(contextRef(displayOwner)).success
-          ? "Рабочая копия не готова к запуску. Выберите проверенный автономный клон."
+          ? msg("shell.theWorkingCopyIsNotReadyChooseAVerifiedStandalone")
           : ""
     : "";
   const repositoryMissing = Boolean(
@@ -1614,8 +1619,10 @@ export function App() {
       () => { if (stillHere()) setPage("demonstration"); },
       e => {
         if (!stillHere()) return;
-        const reason = demoError(e);
-        if (!engine && reason.startsWith(DEMO_EMBEDDED_START_ERROR))
+        const message = demoError(e);
+        const embeddedFailed = message.startsWith(DEMO_EMBEDDED_START_ERROR);
+        const reason = embeddedFailed ? message.slice(DEMO_EMBEDDED_START_ERROR.length) : message;
+        if (!engine && embeddedFailed)
           setDemoRetry({key: demoKey, intent, reason});
         setError(reason);
       },
@@ -1753,7 +1760,7 @@ export function App() {
         : null,
     );
     if (!deletingProject)
-      throw Error("Не удалось сохранить выбор: проект недоступен.");
+      throw Error(msg("shell.couldNotSaveTheSelectionTheProjectIsUnavailable"));
     persistDeletedWorkspaceSelection(deletingProject, owner);
   }, topicsChanged);
   const topicRemoval = useTopicRemovalController(deletion.execute, topicsChanged);
@@ -1907,7 +1914,7 @@ export function App() {
         : target.owner.ref.projectId;
     const p = projectsRef.current.find((v) => v.id === pid);
     if (!p) {
-      setError("Проект больше не находится в списке.");
+      setError(msg("shell.theProjectIsNoLongerInTheList"));
       return;
     }
     if (target.kind === "run") {
@@ -1920,7 +1927,7 @@ export function App() {
             contextKey(r.context) === contextKey(target.owner.ref)
           : target.owner.kind === "primary";
         if (!same) {
-          setError("Сохранённый запуск относится к другой рабочей области.");
+          setError(msg("shell.theSavedRunBelongsToADifferentWorkspace"));
           return;
         }
         navigate(() => openContextRun(r), true);
@@ -1949,7 +1956,7 @@ export function App() {
           homeNavigationState.current;
         if (target.kind === "document") {
           if (!store.has(target)) {
-            setError("Файл больше не содержит несохранённых изменений.");
+            setError(msg("shell.theFileNoLongerHasUnsavedChanges"));
             return;
           }
           const sameRevision =
@@ -1980,7 +1987,7 @@ export function App() {
             draft = target.key;
           } else
             notice =
-              "Прежняя форма недоступна в этой рабочей области. Открыт Обзор; новый запуск не создан.";
+              msg("shell.thePreviousFormIsUnavailableInThisWorkspaceOverviewWas");
         } else if (target.kind === "changes") next = "changes";
         else if (target.kind === "section") next = target.section;
         else if(target.kind==="run"&&attachedRef.current.some(v=>v.id===target.runId&&sameDashboardOwner(v.owner,{projectId:pid,context:owner?contextRef(owner):undefined}))){
@@ -1988,7 +1995,7 @@ export function App() {
         }
         else
           notice =
-            "Прежняя вкладка запуска недоступна. Открыт Обзор этой рабочей области.";
+            msg("shell.thePreviousRunTabIsUnavailableOverviewWasOpenedFor");
         restoration.current.delete(pid);
         setContextSelections((v) => ({ ...v, [pid]: owner }));
         setProjectId(pid);
@@ -2107,16 +2114,13 @@ export function App() {
         </div>
         <NotificationBell controller={notifications} projects={projects} onOpen={openNotification}/>
       </header>
-      <aside className="sidebar" aria-label="Боковая панель">
-        <label className="eyebrow" htmlFor="workspace">
-          РАБОЧАЯ ОБЛАСТЬ
-        </label>
-        <select id="workspace" aria-label="Рабочая область" disabled>
-          <option>Мой компьютер</option>
+      <aside className="sidebar" aria-label={msg("shell.sidebar")}>
+        <label className="eyebrow" htmlFor="workspace">{msg("shell.workspace")}</label>
+        <select id="workspace" aria-label={msg("shell.workspace2")} disabled>
+          <option>{msg("shell.myComputer")}</option>
         </select>
         <div className="local-label">
-          <i /> Только локальная рабочая область
-        </div>
+          <i />{msg("shell.localWorkspaceOnly")}</div>
         <ProjectSidebar projects={projects} controller={organization} activeProjectId={projectPageVisible?projectId:null}
           collapsed={sidebarCollapsed} disabled={settingsBusy} homeActive={page==="home"}
           onHome={()=>navigate(()=>{setPage("home");setError("");},true,"workspace")}
@@ -2130,7 +2134,7 @@ export function App() {
           unreadByProject={notifications.snapshot.byProject} onNotifications={()=>notifications.setOpen(true)}
           onError={e=>setError(preparationErrorMessage(e))} onModalChange={setOrganizationModal}/>
         <button
-          aria-label="Настройки"
+          aria-label={msg("shell.settings")}
           className={`settings-button ${page === "settings" ? "active" : ""}`}
           disabled={settingsBusy}
           onClick={() =>
@@ -2144,39 +2148,38 @@ export function App() {
             },false,"workspace")
           }
         >
-          ⚙ <span>Настройки</span>
+          ⚙ <span>{msg("shell.settings")}</span>
         </button>
         <small className="sidebar-footer">
           <span>© Goga 2026</span>
           <span className="app-version">v{version}</span>
-          <button
+          <HintButton
             className="icon-button sidebar-toggle"
             aria-label={
               sidebarCollapsed
-                ? "Развернуть боковую панель"
-                : "Свернуть боковую панель"
+                ? msg("shell.expandSidebar")
+                : msg("shell.collapseSidebar")
             }
             aria-expanded={!sidebarCollapsed}
             onClick={toggleSidebar}
-            title={
+            hint={
               sidebarCollapsed
-                ? "Развернуть боковую панель"
-                : "Свернуть боковую панель"
+                ? msg("shell.expandSidebar")
+                : msg("shell.collapseSidebar")
             }
           >
             <span aria-hidden="true">{sidebarCollapsed ? "»" : "«"}</span>
-          </button>
+          </HintButton>
         </small>
       </aside>
       <main className="main-area">
         {page!=="home" && <div className="project-bar" ref={repositoryPopupAnchor}>
           <div className="project-heading">
-            <span className="eyebrow">
-              Мой компьютер / {page === "settings" ? "НАСТРОЙКИ" : "ПРОЕКТ"}
+            <span className="eyebrow">{msg("shell.myComputer2")}{page === "settings" ? msg("shell.settings2") : msg("shell.project")}
             </span>
-            <h1 title={page === "settings" ? "Настройки" : project?.name}>
+            <h1 title={page === "settings" ? msg("shell.settings") : project?.name}>
               {page === "settings"
-                ? "Настройки"
+                ? msg("shell.settings")
                 : (project?.name ?? "Goga Desktop")}
             </h1>
           </div>
@@ -2316,11 +2319,11 @@ export function App() {
           </div>
           {page !== "settings" && project && (
             <div className="project-actions">
-              <button
+              <HintButton
                 className="quiet"
-                aria-label="Запуски"
+                aria-label={msg("shell.runs")}
                 aria-pressed={page === "context-runs"}
-                title={`Активных запусков выбранного топика: ${contextActivity.activeCount}`}
+                hint={msg("shell.activeRunsForTheSelectedTopic", { activeCount: String(contextActivity.activeCount) })}
                 disabled={settingsBusy}
                 onClick={() =>
                   navigate(() => {
@@ -2328,16 +2331,14 @@ export function App() {
                     setPage("context-runs");
                   })
                 }
-              >
-                Запуски
-                <span
+              >{msg("shell.runs")}<span
                   className="context-active-count"
-                  aria-label={`Активных: ${contextActivity.activeCount}`}
+                  aria-label={msg("shell.active", { activeCount: String(contextActivity.activeCount) })}
                 >
                   {contextActivity.activeCount}
                 </span>
-              </button>
-              {demoStarting&&<small role="status">Запускаем демонстрацию…</small>}
+              </HintButton>
+              {demoStarting&&<small role="status">{msg("shell.startingDemonstration")}</small>}
               <ContextLaunchMenu
                 context={displayOwner}
                 runs={runs as RunWithContext[]}
@@ -2369,8 +2370,8 @@ export function App() {
         )}
         {error && (
           <TopicModal
-            title="Не удалось выполнить операцию"
-            closeLabel="Закрыть сообщение"
+            title={msg("shell.operationFailed")}
+            closeLabel={msg("shell.dismissMessage")}
             className="app-error-dialog"
             onClose={() => { setError(""); setDemoRetry(null); }}
           >
@@ -2380,7 +2381,7 @@ export function App() {
                 if (demoRetry?.intent !== notificationIntent.current || demoRetry.key !== demoKeyRef.current) return;
                 setError("");
                 enterDemo(true, "system");
-              }}>Запустить в системном браузере</button>
+              }}>{msg("shell.openInSystemBrowser")}</button>
             </div>}
           </TopicModal>
         )}
@@ -2406,7 +2407,7 @@ export function App() {
           onDetachPanel={row=>void detachPanel(row)} operations={homeOperations} onAdd={openAddMenu} onNavigate={openHomeTarget} onReconnect={typeof window.goga.restoreDashboard === "function" ? restoreFromHome : undefined}/>}
         {sessionBuffer && <SessionBuffer store={sessionStore} target={sessionBuffer} onClose={()=>setSessionBuffer(null)}/>}
         <div className="project-page" hidden={!projectPageVisible}>
-          <div className="tabs" role="tablist" aria-label="Разделы проекта">
+          <div className="tabs" role="tablist" aria-label={msg("shell.projectSections")}>
             {project && (
               <button
                 type="button"
@@ -2415,9 +2416,7 @@ export function App() {
                 disabled={settingsBusy}
                 onClick={() => {if (page!=="overview") navigate(() => setPage("overview"));}}
               >
-                <Boxes size={16} aria-hidden="true" />
-                Обзор
-              </button>
+                <Boxes size={16} aria-hidden="true" />{msg("shell.overview")}</button>
             )}
             {project && (
               <button
@@ -2427,9 +2426,7 @@ export function App() {
                 disabled={settingsBusy}
                 onClick={() => {if (page!=="project-settings") navigate(() => setPage("project-settings"));}}
               >
-                <FolderOpen size={16} aria-hidden="true" />
-                Проект
-              </button>
+                <FolderOpen size={16} aria-hidden="true" />{msg("shell.project2")}</button>
             )}
             {project && window.goga.terminal && (
               <button
@@ -2439,9 +2436,7 @@ export function App() {
                 disabled={settingsBusy}
                 onClick={() => navigate(() => setPage("terminal"))}
               >
-                <SquareTerminal size={16} aria-hidden="true" />
-                Терминал
-              </button>
+                <SquareTerminal size={16} aria-hidden="true" />{msg("shell.terminal")}</button>
             )}
             {project && (
               <button
@@ -2451,9 +2446,7 @@ export function App() {
                 disabled={settingsBusy}
                 onClick={() => navigate(() => setPage("topics"))}
               >
-                <Layers size={16} aria-hidden="true" />
-                Топики
-              </button>
+                <Layers size={16} aria-hidden="true" />{msg("shell.topics")}</button>
             )}
             {projectPageVisible&&demoShowId&&<DemoRunTab key={demoShowId} store={demonstrations} showId={demoShowId}
               selected={page==="demonstration"} disabled={settingsBusy} onSelect={()=>navigate(()=>setPage("demonstration"))} onModalChange={setDemoCloseOpen} onError={setError}/>}
@@ -2475,12 +2468,12 @@ export function App() {
                 .map(({ id, owner }) => {
                   const label =
                     kind === "build" && repeatSeeds[id]
-                      ? `Повтор сборки ${repeatSeeds[id].nonce}${owner ? ` · ${owner.topic}` : ""}`
+                      ? msg("shell.repeatBuild", { value1: String(repeatSeeds[id].nonce), value2: String(owner ? ` · ${owner.topic}` : "") })
                       : owner
-                        ? `${kind === "build" ? "Новая сборка" : "Новый конвейер"} · ${owner.topic}`
+                        ? `${kind === "build" ? msg("shell.newBuild") : msg("shell.newPipeline")} · ${owner.topic}`
                         : kind === "build"
-                          ? "Новая сборка"
-                          : "Новый запуск";
+                          ? msg("shell.newBuild")
+                          : msg("shell.newRun");
                   const visible =
                     activeDraft === id &&
                     page === (kind === "build" ? "build" : "launch");
@@ -2533,11 +2526,11 @@ export function App() {
                       >
                         {label}
                       </button>
-                      <button
+                      <HintButton
                         type="button"
                         className="close-tab"
-                        aria-label={`Закрыть вкладку ${label}`}
-                        title="Закрыть вкладку"
+                        aria-label={msg("shell.closeTab", { label: String(label) })}
+                        hint={msg("shell.closeTab2")}
                         disabled={
                           settingsBusy ||
                           (kind === "build" ? buildBusy[id] : launchBusy[id])
@@ -2547,16 +2540,16 @@ export function App() {
                         }
                       >
                         ×
-                      </button>
+                      </HintButton>
                     </div>
                   );
                 }),
             )}
             {workspacePanels.map(row=><div className="run-tab-group" key={row.id}>
               <button role="tab" aria-selected={page==="project"&&selected===row.id} className={`run-tab ${page==="project"&&selected===row.id?"active":""}`}
-                onClick={()=>navigate(()=>openAttachedPanel(row.id))}><Cable size={15}/><span>{row.name}<small>Подключён по URL</small></span></button>
-              <button className="close-tab" title="Отключить панель, не останавливая процесс" aria-label={`Отключить панель ${row.name}`}
-                onClick={()=>navigate(()=>void detachPanel(row),false,"stay")}>×</button>
+                onClick={()=>navigate(()=>openAttachedPanel(row.id))}><Cable size={15}/><span>{row.name}<small>{msg("shell.attachedViaURL")}</small></span></button>
+              <HintButton className="close-tab" hint={msg("shell.disconnectPanelWithoutStoppingTheProcess")} aria-label={msg("shell.disconnectPanel", { name: String(row.name) })}
+                onClick={()=>navigate(()=>void detachPanel(row),false,"stay")}>×</HintButton>
             </div>)}
             {runs
               .filter(
@@ -2575,9 +2568,9 @@ export function App() {
                   <div className="run-tab-group" role="presentation" key={r.id}>
                     <button
                       role="tab"
-                      aria-label={`${r.kind === "build" ? "Сборка" : r.pipeline} · ${r.topic || "Без топика"} · ${r.branch}`}
+                      aria-label={`${r.kind === "build" ? msg("shell.build") : r.pipeline} · ${r.topic || msg("shell.noTopic")} · ${r.branch}`}
                       aria-describedby={unread > 0 ? unreadId : undefined}
-                      title={`${r.kind === "build" ? "Сборка" : r.pipeline} · ${r.topic || "Без топика"} · ${r.branch}`}
+                      title={`${r.kind === "build" ? msg("shell.build") : r.pipeline} · ${r.topic || msg("shell.noTopic")} · ${r.branch}`}
                       aria-selected={selected === r.id && page === "project"}
                       tabIndex={selected === r.id || (!selected && index === 0) ? 0 : -1}
                       onKeyDown={(event) => {
@@ -2611,34 +2604,34 @@ export function App() {
                     >
                       <i className={`status-dot ${r.status}`} />
                       <span>
-                        {r.kind === "build" ? "Сборка" : r.pipeline}
+                        {r.kind === "build" ? msg("shell.build") : r.pipeline}
                         <small>
                           {r.kind === "build"
                             ? r.build?.planPath.split("/").at(-1)
-                            : r.topic || "Без топика"}
+                            : r.topic || msg("shell.noTopic")}
                         </small>
                       </span>
                       {unread > 0 && (
                         <span
                           id={unreadId}
                           className="notification-count run-notification-count"
-                          aria-label={`Непрочитанных уведомлений: ${unread}`}
-                          title={`Непрочитанных уведомлений: ${unread}`}
+                          aria-label={msg("shell.unreadNotifications", { unread: String(unread) })}
+                          title={msg("shell.unreadNotifications", { unread: String(unread) })}
                         >
                           {unread > 99 ? "99+" : unread}
                         </span>
                       )}
                     </button>
-                    <button
+                    <HintButton
                       className="close-tab"
                       data-close-run={r.id}
-                      aria-label={`Закрыть вкладку ${r.kind === "build" ? "Сборка" : r.pipeline} · ${r.topic || "Без топика"}`}
-                      title="Закрыть вкладку"
+                      aria-label={msg("shell.closeTab3", { value1: String(r.kind === "build" ? msg("shell.build") : r.pipeline), value2: String(r.topic || msg("shell.noTopic")) })}
+                      hint={msg("shell.closeTab2")}
                       disabled={closingIds.includes(r.id) || repeatingPipelines.has(r.id)}
                       onClick={() => navigate(() => void closeTab(r.id), false, "stay")}
                     >
                       ×
-                    </button>
+                    </HintButton>
                   </div>
                 );
               })}
@@ -2646,34 +2639,33 @@ export function App() {
           <div className="run-context" data-document-section={page === "project-settings" || undefined}>
             <span
               className="workspace-path"
-              aria-label="Путь выбранного контекста"
+              aria-label={msg("shell.selectedContextPath")}
               title={displayedPath.full}
             >
               {displayedPath.display}
             </span>
             <div className="document-status-outlet" ref={setDocumentStatusOutlet} />
-            {attached&&page==="project"?<div className="run-actions"><span className="run-state">{viewErrors[attached.id]?"Панель недоступна":"Подключено · только просмотр"}</span>
+            {attached&&page==="project"?<div className="run-actions"><span className="run-state">{viewErrors[attached.id]?msg("shell.panelUnavailable"):msg("shell.connectedReadOnly")}</span>
               <PanelRefreshButton busy={refreshingIds.includes(attached.id)} onClick={()=>refreshAction.current(attached.id)}/></div>:run && page === "project" ? (
               <>
                 {run.kind === "build" && (
-                  <span className="run-build-plan" title={run.build?.planPath}>
-                    Сборка <strong>{run.build?.planPath}</strong>
+                  <span className="run-build-plan" title={run.build?.planPath}>{msg("shell.build2")}<strong>{run.build?.planPath}</strong>
                   </span>
                 )}
                 <div className="run-actions">
                   {canShowDashboard ? (<>
-                    <span className="run-state run-state-live" title="Работает">Работает</span>
+                    <span className="run-state run-state-live" title={msg("shell.running")}>{msg("shell.running")}</span>
                     <RunActionButton
                       className="run-output-toggle"
-                      label="Работает — показ журнала вывода"
+                      label={msg("shell.runningShowingOutputLog")}
                       aria-pressed={!!showLogs[run.id]}
                       aria-controls={
                         showLogs[run.id] ? "run-output-journal" : undefined
                       }
                       title={
                         showLogs[run.id]
-                          ? "Скрыть журнал и вернуться к конвейеру"
-                          : "Показать журнал вывода"
+                          ? msg("shell.hideLogAndReturnToPipeline")
+                          : msg("shell.showOutputLog")
                       }
                       onClick={() =>
                         setShowLogs((values) => ({
@@ -2685,16 +2677,16 @@ export function App() {
                       <SquareTerminal size={15} aria-hidden="true" />
                     </RunActionButton>
                   </>) : (
-                    <span className={`run-state ${run.recovery === "unverified" ? "" : run.status === "running" ? "run-state-live" : ["exited", "failed", "stopped"].includes(run.status) ? "run-state-ended" : ""}`} title={run.recovery === "unverified" ? "Состояние процесса не подтверждено после перезапуска" : labels[run.status]}>
+                    <span className={`run-state ${run.recovery === "unverified" ? "" : run.status === "running" ? "run-state-live" : ["exited", "failed", "stopped"].includes(run.status) ? "run-state-ended" : ""}`} title={run.recovery === "unverified" ? msg("shell.processStatusIsUnverifiedAfterRestart") : msg(statusKeys[run.status])}>
                       {run.recovery === "unverified"
-                        ? "Состояние процесса не подтверждено после перезапуска"
-                        : labels[run.status]}
+                        ? msg("shell.processStatusIsUnverifiedAfterRestart")
+                        : msg(statusKeys[run.status])}
                     </span>
                   )}
                   {visibleRun===run.id&&window.goga.refreshDashboard&&<PanelRefreshButton busy={refreshingIds.includes(run.id)} onClick={()=>refreshAction.current(run.id)}/>}
                   {run.recovery && (
                     <RunActionButton
-                      label={reconcilingRun === run.id ? "Проверяем состояние процесса…" : "Проверить состояние процесса"}
+                      label={reconcilingRun === run.id ? msg("shell.checkingProcessStatus") : msg("shell.checkProcessStatus")}
                       aria-busy={reconcilingRun === run.id}
                       disabled={
                         !!reconcilingRun ||
@@ -2709,9 +2701,9 @@ export function App() {
                     ["exited", "failed", "stopped"].includes(run.status) &&
                     run.recovery !== "unverified" &&
                     typeof window.goga.repeatPipeline === "function" && (
-                      <RunActionButton label="Повторить запуск"
+                      <RunActionButton label={msg("shell.repeatRun")}
                         disabled={repeatingPipelines.has(run.id) || !!contextUnavailable || !!workspaceLaunchBlockReason(runs, run.projectId, run.context ?? null, "pipeline")}
-                        title={`Повторить с прежними параметрами${run.pipelineRepeat.clean ? ", с очисткой состояния" : ""}${run.pipelineRepeat.update ? ", с пересборкой" : ""}`}
+                        title={msg("shell.runAgainWithTheSameParameters", { value1: String(run.pipelineRepeat.clean ? msg("shell.resettingState") : ""), value2: String(run.pipelineRepeat.update ? msg("shell.withRebuild") : "") })}
                         onClick={() => void repeatPipeline(run)}
                       ><RotateCcw size={15} aria-hidden="true" /></RunActionButton>
                     )}
@@ -2719,7 +2711,7 @@ export function App() {
                     !(
                       run.status === "starting" || run.status === "running"
                     ) && (
-                      <RunActionButton label="Повторить сборку"
+                      <RunActionButton label={msg("shell.repeatBuild2")}
                         disabled={
                           repeatBusy ||
                           !!contextUnavailable ||
@@ -2736,7 +2728,7 @@ export function App() {
                       </RunActionButton>
                     )}
                   {(run.status === "starting" || run.status === "running") && (
-                    <RunActionButton label="Остановить"
+                    <RunActionButton label={msg("shell.stop")}
                       onClick={stop}
                       className="stop-button"
                       disabled={
@@ -2745,7 +2737,7 @@ export function App() {
                       }
                       title={
                         run.recovery === "unverified"
-                          ? "Невозможно безопасно остановить процесс без подтверждённого владения после перезапуска."
+                          ? msg("shell.cannotSafelyStopTheProcessWithoutVerifyingOwnershipAfterRestart")
                           : undefined
                       }
                     >
@@ -2755,9 +2747,8 @@ export function App() {
                 </div>
               </>
             ) : page === "context-runs" && displayOwner ? (
-              <span>
-                Рабочая копия{" "}
-                {displayOwner.state === "ready" ? "готова" : "недоступна"}
+              <span>{msg("shell.workingCopy")}{" "}
+                {displayOwner.state === "ready" ? msg("shell.ready") : msg("shell.unavailable")}
               </span>
             ) : null}
             {project && typeof window.goga.readGitWorkspace === "function" && (
@@ -2894,7 +2885,7 @@ export function App() {
           >
             {dialogVisible&&<AttachPanelDialog key={attachmentKey} scope={activePanelScope} ownerLabel={project!.name+(selectedContext?" · "+selectedContext.topic:"")} onClose={()=>setAttachDialog(null)}
               onOpen={r=>{setAttachDialog(null);if(r.kind==="managed"){const match=runsRef.current.find(v=>v.id===r.id);
-                if(match)navigate(()=>openContextRun(match));else setError("Запуск уже закрыт.");}
+                if(match)navigate(()=>openContextRun(match));else setError(msg("shell.theRunIsAlreadyClosed"));}
                 else navigate(()=>openAttachedPanel(r.panel.id))}}/>}
             {page==="demonstration"&&demoShowId&&<DemoPanel key={demoShowId} store={demonstrations} showId={demoShowId}
               onSettings={()=>navigate(()=>{settingsBack.current="demonstration";setGlobalSettingsTab("demonstrations");setPage("settings");},false,"workspace")}/>}
@@ -2927,7 +2918,7 @@ export function App() {
                         (p) =>
                           project.name +
                           " · " +
-                          (displayOwner?.topic ?? "Без топика") +
+                          (displayOwner?.topic ?? msg("shell.noTopic")) +
                           " · " +
                           p,
                       ),
@@ -2942,7 +2933,7 @@ export function App() {
                         entries.flatMap((e) => e.paths).length > 500
                           ? [
                               ...entries.flatMap((e) => e.paths).slice(0, 499),
-                              "И другие несохранённые файлы",
+                              msg("shell.andOtherUnsavedFiles"),
                             ]
                           : entries.flatMap((e) => e.paths),
                         entries.some((e) => e.busy),
@@ -2952,11 +2943,13 @@ export function App() {
                 />
               )}
             </RetainedViews>
-            {page === "project" && run?.recoveryMessage && (
-              <p className="hint" role="status">
-                {run.recoveryMessage}
-              </p>
-            )}
+            {page === "project" &&
+              run?.recovery === "unverified" &&
+              run.recoveryMessage && (
+                <p className="hint" role="status">
+                  {run.recoveryMessage}
+                </p>
+              )}
             <RetainedViews
               activeKey={
                 page === "context-runs"
@@ -3003,10 +2996,10 @@ export function App() {
                   unavailableReason={
                     (displayOwner
                       ? displayOwner.state !== "ready"
-                        ? "Рабочая копия этого топика сейчас недоступна. Здесь сохранена её история."
+                        ? msg("shell.theWorkingCopyForThisTopicIsUnavailableItsHistory")
                         : displayOwner.storageKind !== "clone" ||
                             displayOwner.compatibility === "legacy-linked"
-                          ? "История прежней linked-worktree копии. Новые запуски доступны только в автономном клоне."
+                          ? msg("shell.historyOfTheOldLinkedWorktreeNewRunsRequireA")
                           : ""
                       : "") || undefined
                   }
@@ -3018,20 +3011,17 @@ export function App() {
                 />
                 {selectedContext && (
                   <>
-                    <p className="muted">
-                      Старые записи без контекста не назначаются выбранному
-                      топику.
-                    </p>
+                    <p className="muted">{msg("shell.legacyEntriesWithoutAContextAreNotAssignedToThe")}</p>
                     <details>
-                      <summary>Технические сведения рабочей копии</summary>
+                      <summary>{msg("shell.workingCopyDetails")}</summary>
                       <dl>
-                        <dt>Состояние</dt>
+                        <dt>{msg("shell.status")}</dt>
                         <dd>{selectedContext.state}</dd>
-                        <dt>Владение</dt>
+                        <dt>{msg("shell.ownership")}</dt>
                         <dd>{selectedContext.ownership}</dd>
-                        <dt>Путь</dt>
+                        <dt>{msg("shell.path")}</dt>
                         <dd>{selectedContext.path}</dd>
-                        <dt>Контекст</dt>
+                        <dt>{msg("shell.context")}</dt>
                         <dd>{selectedContext.contextId}</dd>
                       </dl>
                     </details>
@@ -3044,27 +3034,24 @@ export function App() {
               initialPreparation &&
               initialPreparation.identity.projectId === project.id && (
                 initialPreparation.creation ? (
-                  <section className="context-stage" aria-label="Подготовка запуска">
+                  <section className="context-stage" aria-label={msg("shell.preparingRun")}>
                     {topicCreation?.state === "error" &&
                     topicCreation.identity.projectId === initialPreparation.identity.projectId &&
                     topicCreation.identity.year === initialPreparation.identity.year &&
                     topicCreation.identity.branch === initialPreparation.identity.branch ? (
                       <>
-                        <h2>Подготовка конвейера</h2>
-                        <p className="context-run-hint">
-                          Топик: {topicCreation.identity.branch}
+                        <h2>{msg("shell.preparingPipeline")}</h2>
+                        <p className="context-run-hint">{msg("shell.topic")}{topicCreation.identity.branch}
                         </p>
                         <p className="error" role="alert">{topicCreation.message}</p>
                         <button
                           type="button"
                           className="primary"
                           onClick={topicCreation.retry}
-                        >
-                          Повторить подготовку
-                        </button>
+                        >{msg("shell.retryPreparation")}</button>
                       </>
                     ) : (
-                      <LoadingState label="Подготовка запуска" />
+                      <LoadingState label={msg("shell.preparingRun")} />
                     )}
                   </section>
                 ) : (
@@ -3116,7 +3103,7 @@ export function App() {
             {page === "project-settings" && contextUnavailable && (
               <section
                 className="context-stage"
-                aria-label="Контекст недоступен"
+                aria-label={msg("shell.contextUnavailable")}
               >
                 <p role="status">{contextUnavailable}</p>
               </section>
@@ -3354,7 +3341,7 @@ export function App() {
                             record.deletedAt
                           )
                             throw Error(
-                              "Созданная рабочая копия изменилась. Выберите топик заново.",
+                              msg("shell.theNewWorkingCopyHasChangedSelectTheTopicAgain"),
                             );
                           createdOwner = record;
                           setKnownContexts((values) => [
@@ -3453,10 +3440,10 @@ export function App() {
               retain={retainProjectView}
             >
               {project && (topicRepository === "checking" ?
-                <LoadingState label="Проверяем Git в проекте" /> :
+                <LoadingState label={msg("shell.checkingProjectGitStatus")} /> :
                 topicRepository === "missing" ?
-                <section className="topics-workspace project-content" aria-label="Топики проекта">
-                  <div className="topics-heading"><h2>Топики</h2></div>
+                <section className="topics-workspace project-content" aria-label={msg("shell.projectTopics")}>
+                  <div className="topics-heading"><h2>{msg("shell.topics")}</h2></div>
                   <TopicRepositoryNotice />
                 </section> :
                 <TopicsWorkspace
@@ -3512,43 +3499,34 @@ export function App() {
                 page === "build")) ? null : !project ? (
               <div className="empty-state">
                 <div className="empty-symbol">⌘</div>
-                <h2>Добавьте локальный проект</h2>
-                <p>
-                  Откройте существующую папку, создайте пустой проект
-                  или клонируйте Git-репозиторий.
-                </p>
+                <h2>{msg("shell.addALocalProject")}</h2>
+                <p>{msg("shell.openAnExistingFolderCreateAnEmptyProjectOrClone")}</p>
                 <div className="creation-welcome-actions">
-                  <button onClick={() => navigate(() => void add())}>Открыть существующий…</button>
-                  <button onClick={() => navigate(() => setProjectCreationOpen(true))} className="primary">Создать новый…</button>
+                  <button onClick={() => navigate(() => void add())}>{msg("shell.openExisting")}</button>
+                  <button onClick={() => navigate(() => setProjectCreationOpen(true))} className="primary">{msg("shell.createNew")}</button>
                 </div>
-                <small>Для запуска нужны установленные Goga и Docker.</small>
+                <small>{msg("shell.installGogaAndDockerToStartARun")}</small>
               </div>
             ) : page==="project"&&attached ? (
-              viewErrors[attached.id]?<section className="context-stage"><h2>Панель конвейера недоступна</h2><p className="error" role="alert">{viewErrors[attached.id]}</p>
-              <button disabled={refreshingIds.includes(attached.id)} onClick={()=>refreshAction.current(attached.id)}>Восстановить панель</button></section>
-              : <div className="afm-placeholder" aria-label="Подключённая панель конвейера">{refreshingIds.includes(attached.id)&&<p role="status">Обновляем страницу панели…</p>}</div>
+              viewErrors[attached.id]?<section className="context-stage"><h2>{msg("shell.pipelinePanelUnavailable")}</h2><p className="error" role="alert">{viewErrors[attached.id]}</p>
+              <button disabled={refreshingIds.includes(attached.id)} onClick={()=>refreshAction.current(attached.id)}>{msg("shell.reconnectPanel")}</button></section>
+              : <div className="afm-placeholder" aria-label={msg("shell.attachedPipelinePanel")}>{refreshingIds.includes(attached.id)&&<p role="status">{msg("shell.refreshingPanel")}</p>}</div>
             ) : page === "context-runs" ||
               page === "context-preparation" || page==="demonstration" ? null : !run ? (
               <div className="empty-state">
                 <div className="empty-symbol">↗</div>
-                <h2>Откройте новый запуск</h2>
-                <p>
-                  Выберите конвейер, топик и параметры запуска.
-                  <br />
-                  Здесь откроется панель конвейера.
-                </p>
+                <h2>{msg("shell.startANewRun")}</h2>
+                <p>{msg("shell.chooseAPipelineTopicAndRunParameters")}<br />{msg("shell.thePipelinePanelWillOpenHere")}</p>
                 <button
                   className="primary"
                   disabled={!!launchUnavailable || settingsBusy}
                   onClick={() => navigate(() => prepareFromHeader("pipeline"),false,"pipeline")}
-                >
-                  Создать запуск
-                </button>
+                >{msg("shell.createRun")}</button>
               </div>
             ) : !canShowDashboard || showLogs[run.id] ? null : (
               <div
                 className="afm-placeholder"
-                aria-label="Встроенная панель конвейера"
+                aria-label={msg("shell.embeddedPipelinePanel")}
               />
             )}
             <RetainedViews
@@ -3568,7 +3546,7 @@ export function App() {
                 runs.some((run) => run.id === JSON.parse(key)[2])
               }
             >
-              {run && <LoadingBoundary pending={repeatingPipelines.has(run.id)} label="Подготавливаем повторный запуск…"><RunOutput key={run.id} run={run} viewError={viewErrors[run.id]} onRestore={typeof window.goga.restoreDashboard === "function" ? () => restorePanel(run.id) : undefined} /></LoadingBoundary>}
+              {run && <LoadingBoundary pending={repeatingPipelines.has(run.id)} label={msg("shell.preparingToRepeatTheRun")}><RunOutput key={run.id} run={run} viewError={viewErrors[run.id]} onRestore={typeof window.goga.restoreDashboard === "function" ? () => restorePanel(run.id) : undefined} /></LoadingBoundary>}
             </RetainedViews>
           </div>
         </div>
@@ -3621,7 +3599,7 @@ export function App() {
                 typeof window.goga.resolveTopicContext !== "function"
               ) {
                 setError(
-                  "API рабочих копий недоступен. Подготовка запуска из основной папки проекта не выполняется.",
+                  msg("shell.theWorkingCopyAPIIsUnavailableNoRunWillBe"),
                 );
                 return;
               }
@@ -3666,7 +3644,7 @@ export function App() {
           setProjectCreationOpen(false);setCreatedProject(created);
         }} />}
       {projectCreationNotice && <div className="project-creation-notice" role="status">
-        <span>{projectCreationNotice}</span><button aria-label="Закрыть сообщение о создании" onClick={() => setProjectCreationNotice("")}>×</button>
+        <span>{projectCreationNotice}</span><button aria-label={msg("shell.dismissCreationMessage")} onClick={() => setProjectCreationNotice("")}>×</button>
       </div>}
       {projectRemoval && <ProjectRemovalDialog project={projectRemoval.project} busy={projectRemoval.busy}
         error={projectRemoval.error} dirty={projectOverviewStates(projectRemoval.project.id).flatMap(state => state.paths)}
@@ -3737,6 +3715,7 @@ function InitialContextPreparation({
   onPrepared: (record: WorktreeRecord) => void;
   onCancel: () => void;
 }) {
+  useLocale();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const readinessRead = useReadScope(JSON.stringify(identity));
@@ -3754,18 +3733,18 @@ function InitialContextPreparation({
   const ambiguous = !explicitOwner && discovered.ambiguous;
   const restriction =
     inventoryError ||
-    (ambiguous ? ambiguousContextReason : "") ||
+    (ambiguous ? ambiguousContextReason() : "") ||
     (existing &&
       (existing.state !== "ready"
-        ? "Рабочая копия недоступна. История запусков сохранена. Выберите другую проверенную копию в шапке."
+        ? msg("shell.theWorkingCopyIsUnavailableRunHistoryHasBeenKept2")
         : existing.storageKind !== "clone" ||
             existing.compatibility === "legacy-linked"
-          ? "Прежняя linked-worktree копия доступна только для просмотра. Для запуска требуется автономный клон."
+          ? msg("shell.theOldLinkedWorktreeIsReadOnlyUseAStandalone")
           : existing.ownership !== "managed" ||
               existing.preparation ||
               existing.deletedAt ||
               !topicContextRefSchema.safeParse(contextRef(existing)).success
-            ? "Рабочая копия не готова к запуску. Выберите проверенный автономный клон."
+            ? msg("shell.theWorkingCopyIsNotReadyChooseAVerifiedStandalone")
             : ""));
   useEffect(() => {
     // This component exists only for an explicit captured preparation intent.
@@ -3814,7 +3793,7 @@ function InitialContextPreparation({
             return record;
           if (!topicContextRefSchema.safeParse(contextRef(record)).success)
             throw Error(
-              "Рабочая копия не готова к запуску. Получена некорректная ссылка владельца.",
+              msg("shell.theWorkingCopyIsNotReadyTheOwnerReferenceIs"),
             );
           const resolved = await window.goga.resolveTopicContext(
             contextRef(record),
@@ -3824,7 +3803,7 @@ function InitialContextPreparation({
             resolved.revision !== record.revision
           )
             throw Error(
-              "Полученная рабочая копия не соответствует выбранному топику. Выберите копию заново.",
+              msg("shell.theWorkingCopyDoesNotMatchTheSelectedTopicSelect"),
             );
           return resolved;
         })
@@ -3858,7 +3837,7 @@ function InitialContextPreparation({
             ready.revision !== record.revision
           )
             throw Error(
-              "Ответ проверки готовности не соответствует выбранной рабочей копии.",
+              msg("shell.theReadinessResponseDoesNotMatchTheSelectedWorkingCopy"),
             );
           return ready;
         });
@@ -3869,7 +3848,7 @@ function InitialContextPreparation({
             () =>
               reject(
                 Error(
-                  "Подготовка заняла больше 300 с. Она ещё может завершиться. Повтор сначала дождётся результата, не создавая вторую копию.",
+                  msg("shell.preparationHasTakenMoreThan300SecondsAndMayStill"),
                 ),
               ),
             TOPIC_CONTEXT_PREPARE_TIMEOUT_MS,
@@ -3887,7 +3866,7 @@ function InitialContextPreparation({
             record.revision !== existing.revision))
       )
         throw Error(
-          "Полученная рабочая копия не соответствует выбранному топику. Выберите копию заново.",
+          msg("shell.theWorkingCopyDoesNotMatchTheSelectedTopicSelect"),
         );
       if (
         record.state !== "ready" ||
@@ -3899,7 +3878,7 @@ function InitialContextPreparation({
         !topicContextRefSchema.safeParse(contextRef(record)).success
       )
         throw Error(
-          "Рабочая копия не готова к запуску. Основная папка проекта не будет использована вместо неё.",
+          msg("shell.theWorkingCopyIsNotReadyTheOriginalProjectFolder"),
         );
       if (flights.get(key) === pending) flights.delete(key);
       onPrepared(record);
@@ -3915,15 +3894,14 @@ function InitialContextPreparation({
   // Reads and the physical preparation already have bounded deadlines above.
   if (!error && !restriction && (busy || loading || !attempted.current))
     return (
-      <section className="context-stage" aria-label="Подготовка запуска">
-        <LoadingState label="Подготовка запуска" />
+      <section className="context-stage" aria-label={msg("shell.preparingRun")}>
+        <LoadingState label={msg("shell.preparingRun")} />
       </section>
     );
   return (
-    <section className="context-stage" aria-label="Подготовка рабочей копии">
-      <h2>{kind === "build" ? "Подготовка сборки" : "Подготовка конвейера"}</h2>
-      <p className="context-run-hint">
-        Топик: {identity.topic} · {identity.year} · {identity.branch}
+    <section className="context-stage" aria-label={msg("shell.preparingWorkingCopy")}>
+      <h2>{kind === "build" ? msg("shell.preparingBuild") : msg("shell.preparingPipeline")}</h2>
+      <p className="context-run-hint">{msg("shell.topic")}{identity.topic} · {identity.year} · {identity.branch}
       </p>
       {restriction && (
         <p className="context-run-hint" role="alert">
@@ -3931,9 +3909,7 @@ function InitialContextPreparation({
         </p>
       )}
       {inventoryError && (
-        <button type="button" onClick={onRetryInventory}>
-          Повторить проверку рабочих копий
-        </button>
+        <button type="button" onClick={onRetryInventory}>{msg("shell.checkWorkingCopiesAgain")}</button>
       )}
       {error && (
         <p className="error" role="alert">
@@ -3946,13 +3922,9 @@ function InitialContextPreparation({
           className="primary"
           disabled={busy || loading || Boolean(restriction)}
           onClick={() => void prepare()}
-        >
-          Повторить подготовку
-        </button>
+        >{msg("shell.retryPreparation")}</button>
       )}
-      <button type="button" onClick={onCancel}>
-        К запускам топика
-      </button>
+      <button type="button" onClick={onCancel}>{msg("shell.backToTopicRuns")}</button>
     </section>
   );
 }

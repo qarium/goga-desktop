@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 /** Preserve facts separately: unchecked locks are not known retained or absent. */
 interface GitDiagnostics {
   status: string;
@@ -22,21 +23,21 @@ export const hasGitDiagnostics = (value: GitDiagnostics) =>
 export function formatGitDiagnostics(value: GitDiagnostics): string {
   return [
     value.message,
-    value.commit && `Коммит: ${value.commit}`,
+    value.commit && msg("git.commit", { commit: String(value.commit) }),
     value.log,
     value.nativeWarning &&
-      "Git сообщил предупреждение; проверьте журнал и состояние рабочей копии.",
-    value.recoveryPath && `Материалы восстановления: ${value.recoveryPath}`,
+      msg("git.gitReportedAWarningCheckTheLogAndWorkingCopy"),
+    value.recoveryPath && msg("git.recoveryFiles", { recoveryPath: String(value.recoveryPath) }),
     value.recoveryUnverified &&
-      "Наличие материалов восстановления не проверено; путь указан по последним известным данным.",
+      msg("git.recoveryFilesWereNotVerifiedThePathIsBasedOn"),
     value.lockRetained &&
-      "Блокировка сохранена; не удаляйте её без проверки состояния Git.",
+      msg("git.theLockWasRetainedDoNotRemoveItWithoutChecking"),
     value.retainedLocks?.length &&
-      `Сохранённые блокировки: ${value.retainedLocks.join(", ")}`,
+      msg("git.retainedLocks", { value1: String(value.retainedLocks.join(", ")) }),
     value.uncheckedLocks?.length &&
-      `Непроверенные блокировки: ${value.uncheckedLocks.join(", ")}. Их наличие и владелец не подтверждены.`,
+      msg("git.unverifiedLocksTheirPresenceAndOwnershipAreUnconfirmed", { value1: String(value.uncheckedLocks.join(", ")) }),
     value.status === "uncertain" &&
-      "Результат не определён. Проверьте состояние Git; ответ не подтверждает отсутствие изменений.",
+      msg("git.outcomeUnknownCheckTheGitStateTheResponseDoesNot"),
   ]
     .filter(Boolean)
     .join("\n\n");

@@ -1,3 +1,5 @@
+import { DOCUMENT_SAVE_CONFLICT_PREFIX } from "../shared/project-documents";
+import { t as tr } from "../shared/i18n";
 /** Strip only Electron's known transport wrapper, never a meaningful host reason. */
 export function preparationErrorMessage(error: unknown): string {
   const text = error instanceof Error ? error.message : String(error);
@@ -10,7 +12,10 @@ export function preparationErrorMessage(error: unknown): string {
 /** Save failures never clear source text, its baseline or editor history. */
 export function documentSaveErrorMessage(error: unknown): string {
   const reason = preparationErrorMessage(error);
-  return reason.startsWith("Конфликт сохранения:")
-    ? `${reason} Ваш черновик остался в редакторе.`
-    : reason;
+  // The marker survives Electron's remote Error serialization. Preserve older
+  // messages from journals or mixed-version hosts without rewriting their text.
+  if (reason.startsWith(DOCUMENT_SAVE_CONFLICT_PREFIX)) {
+    return tr("topics.reasonYourDraftIsStillInTheEditor", { reason: tr("host.saveConflictTheFileChangedAfterItWasOpenedThe") });
+  }
+  return reason;
 }

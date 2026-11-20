@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import { createHash } from "node:crypto";
 import * as fs from "node:fs/promises";
 import path from "node:path";
@@ -51,7 +52,7 @@ export function createNativeGitCapability(options: {
           throw error;
       }
     }
-    throw Error("Штатный Git не найден в PATH приложения.");
+    throw Error(gitMessage("gitHost.nativeGitWasNotFoundOnTheAppS"));
   };
   return {
     journal: options.journal,
@@ -98,7 +99,7 @@ export async function nativeGitGuard(
 ) {
   const capability = options.capability;
   if (!capability)
-    throw Error("Защищённый исполнитель штатного Git недоступен.");
+    throw Error(gitMessage("gitHost.theProtectedNativeGitExecutorIsUnavailable"));
   const client = await capability.client(options.configuration);
   const capture = () =>
     captureNativeGitState({

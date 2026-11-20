@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import { createHash } from "node:crypto";
 import type { NativeGitClient } from "./git-native-client";
 import type { NativeGitState } from "./git-native-state";
@@ -16,7 +17,7 @@ export async function captureNativeIndexRecovery(
     options?.flags !== undefined &&
     (!Buffer.isBuffer(options.flags) || options.flags.length > limit)
   )
-    throw Error("Некорректные признаки индекса Git.");
+    throw Error(gitMessage("gitHost.invalidGitIndexFlags"));
   const read = async (
     args: string[],
     maxOutputBytes = limit,
@@ -29,9 +30,9 @@ export async function captureNativeIndexRecovery(
       ...(stdin ? { stdin } : {}),
     });
     if (r.exitCode !== 0 || !r.processSettled || r.signal !== null)
-      throw Error("Не удалось сохранить подготовленное содержимое Git.");
+      throw Error(gitMessage("gitHost.couldNotPreserveStagedGitContent"));
     if (r.stdout.length > maxOutputBytes)
-      throw Error("Превышен предел чтения Git.");
+      throw Error(gitMessage("gitHost.gitReadLimitExceeded"));
     return r.stdout;
   };
   const selected = new Set(paths),
@@ -43,10 +44,10 @@ export async function captureNativeIndexRecovery(
     const m = /^(\d{6}) ([a-f0-9]{40}|[a-f0-9]{64}) [0-3]\t([\s\S]+)$/.exec(
       row,
     );
-    if (!m) throw Error("Некорректный публичный индекс Git.");
+    if (!m) throw Error(gitMessage("gitHost.invalidPublicGitIndex"));
     if (!selected.has(m[3])) continue;
     if (!["100644", "100755", "120000"].includes(m[1]))
-      throw Error("Этот тип записи Git нельзя включить в защитный снимок.");
+      throw Error(gitMessage("gitHost.thisGitEntryTypeCannotBeIncludedInThe"));
     ids.add(m[2]);
   }
   const flags =
@@ -62,9 +63,9 @@ export async function captureNativeIndexRecovery(
         !result.processSettled ||
         result.signal !== null
       )
-        throw Error("Не удалось сохранить признаки индекса Git.");
+        throw Error(gitMessage("gitHost.couldNotRecordTheGitIndexFlags"));
       if (!Buffer.isBuffer(result.stdout) || result.stdout.length > limit)
-        throw Error("Некорректные признаки индекса Git.");
+        throw Error(gitMessage("gitHost.invalidGitIndexFlags"));
       return result.stdout;
     })());
   const objects: NonNullable<NativeGitState["indexRecovery"]>["objects"] = [];
@@ -77,7 +78,7 @@ export async function captureNativeIndexRecovery(
         .update(data)
         .digest("hex") !== oid
     )
-      throw Error("Содержимое объекта Git не соответствует индексу.");
+      throw Error(gitMessage("gitHost.gitObjectContentsDoNotMatchTheIndex"));
     objects.push({
       oid,
       data: data.toString("base64"),
@@ -91,7 +92,7 @@ export async function captureNativeIndexRecovery(
       size > limit ||
       (total += size) > 32 * 1024 * 1024
     )
-      throw Error("Превышен предел защитного снимка Git.");
+      throw Error(gitMessage("gitHost.gitSnapshotLimitExceeded"));
     return size;
   };
   if (!options?.freshBatch) {
@@ -99,7 +100,7 @@ export async function captureNativeIndexRecovery(
     for (const oid of sorted) {
       const sizeText = (await read(["-s", oid], 128)).toString("ascii");
       if (!/^(?:0|[1-9][0-9]*)\n$/.test(sizeText))
-        throw Error("Некорректный размер объекта Git.");
+        throw Error(gitMessage("gitHost.invalidGitObjectSize"));
       const size = boundedSize(Number(sizeText));
       save(oid, size, await read(["blob", oid]));
     }
@@ -115,13 +116,13 @@ export async function captureNativeIndexRecovery(
       .decode(await read(["--batch-check"], limit, request(sorted)))
       .split("\n");
     if (declarations.length !== sorted.length + 1 || declarations.pop() !== "")
-      throw Error("Некорректный ответ объектов Git.");
+      throw Error(gitMessage("gitHost.invalidGitObjectResponse"));
     const entries = sorted.map((oid, i) => {
       const match = /^([a-f0-9]{40}|[a-f0-9]{64}) blob (0|[1-9][0-9]*)$/.exec(
         declarations[i],
       );
       if (!match || match[1] !== oid)
-        throw Error("Некорректный ответ объектов Git.");
+        throw Error(gitMessage("gitHost.invalidGitObjectResponse"));
       const size = boundedSize(Number(match[2]));
       const header = Buffer.from(`${oid} blob ${size}\n`);
       return { oid, size, header, framed: header.length + size + 1 };
@@ -148,7 +149,7 @@ export async function readNativeGitBlobBodies(
   const limit = 8 * 1024 * 1024;
   let total = 0;
   const seen = new Set<string>();
-  if (expected.length > 12288) throw Error("Слишком много объектов Git.");
+  if (expected.length > 12288) throw Error(gitMessage("gitHost.tooManyGitObjects"));
   const entries = expected
     .map((entry) => {
       if (
@@ -161,7 +162,7 @@ export async function readNativeGitBlobBodies(
         (total += entry.size) > 32 * 1024 * 1024 ||
         seen.has(entry.oid)
       )
-        throw Error("Некорректное ожидаемое объявление объекта Git.");
+        throw Error(gitMessage("gitHost.invalidExpectedGitObjectHeader"));
       seen.add(entry.oid);
       const header = Buffer.from(`${entry.oid} blob ${entry.size}\n`);
       return { ...entry, header, framed: header.length + entry.size + 1 };
@@ -185,7 +186,7 @@ export async function readNativeGitBlobBodies(
         !Buffer.isBuffer(result.stdout) ||
         result.stdout.length > (max ?? limit)
       )
-        throw Error("Не удалось проверить текущее содержимое Git.");
+        throw Error(gitMessage("gitHost.couldNotVerifyCurrentGitContents"));
       return result.stdout;
     },
     (oid, size, body) => {
@@ -198,7 +199,7 @@ export async function readNativeGitBlobBodies(
           .digest("hex") !== oid ||
         sha256 !== checksums.get(oid)
       )
-        throw Error("Содержимое объекта Git не соответствует ожиданию.");
+        throw Error(gitMessage("gitHost.gitObjectContentsDifferFromTheExpectedContents"));
       observed.push({ oid, type: "blob", size, sha256 });
     },
   );
@@ -244,12 +245,12 @@ async function readBlobFrames(
         end >= response.length ||
         response[end] !== 10
       )
-        throw Error("Некорректный ответ объектов Git.");
+        throw Error(gitMessage("gitHost.invalidGitObjectResponse"));
       save(entry.oid, entry.size, response.subarray(start, end));
       offset = end + 1;
     }
     if (offset !== response.length)
-      throw Error("Некорректный ответ объектов Git.");
+      throw Error(gitMessage("gitHost.invalidGitObjectResponse"));
     chunk = [];
     framed = 0;
   };

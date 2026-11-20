@@ -1,3 +1,4 @@
+import { t } from "./i18n";
 import {
   isReservedProjectEnvKey,
   isBlockedTerminalChildEnvKey,
@@ -53,16 +54,16 @@ const reserved = new Set([
 ]);
 export function parseTerminalPresetEnv(input: unknown): TerminalPresetEnv {
   if (!Array.isArray(input) || input.length > 256)
-    throw Error("Допустимо не более 256 переменных.");
+    throw Error(t("hostTerminal.environmentCount"));
   let size = 0;
   const keys = new Set<string>();
   return Array.from(input, (row) => {
     const p = rowSchema.safeParse(row);
-    if (!p.success) throw Error("Укажите имя и текстовое значение переменной.");
+    if (!p.success) throw Error(t("hostTerminal.environmentFields"));
     const { key, value } = p.data;
     if (!/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(key))
       throw Error(
-        "Имя переменной: до 128 символов, латинские буквы, цифры или подчёркивание; первый символ — не цифра.",
+        t("hostTerminal.environmentKey"),
       );
     if (
       isReservedProjectEnvKey(key) ||
@@ -70,13 +71,13 @@ export function parseTerminalPresetEnv(input: unknown): TerminalPresetEnv {
       reserved.has(key) ||
       key.startsWith("_goga_")
     )
-      throw Error("Это имя переменной зарезервировано системой или оболочкой.");
+      throw Error(t("hostTerminal.reservedVariable"));
     if (keys.has(key))
-      throw Error("Имена переменных в одном пресете не должны повторяться.");
+      throw Error(t("hostTerminal.duplicateVariable"));
     assertEnvironmentValue(value);
     size += bytes(key) + bytes(value) + 2;
     if (size > MAX_TERMINAL_PRESET_ENV_BYTES)
-      throw Error("Суммарный размер окружения пресета превышает 128 КиБ.");
+      throw Error(t("hostTerminal.environmentSize"));
     keys.add(key);
     return { key, value };
   });
@@ -101,11 +102,11 @@ export const parseTerminalPresetDraft = (
     .object({ name: z.string(), command: z.string(), env: z.unknown() })
     .strict()
     .safeParse(input);
-  if (!p.success) throw Error("Недопустимый формат пресета терминала.");
+  if (!p.success) throw Error(t("hostTerminal.invalidPresetDraft"));
   const name = terminalPresetNameSchema.safeParse(p.data.name);
   if (!name.success)
     throw Error(
-      "Введите название вкладки: до 120 символов без управляющих знаков.",
+      t("hostTerminal.tabNameLimit"),
     );
   const command = p.data.command;
   if (
@@ -114,12 +115,12 @@ export const parseTerminalPresetDraft = (
     bytes(command) > 8192
   )
     throw Error(
-      "Введите одну команду, не более 8 КиБ, без переводов строк и управляющих знаков.",
+      t("hostTerminal.oneCommand"),
     );
   try {
     assertEnvironmentValue(command);
   } catch {
-    throw Error("Некорректная кодировка команды.");
+    throw Error(t("hostTerminal.commandEncoding"));
   }
   return { name: name.data, command, env: parseTerminalPresetEnv(p.data.env) };
 };
@@ -129,7 +130,7 @@ export const terminalPresetDraftSchema = z.unknown().transform((input, ctx) => {
   } catch (e) {
     ctx.addIssue({
       code: "custom",
-      message: e instanceof Error ? e.message : "Недопустимый формат пресета.",
+      message: e instanceof Error ? e.message : t("hostTerminal.invalidPreset"),
     });
     return z.NEVER;
   }

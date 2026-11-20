@@ -93,3 +93,6 @@
     grid-column: 1/-1;
   }
 }
+
+.workspace-settings-sections { display: grid; gap: 28px; align-content: start; }
+.interface-language-settings select { min-width: min(14rem, 100%); }

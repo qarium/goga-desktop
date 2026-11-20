@@ -93,3 +93,25 @@ it("preserves literal special status names instead of treating them as object pr
   expect(loaded.statusCategory["__proto__"]).toBe("working");
   expect(loaded.statusCategory.constructor).toBe("completed");
 });
+
+it("migrates only matching v1 built-in labels and never rewrites the saved layout on read", async () => {
+  const { getLocale, setLocale } = await import("../src/shared/i18n");
+  const { projectTopicsBoard } = await import("../src/renderer/topics-board-model");
+  const language = getLocale(), s = storage(), key = boardPreferencesKey("test");
+  const raw = JSON.stringify({
+    schemaVersion: 1, view: "board", columns: [
+      { id: "completed", name: "Завершено" },
+      { id: "planned", name: "Наш план" },
+      { id: "external", name: "В работе" },
+    ], statusCategory: { done: "completed", todo: "planned" }
+  });
+  s.setItem(key, raw);
+  try {
+    setLocale("en");
+    const { value } = readBoardPreferences(s, "test");
+    expect(projectTopicsBoard([], [], value).columns.map(c => c.name))
+      .toEqual(["Completed", "Наш план", "В работе"]);
+    expect(value.statusCategory.done).toBe("completed");
+    expect(s.getItem(key)).toBe(raw);
+  } finally { setLocale(language); }
+});

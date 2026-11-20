@@ -1,3 +1,5 @@
+import type { MessageKey } from "../../shared/locale-packs.generated";
+import { subscribeLocale, t as msg } from "../../shared/i18n";
 import {
   EditorView,
   keymap,
@@ -20,6 +22,8 @@ import {
   searchKeymap,
 } from "@codemirror/search";
 
+let nextSearchHint = 0;
+
 /** Only the panel is application UI. Matching, selection and edits are CodeMirror commands. */
 class OverviewSearchPanel implements Panel {
   dom = document.createElement("div");
@@ -30,33 +34,88 @@ class OverviewSearchPanel implements Panel {
   private replaceRow = document.createElement("div");
   private replaceButtons: HTMLButtonElement[] = [];
   private replaceMode = false;
+  private refreshLabels: (() => void)[] = [];
+  private stopLocale?: () => void;
+  // Keep the description and its control in the same editor shadow root.
+  // The browser's anchored popover follows scrolling without editor updates.
+  private hint = document.createElement("span");
+  private hinted?: HTMLButtonElement;
+  private dismissHint = (event?: KeyboardEvent) => {
+    if (!this.hinted || (event && event.key !== "Escape")) return;
+    this.hinted.removeAttribute("aria-describedby");
+    this.hinted.style.removeProperty("anchor-name");
+    this.hinted = undefined;
+    if (this.hint.isConnected) this.hint.hidePopover?.();
+    this.hint.hidden = true;
+    this.dom.ownerDocument.removeEventListener("keydown", this.dismissHint, true);
+  };
+  private bindHint(node: HTMLButtonElement) {
+    const show = () => {
+      if (this.hinted === node) return;
+      this.dismissHint();
+      this.hinted = node;
+      node.style.setProperty("anchor-name", `--${this.hint.id}`);
+      node.setAttribute("aria-describedby", this.hint.id);
+      this.hint.textContent = node.getAttribute("aria-label");
+      this.hint.hidden = false;
+      this.hint.showPopover?.();
+      this.dom.ownerDocument.addEventListener("keydown", this.dismissHint, true);
+    };
+    const close = () => { if (this.hinted === node) this.dismissHint(); };
+    node.addEventListener("mouseenter", show);
+    node.addEventListener("focus", show);
+    node.addEventListener("mouseleave", close);
+    node.addEventListener("blur", close);
+    node.addEventListener("click", close);
+  }
+  private label(key: MessageKey, apply: (text: string) => void) {
+    const refresh = () => apply(msg(key));
+    this.refreshLabels.push(refresh);
+    refresh();
+  }
   constructor(private view: EditorView) {
+    this.hint.className = "cm-overview-icon-hint";
+    this.hint.id = `overview-search-hint-${++nextSearchHint}`;
+    this.hint.style.setProperty("position-anchor", `--${this.hint.id}`);
+    this.hint.setAttribute("role", "tooltip");
+    if (typeof this.hint.showPopover === "function") this.hint.popover = "manual";
+    this.hint.hidden = true;
     this.dom.className = "cm-overview-search";
     this.dom.setAttribute("role", "search");
-    this.dom.setAttribute("aria-label", "Поиск в файле");
+    this.label("overview.findInFile2", text => this.dom.setAttribute("aria-label", text));
     const row = document.createElement("div");
-    const input = (node: HTMLInputElement, name: string, label: string) => {
+    const input = (node: HTMLInputElement, name: string, label: MessageKey) => {
       node.name = name;
-      node.placeholder = label;
-      node.setAttribute("aria-label", label);
+      this.label(label, text => {
+        node.placeholder = text;
+        node.setAttribute("aria-label", text);
+      });
       node.addEventListener("input", () => this.commit());
       return node;
     };
     this.find.setAttribute("main-field", "true");
     const field = document.createElement("div");
     field.className = "cm-overview-search-field";
-    field.append(input(this.find, "search", "Найти"));
+    field.append(input(this.find, "search", "overview.find"));
     row.append(field);
     const button = (
       parent: HTMLElement,
       name: string,
-      label: string,
+      label: MessageKey,
       command: (view: EditorView) => boolean,
+      isIcon = false,
     ) => {
       const node = document.createElement("button");
       node.type = "button";
       node.name = name;
-      node.textContent = label;
+      this.label(label, text => {
+        if (isIcon) {
+          node.setAttribute("aria-label", text);
+          if (this.hinted === node) this.hint.textContent = text;
+        } else {
+          node.textContent = text;
+        }
+      });
       node.addEventListener("click", () => command(this.view));
       parent.append(node);
       return node;
@@ -64,13 +123,12 @@ class OverviewSearchPanel implements Panel {
     const iconButton = (
       parent: HTMLElement,
       name: string,
-      label: string,
+      label: MessageKey,
       command: (view: EditorView) => boolean,
     ) => {
-      const node = button(parent, name, label, command);
+      const node = button(parent, name, label, command, true);
+      this.bindHint(node);
       node.className = `cm-overview-search-${name}`;
-      node.setAttribute("aria-label", label);
-      node.title = label;
       const icon = document.createElementNS(
         "http://www.w3.org/2000/svg",
         "svg",
@@ -93,21 +151,21 @@ class OverviewSearchPanel implements Panel {
       node.replaceChildren(icon);
       return node;
     };
-    this.clear = iconButton(field, "clear", "Очистить поиск", () => {
+    this.clear = iconButton(field, "clear", "overview.clearSearch", () => {
       this.find.value = "";
       this.commit();
       this.find.focus();
       return true;
     });
-    button(row, "prev", "Назад", findPrevious);
-    button(row, "next", "Далее", findNext);
-    iconButton(row, "close", "Закрыть поиск", closeSearchPanel);
-    this.replaceRow.append(input(this.replacement, "replace", "Заменить на"));
+    button(row, "prev", "overview.previous", findPrevious);
+    button(row, "next", "overview.next", findNext);
+    iconButton(row, "close", "overview.closeSearch", closeSearchPanel);
+    this.replaceRow.append(input(this.replacement, "replace", "overview.replaceWith"));
     this.replaceButtons.push(
-      button(this.replaceRow, "replace", "Заменить", replaceNext),
-      button(this.replaceRow, "replaceAll", "Заменить всё", replaceAll),
+      button(this.replaceRow, "replace", "overview.replace", replaceNext),
+      button(this.replaceRow, "replaceAll", "overview.replaceAll", replaceAll),
     );
-    this.dom.append(row, this.replaceRow);
+    this.dom.append(row, this.replaceRow, this.hint);
     this.dom.addEventListener("keydown", (event) => {
       if (runScopeHandlers(this.view, event, "search-panel")) {
         event.preventDefault();
@@ -153,6 +211,7 @@ class OverviewSearchPanel implements Panel {
     if (this.replacement.value !== query.replace)
       this.replacement.value = query.replace;
     this.clear.hidden = query.search.length === 0;
+    if (this.clear.hidden && this.hinted === this.clear) this.dismissHint();
     this.replaceRow.hidden = !this.replaceMode;
     this.replacement.disabled = this.view.state.readOnly;
     for (const node of this.replaceButtons)
@@ -162,8 +221,10 @@ class OverviewSearchPanel implements Panel {
     this.sync();
   }
   mount() {
+    this.stopLocale = subscribeLocale(() => this.refreshLabels.forEach(refresh => refresh()));
     this.find.focus();
   }
+  destroy() { this.dismissHint(); this.stopLocale?.(); }
 }
 
 export function openOverviewSearch(view: EditorView, replace = false) {
@@ -220,6 +281,14 @@ export const overviewSearch = [
       color: "#d7e2f2",
       fontFamily: "system-ui, sans-serif",
       fontSize: "12px",
+    },
+    ".cm-overview-icon-hint": {
+      position: "fixed", inset: "auto", positionArea: "top", positionTryFallbacks: "flip-block",
+      positionVisibility: "anchors-visible", justifySelf: "anchor-center", margin: "8px 0",
+      padding: "7px 10px", width: "max-content", maxWidth: "calc(100vw - 24px)",
+      color: "var(--overlay-fg)", background: "var(--overlay-bg)", border: "1px solid var(--overlay-line)",
+      borderRadius: "6px", boxShadow: "0 6px 20px #0005", font: "700 12px/1.4 system-ui, sans-serif",
+      overflowWrap: "anywhere", pointerEvents: "none",
     },
     ".cm-overview-search > div": {
       display: "flex",

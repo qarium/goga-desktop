@@ -147,6 +147,7 @@ import type {
   Pipeline,
   ProjectSettings,
   ProjectSettingsView,
+  ProjectSettingsSaveResponse,
   Discovery,
   Preview,
   Run,
@@ -163,6 +164,10 @@ export interface SettingsFile {
   version: string;
 }
 export interface DesktopAPI {
+  readonly initialInterfaceLanguage?: string;
+  getInterfaceLanguage?(): Promise<string>;
+  setInterfaceLanguage?(tag: string): Promise<string>;
+  onInterfaceLanguageChanged?(listener: (tag: string) => void): () => void;
   demoState(): Promise<DemoState>;
   demoExecute(command: DemoCommand): Promise<void>;
   demoNextFrame(showId: string, tabId: string, after: string | null): Promise<DemoStreamFrame | null>;
@@ -431,7 +436,7 @@ export interface DesktopAPI {
     projectId: ScopeRef,
     value: ProjectSettings,
     version: string,
-  ): Promise<ProjectSettingsView>;
+  ): Promise<ProjectSettingsSaveResponse>;
   discover(projectId: ScopeRef, options?: LaunchDiscoveryOptions): Promise<Discovery>;
   checkoutBranch(projectId: ScopeRef): Promise<string>;
   readTopicTask(request: TopicTaskRequest): Promise<TopicTaskDocument>;

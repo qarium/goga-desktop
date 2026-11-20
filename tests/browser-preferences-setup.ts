@@ -1,8 +1,11 @@
+import { setLocale } from "../src/shared/i18n";
 import { beforeEach } from "vitest";
 
 // Independent browser fixtures must not inherit another test's selected project
 // context. Remounts within a test deliberately retain storage to test restart.
 beforeEach(() => {
+  // Existing behavior fixtures assert Russian UI; locale tests explicitly choose their own.
+  setLocale("ru");
   if (typeof window === "undefined") return;
   const storage = window.localStorage;
   for (let index = storage.length - 1; index >= 0; index--) {

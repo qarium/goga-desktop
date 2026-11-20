@@ -1,3 +1,5 @@
+import { t as msg } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import type { HomeSessions } from "../home/session-summary";
 import { selectOverviewRows } from "./selection";
 import { createOverviewTransport } from "./transport";
@@ -55,7 +57,8 @@ import {
   OverviewFileActions,
   type OverviewPasteActivity,
 } from "./OverviewFileActions";
-import { SchemaGraph, IconButton } from "./SchemaGraph";
+import { SchemaGraph } from "./SchemaGraph";
+import { IconButton } from "./OverviewIconButton";
 import { ContractPane } from "./ContractPane";
 import { ownerForPath, projectScope, basename } from "./graph";
 import { useViewActive } from "../RetainedViews";
@@ -68,6 +71,7 @@ function useFileText(store: OverviewStore, path: string) {
 function LiveEditor({
   store, ...props
 }: Omit<OverviewEditorProps, "value" | "onChange" | "onSave"> & { store: OverviewStore }) {
+  useLocale();
   const text = useFileText(store, props.path);
   return (
     <OverviewEditor
@@ -84,6 +88,7 @@ function LiveMarkdown({ store, path, onFile }: {
   path: string;
   onFile: (path: string) => void;
 }) {
+  useLocale();
   const text = useFileText(store, path);
   return <HistoryMarkdown path={path} text={text} onFile={onFile} />;
 }
@@ -99,6 +104,7 @@ function Splitter({
   onChange: (v: number) => void;
   axis?: "x" | "y";
 }) {
+  useLocale();
   return (
     <div
       role="separator"
@@ -153,6 +159,7 @@ export function ProjectOverview({
   onMutation?: () => void;
   onCloseState?: (paths: string[], busy: boolean) => void;
 }) {
+  useLocale();
   const callback = useRef(onMutation);
   callback.current = onMutation;
   const [transport] = useState(() => createOverviewTransport(api));
@@ -360,7 +367,7 @@ export function ProjectOverview({
             );
             setSearchNotice(
               r.truncated
-                ? "Показана часть результатов. Уточните имя или область поиска."
+                ? msg("overview.onlySomeResultsAreShownNarrowTheNameOrSearch")
                 : "",
             );
           }
@@ -451,7 +458,7 @@ export function ProjectOverview({
       newName.includes("\\") ||
       [".", ".."].includes(newName)
     ) {
-      setModalError("Введите название без пути");
+      setModalError(msg("overview.enterANameWithoutAPath2"));
       return;
     }
     const base = creation.parent ? creation.parent + "/" : "";
@@ -463,7 +470,7 @@ export function ProjectOverview({
     else
       setModalError(
         store.getSnapshot().creationError ||
-          "Не удалось создать файл. Проверьте путь и отсутствие одноимённого файла.",
+          msg("overview.couldNotCreateTheFileCheckThePathAndMake"),
       );
   };
   const expandAll = async () => {
@@ -486,7 +493,7 @@ export function ProjectOverview({
     setExpanded([...folders]);
     if (queue.length)
       setSearchNotice(
-        "Развёрнуты первые 200 папок. Остальные можно раскрыть вручную.",
+        msg("overview.theFirst200FoldersAreExpandedExpandTheRestManually"),
       );
   };
   const compact = full !== "graph" && width - treeWidth < 790;
@@ -540,7 +547,7 @@ export function ProjectOverview({
           "--ov-contract": cw + "px",
         } as CSSProperties
       }
-      aria-label="Обзор проекта"
+      aria-label={msg("overview.projectOverview")}
     >
       {!treeHidden && (
         <>
@@ -573,34 +580,34 @@ export function ProjectOverview({
             }}
           >
             <header className="ov-heading">
-              <strong>Файлы</strong>
+              <strong>{msg("overview.files")}</strong>
               <div className="ov-tree-tools">
                 <IconButton
-                  label="Создать файл"
+                  label={msg("overview.createFile")}
                   onClick={() => startCreate("file")}
                 >
                   <FilePlus2 size={15} />
                 </IconButton>
                 <IconButton
-                  label="Создать папку"
+                  label={msg("overview.createFolder")}
                   onClick={() => startCreate("directory")}
                 >
                   <FolderPlus size={15} />
                 </IconButton>
                 <IconButton
-                  label="Свернуть дерево файлов"
+                  label={msg("overview.collapseFileTree")}
                   onClick={() => setExpanded([])}
                 >
                   <ChevronsDownUp size={15} />
                 </IconButton>
                 <IconButton
-                  label="Развернуть дерево файлов"
+                  label={msg("overview.expandFileTree")}
                   onClick={() => void expandAll()}
                 >
                   <ChevronsUpDown size={15} />
                 </IconButton>
                 <IconButton
-                  label="Закрыть все открытые файлы"
+                  label={msg("overview.closeAllOpenFiles")}
                   disabled={!state.order.length || busy}
                   onClick={() => close(state.order)}
                 >
@@ -611,14 +618,14 @@ export function ProjectOverview({
             <div className="ov-search">
               <Search size={15} />
               <input
-                aria-label="Поиск файлов"
-                placeholder="Найти файл…"
+                aria-label={msg("overview.searchFiles")}
+                placeholder={msg("overview.findAFile")}
                 value={search}
                 onChange={(e) => changeFileFilter(e.target.value)}
               />
               {search && (
                 <IconButton
-                  label="Очистить поиск"
+                  label={msg("overview.clearSearch")}
                   onClick={() => changeFileFilter("")}
                 >
                   <X size={13} />
@@ -629,24 +636,24 @@ export function ProjectOverview({
               <div
                 className="ov-paste-activity"
                 role="status"
-                aria-label="Вставка файлов"
+                aria-label={msg("overview.pasteFiles")}
                 aria-live="polite"
               >
                 <RefreshCw size={14} className="ov-spin" aria-hidden="true" />
                 <span>
                   {
                     {
-                      preparing: "Подготавливаем вставку",
-                      copying: "Копируем файлы",
-                      refreshing: "Обновляем дерево",
+                      preparing: msg("overview.preparingToPaste"),
+                      copying: msg("overview.copyingFiles"),
+                      refreshing: msg("overview.refreshingTree"),
                     }[pasteActivity.phase]
                   }
                   …
                   <span
                     className="ov-paste-destination"
-                    title={pasteActivity.destination || "Корень проекта"}
+                    title={pasteActivity.destination || msg("overview.projectRoot")}
                   >
-                    {pasteActivity.destination || "Корень проекта"}
+                    {pasteActivity.destination || msg("overview.projectRoot")}
                   </span>
                 </span>
               </div>
@@ -658,12 +665,12 @@ export function ProjectOverview({
                 }}
               >
                 <FolderOpen size={15} />
-                {treeScope ? basename(treeScope) : "Все файлы"}
+                {treeScope ? basename(treeScope) : msg("overview.allFiles")}
                 {treeScope && <X size={13} />}
               </button>
               {treeScope && Object.hasOwn(index.cells, treeScope) && (
                 <IconButton
-                  label={"Показать контракт папки " + treeScope}
+                  label={msg("overview.showFolderContract", { path: treeScope })}
                   onClick={() => showContract(treeScope)}
                 >
                   <Braces size={15} />
@@ -671,7 +678,7 @@ export function ProjectOverview({
               )}
               {treeScope && Object.hasOwn(index.cells, treeScope) && (
                 <IconButton
-                  label="Показать текущую папку на схеме"
+                  label={msg("overview.showCurrentFolderOnGraph")}
                   onClick={() => navigateFromTree(treeScope)}
                 >
                   <Network size={15} />
@@ -694,21 +701,17 @@ export function ProjectOverview({
                 .map((p) =>
                   state.directoryErrors[p] ? (
                     <p key={p} className="ov-notice" role="alert">
-                      <strong>{p || "Проект"}:</strong>{" "}
+                      <strong>{p || msg("overview.project")}:</strong>{" "}
                       <span>{state.directoryErrors[p]}</span>
                       <button
-                        aria-label={"Повторить загрузку " + (p || "проекта")}
+                        aria-label={msg("overview.retryLoading") + (p || msg("overview.projects"))}
                         onClick={() => void store.loadDirectory(p)}
-                      >
-                        Повторить
-                      </button>
+                      >{msg("overview.retry")}</button>
                     </p>
                   ) : state.directories[p]?.truncated ? (
                     <p key={p} className="ov-hint" role="status">
-                      <strong>{p || "Проект"}:</strong>{" "}
-                      <span>
-                        Список ограничен. Уточните поиск или выберите папку.
-                      </span>
+                      <strong>{p || msg("overview.project")}:</strong>{" "}
+                      <span>{msg("overview.listTruncatedNarrowTheSearchOrSelectAFolder")}</span>
                     </p>
                   ) : null,
                 )}
@@ -807,12 +810,10 @@ export function ProjectOverview({
               </p>
             )}
             <footer className="ov-status">
-              <Network size={13} />
-              Выбор в дереве подсвечивает схему
-            </footer>
+              <Network size={13} />{msg("overview.selectingAnItemInTheTreeHighlightsItInThe")}</footer>
           </aside>
           <Splitter
-            label="Ширина дерева файлов"
+            label={msg("overview.fileTreeWidth")}
             value={treeWidth}
             onChange={(v) => setTreeWidth(Math.max(220, Math.min(420, v)))}
           />
@@ -835,33 +836,29 @@ export function ProjectOverview({
         >
           <header className="ov-heading">
             <Network size={17} />
-            <strong>Карта проекта</strong>
+            <strong>{msg("overview.projectMap")}</strong>
             {compact && showInspector && (
               <div className="ov-architecture-tabs">
                 <button
                   aria-pressed={compactTab === "graph"}
                   onClick={() => setCompactTab("graph")}
-                >
-                  Схема
-                </button>
+                >{msg("overview.graph")}</button>
                 <button
                   aria-pressed={compactTab === "contract"}
                   onClick={() => setCompactTab("contract")}
-                >
-                  Контракт
-                </button>
+                >{msg("overview.contract")}</button>
               </div>
             )}
             <div className="ov-map-actions">
               <IconButton
-                label="Показать контракт текущей папки"
+                label={msg("overview.showContractForCurrentFolder")}
                 disabled={!Object.hasOwn(index.cells, graphScope)}
                 onClick={() => showContract(graphScope)}
               >
                 <Braces size={16} />
               </IconButton>
               <IconButton
-                label={full === "graph" ? "Вернуть схему" : "Развернуть схему"}
+                label={full === "graph" ? msg("overview.restoreGraphSize") : msg("overview.expandGraph")}
                 onClick={() => {
                   setGraphCollapsed(false);
                   setFull(full === "graph" ? null : "graph");
@@ -874,7 +871,7 @@ export function ProjectOverview({
                 )}
               </IconButton>
               <IconButton
-                label={graphCollapsed ? "Показать схему" : "Свернуть схему"}
+                label={graphCollapsed ? msg("overview.showGraph") : msg("overview.collapseGraph")}
                 onClick={() => {
                   setFull(null);
                   setGraphCollapsed((v) => !v);
@@ -887,7 +884,7 @@ export function ProjectOverview({
                 )}
               </IconButton>
               <IconButton
-                label="Обновить обзор"
+                label={msg("overview.refreshOverview")}
                 disabled={state.refreshing}
                 onClick={() => void store.refreshAll()}
               >
@@ -901,21 +898,19 @@ export function ProjectOverview({
           <div className="ov-map-body" hidden={graphCollapsed}>
             <nav className="ov-breadcrumb">
               <IconButton
-                label="На уровень выше"
+                label={msg("overview.upOneLevel")}
                 disabled={graphScope === projectScope}
                 onClick={() => drill(index.parents[graphScope] ?? projectScope)}
               >
                 <ArrowUp size={15} />
               </IconButton>
               <button
-                aria-label="Корень проекта"
+                aria-label={msg("overview.projectRoot")}
                 onClick={() => {
                   setGraphScope(projectScope);
                   showFileDirectory("");
                 }}
-              >
-                Проект
-              </button>
+              >{msg("overview.project")}</button>
               {(() => {
                 const chain: string[] = [];
                 let current: string | null = graphScope;
@@ -934,15 +929,11 @@ export function ProjectOverview({
             {state.schemaError && (
               <p className="ov-notice" role="alert">
                 {state.schemaError}
-                <button onClick={() => void store.refreshAll()}>
-                  Повторить
-                </button>
+                <button onClick={() => void store.refreshAll()}>{msg("overview.retry")}</button>
               </p>
             )}
             {state.stale && (
-              <p className="ov-hint ov-stale" role="status">
-                Схема и контракты могли измениться. Обновите обзор.
-              </p>
+              <p className="ov-hint ov-stale" role="status">{msg("overview.theGraphAndContractsMayHaveChangedRefreshOverview")}</p>
             )}
             {state.schema?.length ? (
               <SchemaGraph
@@ -956,28 +947,25 @@ export function ProjectOverview({
               <div className="ov-empty">
                 <Network size={28} />
                 <h3>
-                  {state.refreshing ? "Загружаем схему…" : "Схема отсутствует"}
+                  {state.refreshing ? msg("overview.loadingGraph") : msg("overview.noGraphAvailable")}
                 </h3>
-                <p>
-                  Файлы доступны в дереве. После добавления контракта обновите
-                  обзор.
-                </p>
+                <p>{msg("overview.filesAreAvailableInTheTreeRefreshOverviewAfterAdding")}</p>
               </div>
             )}
           </div>
         </section>
         {graphCollapsed && !file && !displayContract && (
           <div className="ov-empty">
-            <p>Схема свёрнута. Откройте файл в дереве или покажите схему.</p>
+            <p>{msg("overview.theGraphIsCollapsedOpenAFileFromTheTree")}</p>
           </div>
         )}
         {compact && displayContract && (
           <div className="ov-inline-contract">
             <div className="ov-inline-tabs">
-              <button onClick={() => setCompactTab("graph")}>Схема</button>
-              <strong>Контракт</strong>
+              <button onClick={() => setCompactTab("graph")}>{msg("overview.graph")}</button>
+              <strong>{msg("overview.contract")}</strong>
               <IconButton
-                label="Закрыть контракт"
+                label={msg("overview.closeContract")}
                 onClick={() => {
                   transport.cancel("contract");
                   store.closeContract();
@@ -987,7 +975,7 @@ export function ProjectOverview({
                 <X size={16} />
               </IconButton>
               <IconButton
-                label="Обновить обзор"
+                label={msg("overview.refreshOverview")}
                 disabled={state.refreshing}
                 onClick={() => void store.refreshAll()}
               >
@@ -1003,7 +991,7 @@ export function ProjectOverview({
               (!graphCollapsed || (compact && displayContract)) && (
                 <Splitter
                   axis="y"
-                  label="Высота графа"
+                  label={msg("overview.graphHeight")}
                   value={graphHeight}
                   onChange={(v) =>
                     setGraphHeight(Math.max(180, Math.min(800, v)))
@@ -1012,7 +1000,7 @@ export function ProjectOverview({
               )}
             <section className="ov-document">
               <header className="ov-tabs">
-                <div role="tablist" aria-label="Открытые файлы">
+                <div role="tablist" aria-label={msg("overview.openFiles")}>
                   {state.order.map((p) => (
                     <div
                       key={p}
@@ -1034,7 +1022,7 @@ export function ProjectOverview({
                         {dirty.includes(p) && <i className="ov-dirty" />}
                       </button>
                       <IconButton
-                        label={"Закрыть " + p}
+                        label={msg("overview.close2") + p}
                         disabled={state.files[p].busy}
                         onClick={() => close([p])}
                       >
@@ -1047,8 +1035,8 @@ export function ProjectOverview({
                   <IconButton
                     label={
                       preview
-                        ? "Показать исходник Markdown"
-                        : "Предпросмотр Markdown"
+                        ? msg("overview.showMarkdownSource")
+                        : msg("overview.markdownPreview")
                     }
                     onClick={() =>
                       setPreviews((current) => {
@@ -1064,7 +1052,7 @@ export function ProjectOverview({
                 )}
                 <IconButton
                   label={
-                    full === "file" ? "Вернуть документ" : "Развернуть документ"
+                    full === "file" ? msg("overview.restoreDocumentSize") : msg("overview.expandDocument")
                   }
                   onClick={() => setFull(full === "file" ? null : "file")}
                 >
@@ -1078,7 +1066,7 @@ export function ProjectOverview({
               <div className="ov-file-toolbar">
                 <button
                   className="ov-file-path"
-                  title="Показать файл в дереве"
+                  title={msg("overview.revealFileInTree")}
                   onClick={() => {
                     const p = state.active!;
                     const parent = p.includes("/")
@@ -1094,69 +1082,59 @@ export function ProjectOverview({
                 <div className="ov-file-actions">
                   {navigationSupported && (
                     <>
-                      <button
-                        type="button"
-                        className="ov-icon"
-                        aria-label="Назад к месту перехода"
-                        title="Назад к месту перехода после F12 / ⌘-клика / Ctrl-клика"
+                      <IconButton
+                        label={msg("overview.backToPreviousLocation")}
+                        hint={msg("overview.backToPreviousLocationAfterF12ClickCtrlClick")}
                         disabled={!active || !navigation?.canBack}
                         onClick={() => editorCommands.current?.goBack()}
                       >
                         <ArrowLeft size={15} />
-                      </button>
-                      <button
-                        type="button"
-                        className="ov-icon"
-                        aria-label="Перейти к определению"
-                        title="Перейти к определению (F12 / ⌘-клик / Ctrl-клик)"
+                      </IconButton>
+                      <IconButton
+                        label={msg("overview.goToDefinition")}
+                        hint={msg("overview.goToDefinitionF12ClickCtrlClick")}
                         disabled={!active || !navigation?.ready}
                         onClick={() => editorCommands.current?.goToDefinition()}
                       >
                         <CornerDownRight size={15} />
-                      </button>
+                      </IconButton>
                     </>
                   )}
-                  <button
-                    type="button"
-                    className="ov-icon"
-                    aria-label="Найти в файле"
-                    title="Найти в файле (Ctrl+F / ⌘F)"
+                  <IconButton
+                    label={msg("overview.findInFile")}
+                    hint={msg("overview.findInFileCtrlFF")}
                     disabled={!active || preview || file.busy}
                     onClick={() => editorCommands.current?.find()}
                   >
                     <Search size={15} />
-                  </button>
-                  <button
-                    type="button"
-                    className="ov-icon"
-                    aria-label="Заменить в файле"
-                    title="Заменить в файле (Ctrl+R / ⌘⌥F)"
+                  </IconButton>
+                  <IconButton
+                    label={msg("overview.replaceInFile")}
+                    hint={msg("overview.replaceInFileCtrlRF")}
                     disabled={!active || preview || file.busy}
                     onClick={() => editorCommands.current?.replace()}
                   >
                     <Replace size={15} />
-                  </button>
+                  </IconButton>
                   <IconButton
-                    label="Обновить файл с диска"
+                    label={msg("overview.reloadFileFromDisk")}
                     disabled={file.busy}
                     onClick={() => void refreshOne(state.active!)}
                   >
                     <RefreshCw size={15} />
                   </IconButton>
-                  <button
+                  <IconButton
                     className="ov-close-without-save ov-labeled-action"
-                    aria-label="Закрыть без сохранения"
-                    title="Закрыть без сохранения"
+                    label={msg("overview.closeWithoutSaving")}
                     disabled={file.busy}
                     onClick={() => close([state.active!])}
                   >
                     <X size={15} />
-                    <span>Закрыть без сохранения</span>
-                  </button>
-                  <button
+                    <span>{msg("overview.closeWithoutSaving")}</span>
+                  </IconButton>
+                  <IconButton
                     className="ov-labeled-action"
-                    aria-label="Сохранить"
-                    title="Сохранить"
+                    label={msg("overview.save")}
                     disabled={
                       file.busy ||
                       !file.exists ||
@@ -1165,8 +1143,8 @@ export function ProjectOverview({
                     onClick={() => void store.save(state.active!)}
                   >
                     <Save size={14} />
-                    <span>Сохранить</span>
-                  </button>
+                    <span>{msg("overview.save")}</span>
+                  </IconButton>
                 </div>
               </div>
               {file.error && (
@@ -1176,11 +1154,7 @@ export function ProjectOverview({
               )}
               {(file.changedExternally ||
                 (file.error && dirty.includes(state.active!))) && (
-                <div className="ov-notice">
-                  Файл изменён на диске. Черновик сохранён.
-                  <button onClick={() => startCreate("file", state.active!)}>
-                    Сохранить копию…
-                  </button>
+                <div className="ov-notice">{msg("overview.fileChangedOnDiskYourDraftWasKept")}<button onClick={() => startCreate("file", state.active!)}>{msg("overview.saveACopy")}</button>
                 </div>
               )}
               {preview ? (
@@ -1190,7 +1164,7 @@ export function ProjectOverview({
                   positionKey={state.active!}
                   positions={previewScroll.current}
                   active={active}
-                  label="Предпросмотр Markdown"
+                  label={msg("overview.markdownPreview")}
                 >
                   <LiveMarkdown
                     store={store}
@@ -1215,7 +1189,7 @@ export function ProjectOverview({
               )}
               <footer className="ov-status">
                 <span className="ov-save-status">
-                  {dirty.includes(state.active!) ? "Не сохранено" : "Сохранено"}{" "}
+                  {dirty.includes(state.active!) ? msg("overview.notSaved") : msg("overview.saved")}{" "}
                   · {state.active?.split(".").at(-1)}
                 </span>
                 {navigation?.message && (
@@ -1227,7 +1201,7 @@ export function ProjectOverview({
                     {navigation.message}
                   </span>
                 )}
-                <span>Сохранение не создаёт коммит</span>
+                <span>{msg("overview.savingDoesNotCreateACommit")}</span>
               </footer>
             </section>
           </>
@@ -1236,7 +1210,7 @@ export function ProjectOverview({
       {displayContract && !compact && (
         <>
           <Splitter
-            label="Ширина панели контракта"
+            label={msg("overview.contractPanelWidth")}
             value={contractWidth}
             onChange={(v) =>
               setContractWidth(
@@ -1295,35 +1269,32 @@ export function ProjectOverview({
             aria-modal="true"
             aria-label={
               creation.copy
-                ? "Сохранить копию"
+                ? msg("overview.saveACopy2")
                 : creation.kind === "file"
-                  ? "Создать файл"
-                  : "Создать папку"
+                  ? msg("overview.createFile")
+                  : msg("overview.createFolder")
             }
             className="ov-modal"
           >
             <header>
               <h2>
                 {creation.copy
-                  ? "Сохранить копию"
+                  ? msg("overview.saveACopy2")
                   : creation.kind === "file"
-                    ? "Создать файл"
-                    : "Создать папку"}
+                    ? msg("overview.createFile")
+                    : msg("overview.createFolder")}
               </h2>
               <IconButton
-                label="Закрыть окно"
+                label={msg("overview.closeWindow")}
                 onClick={() => setCreation(null)}
               >
                 <X size={17} />
               </IconButton>
             </header>
-            <p className="ov-hint">
-              В папке: {creation.parent || "Корень проекта"}
+            <p className="ov-hint">{msg("overview.inFolder")}{creation.parent || msg("overview.projectRoot")}
             </p>
-            <label>
-              Название
-              <input
-                aria-label="Название"
+            <label>{msg("overview.name")}<input
+                aria-label={msg("overview.name")}
                 autoFocus
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
@@ -1338,9 +1309,9 @@ export function ProjectOverview({
               </p>
             )}
             <footer>
-              <button onClick={() => setCreation(null)}>Отмена</button>
+              <button onClick={() => setCreation(null)}>{msg("overview.cancel")}</button>
               <button className="primary" onClick={() => void create()}>
-                {creation.copy ? "Сохранить копию" : "Создать"}
+                {creation.copy ? msg("overview.saveACopy2") : msg("overview.create")}
               </button>
             </footer>
           </section>
@@ -1351,13 +1322,13 @@ export function ProjectOverview({
           <section
             role="dialog"
             aria-modal="true"
-            aria-label="Несохранённые изменения"
+            aria-label={msg("overview.unsavedChanges")}
             className="ov-modal"
           >
             <header>
-              <h2>{reload ? "Обновить файл с диска?" : "Закрыть файлы?"}</h2>
+              <h2>{reload ? msg("overview.reloadFileFromDisk2") : msg("overview.closeFiles")}</h2>
               <IconButton
-                label="Отменить закрытие"
+                label={msg("overview.cancelClosing")}
                 onClick={() => {
                   setClosing(null);
                   setReload(null);
@@ -1366,10 +1337,7 @@ export function ProjectOverview({
                 <X size={17} />
               </IconButton>
             </header>
-            <p>
-              Несохранённые изменения этих файлов будут потеряны. Остальные
-              файлы не затрагиваются.
-            </p>
+            <p>{msg("overview.unsavedChangesInTheseFilesWillBeLostOtherFiles")}</p>
             <ul>
               {(closing ?? [reload!])
                 .filter((p) => dirty.includes(p))
@@ -1383,9 +1351,7 @@ export function ProjectOverview({
                   setClosing(null);
                   setReload(null);
                 }}
-              >
-                Отмена
-              </button>
+              >{msg("overview.cancel")}</button>
               {closing && (
                 <button
                   onClick={() =>
@@ -1396,9 +1362,7 @@ export function ProjectOverview({
                       setClosing(null);
                     })()
                   }
-                >
-                  Сохранить и закрыть
-                </button>
+                >{msg("overview.saveAndClose")}</button>
               )}
               <button
                 className="danger"
@@ -1409,7 +1373,7 @@ export function ProjectOverview({
                   setReload(null);
                 }}
               >
-                {reload ? "Загрузить с диска" : "Закрыть без сохранения"}
+                {reload ? msg("overview.loadFromDisk") : msg("overview.closeWithoutSaving")}
               </button>
             </footer>
           </section>

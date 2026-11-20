@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import {
   lstat,
   mkdir,
@@ -71,23 +72,23 @@ export class ProjectCreationCoordinator {
     const failure = (message: string) =>
       Promise.resolve<ProjectCreationResult>({ status: "error", message });
     if (!parsed.success)
-      return failure("Проверьте имя, расположение и адрес репозитория.");
+      return failure(tr("host.checkTheNameLocationAndRepositoryAddress"));
     const request = parsed.data,
       signature = JSON.stringify(request),
       prior = this.results.get(request.id);
     if (prior)
       return prior.request === signature
         ? prior.promise
-        : failure("Идентификатор попытки уже использован.");
+        : failure(tr("host.thisAttemptIdHasAlreadyBeenUsed"));
     if (this.disposed || this.frozen)
-      return failure("Приложение готовится к выходу. Создание недоступно.");
+      return failure(tr("host.theAppIsPreparingToExitProjectCreationIsUnavailable"));
     if (this.unsettled)
       return failure(
-        "Остановка предыдущего Git-процесса не подтверждена. Повтор недоступен; временная папка сохранена.",
+        tr("host.thePreviousGitProcessHasNotBeenConfirmedStoppedRetry"),
       );
     if (this.active)
       return failure(
-        "Другой проект ещё создаётся. Дождитесь завершения или отмените создание.",
+        tr("host.anotherProjectIsBeingCreatedWaitForItToFinish"),
       );
     const attempt: Attempt = {
       id: request.id,
@@ -136,7 +137,7 @@ export class ProjectCreationCoordinator {
   }
   private async git(args: string[], cwd: string, attempt: Attempt) {
     if (!this.options.runner.commandBytes)
-      throw new CreationFailure("Безопасный запуск Git недоступен.");
+      throw new CreationFailure(tr("host.gitCannotBeStartedSafely"));
     const env: NodeJS.ProcessEnv = {
       HOME: this.options.home,
       GIT_TERMINAL_PROMPT: "0",
@@ -187,8 +188,8 @@ export class ProjectCreationCoordinator {
     if (result.exitCode !== 0 || result.signal)
       throw new CreationFailure(
         args[0] === "clone"
-          ? `Команда git clone не завершена (код ${result.exitCode ?? "—"}). Проверьте адрес и настроенный доступ Git на этом компьютере.`
-          : `Команда git init не завершена (код ${result.exitCode ?? "—"}). Проверьте Git и права на папку.`,
+          ? tr("host.gitCloneFailedCodeValue1CheckTheAddressAndGit", { value1: result.exitCode ?? "—" })
+          : tr("host.gitInitFailedCodeValue1CheckGitAndFolderPermissions", { value1: result.exitCode ?? "—" }),
       );
   }
   private async execute(
@@ -202,7 +203,7 @@ export class ProjectCreationCoordinator {
       published = false;
     const check = () => {
       if (attempt.controller.signal.aborted)
-        throw new CreationFailure("Создание отменено.");
+        throw new CreationFailure(tr("host.creationCanceled"));
     };
     const cleanup = async (): Promise<string | undefined> => {
       if (reservation && destination && !published) {
@@ -231,11 +232,11 @@ export class ProjectCreationCoordinator {
       const parent = await realpath(request.parent),
         parentIdentity = await lstat(parent);
       if (!parentIdentity.isDirectory())
-        throw new CreationFailure("Выберите существующую родительскую папку.");
+        throw new CreationFailure(tr("host.chooseAnExistingParentFolder"));
       destination = path.join(parent, request.name);
       if (!(await absent(destination)))
         throw new CreationFailure(
-          "Папка или файл с таким именем уже существует. Выберите другое имя или откройте существующий проект.",
+          tr("host.aFileOrFolderWithThisNameAlreadyExistsChoose"),
           "name",
         );
       check();
@@ -275,12 +276,12 @@ export class ProjectCreationCoordinator {
         !(await lstat(prepared)).isDirectory() ||
         (await realpath(prepared)) !== prepared
       )
-        throw new CreationFailure("Git не создал ожидаемую папку проекта.");
+        throw new CreationFailure(tr("host.gitDidNotCreateTheExpectedProjectFolder"));
       if (request.mode === "clone" || request.git) {
         const metadata = await lstat(path.join(prepared, ".git"));
         if (!metadata.isDirectory() || metadata.isSymbolicLink())
           throw new CreationFailure(
-            "Git не создал самостоятельный репозиторий.",
+            tr("host.gitDidNotCreateAnIndependentRepository"),
           );
       }
       if (
@@ -288,7 +289,7 @@ export class ProjectCreationCoordinator {
         (await realpath(request.parent)) !== parent
       )
         throw new CreationFailure(
-          "Расположение изменилось во время создания. Повторите выбор папки.",
+          tr("host.theLocationChangedDuringCreationChooseTheFolderAgain"),
         );
       check();
       // From this point finish publication/registration rather than cancelling a ready project.
@@ -301,7 +302,7 @@ export class ProjectCreationCoordinator {
         (await readdir(destination)).length
       )
         throw new CreationFailure(
-          "Папка назначения изменена другим процессом. Проект не заменён.",
+          tr("host.anotherProcessChangedTheDestinationFolderTheProjectWasNot"),
         );
       await rename(prepared, destination);
       published = true;
@@ -310,7 +311,7 @@ export class ProjectCreationCoordinator {
         project = await this.options.register(destination);
       } catch {
         throw new CreationFailure(
-          "Проект создан, но не добавлен в список. Откройте готовую папку через «Открыть существующий…».",
+          tr("host.theProjectWasCreatedButNotAddedToTheList"),
         );
       }
       const retainedPath = await cleanup();
@@ -321,7 +322,7 @@ export class ProjectCreationCoordinator {
         project,
         ...(retainedPath
           ? {
-              warning: `Проект создан. Не удалось убрать временную папку: ${retainedPath}`,
+              warning: tr("host.projectCreatedCouldNotRemoveTheTemporaryFolderRetainedpath", { retainedPath: retainedPath }),
             }
           : {}),
       };
@@ -338,19 +339,19 @@ export class ProjectCreationCoordinator {
       let message: string;
       if (unsettled)
         message =
-          "Остановка Git-процесса не подтверждена. Временная папка сохранена; повтор пока недоступен.";
+          tr("host.theGitProcessWasNotConfirmedStoppedTheTemporaryFolder");
       else if (error instanceof CreationFailure) message = error.message;
       else if (error instanceof ByteCommandError)
         message =
           error.reason === "timeout"
-            ? "Git не завершился за 30 минут. Процесс остановлен. Проверьте соединение и повторите создание."
-            : "Не удалось выполнить Git. Проверьте его установку, доступ к репозиторию и повторите создание.";
+            ? tr("host.gitDidNotFinishWithin30MinutesAndWasStopped")
+            : tr("host.couldNotRunGitCheckInstallationAndRepositoryAccessThen");
       else if ((error as NodeJS.ErrnoException).code === "EEXIST")
         message =
-          "Папка с таким именем уже существует. Выберите другое имя или откройте существующий проект.";
+          tr("host.aFolderWithThisNameAlreadyExistsChooseAnotherName");
       else
         message =
-          "Не удалось создать проект. Проверьте расположение, свободное место и права доступа.";
+          tr("host.couldNotCreateTheProjectCheckTheLocationFreeSpace");
       return {
         status: "error",
         message,
@@ -370,13 +371,13 @@ export class ProjectCreationCoordinator {
     // participant may fail after this one has already completed; its next lease
     // must report the remaining work (including unsettled cleanup), not deadlock.
     if (this.frozen)
-      throw Error("Подготовка к выходу уже выполняется.");
+      throw Error(tr("host.exitPreparationIsAlreadyInProgress"));
     this.frozen = true;
     const id = this.active?.id ?? this.unsettled;
     let released = false;
     const validate = () => {
       if (released || (this.active && this.active.id !== id))
-        throw Error("Состав операций изменился.");
+        throw Error(tr("host.theSetOfActiveOperationsChanged"));
     };
     const stop = async () => {
       validate();
@@ -395,7 +396,7 @@ export class ProjectCreationCoordinator {
         ? [
             {
               id: `project-create:${id}`,
-              label: "Создание нового проекта — будет отменено при выходе",
+              label: tr("host.newProjectCreationWillBeCanceledOnExit"),
             },
           ]
         : [],

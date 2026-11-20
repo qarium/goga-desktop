@@ -1,13 +1,16 @@
+import type { MessageKey } from "../shared/locale-packs.generated";
+import { subscribeLocale, t } from "../shared/i18n";
+type ConfirmationText = Extract<MessageKey, `native.${string}`>;
 let nextId = 0;
 /** Dialog lives in the same sandboxed renderer as the terminal. All data is text,
  * never HTML. Native modal focus trapping keeps Enter out of the underlying PTY. */
 export function terminalConfirmation(
   root: HTMLElement,
   options: {
-    title: string;
-    message: string;
+    titleKey: ConfirmationText;
+    messageKey: ConfirmationText;
     preview?: string;
-    confirm?: string;
+    confirmKey?: ConfirmationText;
   },
   decide: (confirmed: boolean) => void,
 ): () => void {
@@ -16,8 +19,6 @@ export function terminalConfirmation(
   const title = document.createElement("h2"),
     message = document.createElement("p");
   title.id = `terminal-confirmation-${++nextId}`;
-  title.textContent = options.title;
-  message.textContent = options.message;
   dialog.setAttribute("aria-labelledby", title.id);
   dialog.append(title, message);
   if (options.preview !== undefined) {
@@ -30,21 +31,21 @@ export function terminalConfirmation(
   actions.className = "terminal-confirmation-actions";
   const cancel = document.createElement("button");
   cancel.type = "button";
-  cancel.textContent = options.confirm ? "Отмена" : "Закрыть";
   actions.append(cancel);
   let settled = false;
   const finish = (confirmed: boolean) => {
     if (settled) return;
     settled = true;
+    offLanguage();
     dialog.close();
     dialog.remove();
     decide(confirmed);
   };
   cancel.addEventListener("click", () => finish(false));
-  if (options.confirm) {
-    const confirm = document.createElement("button");
+  const confirm = options.confirmKey ? document.createElement("button") : undefined;
+  if (confirm) {
     confirm.type = "button";
-    confirm.textContent = options.confirm;
+    confirm.className = "primary";
     confirm.addEventListener("click", () => finish(true));
     actions.append(confirm);
   }
@@ -54,6 +55,14 @@ export function terminalConfirmation(
     finish(false);
   });
   dialog.addEventListener("close", () => finish(false));
+  const translate = () => {
+    title.textContent = t(options.titleKey);
+    message.textContent = t(options.messageKey);
+    cancel.textContent = t(confirm ? "native.cancel" : "native.close");
+    if (confirm && options.confirmKey) confirm.textContent = t(options.confirmKey);
+  };
+  translate();
+  const offLanguage = subscribeLocale(translate);
   root.append(dialog);
   try {
     dialog.showModal();

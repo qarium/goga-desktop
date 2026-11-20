@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 /** Exit confirmation holds metadata only: never file content or recovery copies. */
 export class OverviewExitGuard {
   private paths: string[] = [];
@@ -28,7 +29,7 @@ export class OverviewExitGuard {
   validate() {
     if (this.busy || this.approved !== this.revision)
       throw Error(
-        "Файлы обзора изменились перед выходом. Сохраните их или подтвердите выход заново.",
+        t("native.overviewChangedBeforeQuit"),
       );
   }
 }

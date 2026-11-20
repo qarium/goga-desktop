@@ -1,4 +1,5 @@
 "use strict";
+const { text: t } = require("./messages.cjs");
 
 // Host-only view of the already-open page in one dedicated Chrome process.
 // No URLs, CDP sessions, arbitrary methods or runtime evaluation cross the UI boundary.
@@ -25,7 +26,7 @@ const normalized = (n) => Number.isFinite(n) && n >= 0 && n <= 1;
 function createLiveView(pipeTarget, { targetId, ownsPage = () => true } = {}) {
   if (!pipeTarget || typeof pipeTarget.attachHostPage !== "function")
     throw new TypeError(
-      "Для показа нужна закрытая связь с браузером этого контекста.",
+      t("hostTerminal.privateConnectionRequired"),
     );
   let closed = false,
     attaching,
@@ -57,7 +58,7 @@ function createLiveView(pipeTarget, { targetId, ownsPage = () => true } = {}) {
       }
     });
   const requireOpen = () => {
-    if (closed || !ownsPage()) throw Error("Показ закрыт.");
+    if (closed || !ownsPage()) throw Error(t("hostTerminal.showClosed"));
   };
   async function connect() {
     requireOpen();
@@ -65,7 +66,7 @@ function createLiveView(pipeTarget, { targetId, ownsPage = () => true } = {}) {
       const { targetInfos } = await pipeTarget.command("Target.getTargets");
       const pages = targetInfos.filter((p) => p.type === "page");
       if (pages.length !== 1)
-        throw Error("Не удалось однозначно определить страницу показа.");
+        throw Error(t("hostTerminal.pageAmbiguous"));
       targetId = pages[0].targetId;
     }
     requireOpen();
@@ -75,9 +76,9 @@ function createLiveView(pipeTarget, { targetId, ownsPage = () => true } = {}) {
   // Serialize host gestures so a second click/key cannot split a press and release.
   // This queue is private to the view; it never waits for a broker lease.
   function run(fn) {
-    if (closed) return Promise.reject(Error("Показ закрыт."));
+    if (closed) return Promise.reject(Error(t("hostTerminal.showClosed")));
     if (pending >= 48)
-      return Promise.reject(Error("Слишком много действий показа."));
+      return Promise.reject(Error(t("hostTerminal.tooManyActions")));
     ++pending;
     const task = tail.then(async () => {
       requireOpen();
@@ -104,7 +105,7 @@ function createLiveView(pipeTarget, { targetId, ownsPage = () => true } = {}) {
       requireOpen();
       if (drag?.releaseFailed)
         throw Error(
-          "Не удалось подтвердить отпускание мыши. Отмените жест или переоткройте показ.",
+          t("hostTerminal.mouseReleaseUnconfirmed"),
         );
       return fn(session);
     });
@@ -121,7 +122,7 @@ function createLiveView(pipeTarget, { targetId, ownsPage = () => true } = {}) {
       Number.isFinite(v.pageX) &&
       Number.isFinite(v.pageY)
     ))
-      throw Error("Не удалось определить размеры страницы показа.");
+      throw Error(t("hostTerminal.viewportUnavailable"));
     return v;
   }
   async function point(session, x, y) {
@@ -149,15 +150,15 @@ function createLiveView(pipeTarget, { targetId, ownsPage = () => true } = {}) {
       },
     });
     requireOpen();
-    if (!data) throw Error("Браузер не вернул кадр.");
+    if (!data) throw Error(t("hostTerminal.noFrame"));
     return Buffer.from(data, "base64");
   }
   function frame() {
-    if (closed) return Promise.reject(Error("Показ закрыт."));
+    if (closed) return Promise.reject(Error(t("hostTerminal.showClosed")));
     if (!capturing) {
       let cancel;
       const canceled = new Promise((_, reject) => {
-        cancel = () => reject(Error("Показ закрыт."));
+        cancel = () => reject(Error(t("hostTerminal.showClosed")));
       });
       cancelCapture = cancel;
       const capture = (async () => {
@@ -221,7 +222,7 @@ function createLiveView(pipeTarget, { targetId, ownsPage = () => true } = {}) {
       clickCount < 1 ||
       clickCount > 3
     )
-      throw TypeError("Неверный жест выделения.");
+      throw TypeError(t("hostTerminal.invalidGesture"));
     if (phase === "cancel") {
       // Cancellation can arrive while down awaits connection, metrics or its
       // press acknowledgement. Tombstone immediately, not after that queue.
@@ -234,13 +235,13 @@ function createLiveView(pipeTarget, { targetId, ownsPage = () => true } = {}) {
     const requireGesture = () => {
       requireOpen();
       if (epoch !== documentEpoch || retiredGestures.has(gestureId))
-        throw Error("Жест уже завершён или заменён.");
+        throw Error(t("hostTerminal.gestureEnded"));
     };
     const execute = phase === "down" ? runInput : run;
     return execute(async (session) => {
       if (phase === "down") {
         if (drag || retiredGestures.has(gestureId))
-          throw Error("Жест уже завершён или заменён.");
+          throw Error(t("hostTerminal.gestureEnded"));
         const xy = await point(session, x, y);
         requireGesture();
         await session.command("Input.dispatchMouseEvent", {
@@ -267,7 +268,7 @@ function createLiveView(pipeTarget, { targetId, ownsPage = () => true } = {}) {
       } else {
         const current = drag;
         if (!current || current.id !== gestureId)
-          throw Error("Жест уже завершён или заменён.");
+          throw Error(t("hostTerminal.gestureEnded"));
         try {
           const xy = await point(session, x, y);
           requireGesture();
@@ -302,13 +303,13 @@ function createLiveView(pipeTarget, { targetId, ownsPage = () => true } = {}) {
         typeof text !== "string" ||
         Buffer.byteLength(text, "utf8") > 1024 * 1024
       )
-        throw Error("Выделенный текст слишком большой для копирования.");
+        throw Error(t("hostTerminal.selectionTooLarge"));
       return text;
     });
   }
   async function click(x, y) {
     if (!normalized(x) || !normalized(y))
-      throw TypeError("Неверные координаты.");
+      throw TypeError(t("hostTerminal.coordinatesInvalid"));
     return runInput(async (session) => {
       const xy = await point(session, x, y);
       requireOpen();
@@ -340,7 +341,7 @@ function createLiveView(pipeTarget, { targetId, ownsPage = () => true } = {}) {
       !Number.isFinite(deltaY) ||
       Math.abs(deltaY) > 2000
     )
-      throw TypeError("Неверная прокрутка.");
+      throw TypeError(t("hostTerminal.scrollInvalid"));
     return runInput(async (session) => {
       const xy = await point(session, x, y);
       requireOpen();
@@ -353,7 +354,7 @@ function createLiveView(pipeTarget, { targetId, ownsPage = () => true } = {}) {
     });
   }
   async function key(key) {
-    if (!keys.has(key)) throw TypeError("Эта клавиша не поддерживается.");
+    if (!keys.has(key)) throw TypeError(t("hostTerminal.keyUnsupported"));
     return runInput(async (session) => {
       const vk = keys.get(key),
         args = { key, code: key, windowsVirtualKeyCode: vk };
@@ -375,7 +376,7 @@ function createLiveView(pipeTarget, { targetId, ownsPage = () => true } = {}) {
       text.length > 2048 ||
       /[\x00-\x1f\x7f-\x9f]/u.test(text)
     )
-      throw TypeError("Недопустимый текст.");
+      throw TypeError(t("hostTerminal.textInvalid"));
     return runInput((session) => session.command("Input.insertText", { text }));
   }
   function close() {

@@ -1,3 +1,5 @@
+import { t as tr } from "../shared/i18n";
+import { runFailureMessage, type RunFailureReason } from "../shared/run-failure";
 import {
   projectRemovalRequestSchema,
   type ProjectRemovalRequest,
@@ -358,7 +360,7 @@ function assertGitPaths(binding: WorktreeRecord, paths: string[]) {
   const expected = [binding.path, binding.gitCommonDir, binding.gitCommonDir,
     path.join(binding.gitCommonDir, "index"), path.join(binding.gitCommonDir, "objects")];
   if (paths.length !== expected.length || paths.some((p, i) => path.resolve(binding.path, p) !== expected[i]))
-    throw Error("Эффективные пути Git не соответствуют контексту. Запуск в другой папке запрещён.");
+    throw Error(tr("host.effectiveGitPathsDoNotMatchTheContextLaunchingIn"));
 }
 export class HostService extends EventEmitter {
   private overviewSchemaIssued = new Map<string, number>();
@@ -463,6 +465,9 @@ export class HostService extends EventEmitter {
   private settingsLocks = new Map<string, Promise<unknown>>();
   private documentSaveRevisions = new Map<string, number>();
   private runList: Run[] = [];
+  // A run is journaled before spawn. Until its local observer is installed it
+  // belongs to this launch, not to restart reconciliation.
+  private readonly localRunAdmissions = new WeakSet<Run>();
   private journalHeads = new WeakMap<Run, { end: number; sequence: number }>();
   private locks = new Map<string, Promise<unknown>>();
   private children = new Map<
@@ -589,9 +594,7 @@ export class HostService extends EventEmitter {
         this.runList
           .filter(
             (r) =>
-              r.dashboardRecoveryVersion === 1 &&
-              !this.children.has(r.id) &&
-              ["starting", "running"].includes(r.status),
+              r.dashboardRecoveryVersion === 1 && this.canReconcileStoredRun(r),
           )
           .map((r) => this.reconcileRun(r.id).catch(() => {})),
       ).finally(() => {
@@ -626,6 +629,7 @@ export class HostService extends EventEmitter {
           output,
           url,
           error,
+          failureReason,
           persistenceError,
           recoveryMessage,
           dashboardReconnect,
@@ -645,7 +649,7 @@ export class HostService extends EventEmitter {
       this.lastRunSave = "";
       for (const run of this.runList)
         run.persistenceError =
-          "Не удалось сохранить историю запусков. После перезапуска состояние потребует проверки.";
+          tr("host.couldNotSaveRunHistoryItsStateWillNeedVerification");
       this.emit("runs", this.runCatalog());
     });
     return work;
@@ -675,10 +679,10 @@ export class HostService extends EventEmitter {
       )
     )
       throw Error(
-        "Состояние процесса не подтверждено после перезапуска. Проверьте запуск перед продолжением.",
+        tr("host.processStateHasNotBeenVerifiedSinceRestartVerifyThe"),
       );
     if (kind === "build" && active.some((run) => run.kind === "build"))
-      throw Error("В этом репозитории уже работает сборка.");
+      throw Error(tr("host.aBuildIsAlreadyRunningInThisRepository"));
   }
   private addActiveRun(key: string, id: string) {
     const members = this.activeKeys.get(key) ?? new Set<string>();
@@ -697,7 +701,7 @@ export class HostService extends EventEmitter {
     this.detachedRuns.delete(id);
   }
   private check() {
-    if (this.disposed) throw new Error("Приложение завершает работу");
+    if (this.disposed) throw new Error(tr("host.theApplicationIsShuttingDown"));
   }
   private async exclusive<T>(id: string, action: () => Promise<T>): Promise<T> {
     const previous = this.settingsLocks.get(id) ?? Promise.resolve();
@@ -748,10 +752,10 @@ export class HostService extends EventEmitter {
           let message =
             error instanceof Error
               ? error.message
-              : "Операция Goga не выполнена";
+              : tr("host.theGogaOperationFailed");
           for (const entry of document.value.env)
             if (entry.value)
-              message = message.split(entry.value).join("[скрыто]");
+              message = message.split(entry.value).join(tr("host.hidden"));
           throw preserveGitMergeCleanupError(error, message);
         }
       },
@@ -765,13 +769,13 @@ export class HostService extends EventEmitter {
         (await this.state.read(scopeProjectId(id))).version
     )
       throw new Error(
-        "Настройки проекта изменились. Предпросмотр устарел; обновите данные перед запуском.",
+        tr("host.projectSettingsChangedThePreviewIsStaleRefreshBeforeLaunching"),
       );
   }
   private async invocation(p: Project) {
     const doc = this.context.getStore();
     if (!doc || doc.projectId !== p.id)
-      throw new Error("Нет снимка настроек проекта");
+      throw new Error(tr("host.noProjectSettingsSnapshot"));
     const value = doc.document.value;
     if (this.bindings.has(p)) assertContextEnvironment(value.env);
     return {
@@ -800,12 +804,10 @@ export class HostService extends EventEmitter {
     } catch (error) {
       // Errors from arbitrary executable output/argv never cross the host boundary.
       if (
-        /не поддерживает --profile/.test(
-          error instanceof Error ? error.message : "",
-        )
+        error instanceof CommandExitError && /No such option:\s*--profile\b/.test(error.stderr)
       )
         throw new Error(
-          "Эта версия Goga не поддерживает --profile. Выбор профиля не был проигнорирован.",
+          tr("host.thisVersionOfGogaDoesNotSupportProfileTheSelected"),
         );
       assertReadActive();
       if (error instanceof RunnerShutdownError) throw error;
@@ -816,15 +818,15 @@ export class HostService extends EventEmitter {
         .join(" ");
       const reason =
         error instanceof CommandExitError
-          ? `завершилась с кодом ${error.exitCode ?? "signal"}. Проверьте конфигурацию проекта.`
+          ? tr("host.exitedWithCodeValue1CheckTheProjectConfiguration", { value1: error.exitCode ?? "signal" })
           : error instanceof CommandSpawnError
             ? error.code === "ENOENT"
-              ? "не запущена: исполняемый файл или его интерпретатор не найден. Укажите абсолютный путь или PATH в настройках проекта."
+              ? tr("host.couldNotStartTheExecutableOrItsInterpreterWasNot")
               : error.code === "EACCES"
-                ? "не запущена: нет прав на выполнение исполняемого файла."
-                : "не запущена. Проверьте исполняемый файл и его интерпретатор."
-            : "не выполнена. Проверьте исполняемый файл, PATH и конфигурацию проекта. Значения окружения скрыты.";
-      throw new Error(`Команда «${label}» ${reason}`);
+                ? tr("host.couldNotStartPermissionToExecuteTheFileWasDenied")
+                : tr("host.couldNotStartCheckTheExecutableAndItsInterpreter")
+            : tr("host.failedCheckTheExecutablePathAndProjectConfigurationEnvironmentValues");
+      throw new Error(tr("host.commandLabelReason", { label: label, reason: reason }));
     }
   }
   private async profiles(p: Project) {
@@ -924,7 +926,7 @@ export class HostService extends EventEmitter {
                 !record.deletedAt,
             );
             if (records.length !== 1)
-              throw Error("Владелец терминала недоступен.");
+              throw Error(tr("host.terminalOwnerUnavailable"));
             current = worktreeContextRef(records[0]!);
           }
           const result = await this.snapshot(current, async () => {
@@ -972,7 +974,7 @@ export class HostService extends EventEmitter {
       const profiles = await this.profiles(p);
       if (value.profile && !profiles.some((x) => x.name === value.profile))
         throw new Error(
-          "Выбранный профиль отсутствует; выберите существующий профиль или Автоматически.",
+          tr("host.theSelectedProfileNoLongerExistsSelectAnExistingProfile"),
         );
       await this.validateBinding(p);
       const document = await this.state.save(
@@ -1021,7 +1023,7 @@ export class HostService extends EventEmitter {
     // Check after snapshot's asynchronous settings verification as well.
     if (revision !== (this.documentSaveRevisions.get(scopeProjectId(id)) ?? 0))
       throw new Error(
-        "Документы проекта изменились. Список подсказок устарел; обновите данные.",
+        tr("host.projectDocumentsChangedSuggestionsAreStaleRefresh"),
       );
     return result;
   }
@@ -1120,9 +1122,9 @@ export class HostService extends EventEmitter {
   ): Promise<void> {
     const selected = structuredClone(this.parseScope(scope));
     const unique = [...new Set(overviewCopyPathsSchema.parse(paths))];
-    if (typeof absolute !== "boolean") throw Error("Недопустимый формат пути.");
+    if (typeof absolute !== "boolean") throw Error(tr("host.invalidPathFormat"));
     if (!this.fileClipboard?.writeText)
-      throw Error("Текстовый буфер обмена недоступен.");
+      throw Error(tr("host.textClipboardUnavailable"));
     return this.overviewRead(selected, async (project) => {
       const root = this.root(project);
       const entries = await Promise.all(
@@ -1143,7 +1145,7 @@ export class HostService extends EventEmitter {
   ): Promise<OverviewPastePreview> {
     const selected = structuredClone(this.parseScope(scope));
     const destination = overviewDirectorySchema.parse(directory);
-    if (!this.fileClipboard) throw Error("Файловый буфер обмена недоступен.");
+    if (!this.fileClipboard) throw Error(tr("host.fileClipboardUnavailable"));
     const expectedRoot = await this.overviewRead(selected, async (project) => {
       await this.validateBinding(project);
       await this.assertSettings(project.id);
@@ -1156,7 +1158,7 @@ export class HostService extends EventEmitter {
       const root = this.root(project);
       if (root !== expectedRoot)
         throw Error(
-          "Рабочая папка проекта изменилась. Повторите вставку в выбранной папке.",
+          tr("host.theProjectWorkingFolderChangedRetryThePasteInThe"),
         );
       const prepared = await prepareOverviewFiles(root, sources, destination);
       await this.validateBinding(project);
@@ -1187,7 +1189,7 @@ export class HostService extends EventEmitter {
       completedPaths: [],
       touchedPaths: [],
       message:
-        "Подтверждение устарело или уже использовано. Обновите список и повторите вставку.",
+        tr("host.confirmationIsStaleOrAlreadyUsedRefreshTheListAnd"),
     });
     if (!pending) return notDone();
     let observed: OverviewPasteResult | undefined;
@@ -1195,7 +1197,7 @@ export class HostService extends EventEmitter {
       const parsed = overviewPasteDecisionsSchema.parse(decisions);
       return await this.overviewWrite(pending.scope, async (root, guard) => {
         if (root !== pending.root)
-          throw Error("Рабочая папка проекта изменилась.");
+          throw Error(tr("host.theProjectWorkingFolderChanged"));
         observed = await pending.prepared.perform(parsed, guard);
         return observed;
       });
@@ -1207,7 +1209,7 @@ export class HostService extends EventEmitter {
             message:
               observed.status === "uncertain"
                 ? observed.message
-                : "Результат копирования не подтверждён. Проверьте дерево; автоматического повтора и удаления не будет.",
+                : tr("host.theCopyResultCouldNotBeVerifiedCheckTheTree"),
           }
         : notDone();
     }
@@ -1216,7 +1218,7 @@ export class HostService extends EventEmitter {
     const selected = structuredClone(this.parseScope(scope));
     const parsed = overviewCopyPathsSchema.parse(paths);
     const unique = [...new Set(parsed)].filter(p => !parsed.some(parent => parent !== p && p.startsWith(parent + "/")));
-    if (!this.fileClipboard) throw Error("Файловый буфер обмена недоступен.");
+    if (!this.fileClipboard) throw Error(tr("host.fileClipboardUnavailable"));
     return this.overviewRead(selected, async project => {
       const root = this.root(project);
       const entries = await Promise.all(unique.map(p => checkedOverviewEntry(root, p, true)));
@@ -1230,7 +1232,7 @@ export class HostService extends EventEmitter {
   async pasteOverviewEntries(scope: ScopeRef, destinationDirectory: string): Promise<OverviewPasteResult> {
     const selected = structuredClone(this.parseScope(scope));
     const destination = overviewDirectorySchema.parse(destinationDirectory);
-    if (!this.fileClipboard) throw Error("Файловый буфер обмена недоступен.");
+    if (!this.fileClipboard) throw Error(tr("host.fileClipboardUnavailable"));
     // Capture authority before the native clipboard await. A later selection is
     // never used as a fallback destination for this operation.
     const expectedRoot = await this.overviewRead(selected, async project => {
@@ -1242,13 +1244,13 @@ export class HostService extends EventEmitter {
     let observed: OverviewPasteResult | undefined;
     try {
       return await this.overviewWrite(selected, async (root, guard) => {
-        if (root !== expectedRoot) throw Error("Рабочая папка проекта изменилась. Повторите вставку в выбранной папке.");
+        if (root !== expectedRoot) throw Error(tr("host.theProjectWorkingFolderChangedRetryThePasteInThe"));
         observed = await pasteOverviewFiles(root, sources, destination, guard);
         return observed;
       });
     } catch (error) {
       if (!observed) throw error;
-      return { ...observed, status: "uncertain", message: "Результат копирования не подтверждён. Проверьте дерево; автоматического повтора и удаления не будет." };
+      return { ...observed, status: "uncertain", message: tr("host.theCopyResultCouldNotBeVerifiedCheckTheTree") };
     }
   }
   async prepareOverviewFileAction(
@@ -1282,7 +1284,7 @@ export class HostService extends EventEmitter {
       status: "not-done",
       completedPaths: [],
       message:
-        "Подтверждение устарело или уже использовано. Обновите список и подтвердите действие заново.",
+        tr("host.confirmationIsStaleOrAlreadyUsedRefreshTheListAnd2"),
     });
     if (!pending) return notDone();
     let observed: OverviewFileActionResult | undefined;
@@ -1296,7 +1298,7 @@ export class HostService extends EventEmitter {
             this.context.getStore()!.document.version !==
               pending.settingsVersion
           )
-            throw Error("Предпросмотр устарел");
+            throw Error(tr("host.previewIsStale"));
         };
         await verify();
         observed = await pending.prepared.perform(verify, this.trashItem);
@@ -1308,7 +1310,7 @@ export class HostService extends EventEmitter {
             ...observed,
             status: "uncertain",
             message:
-              "Результат не подтверждён. Проверьте каталог и Корзину; автоматического повтора не будет.",
+              tr("host.theResultCouldNotBeVerifiedCheckTheDirectoryAnd"),
           }
         : notDone();
     }
@@ -1319,7 +1321,7 @@ export class HostService extends EventEmitter {
       await this.validateBinding(project);
       await this.assertSettings(project.id);
       await entry.verify();
-      if (!this.showItemInFolder) throw Error("Показ в Finder недоступен.");
+      if (!this.showItemInFolder) throw Error(tr("host.showInFinderIsUnavailable"));
       this.showItemInFolder(path.join(this.root(project), p));
     });
   }
@@ -1375,7 +1377,7 @@ export class HostService extends EventEmitter {
           ),
         );
       if (!Object.hasOwn(index.cells, cell))
-        throw Error("Папка отсутствует в текущей схеме");
+        throw Error(tr("host.thisFolderIsNotInTheCurrentSchema"));
       return readOverviewContract(
         this.runner,
         call.executable,
@@ -1394,12 +1396,12 @@ export class HostService extends EventEmitter {
         metadata = await this.dockerfile(project);
       if (target.path !== metadata.relativePath)
         throw new Error(
-          "Путь Dockerfile изменился. Откройте актуальный файл заново.",
+          tr("host.theDockerfilePathChangedReopenTheCurrentFile"),
         );
       const document = await readProjectDocument(this.root(project), target);
       const latest = await this.dockerfile(project);
       if (latest.fingerprint !== metadata.fingerprint)
-        throw new Error("Конфигурация Dockerfile изменилась");
+        throw new Error(tr("host.dockerfileConfigurationChanged"));
       return {
         ...document,
         version: `${metadata.fingerprint}:${document.version}`,
@@ -1425,14 +1427,14 @@ export class HostService extends EventEmitter {
                 !version.startsWith(prefix)
               )
                 throw new Error(
-                  "Конфигурация Dockerfile изменилась. Черновик сохранён; откройте актуальный файл заново.",
+                  tr("host.dockerfileConfigurationChangedYourDraftWasKeptReopenTheCurrent"),
                 );
               const guard = async () => {
                 await this.validateBinding(project);
                 await this.assertSettings(project.id);
                 const latest = await this.dockerfile(project);
                 if (latest.fingerprint !== metadata.fingerprint)
-                  throw new Error("Конфигурация Dockerfile изменилась");
+                  throw new Error(tr("host.dockerfileConfigurationChanged"));
                 await this.validateBinding(project);
                 await this.assertSettings(project.id);
                 this.assertCatalog(this.context.getStore()!.catalogEpoch);
@@ -1497,7 +1499,7 @@ export class HostService extends EventEmitter {
   private assertCatalog(epoch: number) {
     if (this.deleting || epoch !== this.catalogEpoch)
       throw new Error(
-        "Документы изменились. Предпросмотр или каталог устарел; обновите данные.",
+        tr("host.documentsChangedThePreviewOrCatalogIsStaleRefresh"),
       );
   }
   private async catalogRead<T>(action: () => Promise<T>): Promise<T> {
@@ -1515,7 +1517,7 @@ export class HostService extends EventEmitter {
       this.children.size
     )
       throw new Error(
-        "Удаление недоступно, пока есть запускающийся или работающий конвейер. Дождитесь завершения; запуски не будут остановлены.",
+        tr("host.removalIsUnavailableWhileAPipelineIsStartingOrRunning"),
       );
   }
   async prepareDocumentDeletion(
@@ -1527,14 +1529,14 @@ export class HostService extends EventEmitter {
       !isDeletableDocument(source) ||
       (expectedVersion !== undefined && !isDeletionVersion(expectedVersion))
     )
-      throw new Error("Недопустимый документ или версия для удаления");
+      throw new Error(tr("host.invalidDocumentOrVersionForRemoval"));
     const selected = structuredClone(source);
     if (
       selected.scope === "project" &&
       selected.context &&
       selected.context.projectId !== selected.projectId
     )
-      throw Error("Контекст другого проекта.");
+      throw Error(tr("host.contextBelongsToAnotherProject"));
     return this.operation(async () => {
       this.check();
       this.assertDeletionIdle();
@@ -1567,7 +1569,7 @@ export class HostService extends EventEmitter {
       } catch {
         // Never expose file content, filesystem errors, or settings values.
         throw new Error(
-          "Документ отсутствует, изменён или не может быть безопасно удалён. Обновите список и откройте его заново.",
+          tr("host.theDocumentIsMissingHasChangedOrCannotBeRemoved"),
         );
       }
     });
@@ -1581,7 +1583,7 @@ export class HostService extends EventEmitter {
       return {
         status: "not-trashed",
         message:
-          "Подтверждение удаления истекло или уже использовано. Выберите документ заново.",
+          tr("host.removalConfirmationExpiredOrWasAlreadyUsedSelectTheDocument"),
       };
     return this.operation(async () => {
       try {
@@ -1593,7 +1595,7 @@ export class HostService extends EventEmitter {
       if (!this.trashItem)
         return {
           status: "not-trashed",
-          message: "Системная Корзина недоступна. Удаление не выполнено.",
+          message: tr("host.systemTrashUnavailableNothingWasDeleted"),
         };
       const action = async (): Promise<DeletionResult> => {
         this.assertDeletionIdle();
@@ -1609,14 +1611,14 @@ export class HostService extends EventEmitter {
         try {
           if (pending.source.scope === "project" && pending.source.context) {
             if (pending.source.projectId !== pending.source.context.projectId)
-              throw Error("Контекст другого проекта.");
+              throw Error(tr("host.contextBelongsToAnotherProject"));
             await this.project(pending.source.context);
           }
           return await pending.guard.perform(async (absolutePath) => {
             // A valid confirmation can expire while queued behind a save.
             // Check inside the guarded save queue, immediately at adapter entry.
             if (!this.deletionTickets.isCurrent(pending))
-              throw new Error("Подтверждение удаления истекло");
+              throw new Error(tr("host.removalConfirmationExpired"));
             this.check();
             this.assertDeletionIdle();
             await this.trashItem!(absolutePath);
@@ -1625,7 +1627,7 @@ export class HostService extends EventEmitter {
           return {
             status: "uncertain",
             message:
-              "Не удалось проверить результат удаления. Проверьте Корзину и каталог; текст редактора сохранён.",
+              tr("host.couldNotVerifyRemovalCheckTrashAndTheFolderThe"),
           };
         } finally {
           this.catalogEpoch++;
@@ -1640,7 +1642,7 @@ export class HostService extends EventEmitter {
 
   private parseScope(scope: ScopeRef) {
     const result = scopeRefSchema.safeParse(scope);
-    if (!result.success) throw Error("Некорректный проект или контекст.");
+    if (!result.success) throw Error(tr("host.invalidProjectOrContext"));
     return result.data;
   }
   private root(project: Project): string {
@@ -1680,10 +1682,10 @@ export class HostService extends EventEmitter {
     if (binding) assertGitPaths(binding, lines);
     if ((!binding && lines.length) || !commit || !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(commit) ||
         !ref || (ref !== "HEAD" && !/^refs\/heads\/[^\x00-\x20\x7f]+$/.test(ref)))
-      throw Error("Не удалось определить ветку топика.");
+      throw Error(tr("host.couldNotDetermineTheTopicBranch"));
     const branch = ref === "HEAD" ? "" : ref.slice("refs/heads/".length);
     if (binding && branch !== binding.branch)
-      throw Error("Ветка рабочей копии изменилась. Выберите контекст заново.");
+      throw Error(tr("host.theWorkingCopyBranchChangedSelectTheContextAgain"));
     assertReadActive();
     return {commit, branch};
   }
@@ -1692,7 +1694,7 @@ export class HostService extends EventEmitter {
     if (operationBinding || record.projectPath !== project.path ||
         record.storageKind !== "clone" || record.ownership !== "managed" ||
         record.state !== "ready" || record.preparation || record.reason || record.deletedAt)
-      throw Error("Клон недоступен или не принадлежит выбранному топику.");
+      throw Error(tr("host.theCloneIsUnavailableOrDoesNotBelongToThe"));
     return record;
   }
   /** Display-only admission. A receipt is an optimization hint, never authority:
@@ -1731,15 +1733,15 @@ export class HostService extends EventEmitter {
           if (phase !== "discover") {
             const live = await this.resolveFormOwner(ref, project);
             if (JSON.stringify(live) !== JSON.stringify(binding))
-              throw Error("Рабочая копия изменилась во время чтения.");
+              throw Error(tr("host.theWorkingCopyChangedDuringReading"));
           }
           await this.formGitFacts(project);
         }
         const current = await this.state.readRegisteredProject(id);
         if (current.document.version !== document.version)
-          throw Error("Настройки проекта изменились. Предпросмотр устарел; обновите данные перед запуском.");
+          throw Error(tr("host.projectSettingsChangedThePreviewIsStaleRefreshBeforeLaunching"));
         if (current.project.path !== project.path || await realpath(project.path) !== project.path)
-          throw Error("Основная папка проекта изменилась. Обновите данные.");
+          throw Error(tr("host.theOriginalProjectFolderChangedRefresh"));
         this.check();
         assertReadActive();
         return result;
@@ -1761,7 +1763,7 @@ export class HostService extends EventEmitter {
         ))
     )
       throw Error(
-        "Контекст занят запуском или состояние процесса не подтверждено после перезапуска.",
+        tr("host.theContextHasAnActiveRunOrTheProcessState"),
       );
   }
   private async validateBinding(project: Project) {
@@ -1773,14 +1775,14 @@ export class HostService extends EventEmitter {
       fresh.projectPath !== project.path ||
       fresh.storageKind !== "clone"
     )
-      throw Error("Контекст изменился; запуск в основной папке запрещён.");
+      throw Error(tr("host.theContextChangedLaunchingInTheOriginalFolderIsNot"));
     await this.assertEffectiveRoot(project);
   }
   private async project(scope: ScopeRef): Promise<Project> {
     const parsed = this.parseScope(scope),
       id = scopeProjectId(parsed);
     const p = (await this.listProjects()).find((p) => p.id === id);
-    if (!p) throw new Error("Неизвестный проект");
+    if (!p) throw new Error(tr("host.unknownProject2"));
     const inherited = this.context.getStore();
     const binding =
       typeof parsed === "string"
@@ -1796,7 +1798,7 @@ export class HostService extends EventEmitter {
       binding.state !== "ready" ||
       binding.ownership !== "managed"
     )
-      throw Error("Клон недоступен или не принадлежит выбранному топику.");
+      throw Error(tr("host.theCloneIsUnavailableOrDoesNotBelongToThe"));
     const scoped = { ...p };
     this.bindings.set(scoped, binding);
     await this.assertEffectiveRoot(scoped);
@@ -1812,7 +1814,7 @@ export class HostService extends EventEmitter {
     try {
       const label = await this.operation(() => this.exclusive(projectId, async () => {
         this.check();
-        if (this.shutdownAdmission) throw Error("Приложение готовится к выходу.");
+        if (this.shutdownAdmission) throw Error(tr("host.theAppIsPreparingToExit"));
         this.demoAdmissions.set(ticket, ref);
         const project = await this.project(ref);
         return typeof ref === "string" ? project.name : project.name + " · " + ref.topic;
@@ -1831,7 +1833,7 @@ export class HostService extends EventEmitter {
   }
   createProject(request: ProjectCreationRequest) {
     this.check();
-    if (this.shutdownAdmission) throw Error("Приложение готовится к выходу.");
+    if (this.shutdownAdmission) throw Error(tr("host.theAppIsPreparingToExit"));
     return this.projectCreation.create(request);
   }
   cancelProjectCreation(id: string) { return this.projectCreation.cancelAndWait(id); }
@@ -1840,7 +1842,7 @@ export class HostService extends EventEmitter {
   async removeProject(input: ProjectRemovalRequest): Promise<Project[]> {
     const target = projectRemovalRequestSchema.parse(input);
     if (!path.isAbsolute(target.path))
-      throw Error("Недопустимая папка проекта.");
+      throw Error(tr("host.invalidProjectFolder"));
     return this.operation(() =>
       this.exclusive(target.id, async () => {
         this.check();
@@ -1855,14 +1857,14 @@ export class HostService extends EventEmitter {
           )
         )
           throw Error(
-            "Сначала завершите запуск этого проекта или проверьте его состояние. Проект не убран из списка; процессы не остановлены.",
+            tr("host.finishTheProjectSRunOrVerifyItsStateFirst"),
           );
         if ([...this.terminalLeaseProjects.values()].includes(target.id))
           throw Error(
-            "Сначала закройте терминалы этого проекта. Проект не убран из списка; сессии не остановлены.",
+            tr("host.closeThisProjectSTerminalsFirstTheProjectRemainsIn"),
           );
         if(this.hasDemonstration(target.id))
-          throw Error("Сначала закройте демонстрации этого проекта. Проект не убран из списка.");
+          throw Error(tr("host.closeThisProjectSDemonstrationsFirstTheProjectRemainsIn"));
         const remaining = await this.state.removeProject(target);
         if (this.selectedContext?.projectId === target.id)
           this.selectedContext = null;
@@ -1873,10 +1875,10 @@ export class HostService extends EventEmitter {
   async addProject(folder: string): Promise<Project> {
     this.check();
     if (typeof folder !== "string" || !path.isAbsolute(folder))
-      throw new Error("Выберите локальную папку");
+      throw new Error(tr("host.chooseALocalFolder"));
     const canonical = await realpath(folder);
     if (!(await lstat(canonical)).isDirectory())
-      throw Error("Выберите папку проекта, а не файл.");
+      throw Error(tr("host.chooseTheProjectFolderNotAFile"));
     // A project is a local directory. Git-root discovery is only a hint which
     // preserves canonical IDs for existing repositories, never an admission gate.
     let root = canonical;
@@ -1929,7 +1931,7 @@ export class HostService extends EventEmitter {
     );
     if (!text) return {};
     const doc = parseDocument(text);
-    if (doc.errors.length) throw new Error("Некорректная конфигурация проекта");
+    if (doc.errors.length) throw new Error(tr("host.invalidProjectConfiguration"));
     return doc.toJS({ maxAliasCount: 100 }) ?? {};
   }
   private async topics(
@@ -1950,10 +1952,10 @@ export class HostService extends EventEmitter {
       );
     } catch (e) {
       if (e instanceof SyntaxError)
-        throw new Error("Goga вернула некорректный каталог топиков");
+        throw new Error(tr("host.gogaReturnedAnInvalidTopicCatalog"));
       throw e;
     }
-    if (!Array.isArray(rows)) throw new Error("Некорректный каталог топиков");
+    if (!Array.isArray(rows)) throw new Error(tr("host.invalidTopicCatalog"));
     return rows
       .map((r) => {
         if (
@@ -1962,7 +1964,7 @@ export class HostService extends EventEmitter {
           typeof r.branch !== "string" ||
           r.branch.startsWith("-")
         )
-          throw new Error("Некорректный топик Goga");
+          throw new Error(tr("host.invalidGogaTopic"));
         return {
           topic: r.topic,
           branch: r.branch,
@@ -2003,14 +2005,14 @@ export class HostService extends EventEmitter {
       typeof request.topic !== "string" ||
       request.topic !== slug(request.branch)
     )
-      throw new Error("Некорректный запрос задачи");
+      throw new Error(tr("host.invalidTaskRequest"));
     if (
       request.context &&
       (request.context.projectId !== request.projectId ||
         request.context.topic !== request.topic ||
         request.context.branch !== request.branch)
     )
-      throw Error("Задача относится к другому контексту.");
+      throw Error(tr("host.theTaskBelongsToAnotherContext"));
     // snapshot() already resolved this exact owner and its effective Git root.
     // Reuse that Project only for this read; every command and the final owner
     // resolution still check live paths. The launch path deliberately revalidates.
@@ -2028,7 +2030,7 @@ export class HostService extends EventEmitter {
       taskOwner &&
       (taskOwner.topic !== request.topic || taskOwner.branch !== request.branch)
     )
-      throw Error("Задача относится к другому контексту.");
+      throw Error(tr("host.theTaskBelongsToAnotherContext"));
     // Catalog rows describe presentation, not authority to launch in an already
     // resolved checkout. Launch reads only this task and validates the live owner.
     const facts = form ? await this.formGitFacts(p, request.branch) : undefined;
@@ -2065,10 +2067,10 @@ export class HostService extends EventEmitter {
       }
     }
     if (count !== undefined && count > 1)
-      throw new Error("Топик неоднозначен. Обновите каталог.");
+      throw new Error(tr("host.theTopicIsAmbiguousRefreshTheCatalog"));
     if (count === 0 && !taskOwner)
       throw new Error(
-        "Данные задачи выбранного топика не найдены. Обновите каталог.",
+        tr("host.noTaskDataWasFoundForTheSelectedTopicRefresh"),
       );
     const relative = taskPath(
       request.topic,
@@ -2077,7 +2079,7 @@ export class HostService extends EventEmitter {
     const git = (args: string[]) => this.cmd(p, args, true);
     const current = facts?.branch ?? (await git(["branch", "--show-current"])).trim();
     if (taskOwner && current !== taskOwner.branch)
-      throw Error("Ветка рабочей копии изменилась. Выберите контекст заново.");
+      throw Error(tr("host.theWorkingCopyBranchChangedSelectTheContextAgain"));
     const commit = facts?.commit ?? (
       await git([
         "rev-parse",
@@ -2086,7 +2088,7 @@ export class HostService extends EventEmitter {
       ])
     ).trim();
     if (!/^[a-f0-9]{40,64}$/.test(commit))
-      throw new Error("Не удалось определить ветку топика");
+      throw new Error(tr("host.couldNotDetermineTheTopicBranch2"));
     const value =
       current === request.branch
         ? await readWorkingTask(this.root(p), relative)
@@ -2118,7 +2120,7 @@ export class HostService extends EventEmitter {
       ) !== relative
     )
       throw new Error(
-        "Ветка или задача изменились во время чтения. Откройте задачу заново.",
+        tr("host.theBranchOrTaskChangedWhileBeingReadOpenThe"),
       );
     if (forLaunch) await this.validateBinding(p);
     assertReadActive();
@@ -2138,7 +2140,7 @@ export class HostService extends EventEmitter {
     try {
       identity = topicContextIdentitySchema.parse(input);
     } catch {
-      return Promise.reject(Error("Некорректная идентичность топика"));
+      return Promise.reject(Error(tr("host.invalidTopicIdentity")));
     }
     const key = JSON.stringify(identity);
     const pending = this.contextPreparations.get(key);
@@ -2150,7 +2152,7 @@ export class HostService extends EventEmitter {
         const repositoryKey = await this.key(project);
         if (this.activeKeys.has(repositoryKey))
           throw Error(
-            "Подготовка рабочей копии недоступна во время активного запуска. Существующая защита репозитория сохранена.",
+            tr("host.cannotPrepareAWorkingCopyDuringAnActiveRunRepository"),
           );
         const board = await this.readTopicBoard(project.id, identity.year);
         if (
@@ -2164,7 +2166,7 @@ export class HostService extends EventEmitter {
           )
         )
           throw Error(
-            "Топик отсутствует в актуальном локальном каталоге. Обновите список; новая ветка не создаётся.",
+            tr("host.theTopicIsAbsentFromTheCurrentLocalCatalogRefresh"),
           );
         return this.clones.ensure(project, identity);
       }),
@@ -2210,7 +2212,7 @@ export class HostService extends EventEmitter {
               );
               if (!primary)
                 throw Error(
-                  "Основная папка проекта изменилась. Выберите контекст заново.",
+                  tr("host.theOriginalProjectFolderChangedSelectTheContextAgain"),
                 );
               return this.topics(primary, identity.year);
             }),
@@ -2227,12 +2229,12 @@ export class HostService extends EventEmitter {
     this.check();
     const request = topicContextReadinessSchema.parse(input);
     if (request.topic !== slug(request.branch))
-      throw Error("Некорректная идентичность топика.");
+      throw Error(tr("host.invalidTopicIdentity2"));
     if (!("contextId" in request)) {
       const project = (await this.listProjects()).find(
         (p) => p.id === request.projectId,
       );
-      if (!project) throw Error("Неизвестный проект");
+      if (!project) throw Error(tr("host.unknownProject2"));
       const owners = (await this.clones.list(request.projectId)).filter(
         (r) =>
           r.year === request.year &&
@@ -2242,7 +2244,7 @@ export class HostService extends EventEmitter {
       );
       if (owners.length > 1)
         throw Error(
-          "Владелец топика неоднозначен. Выберите точную рабочую копию.",
+          tr("host.topicOwnershipIsAmbiguousSelectTheExactWorkingCopy"),
         );
       if (owners.length === 1)
         return this.checkTopicContextReadiness(worktreeContextRef(owners[0]!));
@@ -2259,12 +2261,12 @@ export class HostService extends EventEmitter {
     );
     if (!project || project.path !== record.projectPath)
       throw Error(
-        "Основная папка проекта изменилась. Выберите контекст заново.",
+        tr("host.theOriginalProjectFolderChangedSelectTheContextAgain"),
       );
     const verify = await this.assertTaskReady(ref, project.path, record);
     const after = await this.resolveTopicContext(ref);
     if (after.path !== record.path || after.revision !== record.revision)
-      throw Error("Рабочая копия изменилась во время проверки.");
+      throw Error(tr("host.theWorkingCopyChangedDuringVerification"));
     await verify();
     return { record: after, verify };
   }
@@ -2275,7 +2277,7 @@ export class HostService extends EventEmitter {
     const record = await this.clones.resolve(ref);
     if (record.projectPath !== (await realpath(project.path)))
       throw Error(
-        "Основная папка проекта изменилась. Выберите контекст заново.",
+        tr("host.theOriginalProjectFolderChangedSelectTheContextAgain"),
       );
     return record;
   }
@@ -2286,7 +2288,7 @@ export class HostService extends EventEmitter {
     const records = await this.clones.reconcile(id);
     if (records.some((record) => record.projectPath !== root))
       throw Error(
-        "Реестр относится к прежней папке проекта. Требуется проверка.",
+        tr("host.theRegistryBelongsToThePreviousProjectFolderVerificationRequired"),
       );
     const pending = records.some((r) => r.deletedAt)
       ? await this.clones.contextDeletionRecovery(id)
@@ -2383,19 +2385,19 @@ export class HostService extends EventEmitter {
             const current = await this.state.readRegisteredProject(project.id);
             if (document.version !== current.document.version)
               throw Error(
-                "Настройки проекта изменились. Откройте изменения заново.",
+                tr("host.projectSettingsChangedOpenChangesAgain"),
               );
             if (
               current.project.path !== project.path ||
               root !== (await realpath(root))
             )
               throw Error(
-                "Рабочая папка изменилась. Откройте изменения заново.",
+                tr("host.theWorkingFolderChangedOpenChangesAgain"),
               );
             if (binding && typeof owner !== "string") {
               if (binding.projectPath !== (await realpath(project.path)))
                 throw Error(
-                  "Основная папка проекта изменилась; подмена клона запрещена.",
+                  tr("host.theOriginalProjectFolderChangedUsingItInPlaceOf"),
                 );
               // Match the ordinary resolver's effective-path check under the final
               // read environment, without its repairing CloneStore or write admission.
@@ -2430,11 +2432,11 @@ export class HostService extends EventEmitter {
                 paths.length !== expected.length ||
                 paths.some((p, i) => path.resolve(root, p) !== expected[i])
               )
-                throw Error("Эффективные пути Git не соответствуют контексту.");
+                throw Error(tr("host.effectiveGitPathsDoNotMatchTheContext"));
               const fresh = await this.clones.resolveGitRead(owner);
               if (JSON.stringify(fresh) !== JSON.stringify(admission))
                 throw Error(
-                  "Владелец или операция Git изменились. Откройте изменения заново.",
+                  tr("host.theGitOwnerOrOperationChangedOpenChangesAgain"),
                 );
             }
             // Git and clone proofs can outlive either a settings change or an
@@ -2442,11 +2444,11 @@ export class HostService extends EventEmitter {
             const final = await this.state.readRegisteredProject(project.id);
             if (document.version !== final.document.version)
               throw Error(
-                "Настройки проекта изменились. Откройте изменения заново.",
+                tr("host.projectSettingsChangedOpenChangesAgain"),
               );
             if (final.project.path !== project.path)
               throw Error(
-                "Рабочая папка изменилась. Откройте изменения заново.",
+                tr("host.theWorkingFolderChangedOpenChangesAgain"),
               );
             this.assertCatalog(epoch);
             assertStoppedRebaseOwnership(stoppedRebase);
@@ -2487,10 +2489,10 @@ export class HostService extends EventEmitter {
           return result;
         } catch (error) {
           let message =
-            error instanceof Error ? error.message : "Чтение Git не выполнено";
+            error instanceof Error ? error.message : tr("host.gitReadFailed");
           for (const entry of document.value.env)
             if (entry.value)
-              message = message.split(entry.value).join("[скрыто]");
+              message = message.split(entry.value).join(tr("host.hidden"));
           throw Error(message);
         }
       }),
@@ -2591,7 +2593,7 @@ export class HostService extends EventEmitter {
       path.join(admission.record.gitCommonDir, "HEAD"),
     )?.bytes.toString("utf8");
     if (!head || !/^[a-f0-9]{40}(?:[a-f0-9]{24})?\n$/.test(head))
-      throw Error("HEAD остановленного rebase изменился.");
+      throw Error(tr("host.thePausedRebaseHeadChanged"));
     const ownership = [
       path.join(
         this.clones.store.root,
@@ -2602,7 +2604,7 @@ export class HostService extends EventEmitter {
       const parent = conflictDirectory(path.dirname(file));
       const value = conflictRegular(file, 4096);
       if (!value || conflictDirectory(path.dirname(file)) !== parent)
-        throw Error("Владение остановленным rebase изменилось.");
+        throw Error(tr("host.ownershipOfThePausedRebaseChanged"));
       return Object.freeze([file, value.identity] as const);
     });
     return Object.freeze({
@@ -2630,7 +2632,7 @@ export class HostService extends EventEmitter {
           ? undefined
           : await this.clones.resolveGitRead(owner);
       if (admission && admission.record.path !== context.root)
-        throw Error("Рабочая папка конфликта не соответствует владельцу.");
+        throw Error(tr("host.theConflictWorkingFolderDoesNotMatchTheOwner"));
       const settings = await this.state.read(scopeProjectId(owner));
       const stoppedRebase = this.stoppedRebaseConflictBinding(admission);
       const controls = await fingerprintNativeGitControls(context.root);
@@ -2638,7 +2640,7 @@ export class HostService extends EventEmitter {
         await context.verify();
         assertStoppedRebaseOwnership(stoppedRebase);
         if (controls !== (await fingerprintNativeGitControls(context.root)))
-          throw Error("Операция Git изменилась. Откройте конфликт заново.");
+          throw Error(tr("host.theGitOperationChangedOpenTheConflictAgain"));
       };
       await verify();
       const result = await action({
@@ -2675,14 +2677,14 @@ export class HostService extends EventEmitter {
   /** Fresh scoped settings/owner admission spans the entire action, never a stale closure. */
   private nativeCloneOwnerProof(binding?: WorktreeRecord) {
     if (!binding) return [];
-    if (!binding.sourceCommonDir) throw Error("Источник клона не подтверждён.");
+    if (!binding.sourceCommonDir) throw Error(tr("host.theCloneSourceCouldNotBeVerified"));
     return [
       ...[
         path.join(this.clones.store.root, `.owner-${binding.contextId}.json`),
         path.join(binding.gitCommonDir, "desktop-owner.json"),
       ].map((file) => {
         const value = conflictRegular(file, 4096);
-        if (!value) throw Error("Владение клоном не подтверждено.");
+        if (!value) throw Error(tr("host.cloneOwnershipCouldNotBeVerified"));
         return ["file", file, value.identity];
       }),
       // Bind source redirection as opaque filesystem identity, not parsed Git
@@ -2740,7 +2742,7 @@ export class HostService extends EventEmitter {
                 await this.clones.resolveNativeOperationOwner(owner),
               ) !== JSON.stringify(binding)
             )
-              throw Error("Владелец клона изменился.");
+              throw Error(tr("host.theCloneOwnerChanged"));
             const epoch = this.catalogEpoch;
             const project = await this.project(scopeProjectId(owner));
             const settings = await this.state.read(project.id);
@@ -2761,7 +2763,7 @@ export class HostService extends EventEmitter {
                 settings.version !== (await this.state.read(project.id)).version
               )
                 throw Error(
-                  "Владелец или настройки операции изменились. Повторите предпросмотр.",
+                  tr("host.theOwnerOrOperationSettingsChangedPreviewAgain"),
                 );
               if (binding && typeof owner !== "string") {
                 if (
@@ -2770,7 +2772,7 @@ export class HostService extends EventEmitter {
                     JSON.stringify(physicalOwner)
                 )
                   throw Error(
-                    "Владелец клона изменился; переход в основной проект запрещён.",
+                    tr("host.theCloneOwnerChangedSwitchingToTheOriginalProjectIs"),
                   );
                 await this.clones.assertNativeOperationOwnerRecord(binding);
               }
@@ -2778,7 +2780,7 @@ export class HostService extends EventEmitter {
               if (
                 settings.version !== (await this.state.read(project.id)).version
               )
-                throw Error("Настройки операции изменились.");
+                throw Error(tr("host.operationSettingsChanged"));
             };
             const native = createNativeGitCapability({
               root,
@@ -2848,7 +2850,7 @@ export class HostService extends EventEmitter {
                   await this.clones.resolveNativeOperationOwner(owner),
                 ) !== JSON.stringify(binding)
               )
-                throw Error("Владелец клона изменился после операции.");
+                throw Error(tr("host.theCloneOwnerChangedAfterTheOperation"));
               return value;
             } catch (error) {
               actionFailure = error;
@@ -2882,7 +2884,7 @@ export class HostService extends EventEmitter {
                   : { status: "uncertain" }),
                 log: sanitize(
                   String(completed.log) +
-                    "\nИтоговая проверка владельца/служебной блокировки не пройдена: " +
+                    tr("host.nfinalVerificationOfTheOwnerOrServiceLockFailed") +
                     (error instanceof Error ? error.message : String(error)),
                 ),
               } as T;
@@ -2943,7 +2945,7 @@ export class HostService extends EventEmitter {
                   root !== (await realpath(this.root(project)))
                 )
                   throw Error(
-                    "Рабочая папка изменилась. Повторите предпросмотр коммита.",
+                    tr("host.theWorkingFolderChangedPreviewTheCommitAgain"),
                   );
                 if (binding) {
                   // The repository lifecycle lock below is not reentrant: validate the
@@ -2963,14 +2965,14 @@ export class HostService extends EventEmitter {
                       JSON.stringify(worktreeContextRef(binding))
                   )
                     throw Error(
-                      "Владелец клона изменился. Коммит в основной папке запрещён.",
+                      tr("host.theCloneOwnerChangedCommitsInTheOriginalFolderAre"),
                     );
                   await this.clones.store.assertOwned(row);
                   if (
                     JSON.stringify(this.nativeCloneOwnerProof(binding)) !==
                     JSON.stringify(physicalOwner)
                   )
-                    throw Error("Физический владелец клона изменился.");
+                    throw Error(tr("host.thePhysicalOwnerOfTheCloneChanged"));
                 }
               };
               const git: GitCommitContext["git"] = (args, options) => {
@@ -3043,7 +3045,7 @@ export class HostService extends EventEmitter {
                       const value = await reader.snapshot();
                       if (binding && value.branch !== binding.branch)
                         throw Error(
-                          "Ветка клона изменилась. Повторите предпросмотр коммита.",
+                          tr("host.theCloneBranchChangedPreviewTheCommitAgain"),
                         );
                       return value;
                     },
@@ -3071,7 +3073,7 @@ export class HostService extends EventEmitter {
                     sanitizeRepositoryLog(
                       error instanceof Error
                         ? error.message
-                        : "Не удалось выполнить операцию Git.",
+                        : tr("host.gitOperationFailed"),
                       secrets,
                     ),
                   );
@@ -3109,7 +3111,7 @@ export class HostService extends EventEmitter {
             const settings = this.context.getStore()!;
             const project = settings.scopedProject;
             if (this.binding(project))
-              throw Error("Управление ветками доступно только без топика.");
+              throw Error(tr("host.branchManagementIsAvailableOnlyWithNoTopicSelected"));
             const root = await realpath(this.root(project));
             const secrets = settings.document.value.env
               .map((row) => row.value)
@@ -3128,7 +3130,7 @@ export class HostService extends EventEmitter {
                 (await realpath(this.root(current))) !== root
               )
                 throw Error(
-                  "Рабочая папка изменилась. Повторите предпросмотр операции.",
+                  tr("host.theWorkingFolderChangedPreviewTheOperationAgain"),
                 );
             };
             const git: GitBranchContext["git"] = (args, stdin) =>
@@ -3210,7 +3212,7 @@ export class HostService extends EventEmitter {
                 sanitizeRepositoryLog(
                   error instanceof Error
                     ? error.message
-                    : "Не удалось выполнить операцию Git.",
+                    : tr("host.gitOperationFailed"),
                   secrets,
                 ),
               );
@@ -3277,7 +3279,7 @@ export class HostService extends EventEmitter {
             JSON.stringify(this.nativeCloneOwnerProof(binding)) !==
             JSON.stringify(physicalOwner)
           )
-            throw Error("Владелец клона изменился.");
+            throw Error(tr("host.theCloneOwnerChanged"));
           return {
             scope: context.scope,
             projectPath: await realpath(project.path),
@@ -3339,7 +3341,7 @@ export class HostService extends EventEmitter {
     // operation. Never create directories while displaying a board or preview.
     if (typeof scope !== "string") {
       if (scope.branch !== input.targetBranch)
-        throw Error("Запрошена ветка другого топика.");
+        throw Error(tr("host.theRequestedBranchBelongsToAnotherTopic"));
       await ensureCloneTopicDirectory(await this.resolveTopicContext(scope));
     }
     let attempt: object | undefined;
@@ -3352,7 +3354,7 @@ export class HostService extends EventEmitter {
               await context.git(["symbolic-ref", "--quiet", "--short", "HEAD"])
             ).stdout.trim() !== input.targetBranch
           )
-            throw Error("Топик не является текущей веткой этого контекста.");
+            throw Error(tr("host.theTopicIsNotTheCurrentBranchInThisContext"));
           const sourceRef = (
             await context.git([
               "rev-parse",
@@ -3365,7 +3367,7 @@ export class HostService extends EventEmitter {
             !/^refs\/(heads|remotes|desktop)\//.test(sourceRef) ||
             sourceRef.includes("\n")
           )
-            throw Error("Источник не является прямой веткой.");
+            throw Error(tr("host.theSourceIsNotADirectBranch"));
           return this.gitUpdateHandoff.captureAttempt(context, {
             ...input,
             sourceRef,
@@ -3458,13 +3460,13 @@ export class HostService extends EventEmitter {
           project.id,
           async (context) => {
             if (context.root !== root)
-              throw Error("Исходная рабочая папка изменилась.");
+              throw Error(tr("host.theOriginalWorkingFolderChanged"));
             const engine = new GitBranchActions({
               context: async (_id, fn) => fn(context),
             });
             const inventory = await engine.inventory(project.id);
             if (!inventory.branch)
-              throw Error("Переключение требует текущую локальную ветку.");
+              throw Error(tr("host.switchingRequiresACurrentLocalBranch"));
             if (!returning) {
               original = inventory.branch;
               if (
@@ -3473,7 +3475,7 @@ export class HostService extends EventEmitter {
                 )?.oid !== expectedOid
               )
                 throw Error(
-                  "Ветка топика изменилась после синхронизации; применение не выполнялось.",
+                  tr("host.theTopicBranchChangedAfterSyncChangesWereNotApplied"),
                 );
             }
             if (inventory.branch === target)
@@ -3482,7 +3484,7 @@ export class HostService extends EventEmitter {
                 action: "switch-local" as const,
                 status: "success" as const,
                 changed: false,
-                message: "Ветка уже выбрана.",
+                message: tr("host.thisBranchIsAlreadySelected"),
                 log: "",
               };
             if (
@@ -3490,12 +3492,12 @@ export class HostService extends EventEmitter {
               (inventory.branch !== branch || inventory.head !== expectedOid)
             )
               throw Error(
-                "Текущая ветка или её коммит изменились извне. Чужое переключение не отменялось.",
+                tr("host.theCurrentBranchOrItsCommitChangedExternallyTheExternal"),
               );
             this.assertScopeWritable(this.context.getStore()!.scopedProject);
             if (this.terminalDeletionBlocked(project.id))
               throw Error(
-                "Исходная рабочая папка занята командой в терминале.",
+                tr("host.aTerminalCommandIsUsingTheOriginalWorkingFolder"),
               );
             const preview = await engine.prepare({
               projectId: project.id,
@@ -3514,13 +3516,13 @@ export class HostService extends EventEmitter {
           [
             result.message,
             ...(result.recoveryPath
-              ? [`Материалы восстановления: ${result.recoveryPath}`]
+              ? [tr("host.recoveryFilesRecoverypath", { recoveryPath: result.recoveryPath })]
               : []),
           ].join("\n"),
         );
       return result.changed;
     };
-    diagnostic(`Переключение исходного проекта на ветку топика ${branch}…`);
+    diagnostic(tr("host.switchingTheOriginalProjectToTopicBranchBranch", { branch: branch }));
     // An uncertain first hop must not authorize CLI execution or another write.
     const switched = await switchTo(branch);
     let failure: unknown;
@@ -3532,19 +3534,19 @@ export class HostService extends EventEmitter {
       failure = error;
     } finally {
       if (switched) {
-        diagnostic(`Возврат исходного проекта на ветку ${original}…`);
+        diagnostic(tr("host.returningTheOriginalProjectToBranchOriginal", { original: original! }));
         try {
           await switchTo(original!, true);
-          diagnostic(`Исходная ветка ${original} восстановлена.`);
+          diagnostic(tr("host.originalBranchOriginalRestored", { original: original! }));
         } catch (error) {
           throw Error(
             [
-              `Не удалось вернуться на исходную ветку ${original}. Изменения не сбрасывались; проверьте текущую ветку перед продолжением.`,
+              tr("host.couldNotReturnToTheOriginalBranchOriginalNoChanges", { original: original! }),
               failed
                 ? failure instanceof Error
                   ? failure.message
-                  : "goga topics propagate завершилась ошибкой."
-                : "goga topics propagate выполнена. Повтор команды не выполнялся.",
+                  : tr("host.gogaTopicsPropagateFailed")
+                : tr("host.gogaTopicsPropagateCompletedTheCommandWasNotRepeated"),
               error instanceof Error ? error.message : String(error),
             ].join("\n"),
           );
@@ -3591,7 +3593,7 @@ export class HostService extends EventEmitter {
                   const project = (await this.listProjects()).find(
                     (p) => p.id === request.projectId,
                   );
-                  if (!project) throw Error("Неизвестный проект.");
+                  if (!project) throw Error(tr("host.unknownProject"));
                   return project;
                 },
                 resolve: (ref) => this.resolveTopicContext(ref),
@@ -3606,7 +3608,7 @@ export class HostService extends EventEmitter {
                           this.terminalDeletionBlocked(ref)
                         )
                           throw Error(
-                            "Для получения коммитов остановите запуск и активные команды в терминале топика. Экспорт не выполнялся.",
+                            tr("host.stopTheRunAndActiveTerminalCommandsInTheTopic"),
                           );
                         const engine = new NativeGitSequence({
                           context: async (_scope, action) => action(context),
@@ -3638,7 +3640,7 @@ export class HostService extends EventEmitter {
                     repositorySnapshot.document.version
                   )
                     throw Error(
-                      "Настройки проекта изменились; повторите действие.",
+                      tr("host.projectSettingsChangedRetryTheAction"),
                     );
                   this.assertCatalog(repositorySnapshot.catalogEpoch);
                 },
@@ -3730,7 +3732,7 @@ export class HostService extends EventEmitter {
   }) {
     this.check();
     if ((await this.sync.applyProjectId(input.token)) !== input.projectId)
-      throw Error("Подтверждение другого проекта.");
+      throw Error(tr("host.confirmationBelongsToAnotherProject"));
     return this.operation(async () =>
       this.sync.apply(await this.project(input.projectId), input),
     );
@@ -3744,7 +3746,7 @@ export class HostService extends EventEmitter {
     controller: NonNullable<HostService["terminalDeletion"]>,
   ) {
     if (this.terminalDeletion && this.terminalDeletion !== controller)
-      throw Error("Терминальный контроллер уже установлен.");
+      throw Error(tr("host.theTerminalControllerIsAlreadyInstalled"));
     this.terminalDeletion = controller;
   }
   private terminalDeletionBlocked(scope: ScopeRef): boolean {
@@ -3783,17 +3785,17 @@ export class HostService extends EventEmitter {
       details: [
         ...(plan.primarySwitch
           ? [
-              `После перехода в «Без топика» основная папка будет переключена с «${plan.primarySwitch.from}» на «${plan.primarySwitch.to}» без force, затем Goga удалит топик.`,
+              tr("host.afterSwitchingToNoTopicTheOriginalFolderWillSwitch", { from: plan.primarySwitch.from, to: plan.primarySwitch.to }),
             ]
           : []),
-        "Простаивающие сессии этого топика будут закрыты. Выполняющиеся команды блокируют удаление; сессии других контекстов сохраняются.",
-        "Рабочая копия целиком, включая .git, будет перемещена в системную Корзину.",
+        tr("host.idleSessionsForThisTopicWillBeClosedRunningCommands"),
+        tr("host.theEntireWorkingCopyIncludingGitWillBeMovedTo"),
         plan.flow === "clone-after-topic"
-          ? "Топик уже удалён. Сейчас очищается только эта копия; повторная команда Goga не выполняется."
-          : "После переключения в основную папку Goga удалит топик. Основная папка и внешние рабочие копии не удаляются.",
+          ? tr("host.theTopicWasAlreadyRemovedOnlyThisCopyWillBe")
+          : tr("host.afterSwitchingToTheOriginalFolderGogaWillRemoveThe"),
         plan.schemaVersion === 4
-          ? "Копия перемещается целиком вместе с локальными файлами и непереданными коммитами. Архив и резервная ветка не создаются."
-          : "Незакоммиченные, неотслеживаемые и ignored-файлы блокируют удаление. Архивные refs, синхронизация и публикация не создаются.",
+          ? tr("host.theEntireCopyIncludingLocalFilesAndUnpushedCommitsWill")
+          : tr("host.uncommittedUntrackedOrIgnoredFilesPreventRemovalNoArchiveRefs"),
       ],
     };
   }
@@ -3817,7 +3819,7 @@ export class HostService extends EventEmitter {
       )
     )
       throw Error(
-        "Найден старый журнал archive-first. Требуется ручная проверка; новый порядок удаления к нему не применяется.",
+        tr("host.aLegacyArchiveFirstJournalWasFoundCheckItManually"),
       );
     const plans = (await this.clones.contextDeletionRecovery(ref.projectId))
       .filter(
@@ -3848,7 +3850,7 @@ export class HostService extends EventEmitter {
       async () => {
         const project = await this.project(plan.owner.projectId);
         if (project.path !== plan.projectPath)
-          throw Error("Основная папка проекта изменилась.");
+          throw Error(tr("host.theOriginalProjectFolderChanged"));
         const d = await this.topicsContext(
           plan.owner.projectId,
           {
@@ -3862,7 +3864,7 @@ export class HostService extends EventEmitter {
           (plan.primarySwitch &&
             this.terminalDeletionBlocked(plan.owner.projectId))
         )
-          throw Error("Основная папка занята.");
+          throw Error(tr("host.theOriginalFolderIsBusy"));
         if (!execute && plan.primarySwitch) {
           await verifyDeletionSwitch(
             d.git,
@@ -3905,7 +3907,7 @@ export class HostService extends EventEmitter {
           )
         )
           throw Error(
-            "Удаление внешней ветки не разрешено этим подтверждением.",
+            tr("host.deletingAnExternalBranchIsNotAuthorizedByThisConfirmation"),
           );
         const matching = refs.filter(
           (ref) =>
@@ -3914,7 +3916,7 @@ export class HostService extends EventEmitter {
         );
         if (matching.some((ref) => ref !== `refs/heads/${plan.owner.branch}`))
           throw Error(
-            "Одноимённый топик основной папки принадлежит другой ветке. Удаление не разрешено.",
+            tr("host.aTopicWithTheSameNameInTheOriginalFolder"),
           );
         if (
           execute &&
@@ -3924,7 +3926,7 @@ export class HostService extends EventEmitter {
           ).trim() !== plan.primaryHead
         )
           throw Error(
-            "Ветка основной папки изменилась после подтверждения удаления.",
+            tr("host.theBranchInTheOriginalFolderChangedAfterRemovalWas"),
           );
         const request = {
           projectId: plan.owner.projectId,
@@ -3980,7 +3982,7 @@ export class HostService extends EventEmitter {
         const absent = !ownBranch && !exists && !carried;
         if (plan.primaryTopicAbsent && !absent)
           throw Error(
-            "Топик появился в основной папке после подтверждения. Его удаление не разрешено.",
+            tr("host.theTopicAppearedInTheOriginalFolderAfterConfirmationIts"),
           );
         // A clone-only topic has nothing to remove in primary. This absence is
         // bound into the journal so later primary data is never silently deleted.
@@ -3998,7 +4000,7 @@ export class HostService extends EventEmitter {
           // to files or refs introduced while board/prepare was reading.
           await beforeExecute?.();
           if (this.deletionGuards(plan.owner).current)
-            throw Error("Сначала переключитесь в основную папку.");
+            throw Error(tr("host.switchToTheOriginalFolderFirst"));
           const removed = await this.topicDomain.execute(d, ticket.token);
           if (removed.status !== "success") throw Error(removed.message);
         }
@@ -4015,7 +4017,7 @@ export class HostService extends EventEmitter {
       this.check();
       const ref = topicContextRefSchema.parse(input);
       if (this.deletionGuards(ref).active)
-        throw Error("Активный контекст нельзя удалить.");
+        throw Error(tr("host.theActiveContextCannotBeRemoved"));
       const recovered = await this.contextDeletionRecovery(ref);
       if (recovered) return recovered;
       const row = await this.resolveTopicContext(ref);
@@ -4031,7 +4033,7 @@ export class HostService extends EventEmitter {
             stage: "choose-branch",
             switchBranches: await deletionSwitchBranches(git, ref.topic),
             details: [
-              `В основной папке открыта ветка «${currentBranch}». Выберите другую локальную ветку для перехода перед удалением топика.`,
+              tr("host.branchCurrentbranchIsCheckedOutInTheOriginalFolderSelect", { currentBranch: currentBranch }),
             ],
           };
         primarySwitch = await prepareDeletionSwitch(
@@ -4042,7 +4044,7 @@ export class HostService extends EventEmitter {
         );
       } else if (branch)
         throw Error(
-          "Ветка основной папки изменилась. Откройте подтверждение заново.",
+          tr("host.theBranchInTheOriginalFolderChangedOpenTheConfirmation"),
         );
       const primaryTopicAbsent = await this.contextTopicDeletion({
         owner: ref,
@@ -4068,7 +4070,7 @@ export class HostService extends EventEmitter {
       plan.owner.projectId !== input.projectId ||
       plan.projectPath !== (await this.project(input.projectId)).path
     )
-      throw Error("Подтверждение удаления другого проекта или основной папки.");
+      throw Error(tr("host.removalConfirmationBelongsToAnotherProjectOrOriginalFolder"));
     return plan;
   }
   async deleteContext(input: {
@@ -4077,11 +4079,11 @@ export class HostService extends EventEmitter {
     allowAhead?: true;
   }): Promise<ContextDeletionResult> {
     this.check();
-    if (!this.trashItem) throw Error("Системная Корзина недоступна.");
+    if (!this.trashItem) throw Error(tr("host.systemTrashUnavailable"));
     return this.operation(async () => {
       const plan = await this.ownedContextDeletion(input);
       if (this.deletionGuards(plan.owner).active)
-        throw Error("Активный контекст нельзя удалить.");
+        throw Error(tr("host.theActiveContextCannotBeRemoved"));
       const terminals = this.terminalDeletion?.prepareContextDeletion(
         plan.owner,
       );
@@ -4092,7 +4094,7 @@ export class HostService extends EventEmitter {
           {
             beforeTrash: async (latest) => {
               if (this.deletionGuards(plan.owner).active)
-                throw Error("Активный контекст нельзя удалить.");
+                throw Error(tr("host.theActiveContextCannotBeRemoved"));
               if (latest.flow === "clone-after-topic")
                 await this.assertCleanupTopicAbsent(
                   latest.owner,
@@ -4107,12 +4109,12 @@ export class HostService extends EventEmitter {
               await terminals?.stopIdle();
               if (this.terminalLeases.has(plan.owner.contextId))
                 throw Error(
-                  "Не удалось подтвердить закрытие терминалов топика. Копия сохранена.",
+                  tr("host.couldNotVerifyClosureOfTheTopicSTerminalsIts"),
                 );
             },
             trashItem: async (root) => {
               if (this.deletionGuards(plan.owner).active)
-                throw Error("Активный контекст нельзя удалить.");
+                throw Error(tr("host.theActiveContextCannotBeRemoved"));
               await this.trashItem!(root);
             },
           },
@@ -4140,10 +4142,10 @@ export class HostService extends EventEmitter {
       const plan = await this.ownedContextDeletion(input);
       if (this.deletionGuards(plan.owner).current)
         throw Error(
-          "Сначала переключитесь в основную папку; удаляемый контекст ещё выбран.",
+          tr("host.switchToTheOriginalFolderFirstTheContextToRemove"),
         );
       if (this.deletionGuards(plan.owner).active)
-        throw Error("Активный контекст нельзя удалить.");
+        throw Error(tr("host.theActiveContextCannotBeRemoved"));
       const terminals = plan.primarySwitch
         ? this.terminalDeletion?.prepareContextDeletion(plan.owner.projectId)
         : undefined;
@@ -4155,7 +4157,7 @@ export class HostService extends EventEmitter {
               primary.active() ||
               this.terminalDeletionBlocked(plan.owner.projectId)
             )
-              throw Error("Основная папка занята.");
+              throw Error(tr("host.theOriginalFolderIsBusy"));
           });
         }
         const result = await this.clones.finishContextDeletion(
@@ -4228,7 +4230,7 @@ export class HostService extends EventEmitter {
           return intercept ? await intercept(args, invoke) : await invoke();
         } catch {
           throw new Error(
-            "Операция Goga не выполнена. Проверьте конфигурацию и состояние репозитория.",
+            tr("host.gogaOperationFailedCheckTheConfigurationAndRepositoryState"),
           );
         }
       },
@@ -4286,7 +4288,7 @@ export class HostService extends EventEmitter {
           row.revision === confirmedDeletion.revision;
         if (confirmedDeletion && !allOwners.some(confirmed))
           throw Error(
-            "Подтверждённый владелец удаления изменился. Обновите подтверждение.",
+            tr("host.theConfirmedRemovalOwnerChangedConfirmAgain"),
           );
         // Goga delete is slug-wide even when the request carries target.branch.
         // Every matching owner must use the dedicated context deletion flow.
@@ -4303,7 +4305,7 @@ export class HostService extends EventEmitter {
           )
         )
           throw Error(
-            "У топика есть рабочая копия. Операция из основной папки запрещена; выберите её точный контекст.",
+            tr("host.theTopicHasAWorkingCopyTheOriginalFolderCannot"),
           );
       },
       assertBranchesAvailable: (branches, operation) =>
@@ -4324,7 +4326,7 @@ export class HostService extends EventEmitter {
     // This endpoint is primary-only. In particular, never inherit a clone
     // binding from a nested read and silently label its data as primary.
     if (typeof projectId !== "string" || this.context.getStore()?.binding)
-      throw Error("Каталог доступен только для основной папки проекта.");
+      throw Error(tr("host.theCatalogIsAvailableOnlyInTheOriginalProjectFolder"));
     this.parseScope(projectId);
     topicYearSchema.parse(year);
     const result = await this.snapshot(projectId, async () => {
@@ -4351,7 +4353,7 @@ export class HostService extends EventEmitter {
             } catch {
               assertReadActive();
               throw Error(
-                "Не удалось выполнить команду Goga. Проверьте конфигурацию проекта.",
+                tr("host.theGogaCommandFailedCheckTheProjectConfiguration"),
               );
             }
           },
@@ -4381,7 +4383,7 @@ export class HostService extends EventEmitter {
       )
     )
       throw Error(
-        "Реестр относится к прежней папке проекта. Требуется проверка.",
+        tr("host.theRegistryBelongsToThePreviousProjectFolderVerificationRequired"),
       );
     assertReadActive();
     return rows;
@@ -4393,7 +4395,7 @@ export class HostService extends EventEmitter {
     this.check();
     assertReadActive();
     if (typeof projectId !== "string" || this.context.getStore()?.binding)
-      throw Error("Таблица доступна только для основной папки проекта.");
+      throw Error(tr("host.theTableIsAvailableOnlyInTheOriginalProjectFolder"));
     this.parseScope(projectId);
     topicYearSchema.parse(year);
     const result = await this.snapshot(projectId, async () => {
@@ -4438,7 +4440,7 @@ export class HostService extends EventEmitter {
           if (group.length > 1) {
             for (const candidate of group) failed.add(candidate.contextId);
             row.statusError =
-              "Неоднозначный владелец статуса топика. Обновите список контекстов.";
+              tr("host.topicStatusOwnershipIsAmbiguousRefreshTheContextList");
             summaries[index] = row;
             continue;
           }
@@ -4471,7 +4473,7 @@ export class HostService extends EventEmitter {
             assertReadActive();
             failed.add(owner.contextId);
             row.statusError =
-              "Не удалось прочитать актуальный статус топика. Обновите таблицу.";
+              tr("host.couldNotReadTheCurrentTopicStatusRefreshTheTable");
           }
           summaries[index] = row;
         }
@@ -4501,7 +4503,7 @@ export class HostService extends EventEmitter {
       if (
         JSON.stringify(comparable(before)) !== JSON.stringify(comparable(after))
       )
-        throw Error("Каталог контекстов изменился; обновите список.");
+        throw Error(tr("host.theContextCatalogChangedRefreshTheList"));
       assertReadActive();
       return table;
     });
@@ -4515,7 +4517,7 @@ export class HostService extends EventEmitter {
       this.context.getStore()?.binding ||
       this.selectedContext?.projectId === parsed
     )
-      throw Error("Очистка истории доступна только в режиме «Без топика».");
+      throw Error(tr("host.historyCleanupIsOnlyAvailableWithNoTopicSelected"));
     this.check();
     return parsed;
   }
@@ -4536,7 +4538,7 @@ export class HostService extends EventEmitter {
         await this.assertSettings(projectId);
         this.assertCatalog(snapshot.catalogEpoch);
         if ((await this.project(projectId)).path !== project.path)
-          throw Error("Папка проекта изменилась. Повторите предпросмотр.");
+          throw Error(tr("host.theProjectFolderChangedPreviewAgain"));
       },
       command: (args) =>
         this.runner.command(call.executable, args, project.path, call.env),
@@ -4564,7 +4566,7 @@ export class HostService extends EventEmitter {
       const message =
         error instanceof Error
           ? error.message
-          : "Не удалось подготовить очистку.";
+          : tr("host.couldNotPrepareCleanup");
       return {
         status: "error",
         projectId: typeof scope === "string" ? scope : "",
@@ -4587,7 +4589,7 @@ export class HostService extends EventEmitter {
       const id = this.assertHistoryPrimary(scope);
       if (!pending || pending.projectId !== id)
         throw Error(
-          "Подтверждение очистки истекло или уже использовано. Откройте предпросмотр заново.",
+          tr("host.theCleanupConfirmationExpiredOrWasAlreadyUsedOpenThe"),
         );
       return await this.operation(() =>
         this.exclusive(id, () =>
@@ -4611,7 +4613,7 @@ export class HostService extends EventEmitter {
       const message =
         error instanceof Error
           ? error.message
-          : "Не удалось выполнить очистку.";
+          : tr("host.cleanupFailed");
       return { status: "error", changed, error: message, log: message };
     }
   }
@@ -4619,7 +4621,7 @@ export class HostService extends EventEmitter {
     this.check();
     const parsed = this.parseScope(scope);
     if (typeof parsed === "string" && this.context.getStore()?.binding)
-      throw Error("Для рабочей копии требуется точный контекст топика.");
+      throw Error(tr("host.theWorkingCopyRequiresAnExactTopicContext"));
     return withOfflineGitReadScope(() => this.snapshot(parsed, async () => {
       const project = await this.project(parsed);
       assertReadActive();
@@ -4642,7 +4644,7 @@ export class HostService extends EventEmitter {
     this.check();
     const parsed = this.parseScope(scope);
     if (typeof parsed === "string" && this.context.getStore()?.binding)
-      throw Error("Для рабочей копии требуется точный контекст топика.");
+      throw Error(tr("host.theWorkingCopyRequiresAnExactTopicContext"));
     return history.withHistoryRead(async () => {
       const result = await this.snapshot(parsed, async () => {
         const project = await this.project(parsed);
@@ -4686,7 +4688,7 @@ export class HostService extends EventEmitter {
             parsed.branch !== target.branch ||
             target.remote)))
     )
-      throw Error("История относится к другому контексту топика.");
+      throw Error(tr("host.historyBelongsToADifferentTopicContext"));
     return this.historyRead(parsed, async (project) => {
       const owner = this.binding(project);
       const assertNoOwner = async () => {
@@ -4699,7 +4701,7 @@ export class HostService extends EventEmitter {
           )
         )
           throw Error(
-            "У топика есть рабочая копия. Выберите её точный контекст; подмена основной папкой запрещена.",
+            tr("host.theTopicHasAWorkingCopySelectItsExactContext"),
           );
       };
       await assertNoOwner();
@@ -4757,9 +4759,9 @@ export class HostService extends EventEmitter {
         parsed.branch !== target.branch ||
         target.remote)
     )
-      throw Error("Топик относится к другому контексту.");
+      throw Error(tr("host.theTopicBelongsToAnotherContext"));
     if (typeof parsed === "string" && this.context.getStore()?.binding)
-      throw Error("Для рабочей копии требуется точный контекст топика.");
+      throw Error(tr("host.theWorkingCopyRequiresAnExactTopicContext"));
     const result = await this.snapshot(parsed, async () => {
       const context = await this.topicsContext(parsed);
       const assertNoOwner = async () => {
@@ -4771,7 +4773,7 @@ export class HostService extends EventEmitter {
           )
         )
           throw Error(
-            "У топика есть рабочая копия. Выберите её точный контекст; подмена основной папкой запрещена.",
+            tr("host.theTopicHasAWorkingCopySelectItsExactContext"),
           );
       };
       await assertNoOwner();
@@ -4789,7 +4791,7 @@ export class HostService extends EventEmitter {
     this.check();
     assertReadActive();
     if (typeof projectId !== "string" || this.context.getStore()?.binding)
-      throw Error("Ветки доступны только для основной папки проекта.");
+      throw Error(tr("host.branchesAreAvailableOnlyInTheOriginalProjectFolder"));
     this.parseScope(projectId);
     const result = await this.snapshot(projectId, async () => {
       const project = await this.project(projectId);
@@ -4855,7 +4857,7 @@ export class HostService extends EventEmitter {
       }
       const after = await this.clones.reconcile(scope);
       if (JSON.stringify(before) !== JSON.stringify(after))
-        throw Error("Каталог контекстов изменился; обновите список.");
+        throw Error(tr("host.theContextCatalogChangedRefreshTheList"));
       board.revision = digest(
         JSON.stringify([
           board.revision,
@@ -4873,7 +4875,7 @@ export class HostService extends EventEmitter {
         id.branch !== target.branch ||
         target.remote)
     )
-      throw Error("Топик относится к другому контексту.");
+      throw Error(tr("host.theTopicBelongsToAnotherContext"));
     return this.snapshot(id, async () => {
       const context = await this.topicsContext(id);
       const details = await this.topicDomain.details(context, year, target);
@@ -4891,12 +4893,12 @@ export class HostService extends EventEmitter {
     return this.snapshot(owner.projectId, async () => {
       const project = await this.project(owner.projectId);
       if (expectedPath && project.path !== expectedPath)
-        throw Error("Основная папка изменилась.");
+        throw Error(tr("host.theOriginalFolderChanged"));
       const d = await this.topicsContext(owner.projectId);
       const refs = await readTopicRefInventory(d.git);
       if (ownTopicRefs(refs, owner.topic).length)
         throw Error(
-          "Собственная ветка топика существует. Очистка копии не разрешена.",
+          tr("host.theTopicSOwnBranchExistsCopyCleanupIsNot"),
         );
       if (
         (
@@ -4904,7 +4906,7 @@ export class HostService extends EventEmitter {
         ).has(owner.topic)
       )
         throw Error(
-          "Каталог топика остаётся в основной папке. Копия сохранена.",
+          tr("host.theTopicDirectoryRemainsInTheOriginalFolderTheCopy"),
         );
       // For an explicitly selected copy the confirmed native command owns its
       // remote effects. Moving the local directory does not need an additional
@@ -4923,7 +4925,7 @@ export class HostService extends EventEmitter {
           ])
         ).trim()
       )
-        throw Error("Ветка на origin существует; копия сохранена.");
+        throw Error(tr("host.theBranchStillExistsOnOriginTheCopyWasKept"));
     });
   }
   private async topicRemovalAccess(
@@ -4951,7 +4953,7 @@ export class HostService extends EventEmitter {
             : await readTopicMutationSnapshot(d, year);
       const after = await this.clones.list(projectId);
       if (JSON.stringify(before) !== JSON.stringify(after))
-        throw Error("Каталог контекстов изменился.");
+        throw Error(tr("host.theContextCatalogChanged"));
       return {
         projectId,
         projectPath: project.path,
@@ -4978,10 +4980,10 @@ export class HostService extends EventEmitter {
       beforeCommand?: () => void,
     ) => {
       if (before.projectPath !== project.path)
-        throw Error("Основная папка изменилась.");
+        throw Error(tr("host.theOriginalFolderChanged"));
       const d = await this.topicsContext(projectId, undefined, beforeCommand);
       if (d.owner || d.root !== project.path)
-        throw Error("Подмена основной папки рабочей копией запрещена.");
+        throw Error(tr("host.theWorkingCopyCannotBeSubstitutedForTheOriginalFolder"));
       d.removalFlow = true;
       d.assertPrimaryOwnerAvailable = async () => {
         const fresh = await owners();
@@ -4994,7 +4996,7 @@ export class HostService extends EventEmitter {
           key(fresh) !== key(before.owners)
         )
           throw Error(
-            "Владельцы рабочих копий изменились. Подтвердите удаление заново.",
+            tr("host.workingCopyOwnershipChangedConfirmRemovalAgain"),
           );
       };
       return d;
@@ -5010,9 +5012,9 @@ export class HostService extends EventEmitter {
         ),
       inspect: async (owner, action) => {
         if (this.deletionGuards(owner).active)
-          throw Error("В копии есть активные сессии.");
+          throw Error(tr("host.theCopyHasActiveSessions"));
         const recovery = await this.contextDeletionRecovery(owner);
-        if (recovery) throw Error("Есть незавершённое удаление копии.");
+        if (recovery) throw Error(tr("host.aCopyRemovalIsUnfinished"));
         return action === "delete"
           ? this.clones.captureWholeCopyIdentity(owner)
           : this.clones.captureRemovalBaseline(owner);
@@ -5065,7 +5067,7 @@ export class HostService extends EventEmitter {
               (owner) => this.deletionGuards(worktreeContextRef(owner)).active,
             );
             if (busy) {
-              blocked = `В копии топика «${busy.topic}» появилась активная сессия. Удаление не начато.`;
+              blocked = tr("host.topicTopicNowHasAnActiveSessionInItsCopy", { topic: busy.topic });
               throw Error(blocked);
             }
           }),
@@ -5104,7 +5106,7 @@ export class HostService extends EventEmitter {
   }
   async prepareTopicRemoval(input: TopicRemovalRequest) {
     if (this.context.getStore()?.binding)
-      throw Error("Удаление доступно только для основной папки проекта.");
+      throw Error(tr("host.removalIsAvailableOnlyInTheOriginalProjectFolder"));
     const request = topicRemovalRequestSchema.parse(input);
     // The preview does not mutate the project. It must neither hold the global
     // operation queue nor leave an obsolete read blocking navigation/other work.
@@ -5118,7 +5120,7 @@ export class HostService extends EventEmitter {
   }
   async executeTopicRemoval(input: { projectId: string; token: string }) {
     if (this.context.getStore()?.binding)
-      throw Error("Удаление доступно только для основной папки проекта.");
+      throw Error(tr("host.removalIsAvailableOnlyInTheOriginalProjectFolder"));
     const parsed = topicRemovalTokenSchema.parse(input),
       prepared = this.topicRemovals.take(parsed.projectId, parsed.token);
     return this.operation(() =>
@@ -5149,7 +5151,7 @@ export class HostService extends EventEmitter {
           if (recovery) {
             if (recovery.purpose !== "clone-after-topic")
               throw Error(
-                "Сначала завершите прежнее удаление этого контекста.",
+                tr("host.finishThePreviousRemovalOfThisContextFirst"),
               );
             // A prepared cleanup has not moved any data: an explicit recheck must
             // bind a new snapshot/consent. Later stages keep their original journal.
@@ -5173,7 +5175,7 @@ export class HostService extends EventEmitter {
   }
   async prepareTopicOperation(request: TopicOperationRequest) {
     if (request?.action === "clear")
-      throw Error("Используйте отдельное подтверждение очистки топиков.");
+      throw Error(tr("host.useTheSeparateTopicCleanupConfirmation"));
     return this.operation(() =>
       this.exclusive(request?.projectId, () =>
         this.snapshot(request?.context ?? request?.projectId, async () => {
@@ -5186,13 +5188,13 @@ export class HostService extends EventEmitter {
                   request.target.topic !== request.context.topic ||
                   request.target.branch !== request.context.branch)))
           )
-            throw Error("Контекст другого топика.");
+            throw Error(tr("host.contextBelongsToAnotherTopic"));
           if (
             request.context &&
             ["create", "switch", "delete"].includes(request.action)
           )
             throw Error(
-              "Для создания/выбора/удаления owned clone используйте отдельное действие.",
+              tr("host.useTheDedicatedActionToCreateSelectOrDeleteA"),
             );
           let checked = request;
           if (!request.context) {
@@ -5201,7 +5203,7 @@ export class HostService extends EventEmitter {
               request.year,
             );
             if (global.revision !== request.expectedRevision)
-              throw Error("Каталог изменился; обновите данные.");
+              throw Error(tr("host.theCatalogChangedRefresh"));
             const local = await this.topicDomain.board(
               await this.topicsContext(request.projectId),
               request.year,
@@ -5220,7 +5222,7 @@ export class HostService extends EventEmitter {
               request.year,
             );
             if (before.revision !== request.expectedRevision)
-              throw Error("Каталог изменился; создайте новый предпросмотр.");
+              throw Error(tr("host.theCatalogChangedCreateANewPreview"));
             const baseRef = request.baseRef || before.baseRef;
             if (
               request.action === "publish" ||
@@ -5262,7 +5264,7 @@ export class HostService extends EventEmitter {
             const base = proof.base ?? proof.publication?.base;
             if (base)
               visible.details.unshift(
-                `Выбранная база ${base.baseRef}: неизменяемый commit ${base.sourceOid}. Основная папка не изменяется.`,
+                tr("host.selectedBaseBaserefImmutableCommitSourceoidTheOriginalFolderIs", { baseRef: base.baseRef, sourceOid: base.sourceOid }),
               );
             if (proof.publication)
               visible.details.unshift(...proof.publication.details);
@@ -5361,7 +5363,7 @@ export class HostService extends EventEmitter {
     selection: BuildContextSelection = {},
   ): Promise<BuildContext> {
     if (!buildSelectionSchema.safeParse(selection).success)
-      throw new Error("Некорректный выбор сборки");
+      throw new Error(tr("host.invalidBuildSelection"));
     validateBuildOptions(selection);
     selection = structuredClone(selection);
     return this.snapshot(id, async () => {
@@ -5421,14 +5423,14 @@ export class HostService extends EventEmitter {
         effectiveReview = await this.cmd(p, ["config", "build.review.skip"]);
       } catch {
         defaults.reviewError =
-          "Не удалось прочитать настройку ревью из Goga. Проверьте версию, исполняемый файл и конфигурацию или выберите режим явно.";
+          tr("host.couldNotReadTheReviewSettingFromGogaCheckThe");
       }
       if (effectiveReview !== undefined) {
         try {
           defaults.skipReview = buildReviewDefault(effectiveReview);
         } catch {
           defaults.reviewError =
-            "Goga вернула некорректное значение настройки ревью. Проверьте версию и конфигурацию или выберите режим явно.";
+            tr("host.gogaReturnedAnInvalidReviewSettingCheckTheVersionAnd");
         }
       }
       let historyPlan: BuildContext["historyPlan"] = { path: "" };
@@ -5439,6 +5441,7 @@ export class HostService extends EventEmitter {
         ).trim();
         if (!candidate) throw Error("Empty history path");
       } catch {
+        historyPlan.errorCode = "history";
         historyPlan.error = buildPlanProblem(
           Error("[build-plan:history]"),
         ).message;
@@ -5448,7 +5451,9 @@ export class HostService extends EventEmitter {
         try {
           historyPlan.path = (await readPlan(this.root(p), candidate)).path;
         } catch (error) {
-          historyPlan.error = buildPlanProblem(error, true).message;
+          const problem = buildPlanProblem(error, true);
+          historyPlan.errorCode = problem.code;
+          historyPlan.error = problem.message;
           // Never return an outside/absolute CLI-controlled path to the renderer.
           if (
             path.isAbsolute(candidate) ||
@@ -5464,7 +5469,7 @@ export class HostService extends EventEmitter {
         .split("\n")
         .filter((b) => b && !b.endsWith("/HEAD"));
       if (before !== (await this.fingerprint(p)))
-        throw new Error("Контекст сборки изменился; обновите данные.");
+        throw new Error(tr("host.theBuildContextChangedRefresh"));
       return {
         revision: digest(
           JSON.stringify([
@@ -5493,12 +5498,12 @@ export class HostService extends EventEmitter {
     this.assertLaunchAllowed();
     // Safe errors: zod diagnostics can include user-controlled secrets.
     const parsed = buildRequestSchema.safeParse(input);
-    if (!parsed.success) throw new Error("Некорректный запрос сборки");
+    if (!parsed.success) throw new Error(tr("host.invalidBuildRequest"));
     const request = structuredClone(parsed.data);
     this.validateRepeatRequest(request);
     validateBuildOptions(request.options);
     if (request.context && request.context.projectId !== request.projectId)
-      throw Error("Контекст другого проекта.");
+      throw Error(tr("host.contextBelongsToAnotherProject"));
     if (request.context) assertContextEnvironment(request.options.env ?? []);
     return this.operation(() =>
       this.exclusive(request.projectId, () =>
@@ -5533,7 +5538,7 @@ export class HostService extends EventEmitter {
     this.check();
     this.assertRunAdmission(p, key, "build");
     if (request.options.clean && !request.confirmClean)
-      throw new Error("Подтвердите очистку состояния сборки.");
+      throw new Error(tr("host.confirmClearingBuildState"));
     const selection = {
       ...(request.options.env !== undefined
         ? { env: request.options.env }
@@ -5547,14 +5552,14 @@ export class HostService extends EventEmitter {
     };
     const context = await this.buildContext(p.id, selection);
     if (!context.branch || request.expectedBranch !== context.branch)
-      throw new Error("Текущая ветка изменилась. Обновите сборку.");
+      throw new Error(tr("host.theCurrentBranchChangedRefreshTheBuild"));
     if (context.revision !== request.contextRevision)
       throw new Error(
-        "Контекст сборки устарел или настройки изменились. Обновите сборку.",
+        tr("host.theBuildContextIsStaleOrItsSettingsChangedRefresh"),
       );
     const plan = await readPlan(this.root(p), request.planPath);
     if (plan.version !== request.planVersion)
-      throw new Error("План изменился. Откройте его заново перед сборкой.");
+      throw new Error(tr("host.thePlanChangedOpenItAgainBeforeBuilding"));
     const invocation = await this.invocation(p);
     const options: BuildOptions = {
       ...request.options,
@@ -5571,12 +5576,12 @@ export class HostService extends EventEmitter {
     if (this.binding(p)) assertContextEnvironment(options.env ?? []);
     const args = buildArgs(plan.path, options, context.capabilities);
     if (options.workflow && !context.workflows.includes(options.workflow))
-      throw new Error("Рабочий процесс отсутствует");
+      throw new Error(tr("host.workflowNotFound"));
     if (
       options.profile &&
       !context.profiles.some((p) => p.name === options.profile)
     )
-      throw new Error("Выбранный профиль отсутствует");
+      throw new Error(tr("host.selectedProfileNotFound"));
     const runtime = {
       ...(await buildHomeEnvironment(this.home)),
       ...Object.fromEntries(options.env.map((e) => [e.key, e.value])),
@@ -5584,11 +5589,11 @@ export class HostService extends EventEmitter {
     const workflow = options.workflow || runtime.GOGA_WORKFLOW || "";
     if (options.profile && !workflow)
       throw new Error(
-        "Профиль сборки не применяется без рабочего процесса. Выберите рабочий процесс или автоматический профиль.",
+        tr("host.aBuildProfileCannotBeAppliedWithoutAWorkflowSelect"),
       );
     if (options.baseRef && !context.branches.includes(options.baseRef))
       throw new Error(
-        "Выберите существующую локальную или удалённую ветку сравнения",
+        tr("host.selectAnExistingLocalOrRemoteComparisonBranch"),
       );
     if (context.defaults.reviewError && options.skipReview === undefined)
       throw new Error(context.defaults.reviewError);
@@ -5598,11 +5603,11 @@ export class HostService extends EventEmitter {
     );
     const final = await this.buildContext(p.id, selection);
     if (final.revision !== context.revision || final.branch !== context.branch)
-      throw new Error("Контекст сборки изменился перед запуском");
+      throw new Error(tr("host.theBuildContextChangedBeforeLaunch"));
     if (
       (await readPlan(this.root(p), request.planPath)).version !== plan.version
     )
-      throw new Error("План изменился перед запуском");
+      throw new Error(tr("host.thePlanChangedBeforeLaunch"));
     await this.assertSettings(p.id);
     this.check();
     const run: Run = {
@@ -5619,7 +5624,7 @@ export class HostService extends EventEmitter {
           }
         : {}),
       projectId: p.id,
-      pipeline: "Сборка",
+      pipeline: "build", // Stable journal identifier. Translate the build kind only for display.
       topic: this.binding(p)?.topic ?? "",
       branch: context.branch,
       status: "running",
@@ -5648,6 +5653,7 @@ export class HostService extends EventEmitter {
     let child: ChildProcessWithoutNullStreams;
     try {
       await this.validateBinding(p);
+      this.localRunAdmissions.add(run);
       this.addActiveRun(key, run.id);
       this.runList.push(run);
       await this.persistRuns();
@@ -5659,12 +5665,13 @@ export class HostService extends EventEmitter {
         invocation.env,
       );
     } catch {
+      this.localRunAdmissions.delete(run);
       this.removeActiveRun(key, run.id);
       run.status = "failed";
       run.endedAt = new Date().toISOString();
       if (this.runList.includes(run)) await this.persistRuns().catch(() => {});
       throw new Error(
-        "Не удалось запустить сборку. Проверьте исполняемый файл и окружение.",
+        tr("host.couldNotStartTheBuildCheckTheExecutableAndEnvironment"),
       );
     }
     const secrets = [
@@ -5701,14 +5708,14 @@ export class HostService extends EventEmitter {
         code === 0 ? "exited" : "failed",
         code === 0
           ? undefined
-          : `Сборка завершилась с кодом ${code ?? "signal"}`,
+          : { kind: "build-exit", code },
       ).catch(() => {});
     };
     const onError = () => {
       void this.terminateOwned(
         run.id,
         "failed",
-        "Не удалось запустить процесс сборки. Проверьте Goga и PATH.",
+        { kind: "build-spawn" },
       ).catch(() => {});
     };
     child.on("close", onClose);
@@ -5725,6 +5732,7 @@ export class HostService extends EventEmitter {
         child.off("error", onError);
       },
     });
+    this.localRunAdmissions.delete(run);
     this.emitRuns();
     return this.publicRun(run);
   }
@@ -5738,7 +5746,7 @@ export class HostService extends EventEmitter {
       source.kind !== "build" ||
       source.projectId !== request.projectId
     )
-      throw Error("Исходная сборка не найдена.");
+      throw Error(tr("host.originalBuildNotFound"));
     const narrow = (r: Run["context"] | BuildRequest["context"]) =>
       r
         ? {
@@ -5755,24 +5763,24 @@ export class HostService extends EventEmitter {
       JSON.stringify(narrow(request.context))
     )
       throw Error(
-        "Повтор относится к другому контексту. Подготовьте исходную рабочую копию заново.",
+        tr("host.theRepeatRequestBelongsToAnotherContextPrepareTheOriginal"),
       );
     const required = source.buildRepeat;
     const effective = new Map(
       (request.options.env ?? []).map((e) => [e.key, e.value]),
     );
     if (required?.requiredEnvKeys.some((k) => !effective.get(k)?.trim()))
-      throw Error("Введите недостающие значения окружения исходной сборки.");
+      throw Error(tr("host.enterMissingEnvironmentValuesFromTheOriginalBuild"));
     if (required?.requiresProxy && !request.options.proxy)
-      throw Error("Введите отсутствующий proxy исходной сборки.");
+      throw Error(tr("host.enterTheMissingProxyFromTheOriginalBuild"));
   }
   async prepareBuildRepeat(id: string): Promise<BuildRepeatPreparation> {
     this.check();
     const source = this.runList.find((r) => r.id === id);
     if (!source || source.kind !== "build" || !source.build)
-      throw Error("Исходная сборка отсутствует.");
+      throw Error(tr("host.originalBuildMissing"));
     if (["starting", "running"].includes(source.status))
-      throw Error("Дождитесь завершения исходной сборки.");
+      throw Error(tr("host.waitForTheOriginalBuildToFinish"));
     const ref = source.context
       ? {
           projectId: source.context.projectId,
@@ -5803,10 +5811,10 @@ export class HostService extends EventEmitter {
   }
   async repeatBuild(id: string, confirmClean: boolean): Promise<Run> {
     if (typeof confirmClean !== "boolean")
-      throw new Error("Некорректное подтверждение очистки");
+      throw new Error(tr("host.invalidCleanupConfirmation"));
     const original = this.buildRequests.get(id);
     if (!original || !this.runList.some((r) => r.id === id))
-      throw new Error("Исходная сборка недоступна для повтора");
+      throw new Error(tr("host.theOriginalBuildCannotBeRepeated"));
     return this.launchBuild({ ...structuredClone(original), confirmClean });
   }
   async checkoutBranch(id: ScopeRef): Promise<string> {
@@ -5953,17 +5961,17 @@ export class HostService extends EventEmitter {
   }
   private normalize(r: PipelineRequest): PipelineRequest {
     if (!r || typeof r.projectId !== "string")
-      throw new Error("Некорректный запрос");
+      throw new Error(tr("host.invalidRequest"));
     if (
       r.profileMode !== undefined &&
       !["project", "auto"].includes(r.profileMode)
     )
-      throw new Error("Некорректный выбор профиля");
+      throw new Error(tr("host.invalidProfileSelection"));
     if (r.profileMode === "auto" && r.profile)
-      throw new Error("Некорректный выбор профиля");
+      throw new Error(tr("host.invalidProfileSelection"));
     pipelineArgs(r, true);
     if (r.context && r.context.projectId !== r.projectId)
-      throw Error("Контекст другого проекта.");
+      throw Error(tr("host.contextBelongsToAnotherProject"));
     return {
       projectId: r.projectId,
       ...(r.context ? { context: topicContextRefSchema.parse(r.context) } : {}),
@@ -5988,7 +5996,7 @@ export class HostService extends EventEmitter {
       JSON.stringify((await this.invocation(p)).value),
     ];
     const walk = async (dir: string, depth = 0) => {
-      if (depth > 8) throw new Error("Слишком глубокие определения Goga");
+      if (depth > 8) throw new Error(tr("host.gogaDefinitionsAreNestedTooDeeply"));
       let entries;
       try {
         entries = await readdir(dir, { withFileTypes: true });
@@ -6000,13 +6008,13 @@ export class HostService extends EventEmitter {
         const file = path.join(dir, e.name);
         if (e.isSymbolicLink())
           throw new Error(
-            "Символические ссылки в определениях Goga не поддержаны",
+            tr("host.symbolicLinksInGogaDefinitionsAreNotSupported"),
           );
         if (e.isDirectory()) await walk(file, depth + 1);
         else if (e.isFile()) {
           const info = await lstat(file);
           if (info.size > 4 * 1024 * 1024)
-            throw new Error("Определения Goga слишком велики");
+            throw new Error(tr("host.gogaDefinitionsAreTooLarge"));
           chunks.push(file, await readFile(file, "utf8"));
         }
       }
@@ -6035,7 +6043,7 @@ export class HostService extends EventEmitter {
             : null
           : workflowName(r.workflow);
       if (workflow && !names.includes(workflow))
-        throw new Error("Рабочий процесс отсутствует в проекте");
+        throw new Error(tr("host.workflowNotFoundInThisProject"));
     }
     const explicit =
       r.profile ||
@@ -6049,7 +6057,7 @@ export class HostService extends EventEmitter {
       !(await this.profiles(p)).some((x) => x.name === explicit)
     )
       throw new Error(
-        "Выбранный профиль отсутствует. Обновите список профилей.",
+        tr("host.theSelectedProfileIsMissingRefreshTheProfileList"),
       );
     let profile = workflow
       ? explicit || process.env.GOGA_PROFILE?.trim() || null
@@ -6088,7 +6096,7 @@ export class HostService extends EventEmitter {
     const composed = await this.compose(p, r);
     if (before !== (await this.fingerprint(p, !!formProject)))
       throw new Error(
-        "Определения изменились во время предпросмотра. Обновите его.",
+        tr("host.definitionsChangedDuringPreviewRefreshThePreview"),
       );
     this.assertCatalog(epoch);
     const result = { ...composed, token: randomUUID() };
@@ -6121,7 +6129,7 @@ export class HostService extends EventEmitter {
   readRunJournal(id: string, after?: number): RunJournalSlice {
     this.check();
     const run = this.runList.find(r => r.id === id);
-    if (!run) throw Error("Неизвестный запуск");
+    if (!run) throw Error(tr("host.unknownRun"));
     const output = run.output ?? {text:"",truncated:false};
     const head = this.journalHeads.get(run);
     const end = head?.end ?? output.text.length, start = end - output.text.length;
@@ -6199,16 +6207,22 @@ export class HostService extends EventEmitter {
     delete run.dashboardRunId;
     delete run.dashboardMessage;
   }
+  private canReconcileStoredRun(run: Run): boolean {
+    return (
+      (run.status === "starting" || run.status === "running") &&
+      !this.localRunAdmissions.has(run) &&
+      !this.children.has(run.id) &&
+      this.runList.includes(run)
+    );
+  }
   private async reconcileStoredRun(run: Run) {
-    const active = () =>
-      this.runList.includes(run) &&
-      ["starting", "running"].includes(run.status);
+    const active = () => this.canReconcileStoredRun(run);
     if (!active()) return;
     if (!this.recovery) {
       this.clearDashboard(run);
       run.recovery = "unverified";
       run.recoveryMessage =
-        "Нет проверяемого канала восстановления этого запуска.";
+        tr("host.noVerifiableRecoveryChannelIsAvailableForThisRun");
       return;
     }
     try {
@@ -6224,6 +6238,7 @@ export class HostService extends EventEmitter {
             }
           : run.projectId,
       );
+      if (!active()) return;
       const result = await this.recovery.reconcile(
         run.process,
         this.runOwnerHash(run),
@@ -6241,8 +6256,7 @@ export class HostService extends EventEmitter {
         if (run.context) run.syncPending = true;
       } else if (result.state === "alive") {
         run.recovery = "confirmed";
-        run.recoveryMessage =
-          "Владелец supervisor подтверждён. Процесс продолжает работу; его можно безопасно остановить.";
+        delete run.recoveryMessage;
         if (
           run.dashboardRecoveryVersion === 1 &&
           run.kind !== "build" &&
@@ -6254,7 +6268,7 @@ export class HostService extends EventEmitter {
             if (!active()) return;
             this.clearDashboard(run);
             run.dashboardMessage =
-              "Панель пока недоступна или её источник изменился. Можно повторить подключение; процесс не перезапускался.";
+              tr("host.theDashboardIsNotReadyOrItsSourceChangedReconnect");
           }
         }
       } else {
@@ -6267,15 +6281,14 @@ export class HostService extends EventEmitter {
       this.clearDashboard(run);
       run.recovery = "unverified";
       run.recoveryMessage =
-        "Исходный контекст или сохранённые данные процесса недоступны. Никакой процесс не остановлен; восстановите исходную копию и повторите проверку.";
+        tr("host.theOriginalContextOrStoredProcessDataIsUnavailableNo");
     }
   }
   async reconcileRun(id: string): Promise<Run> {
     this.check();
     const run = this.runList.find((r) => r.id === id);
-    if (!run) throw Error("Неизвестный запуск");
-    if (!this.children.has(id) && ["starting", "running"].includes(run.status))
-      await this.reconcileStoredRun(run);
+    if (!run) throw Error(tr("host.unknownRun"));
+    if (this.canReconcileStoredRun(run)) await this.reconcileStoredRun(run);
     await this.persistRuns();
     await this.syncCompletedRun(run);
     this.emitRuns();
@@ -6299,7 +6312,7 @@ export class HostService extends EventEmitter {
   async launch(request: LaunchRequest): Promise<Run> {
     this.assertLaunchAllowed();
     if (request?.update !== undefined && typeof request.update !== "boolean")
-      throw new Error("Некорректный параметр обновления (update)");
+      throw new Error(tr("host.invalidUpdateOption"));
     return this.operation(() =>
       this.exclusive(request?.projectId, () =>
         this.snapshot(
@@ -6317,8 +6330,8 @@ export class HostService extends EventEmitter {
     const operation = Promise.resolve().then(() => {
       this.assertLaunchAllowed();
       const source = this.runList.find((run) => run.id === id);
-      if (!source || source.kind === "build") throw Error("Исходный запуск конвейера отсутствует.");
-      if (!source.pipelineRepeat) throw Error("Для этого запуска не сохранены полные параметры повтора. Создайте новый запуск.");
+      if (!source || source.kind === "build") throw Error(tr("host.theOriginalPipelineRunIsMissing"));
+      if (!source.pipelineRepeat) throw Error(tr("host.fullRepeatSettingsWereNotSavedForThisRunCreate"));
       const context = source.context ? {
         projectId: source.context.projectId,
         year: source.context.year,
@@ -6330,9 +6343,9 @@ export class HostService extends EventEmitter {
       const scope = context ?? source.projectId;
       return this.operation(() => this.exclusive(source.projectId, () => this.snapshot(scope, async () => {
         this.assertLaunchAllowed();
-        if (!this.runList.includes(source)) throw Error("Исходный запуск уже закрыт.");
+        if (!this.runList.includes(source)) throw Error(tr("host.theOriginalRunWasAlreadyClosed"));
         if (["starting", "running"].includes(source.status) || source.recovery === "unverified" || this.children.has(id) || this.stopFlights.has(id))
-          throw Error("Дождитесь подтверждённого завершения исходного запуска. Для работающего конвейера можно восстановить панель.");
+          throw Error(tr("host.waitUntilTheOriginalRunIsConfirmedFinishedForA"));
         const options = pipelineRepeatSnapshotSchema.parse(source.pipelineRepeat);
         const { version: _version, ...choices } = options;
         return this.launchWithSettings({
@@ -6358,13 +6371,13 @@ export class HostService extends EventEmitter {
     this.assertLaunchAllowed();
     assertEnvironmentTransport(this.context.getStore()!.document.value.env);
     if (typeof request?.clean !== "boolean")
-      throw new Error("Некорректный параметр очистки состояния (clean)");
+      throw new Error(tr("host.invalidCleanStateOption"));
     if (
       typeof request.expectedBranch !== "string" ||
       request.expectedBranch.length > 256 ||
       typeof request.confirmBranchSwitch !== "boolean"
     )
-      throw new Error("Некорректное подтверждение текущей ветки");
+      throw new Error(tr("host.invalidConfirmationOfTheCurrentBranch"));
     if (
       typeof request.confirmEmptyTask !== "boolean" ||
       "confirmTaskOverwrite" in request ||
@@ -6374,7 +6387,7 @@ export class HostService extends EventEmitter {
           !/^[a-f0-9]{64}$/.test(request.taskVersion)))
     )
       throw new Error(
-        "Некорректная версия записи задачи. Черновик не сохранён.",
+        tr("host.invalidTaskVersionTheDraftWasNotSaved"),
       );
     if (
       request.topic?.mode === "none" &&
@@ -6384,7 +6397,7 @@ export class HostService extends EventEmitter {
         request.confirmBranchSwitch)
     )
       throw Error(
-        "Запуск без топика не сохраняет задачу и не переключает ветку.",
+        tr("host.aRunWithoutATopicDoesNotSaveATask"),
       );
     const r = this.normalize(request),
       p = await this.project(r.projectId);
@@ -6408,7 +6421,7 @@ export class HostService extends EventEmitter {
     request: LaunchRequest,
   ): Promise<Run> {
     if (request.topic.mode !== "new" || this.binding(primary))
-      throw Error("Новый топик должен создаваться из исходного проекта.");
+      throw Error(tr("host.createNewTopicsFromTheOriginalProject"));
     const base = (
       await this.cmd(
         primary,
@@ -6459,7 +6472,7 @@ export class HostService extends EventEmitter {
       );
     } catch (error) {
       throw Error(
-        `${error instanceof Error ? error.message : String(error)} Копия топика «${owner.topic}» подготовлена: ${owner.path}. Выберите её в шапке и проверьте параметры. Повторное создание автоматически не выполняется.`,
+        tr("host.value1TheWorkingCopyForTopicTopicIsReadyPath", { value1: error instanceof Error ? error.message : String(error), topic: owner.topic, path: owner.path }),
       );
     }
   }
@@ -6475,11 +6488,11 @@ export class HostService extends EventEmitter {
     validateTaskText(request.task);
     const selection = request.topic;
     if (!selection || !["none", "existing", "new"].includes(selection.mode))
-      throw new Error("Выберите топик");
+      throw new Error(tr("host.selectATopic"));
     const repository = await this.hasProjectGit(p);
     if (!repository && selection.mode !== "none")
       throw Error(
-        "Топики доступны только в Git-репозитории. Выберите запуск «Без топика».",
+        tr("host.topicsRequireAGitRepositorySelectNoTopicToLaunch"),
       );
     const current = await this.pipelineBranch(p);
     if (
@@ -6488,40 +6501,40 @@ export class HostService extends EventEmitter {
         request.topic.branch !== this.binding(p)!.branch ||
         request.topic.topic !== this.binding(p)!.topic)
     )
-      throw Error("Выберите топик, которому принадлежит клон.");
+      throw Error(tr("host.selectTheTopicThatOwnsThisClone"));
     const assertBranch = async (expected: string) => {
       if (
         (await this.hasProjectGit(p)) !== repository ||
         (await this.pipelineBranch(p)) !== expected
       )
         throw new Error(
-          "Текущая ветка изменилась вне приложения. Обновите каталог и подтвердите запуск повторно.",
+          tr("host.theCurrentBranchChangedOutsideTheAppRefreshTheCatalog"),
         );
     };
     if (current !== request.expectedBranch)
       throw new Error(
-        "Текущая ветка изменилась вне приложения. Обновите каталог и подтвердите запуск повторно.",
+        tr("host.theCurrentBranchChangedOutsideTheAppRefreshTheCatalog"),
       );
     if (
       (selection.mode === "new" ||
         (selection.mode === "existing" && selection.branch !== current)) &&
       !request.confirmBranchSwitch
     )
-      throw new Error("Подтвердите переключение ветки перед запуском.");
+      throw new Error(tr("host.confirmTheBranchSwitchBeforeLaunch"));
     if (
       (selection.mode === "new" ||
         (selection.mode === "existing" && selection.branch !== current)) &&
       this.activeRuns(p, key).length
     )
       throw new Error(
-        "Нельзя переключать или создавать ветку, пока в этой папке работает процесс.",
+        tr("host.cannotSwitchOrCreateABranchWhileAProcessIs"),
       );
     let branch: string, topic: string, launchTaskPath: string | undefined;
     let mutated = false;
     let taskSnapshot: TopicTaskDocument | undefined;
     const taskConflict = () =>
       Error(
-        "Задача изменена вне приложения. Файл не перезаписан; ваш черновик сохранён в форме. Перечитайте задачу и разрешите конфликт перед сохранением.",
+        tr("host.theTaskChangedOutsideTheAppItWasNotOverwritten"),
       );
     const assertTaskWrite = async () => {
       if (!taskSnapshot || request.taskVersion === undefined) return;
@@ -6541,12 +6554,12 @@ export class HostService extends EventEmitter {
           branch.length > 180 ||
           /[\x00-\x20]/.test(branch)
         )
-          throw new Error("Недопустимое имя ветки");
+          throw new Error(tr("host.invalidBranchName"));
         await this.cmd(p, ["check-ref-format", "--branch", branch], true);
         topic = slug(branch);
         if (!topic)
           throw new Error(
-            "Имя топика должно содержать латинские буквы или цифры",
+            tr("host.aTopicNameMustContainLatinLettersOrDigits"),
           );
         if (
           typeof selection.baseRef !== "string" ||
@@ -6554,7 +6567,7 @@ export class HostService extends EventEmitter {
           selection.baseRef.startsWith("-") ||
           /[\x00-\x20]/.test(selection.baseRef)
         )
-          throw new Error("Недопустимая исходная ветка");
+          throw new Error(tr("host.invalidSourceBranch"));
         await this.cmd(
           p,
           ["rev-parse", "--verify", `${selection.baseRef}^{commit}`],
@@ -6562,7 +6575,7 @@ export class HostService extends EventEmitter {
         );
         if ((await this.cmd(p, ["status", "--porcelain"], true)).trim())
           throw new Error(
-            "Есть незакоммиченные изменения. Сохраните или уберите их перед созданием топика.",
+            tr("host.thereAreUncommittedChangesSaveOrSetThemAsideBefore"),
           );
         const topicRelative = `.goga/history/${new Date().getFullYear()}/${topic}`;
         launchTaskPath = `${topicRelative}/todo.md`;
@@ -6596,7 +6609,7 @@ export class HostService extends EventEmitter {
           )
         )
           throw new Error(
-            "Имя ветки уже занято. Выберите существующий топик или другое имя.",
+            tr("host.theBranchNameIsAlreadyInUseSelectAnExisting"),
           );
         const directoryExists = async () =>
           lstat(topicDir).then(
@@ -6607,7 +6620,7 @@ export class HostService extends EventEmitter {
             },
           );
         if (await directoryExists())
-          throw new Error("Имя топика уже занято в рабочей копии.");
+          throw new Error(tr("host.theTopicNameIsAlreadyInUseInTheWorking"));
         for (const ref of refs) {
           if (
             (
@@ -6618,7 +6631,7 @@ export class HostService extends EventEmitter {
               )
             ).trim()
           )
-            throw new Error("Имя топика уже занято в истории веток.");
+            throw new Error(tr("host.theTopicNameIsAlreadyInUseInBranchHistory"));
         }
         this.check();
         await assertBranch(current);
@@ -6649,7 +6662,7 @@ export class HostService extends EventEmitter {
           !request.task.trim() &&
           !request.confirmEmptyTask
         )
-          throw new Error("Подтвердите замену задачи пустым текстом.");
+          throw new Error(tr("host.confirmReplacingTheTaskWithEmptyText"));
         if (branch !== current) {
           const targetRef = (
             await this.cmd(
@@ -6660,7 +6673,7 @@ export class HostService extends EventEmitter {
           ).trim();
           if ((await this.cmd(p, ["status", "--porcelain"], true)).trim())
             throw new Error(
-              "Есть незакоммиченные изменения. Сохраните или уберите их перед переключением ветки.",
+              tr("host.thereAreUncommittedChangesSaveOrSetThemAsideBefore2"),
             );
           this.check();
           await assertBranch(current);
@@ -6674,7 +6687,7 @@ export class HostService extends EventEmitter {
             ).trim() !== targetRef
           )
             throw new Error(
-              "Задача или ветка изменились перед переключением. Откройте задачу заново.",
+              tr("host.theTaskOrBranchChangedBeforeSwitchingOpenTheTask"),
             );
           await assertBranch(current);
           await this.assertSettings(p.id);
@@ -6692,7 +6705,7 @@ export class HostService extends EventEmitter {
       // current checkout rather than comparing it to a cached admission token.
       const composed = await this.compose(p, r);
       if (!composed.stages.length)
-        throw Error("Нельзя запустить пустой набор стадий");
+        throw Error(tr("host.cannotLaunchWithNoStagesSelected"));
       this.check();
       await assertBranch(branch);
       if (
@@ -6729,7 +6742,7 @@ export class HostService extends EventEmitter {
         const written = await readWorkingTask(this.root(p), taskSnapshot.path);
         if (!written.exists || written.text !== request.task)
           throw Error(
-            "Задача изменилась во время сохранения. Проверьте todo.md; запуск не выполнен, черновик сохранён в форме.",
+            tr("host.theTaskChangedWhileSavingCheckTodoMdTheRun"),
           );
       }
       await assertBranch(branch);
@@ -6740,7 +6753,7 @@ export class HostService extends EventEmitter {
         launchTaskPath !== undefined &&
         taskPath(topic, this.binding(p)?.year ?? taskYear) !== launchTaskPath
       )
-        throw new Error("Год задачи изменился. Откройте её заново.");
+        throw new Error(tr("host.theTaskYearChangedOpenItAgain"));
       const startedTask =
         launchTaskPath === undefined
           ? undefined
@@ -6751,7 +6764,7 @@ export class HostService extends EventEmitter {
         startedTask?.text !== request.task
       )
         throw new Error(
-          "Задача изменена извне перед запуском. Откройте её заново.",
+          tr("host.theTaskChangedExternallyBeforeLaunchOpenItAgain"),
         );
       await assertBranch(branch);
       await this.assertSettings(p.id);
@@ -6796,11 +6809,12 @@ export class HostService extends EventEmitter {
           branch,
         };
       await this.validateBinding(p);
+      this.localRunAdmissions.add(run);
       this.addActiveRun(key, run.id);
       this.runList.push(run);
-      await this.persistRuns();
       let child: ChildProcessWithoutNullStreams;
       try {
+        await this.persistRuns();
         child = await this.startRun(
           run,
           p,
@@ -6816,6 +6830,7 @@ export class HostService extends EventEmitter {
           invocation.env,
         );
       } catch (error) {
+        this.localRunAdmissions.delete(run);
         this.removeActiveRun(key, run.id);
         run.status = "failed";
         run.endedAt = new Date().toISOString();
@@ -6855,7 +6870,7 @@ export class HostService extends EventEmitter {
             void this.terminateOwned(
               run.id,
               "failed",
-              "Goga завершилась до открытия Dashboard.",
+              { kind: "dashboard-not-opened" },
             ).catch(() => {});
           else
             void this.terminateOwned(
@@ -6863,7 +6878,7 @@ export class HostService extends EventEmitter {
               code === 0 ? "exited" : "failed",
               code === 0
                 ? undefined
-                : `Goga завершилась с кодом ${code ?? "signal"}`,
+                : { kind: "pipeline-exit", code },
             ).catch(() => {});
         },
         onFailure: (error) => {
@@ -6886,6 +6901,7 @@ export class HostService extends EventEmitter {
         },
       };
       this.children.set(run.id, entry);
+      this.localRunAdmissions.delete(run);
       entry.timer = setTimeout(
         () => this.expireStartup(run.id),
         Math.max(0, deadlineAt - performance.now()),
@@ -6895,7 +6911,7 @@ export class HostService extends EventEmitter {
     } catch (error) {
       if (mutated)
         throw new Error(
-          `${(error as Error).message} Рабочая копия уже изменена; автоматического отката нет. Проверьте текущую ветку и todo.md.`,
+          tr("host.value1TheWorkingCopyHasAlreadyChangedNoAutomaticRollback", { value1: (error as Error).message }),
         );
       throw error;
     }
@@ -6950,7 +6966,7 @@ export class HostService extends EventEmitter {
         if (!run) continue; // a repeated confirmed request is idempotent
         if (!belongs(run) || (run.kind ?? "pipeline") !== request.kind)
           throw Error(
-            "Запуск не относится к выбранному разделу или рабочему контексту. История не изменена.",
+            tr("host.theRunDoesNotBelongToTheSelectedSectionOr"),
           );
         const keep = reason(run);
         if (keep) retained.push({ id, reason: keep });
@@ -6980,7 +6996,7 @@ export class HostService extends EventEmitter {
       const existing = new Set(this.runList.map((run) => run.id));
       if (candidates.some((id) => existing.has(id) && !safe.has(id)))
         throw Error(
-          "Состояние запуска изменилось во время очистки. История сохранена; повторите попытку.",
+          tr("host.runStateChangedDuringCleanupHistoryWasKeptRetry"),
         );
     };
     const publishRemoval = (ids: string[]) => {
@@ -7013,10 +7029,10 @@ export class HostService extends EventEmitter {
     const operation = Promise.resolve()
       .then(async () => {
         const run = this.runList.find((r) => r.id === id);
-        if (!run) throw new Error("Неизвестный запуск");
+        if (!run) throw new Error(tr("host.unknownRun"));
         if (run.syncPending)
           throw Error(
-            "Автоматическая синхронизация ещё не записана. Сохранённый запуск нужен для повтора после перезапуска.",
+            tr("host.automaticSyncHasNotBeenRecordedYetTheSavedRun"),
           );
         if (
           this.children.has(id) ||
@@ -7028,7 +7044,7 @@ export class HostService extends EventEmitter {
         }
         // A completed observer may have updated the status while consent was open.
         if (this.children.has(id))
-          throw new Error("Процесс ещё работает; вкладка сохранена.");
+          throw new Error(tr("host.theProcessIsStillRunningTheTabWasKept"));
         this.dashboardFlights.get(id)?.controller.abort();
         this.runList = this.runList.filter((r) => r.id !== id);
         this.buildRequests.delete(id);
@@ -7049,7 +7065,7 @@ export class HostService extends EventEmitter {
       run.dashboardRecoveryVersion !== 1 ||
       run.kind === "build"
     )
-      throw Error("Для этого запуска не сохранена новая связь с панелью.");
+      throw Error(tr("host.noNewDashboardConnectionWasSavedForThisRun"));
     const owner = this.runOwnerHash(run),
       metadata = run.process;
     const claim = await this.recovery.readDashboard(
@@ -7057,7 +7073,7 @@ export class HostService extends EventEmitter {
       owner,
       metadata.cwd,
     );
-    if (!claim) throw Error("Для этого запуска не сохранена связь с панелью.");
+    if (!claim) throw Error(tr("host.noDashboardConnectionWasSavedForThisRun"));
     const pin = await readDashboardIdentity(claim.origin, signal);
     // The payload may finish while HTTP is in flight. A status response is not
     // authority to open a panel after its supervised process has terminated.
@@ -7068,7 +7084,7 @@ export class HostService extends EventEmitter {
     );
     if (processState.state !== "alive")
       throw Error(
-        "Процесс больше не подтверждён как работающий. Подключение отменено.",
+        tr("host.theProcessIsNoLongerVerifiedAsRunningConnectionCanceled"),
       );
     if (
       signal?.aborted ||
@@ -7078,9 +7094,9 @@ export class HostService extends EventEmitter {
       !["starting", "running"].includes(run.status) ||
       this.stopFlights.has(run.id)
     )
-      throw Error("Состояние запуска изменилось. Подключение отменено.");
+      throw Error(tr("host.runStateChangedConnectionCanceled"));
     if (pin !== claim.serverRunId)
-      throw Error("Источник панели изменился. Подключение отменено.");
+      throw Error(tr("host.dashboardSourceChangedConnectionCanceled"));
     run.url = claim.origin;
     run.dashboardRunId = pin;
     run.dashboardReconnect = true;
@@ -7143,7 +7159,7 @@ export class HostService extends EventEmitter {
       )
         return false;
       run.dashboardMessage =
-        "Переподключение после выхода недоступно: не удалось сохранить проверяемую связь с панелью. Сам конвейер продолжает работу.";
+        tr("host.reconnectionAfterExitIsUnavailableBecauseAVerifiableDashboardLink");
     }
     this.emitRuns();
     return this.runList.includes(run) && run.status === "running";
@@ -7151,7 +7167,7 @@ export class HostService extends EventEmitter {
   prepareDashboardReconnect(id: string): Promise<string> {
     this.check();
     if (this.shutdownAdmission)
-      return Promise.reject(Error("Приложение готовится к выходу."));
+      return Promise.reject(Error(tr("host.theAppIsPreparingToExit")));
     const previous = this.dashboardFlights.get(id);
     if (previous) return previous.promise;
     const controller = new AbortController();
@@ -7164,7 +7180,7 @@ export class HostService extends EventEmitter {
           !this.recovery ||
           !run.process
         )
-          throw Error("Для этого запуска не сохранена новая связь с панелью.");
+          throw Error(tr("host.noNewDashboardConnectionWasSavedForThisRun"));
         const owner = this.runOwnerHash(run);
         const p = await this.project(
           run.context
@@ -7186,11 +7202,11 @@ export class HostService extends EventEmitter {
         if (result.state !== "alive") {
           if (result.state === "terminal") await this.reconcileRun(id);
           throw Error(
-            "Процесс не подтверждён как работающий. Панель не подключена; повторного запуска не было.",
+            tr("host.theProcessCouldNotBeVerifiedAsRunningTheDashboard"),
           );
         }
         if (controller.signal.aborted || this.runOwnerHash(run) !== owner)
-          throw Error("Подключение отменено.");
+          throw Error(tr("host.connectionCanceled"));
         const url = await this.restoreSavedDashboard(run, controller.signal);
         this.emitRuns();
         return url;
@@ -7238,7 +7254,7 @@ export class HostService extends EventEmitter {
     void this.terminateOwned(
       id,
       "failed",
-      "Время запуска истекло. Dashboard не открылся в установленный срок.",
+      { kind: "dashboard-timeout" },
     ).catch(() => {});
   }
   stop(id: string): Promise<void> {
@@ -7247,13 +7263,13 @@ export class HostService extends EventEmitter {
   private terminateOwned(
     id: string,
     status: "failed" | "exited" | "stopped",
-    error?: string,
+    reason?: string | RunFailureReason,
   ): Promise<void> {
     const pending = this.stopFlights.get(id);
     if (pending) return pending;
     // Install single-flight before cancelling observers or any asynchronous kill.
     const operation = Promise.resolve()
-      .then(() => this.finishOwned(id, status, error))
+      .then(() => this.finishOwned(id, status, reason))
       .finally(() => this.stopFlights.delete(id));
     this.stopFlights.set(id, operation);
     return operation;
@@ -7261,8 +7277,10 @@ export class HostService extends EventEmitter {
   private async finishOwned(
     id: string,
     status: "failed" | "exited" | "stopped",
-    error?: string,
+    reason?: string | RunFailureReason,
   ): Promise<void> {
+    const failureReason = typeof reason === "object" ? reason : undefined;
+    const error = typeof reason === "object" ? runFailureMessage(reason) : reason;
     const entry = this.children.get(id);
     if (!entry) {
       const recovered = this.runList.find((r) => r.id === id);
@@ -7302,7 +7320,7 @@ export class HostService extends EventEmitter {
       }
       if (this.runList.find((r) => r.id === id)?.recovery === "unverified")
         throw Error(
-          "После перезапуска состояние процесса не подтверждено. Остановка по сохранённому PID не выполняется.",
+          tr("host.processStateWasNotVerifiedAfterRestartTheSavedPid"),
         );
       return;
     }
@@ -7312,11 +7330,14 @@ export class HostService extends EventEmitter {
       for (const secret of [...entry.secrets].sort(
         (a, b) => b.length - a.length,
       ))
-        text = text.split(secret).join("[скрыто]");
+        text = text.split(secret).join(tr("host.hidden"));
       return text;
     };
     entry.cancel();
-    if (error) run.error = safe(error);
+    if (error) {
+      run.error = safe(error);
+      run.failureReason = failureReason;
+    }
     // Abort a pending native page/permission prompt before awaiting termination.
     if (!run.dashboardOpened) delete run.url;
     this.emitRuns();
@@ -7330,9 +7351,11 @@ export class HostService extends EventEmitter {
         if (!error && status !== "stopped") status = result.status;
       } else await this.runner.kill(entry.child);
     } catch (killError) {
+      // This compound failure includes external diagnostics; do not replace it with a UI label.
+      delete run.failureReason;
       run.error = [
         error ? safe(error) : "",
-        "Не удалось остановить процесс. Он может ещё работать; повторите остановку.",
+        tr("host.couldNotStopTheProcessItMayStillBeRunning"),
         safe(
           killError instanceof Error ? killError.message : String(killError),
         ),
@@ -7349,8 +7372,13 @@ export class HostService extends EventEmitter {
     run.status = status;
     delete run.recovery;
     delete run.recoveryMessage;
-    if (status === "stopped") delete run.error;
-    else run.error = error ? safe(error) : undefined;
+    if (status === "stopped" || !error) {
+      delete run.error;
+      delete run.failureReason;
+    } else {
+      run.error = safe(error);
+      run.failureReason = failureReason;
+    }
     run.endedAt = new Date().toISOString();
     if (run.context) run.syncPending = true;
     this.emitRuns();
@@ -7379,7 +7407,7 @@ export class HostService extends EventEmitter {
   private assertLaunchAllowed(): void {
     this.check();
     if (this.shutdownAdmission)
-      throw Error("Приложение готовится к выходу. Новый запуск недоступен.");
+      throw Error(tr("host.theApplicationIsPreparingToExitNewRunsAreUnavailable"));
   }
   /** Freeze only new runs; stopping/recovery and project reads must remain usable.
    * Drain the pre-existing operation chain before taking the confirmation snapshot:
@@ -7390,7 +7418,7 @@ export class HostService extends EventEmitter {
     // Retry may prove its empty inventory, but must never reopen admission.
     if (!this.shutdownFinalized) this.check();
     if (this.shutdownAdmission)
-      throw Error("Подготовка к выходу уже выполняется.");
+      throw Error(tr("host.exitPreparationIsAlreadyInProgress"));
     this.shutdownAdmission = true;
     let released = false;
     const active = () =>
@@ -7406,20 +7434,20 @@ export class HostService extends EventEmitter {
         active().map((run) => [run.id, this.runOwnerHash(run)]),
       );
       const validate = () => {
-        if (released) throw Error("Подготовка к выходу уже завершена.");
+        if (released) throw Error(tr("host.exitPreparationHasAlreadyFinished"));
         for (const run of active()) {
           if (
             planned.get(run.id) !== this.runOwnerHash(run) ||
             run.recovery === "unverified"
           )
-            throw Error("Состояние запуска не подтверждено. Выход отменён.");
+            throw Error(tr("host.runStateIsUnverifiedExitCanceled"));
         }
         if (
           [...this.children.keys()].some(
             (id) => !this.runList.some((run) => run.id === id),
           )
         )
-          throw Error("Состояние запуска не подтверждено. Выход отменён.");
+          throw Error(tr("host.runStateIsUnverifiedExitCanceled"));
       };
       const validateKeep = async () => {
         validate();
@@ -7468,7 +7496,7 @@ export class HostService extends EventEmitter {
       return {
         items: active().map((run) => ({
           id: `run:${run.id}`,
-          label: `${run.pipeline} — ${run.topic || "Без топика"}`,
+          label: `${run.pipeline} — ${run.topic || tr("host.noTopic")}`,
         })),
         requiresConfirmation: planned.size > 0,
         validate,
@@ -7534,7 +7562,7 @@ export class HostService extends EventEmitter {
           !this.detachedRuns.has(run.id),
       )
     )
-      throw Error("Сначала требуется завершить запуски приложения.");
+      throw Error(tr("host.stopTheApplicationSRunsFirst"));
     if (this.shutdownFinalized) return;
     await this.operationTail;
     await this.persistRuns();

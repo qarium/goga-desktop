@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { constants } from "node:fs";
 import {
   lstat,
@@ -111,7 +112,7 @@ const hash = (v: string | Buffer) =>
   createHash("sha256").update(v).digest("hex");
 const missing = (e: unknown) => (e as NodeJS.ErrnoException).code === "ENOENT";
 const changed = () =>
-  new Error("Контекст или журнал синхронизации изменён. Обновите данные.");
+  new Error(tr("host.theContextOrSynchronizationJournalChangedRefresh"));
 /** Push commits to the original local project. Applying to its checkout remains explicit. */
 export class ContextSyncManager {
   private readonly root: string;
@@ -232,7 +233,7 @@ export class ContextSyncManager {
         } catch (e) {
           if ((e as NodeJS.ErrnoException).code === "EEXIST")
             throw new Error(
-              "Синхронизация занята другим процессом; повторите или восстановите после перезапуска.",
+              tr("host.anotherProcessIsSynchronizingRetryLaterOrRecoverAfterRestart"),
             );
           throw e;
         }
@@ -590,7 +591,7 @@ export class ContextSyncManager {
         return structuredClone(entry.state);
       }
       if (!(await assertLocalOrigin(owner, (args, cwd) => this.git(args, cwd), allowOriginMigration)))
-        throw new Error("У клона отсутствует локальный origin; настройки не изменялись.");
+        throw new Error(tr("host.theCloneHasNoLocalOriginSettingsWereNotChanged"));
       await this.git(
         ["check-ref-format", `refs/heads/${owner.branch}`],
         owner.path,
@@ -603,7 +604,7 @@ export class ContextSyncManager {
       ).trim();
       if (existing && existing !== operation.sourceOid)
         throw new Error(
-          "Служебная ссылка занята другим OID; импорт не перезаписывает refs.",
+          tr("host.theInternalRefPointsToADifferentOidImportDoes"),
         );
       await this.assertDirectDestination(owner);
       // Ordinary non-forced push, with a pinned source commit and one visible branch.
@@ -641,7 +642,7 @@ export class ContextSyncManager {
         }
         if (error instanceof CommandExitError && error.exitCode !== null)
           throw new Error(
-            `Git не выполнил push ветки ${owner.branch} в локальный origin. Проверьте, не открыта ли целевая ветка в рабочей копии и нет ли расхождения истории; force не выполнялся.`,
+            tr("host.gitCouldNotPushBranchBranchToTheLocalOrigin", { branch: owner.branch }),
           );
         throw error;
       }
@@ -649,7 +650,7 @@ export class ContextSyncManager {
       await assertLocalOrigin(owner, (args, cwd) => this.git(args, cwd));
       if ((await this.visibleOid(owner)) !== operation.sourceOid)
         throw new Error(
-          "OID ветки оригинального проекта изменился во время push.",
+          tr("host.theOriginalProjectSBranchOidChangedDuringPush"),
         );
       if (!existing)
         await this.git(
@@ -670,11 +671,11 @@ export class ContextSyncManager {
         ).trim() !== operation.sourceOid
       )
         throw new Error(
-          "OID служебного снимка изменился во время синхронизации.",
+          tr("host.theSnapshotOidChangedDuringSynchronization"),
         );
       if ((await this.visibleOid(owner)) !== operation.sourceOid)
         throw new Error(
-          "OID ветки оригинального проекта изменился во время синхронизации.",
+          tr("host.theOriginalProjectSBranchOidChangedDuringSynchronization"),
         );
       entry.state = {
         ...entry.state,
@@ -694,7 +695,7 @@ export class ContextSyncManager {
         error:
           error instanceof Error
             ? error.message
-            : "Не удалось синхронизировать коммиты.",
+            : tr("host.couldNotSynchronizeCommits"),
         updatedAt: new Date().toISOString(),
       };
     }
@@ -725,7 +726,7 @@ export class ContextSyncManager {
       throw error;
     }
     throw new Error(
-      "Целевая ветка оригинального проекта является символической ссылкой. Push запрещён: он мог бы изменить другую ветку.",
+      tr("host.theDestinationBranchInTheOriginalProjectIsASymbolic"),
     );
   }
   private async visibleOid(owner: WorktreeRecord) {
@@ -804,7 +805,7 @@ export class ContextSyncManager {
         entry.owner.revision !== owner.revision ||
         entry.operation.owner.revision !== owner.revision
       )
-        throw new Error("Нет сохранённой операции для повтора.");
+        throw new Error(tr("host.thereIsNoSavedOperationToRetry"));
       entry.state.status = !allowActive && this.deps.isActive(owner.contextId)
         ? "waiting"
         : "syncing";
@@ -826,7 +827,7 @@ export class ContextSyncManager {
       .parse(JSON.parse(raw));
     try {
       process.kill(value.pid, 0);
-      throw new Error("Предыдущий процесс синхронизации ещё работает.");
+      throw new Error(tr("host.thePreviousSyncProcessIsStillRunning"));
     } catch (e) {
       if ((e as NodeJS.ErrnoException).code !== "ESRCH") throw e;
     }
@@ -866,7 +867,7 @@ export class ContextSyncManager {
           error:
             error instanceof Error
               ? error.message
-              : "Не удалось восстановить импорт.",
+              : tr("host.couldNotRecoverTheImport"),
         });
       }
     }
@@ -888,10 +889,10 @@ export class ContextSyncManager {
       this.deps.isActive(owner.contextId) ||
       this.deps.isProjectActive?.(owner.projectId)
     )
-      return "Сначала дождитесь завершения активных операций проекта и топика.";
+      return tr("host.waitForActiveProjectAndTopicOperationsToFinish");
     const branch = await this.targetBranch(owner.projectPath);
     if (!branch)
-      return "В основной копии не выбрана целевая ветка (detached HEAD).";
+      return tr("host.noTargetBranchIsCheckedOutInTheOriginalWorking");
     for (const name of [
       "MERGE_HEAD",
       "REBASE_HEAD",
@@ -909,7 +910,7 @@ export class ContextSyncManager {
       await noSymlinks(file);
       try {
         await lstat(file);
-        return "В основной копии уже идёт операция Git. Завершите её вручную.";
+        return tr("host.aGitOperationIsAlreadyInProgressInTheOriginal");
       } catch (e) {
         if (!missing(e)) throw e;
       }
@@ -922,7 +923,7 @@ export class ContextSyncManager {
         )
       ).length
     )
-      return "Основная рабочая копия содержит локальные изменения. Сначала сохраните их вручную.";
+      return tr("host.theOriginalWorkingCopyHasLocalChangesSaveThemManually");
     return;
   }
   private async mergePreview(
@@ -955,7 +956,7 @@ export class ContextSyncManager {
           (e) => e.state.contextId === owner.contextId,
         );
       if (!entry || !entry.state.importedOid || !entry.state.destinationRef)
-        throw new Error("Сначала синхронизируйте коммиты топика.");
+        throw new Error(tr("host.syncTopicCommitsFirst"));
       this.assertEntry(entry, owner, true);
       const sourceOid = entry.state.importedOid,
         targetOid = await this.head(owner.projectPath),
@@ -986,13 +987,13 @@ export class ContextSyncManager {
         ).trim() !== sourceOid
       )
         reason =
-          "Синхронизированная служебная ссылка изменена. Повторите синхронизацию.";
+          tr("host.theSynchronizedInternalRefChangedSyncAgain");
       if (!reason) {
         try {
           preview.files = await this.mergePreview(owner, targetOid, sourceOid);
         } catch {
           reason =
-            "Предварительное слияние выявило конфликт или Git не поддерживает безопасный предпросмотр.";
+            tr("host.theMergePreviewFoundAConflictOrGitDoesNot");
         }
       }
       preview.canApply = !reason;
@@ -1016,7 +1017,7 @@ export class ContextSyncManager {
       (e) => e.apply?.preview.token === token && e.apply.phase === "preview",
     );
     if (entries.length !== 1)
-      throw new Error("Предпросмотр устарел или уже использован.");
+      throw new Error(tr("host.thePreviewIsStaleOrHasAlreadyBeenUsed"));
     return entries[0].state.projectId;
   }
   async apply(
@@ -1024,7 +1025,7 @@ export class ContextSyncManager {
     input: { token: string; confirmed: true },
   ): Promise<ContextApplyResult> {
     if (input.confirmed !== true)
-      throw new Error("Нужно явное подтверждение применения в целевую ветку.");
+      throw new Error(tr("host.explicitConfirmationIsRequiredToApplyChangesToTheTarget"));
     const token = z.string().uuid().parse(input.token);
     return this.locked(async () => {
       const doc = await this.read(),
@@ -1039,7 +1040,7 @@ export class ContextSyncManager {
         !entry.apply.preview.canApply
       )
         throw new Error(
-          "Предпросмотр устарел или уже использован. Создайте новый.",
+          tr("host.thePreviewIsStaleOrWasAlreadyUsedCreateA"),
         );
       const owner = await this.owner(project, worktreeContextRef(entry.owner)),
         operation = entry.apply,
@@ -1137,10 +1138,10 @@ export class ContextSyncManager {
         operation.error =
           error instanceof Error
             ? error.message
-            : "Слияние завершилось ошибкой.";
+            : tr("host.theMergeFailed");
         await this.write(doc.journal, raw);
         throw new Error(
-          "Применение не завершено. Проверьте Git вручную; Desktop не выполнял откат, reset или очистку. " +
+          tr("host.changesWereNotFullyAppliedCheckGitManuallyDesktopDid") +
             operation.error,
         );
       }
@@ -1180,7 +1181,7 @@ export class ContextSyncManager {
       } catch {
         operation.phase = "error";
         operation.error =
-          "Применение было прервано. Создайте новый предпросмотр; автоматический повтор слияния запрещён.";
+          tr("host.applyingChangesWasInterruptedCreateANewPreviewTheMerge");
       }
       await this.write(doc.journal, doc.raw);
     });

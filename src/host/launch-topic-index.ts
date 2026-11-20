@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { lstat, opendir, realpath } from "node:fs/promises";
 import path from "node:path";
 import type { Topic } from "../shared/types";
@@ -28,7 +29,7 @@ const MAX_BYTES = 8 * 1024 * 1024;
 const MAX_PATH_BYTES = 4 * 1024 * 1024;
 const oid = /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/;
 function unsupported(): never {
-  throw Error("Не удалось подготовить каталог формы.");
+  throw Error(tr("host.couldNotPrepareTheFormCatalog"));
 }
 const slug = (s: string) =>
   s
@@ -320,7 +321,7 @@ export async function collectLaunchTopicIndex({
   );
   const [lastRefs, lastHead] = await readRefs(git);
   if (lastRefs !== refs || lastHead !== head)
-    throw Error("Ветки изменились во время чтения. Повторите загрузку.");
+    throw Error(tr("host.branchesChangedWhileBeingReadReload"));
   const byBranch = new Map(
     sources
       .filter((s) => files.has(s.row))
@@ -402,12 +403,12 @@ export async function readLaunchTopicIndex({
         }
         if (r.exitCode !== 0 || r.signal)
           throw Error(
-            "Не удалось прочитать конфигурацию или статусы топиков Goga. Проверьте конфигурацию проекта.",
+            tr("host.couldNotReadGogaTopicConfigurationOrStatusesCheckThe"),
           );
         try {
           return JSON.parse(r.stdout.toString("utf8"));
         } catch {
-          throw Error("Goga вернула некорректные ранги статусов.");
+          throw Error(tr("host.gogaReturnedInvalidStatusRankings"));
         }
       },
     });

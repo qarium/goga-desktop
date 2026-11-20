@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { ListX } from "lucide-react";
 import type { Project } from "../shared/types";
@@ -35,6 +37,7 @@ export function SidebarActionMenu({
   onClose: (restoreFocus?: boolean) => void;
   onError: (error: unknown) => void;
 }) {
+  useLocale();
   const anchor = useRef<HTMLSpanElement>(null),
     [root, setRoot] = useState<HTMLDivElement | null>(null);
   const callbacks = useRef({ onClose, onError });
@@ -166,17 +169,18 @@ export function ProjectListMenu({
   onError: (error: unknown) => void;
   actions?: SidebarMenuAction[];
 }) {
+  useLocale();
   return (
     <SidebarActionMenu
       target={target}
-      label="Действия с проектом"
+      label={msg("shell.projectActions")}
       onClose={onClose}
       onError={onError}
       actions={[
         ...actions,
         {
           key: "remove",
-          label: "Убрать из списка…",
+          label: msg("shell.removeFromList"),
           icon: <ListX size={16} aria-hidden="true" />,
           run: () => onRemove(target.project),
         },
@@ -202,12 +206,13 @@ export function ProjectRemovalDialog({
   onClose: () => void;
   onConfirm: () => void;
 }) {
+  useLocale();
   return (
     <TopicModal
-      title="Убрать проект из списка?"
+      title={msg("shell.removeProjectFromList")}
       className="project-removal-dialog"
       busy={busy}
-      closeLabel="Закрыть подтверждение"
+      closeLabel={msg("shell.closeConfirmation")}
       onClose={onClose}
     >
       <div className="project-removal-copy">
@@ -215,19 +220,16 @@ export function ProjectRemovalDialog({
           <strong>{project.name}</strong>
           <code>{project.path}</code>
         </div>
-        <p>
-          Файлы, настройки, копии топиков и история запусков останутся на
-          компьютере. Проект можно добавить обратно.
-        </p>
+        <p>{msg("shell.filesSettingsTopicWorkingCopiesAndRunHistoryWillStay")}</p>
         {!!dirty.length && (
           <div className="project-removal-warning" role="note">
-            <p>Несохранённые файлы Обзора будут закрыты без сохранения:</p>
+            <p>{msg("shell.unsavedFilesInOverviewWillBeClosedWithoutSaving")}</p>
             <ul>
               {dirty.map((path) => (
                 <li key={path}>{path}</li>
               ))}
             </ul>
-            <p>Вернитесь в редактор, если хотите сохранить изменения.</p>
+            <p>{msg("shell.returnToTheEditorIfYouWantToSaveYour")}</p>
           </div>
         )}
         {blocked && (
@@ -240,19 +242,17 @@ export function ProjectRemovalDialog({
             {error}
           </p>
         )}
-        {busy && <p role="status">Убираем проект из списка…</p>}
+        {busy && <p role="status">{msg("shell.removingProjectFromList")}</p>}
       </div>
       <div className="form-actions">
-        <button type="button" disabled={busy} onClick={onClose}>
-          Отмена
-        </button>
+        <button type="button" disabled={busy} onClick={onClose}>{msg("shell.cancel")}</button>
         <button
           type="button"
           className="primary"
           disabled={busy || !!blocked}
           onClick={onConfirm}
         >
-          {busy ? "Убираем…" : "Убрать из списка"}
+          {busy ? msg("shell.removing") : msg("shell.removeFromList2")}
         </button>
       </div>
     </TopicModal>

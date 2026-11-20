@@ -63,6 +63,53 @@ beforeEach(() => {
   };
 });
 afterEach(cleanup);
+it("distinguishes a group heading from its indented projects only in the expanded sidebar", () => {
+  localStorage.setItem(
+    organizationKey,
+    JSON.stringify({
+      schemaVersion: 1,
+      groups: [
+        { id: "g", name: "Работа", collapsed: false, projectIds: ["a"] },
+      ],
+      ungroupedProjectIds: ["b"],
+    }),
+  );
+  const style = document.createElement("style");
+  style.textContent = readFileSync("src/renderer/ProjectSidebar.css", "utf8");
+  document.head.appendChild(style);
+  try {
+    const view = render(<Sidebar />);
+    const toggle = screen.getByRole("button", { name: "Группа Работа" });
+    const heading = toggle.closest(".ps-group-heading")!;
+    const alpha = screen.getByRole("button", { name: "Alpha" });
+    const members = alpha.closest(".ps-members")!;
+    expect(toggle.getAttribute("title")).toBe("Работа");
+    expect(
+      toggle.querySelector(".ps-group-icon")?.getAttribute("aria-hidden"),
+    ).toBe("true");
+    expect(getComputedStyle(heading).borderRadius).not.toBe("");
+    expect(
+      parseFloat(getComputedStyle(members).paddingInlineStart),
+    ).toBeGreaterThan(0);
+    expect(alpha.closest(".ps-selected")).not.toBeNull();
+    expect(
+      screen.getByRole("button", { name: "Beta" }).closest(".ps-members"),
+    ).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute("aria-expanded")).toBe("false");
+    expect(toggle.querySelector("small")?.textContent).toBe("1");
+    expect(heading.nextElementSibling).toBeNull();
+
+    view.rerender(<Sidebar collapsed />);
+    expect(
+      screen.getByRole("button", { name: "Alpha" }).closest(".ps-members"),
+    ).toBeNull();
+    expect(screen.queryByRole("button", { name: "Группа Работа" })).toBeNull();
+  } finally {
+    style.remove();
+  }
+});
 it("keeps the group count inset from the toggle edge without shrinking it", () => {
   localStorage.setItem(
     organizationKey,

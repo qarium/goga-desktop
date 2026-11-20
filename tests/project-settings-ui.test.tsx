@@ -18,6 +18,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { openFirstProject } from "./helpers/open-first-project";
 import { App } from "../src/renderer/App";
@@ -118,6 +119,24 @@ async function openSettings() {
   fireEvent.click(await screen.findByRole("button", { name: "Проект" }));
   return screen.findByLabelText("Исполняемый файл");
 }
+it("uses the terminal tab presentation for project sections without changing their navigation", async () => {
+  render(<App />);
+  await openFirstProject();
+  await openSettings();
+  const selected = screen.getByRole("button", { name: "Запуск", current: "page" });
+  const bar = selected.closest("nav")!;
+  const config = within(bar).getByRole("button", { name: "Конфигурация" });
+  for (const button of [selected, config]) {
+    expect(button.classList.contains("workspace-tab-select")).toBe(true);
+    expect(button.closest(".workspace-tab")).not.toBeNull();
+  }
+  expect(selected.closest(".workspace-tab")?.getAttribute("data-selected")).toBe("true");
+  fireEvent.click(config);
+  expect(config.getAttribute("aria-current")).toBe("page");
+  expect(config.closest(".workspace-tab")?.getAttribute("data-selected")).toBe("true");
+  expect(selected.closest(".workspace-tab")?.getAttribute("data-selected")).toBe("false");
+});
+
 it("opens during an active run and returns to the same native run without reload", async () => {
   api.runs.mockResolvedValue([
     {
@@ -390,7 +409,7 @@ it("ignores a late read from another project and keeps general settings separate
   ).toBe("beta-goga");
   fireEvent.click(screen.getByRole("button", { name: "Настройки" }));
   expect(
-    await screen.findByRole("heading", { name: "Общие настройки" }),
+    await screen.findByRole("heading", { name: "Настройки", level: 2 }),
   ).toBeTruthy();
   expect(screen.queryByLabelText("Исполняемый файл")).toBeNull();
 });

@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import { runRecoveryMetadataSchema } from "./run-recovery";
 import { buildRepeatSnapshotSchema } from "../shared/build-repeat";
 import { pipelineRepeatSnapshotSchema } from "../shared/pipeline-repeat";
@@ -11,19 +12,19 @@ import { topicContextRefSchema } from "../shared/worktrees";
 import { noSymlinks } from "./settings";
 import { acquireOwnedLock } from "./owned-lock";
 const invalid = () =>
-  Error("Журнал запусков Desktop повреждён или несовместим.");
+  Error(tr("host.theDesktopRunJournalIsDamagedOrIncompatible"));
 const conflict = () =>
-  Error("Журнал запусков изменён. Обновите данные перед сохранением.");
+  Error(tr("host.runHistoryChangedRefreshBeforeSaving"));
 const ownerChanged = () =>
   Error(
-    "Владелец или контекст сохранённого запуска изменён; запись запрещена.",
+    tr("host.theOwnerOrContextOfTheSavedRunChangedWriting"),
   );
 /** The journal was replaced, but durability confirmation failed afterwards.
  * Callers must reflect these committed removals instead of restoring old rows. */
 export class RunHistoryClearCommittedError extends Error {
   constructor(readonly removedRunIds: string[]) {
     super(
-      "Очистка истории записана, но подтверждение сохранения на диске не завершено. Повторите проверку истории.",
+      tr("host.historyCleanupWasRecordedButTheDiskWriteWasNot"),
     );
     this.name = "RunHistoryClearCommittedError";
   }
@@ -424,7 +425,7 @@ export class ContextRunsStore {
         if (old?.terminal && !existing.has(run.id)) continue;
         if (old?.terminal && run.status !== old.terminal)
           throw Error(
-            "Завершённое состояние запуска изменено; устаревшая запись запрещена.",
+            tr("host.theCompletedRunStateChangedTheStaleWriteWasRefused"),
           );
         const terminal =
           run.status === "exited" ||
@@ -469,7 +470,7 @@ export class ContextRunsStore {
           run.recovery === "unverified"
         )
           throw Error(
-            "Запуск ещё требует контроля или синхронизации. История сохранена.",
+            tr("host.theRunStillNeedsMonitoringOrSynchronizationItsHistoryWas"),
           );
       if (!removed.length) return [];
       const terminal = new Map(

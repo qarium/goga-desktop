@@ -1,3 +1,4 @@
+import { t } from "../../shared/i18n";
 import { randomUUID } from "node:crypto";
 import {
   DEMO_DEFAULT_PORT,
@@ -39,7 +40,7 @@ type Options = {
   chromePath?: string;
   launchEmbedded?: typeof launchEmbeddedBrowser;
 };
-const stale = () => new Error("Показ уже закрыт или заменён.");
+const stale = () => new Error(t("hostTerminal.showReplaced"));
 export class Demonstrations {
   private readonly activeShows = new Map<string, Show>();
   private readonly opening = new Map<string, number>();
@@ -118,7 +119,7 @@ export class Demonstrations {
     } catch (error) {
       if (error instanceof InvalidDemoPreferences) ({ port, engine } = error);
       settingsError =
-        "Не удалось прочитать настройки демонстрации. Проверьте и сохраните порт в настройках.";
+        t("hostTerminal.settingsReadFailed");
     }
     const b = this.broker.state();
     return {
@@ -148,7 +149,7 @@ export class Demonstrations {
     const existing = [...this.activeShows.values()].find((s) => s.key === key);
     if (existing) {
       if (existing.closing)
-        throw Error("Сначала завершите закрытие этого показа.");
+        throw Error(t("hostTerminal.closePending"));
       return;
     }
     const preferences = await this.configured(),
@@ -160,7 +161,7 @@ export class Demonstrations {
       key,
       scope,
       engine,
-      label: label || (typeof scope === "string" ? "Без топика" : scope.topic),
+      label: label || (typeof scope === "string" ? t("hostTerminal.noTopic") : scope.topic),
       published: false,
       closing: false,
     };
@@ -191,7 +192,7 @@ export class Demonstrations {
           if (this.shutdown.signal.aborted) throw stale();
           throw Error(
             DEMO_EMBEDDED_START_ERROR +
-              (error instanceof Error ? error.message : "ошибка запуска."),
+              t("hostTerminal.embeddedStartup", { reason: error instanceof Error ? error.message : t("hostTerminal.startError") }),
           );
         }
       } else {
@@ -233,7 +234,7 @@ export class Demonstrations {
         if (cmd.action === "port") {
           if (this.broker.state().slotId)
             throw new Error(
-              "Сначала завершите показ, за которым закреплён порт.",
+              t("hostTerminal.releaseShowFirst"),
             );
           this.preferences = Promise.resolve(
             await savePort(this.options.settingsFile, cmd.port),
@@ -267,12 +268,12 @@ export class Demonstrations {
               !owner.connectionId ||
               owner.connectionId !== cmd.connectionId
             )
-              throw new Error("Агент уже отключился или сменился.");
+              throw new Error(t("hostTerminal.agentChanged"));
             await this.broker.handoff(s.id, s.id);
             return;
           case "switch-port":
             if (owner.slotId === s.id || owner.slotId !== cmd.fromShowId)
-              throw new Error("Владелец порта изменился.");
+              throw new Error(t("hostTerminal.portOwnerChanged"));
             if (owner.slotId) await this.broker.handoff(owner.slotId, s.id);
             else await this.broker.arm(s.id, (await this.configured()).port);
             return;
@@ -391,7 +392,7 @@ export class Demonstrations {
       );
       await this.broker.close();
       if (stopped.some((r) => r.status === "rejected"))
-        throw new Error("Не удалось полностью закрыть демонстрацию.");
+        throw new Error(t("hostTerminal.closeFailed"));
     }).catch((error) => {
       this.done = undefined;
       throw error;

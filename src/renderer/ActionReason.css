@@ -8,10 +8,6 @@
   min-height: 36px;
   margin: 0;
   padding: 8px 10px;
-  border: 1px solid rgba(232, 168, 76, 0.32);
-  border-radius: 6px;
-  background: rgba(232, 168, 76, 0.09);
-  color: #edc28a;
   font-size: 12px;
   line-height: 18px;
 }

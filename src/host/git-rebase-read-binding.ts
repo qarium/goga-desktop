@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import path from "node:path";
 import type { WorktreeRecord } from "../shared/worktrees";
 import { auditMetadata, stat } from "./git-merge-safety";
@@ -5,7 +6,7 @@ import { nativeIntent } from "./git-native-context";
 import { fingerprintNativeGitControls } from "./git-native-state";
 import { noSymlinks } from "./settings";
 const unavailable = () =>
-  Error("Не удалось подтвердить физический контекст остановленного rebase.");
+  Error(gitMessage("gitHost.couldNotVerifyThePhysicalContextOfTheInterrupted"));
 /** Display/conflict-file identity only, NEVER permission to replay a sequence.
  * Git controls are opaque and sealed. Only the native journal can authorize
  * continuation; a changed todo/author-script/patch is not interpreted here. */

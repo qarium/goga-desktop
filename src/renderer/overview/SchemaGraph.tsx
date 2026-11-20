@@ -1,3 +1,5 @@
+import { t as msg } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import { useCallback, useEffect, useMemo, useRef } from "react";
 import {
   ReactFlow,
@@ -13,33 +15,11 @@ import {
 } from "@xyflow/react";
 import { Braces, Boxes, ChevronRight, Minus, Plus, Focus } from "lucide-react";
 import type { SchemaCell } from "../../shared/project-architecture";
+import { IconButton } from "./OverviewIconButton";
 import { prepareOverviewGraph, type GraphData } from "./graph";
 import "@xyflow/react/dist/style.css";
-export function IconButton({
-  label,
-  onClick,
-  disabled,
-  children,
-}: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      className="ov-icon"
-      aria-label={label}
-      title={label}
-      disabled={disabled}
-      onClick={onClick}
-    >
-      {children}
-    </button>
-  );
-}
 function Cell({ data }: NodeProps<Node<GraphData>>) {
+  useLocale();
   return (
     <div
       className={
@@ -51,29 +31,27 @@ function Cell({ data }: NodeProps<Node<GraphData>>) {
       <Handle type="target" position={Position.Left} />
       <div className="ov-node-title">
         <Boxes size={19} />
-        <strong>{data.name}</strong>
+        <strong>{data.cell === "." ? msg("overview.project") : data.name}</strong>
         <ChevronRight size={13} />
       </div>
       {data.external && <small className="ov-node-path">{data.cell}</small>}
       <div className="ov-node-actions">
-        <button
+        <IconButton
           className="nodrag"
           disabled={!data.navigable}
-          aria-label={"Показать контракт " + data.cell}
+          label={msg("overview.showCellContract", { path: data.cell })}
           onClick={(e) => {
             e.stopPropagation();
             data.onContract?.(data.cell);
           }}
         >
-          <Braces size={12} />
-          Контракт
-        </button>
+          <Braces size={12} />{msg("overview.contract")}</IconButton>
         <small>
           {data.external
-            ? data.direction
+            ? (data.direction === "incoming" ? msg("overview.incoming") : msg("overview.dependency"))
             : data.children
-              ? `${data.children} влож.`
-              : "Файлы ↗"}
+              ? msg("overview.children", { children: String(data.children) })
+              : msg("overview.files2")}
         </small>
       </div>
       <Handle type="source" position={Position.Right} />
@@ -81,20 +59,21 @@ function Cell({ data }: NodeProps<Node<GraphData>>) {
   );
 }
 function Scope({ data }: NodeProps<Node<GraphData>>) {
+  useLocale();
   return (
     <div className={"ov-scope " + (data.selected ? "ov-selected" : "")}>
       <Handle type="target" position={Position.Left} />
       <header>
         <Boxes size={17} />
-        <strong>{data.name}</strong>
-        <small>ТЕКУЩАЯ ОБЛАСТЬ</small>
-        <button
+        <strong>{data.cell === "." ? msg("overview.project") : data.name}</strong>
+        <small>{msg("overview.currentSCOPE")}</small>
+        <IconButton
           className="nodrag"
-          aria-label={"Показать контракт " + data.cell}
+          label={msg("overview.showCellContract", { path: data.cell })}
           onClick={() => data.onContract?.(data.cell)}
         >
           <Braces size={15} />
-        </button>
+        </IconButton>
       </header>
       <Handle type="source" position={Position.Right} />
     </div>
@@ -105,6 +84,7 @@ const fitOptions = { padding: 0.13, maxZoom: 1.1 };
 const zoomPercent = (state: ReactFlowState) =>
   Math.round(state.transform[2] * 100);
 function ZoomIndicator() {
+  useLocale();
   const percent = useStore(zoomPercent);
   return <span>{percent}%</span>;
 }
@@ -122,6 +102,7 @@ function Graph({
   onDrill: (id: string) => void;
   onContract: (id: string) => void;
 }) {
+  useLocale();
   const flow = useReactFlow<Node<GraphData>>(),
     host = useRef<HTMLDivElement>(null);
   const contractAction = useRef(onContract);
@@ -223,10 +204,7 @@ function Graph({
   }, [geometry, selection, reveal]);
   if (model.tooLarge)
     return (
-      <div className="ov-empty">
-        Слишком много элементов для одного графа. Выберите вложенную папку в
-        дереве.
-      </div>
+      <div className="ov-empty">{msg("overview.tooManyItemsForASingleGraphSelectASubfolder")}</div>
     );
   return (
     <div className="ov-canvas" ref={host}>
@@ -248,15 +226,15 @@ function Graph({
         <Background color="#244963" gap={24} />
       </ReactFlow>
       <div className="ov-graph-controls">
-        <IconButton label="Уменьшить граф" onClick={() => void flow.zoomOut()}>
+        <IconButton label={msg("overview.zoomOut")} onClick={() => void flow.zoomOut()}>
           <Minus size={15} />
         </IconButton>
         <ZoomIndicator />
-        <IconButton label="Увеличить граф" onClick={() => void flow.zoomIn()}>
+        <IconButton label={msg("overview.zoomIn")} onClick={() => void flow.zoomIn()}>
           <Plus size={15} />
         </IconButton>
         <IconButton
-          label="Показать весь граф"
+          label={msg("overview.fitGraphToView")}
           onClick={() => void flow.fitView(fitOptions)}
         >
           <Focus size={15} />
@@ -266,6 +244,7 @@ function Graph({
   );
 }
 export function SchemaGraph(props: Parameters<typeof Graph>[0]) {
+  useLocale();
   return (
     <ReactFlowProvider>
       <Graph {...props} />

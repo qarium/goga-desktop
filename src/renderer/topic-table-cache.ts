@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import type { TopicBoardSnapshot } from "../shared/topics";
 import { preparationErrorMessage } from "./preparation-error";
 import { readWithSignal } from "./read-request";
@@ -139,7 +140,7 @@ export class TopicTableCache {
         board.projectId !== active.scope.projectId ||
         board.year !== active.scope.year
       )
-        throw Error("Ответ относится к другому проекту или году.");
+        throw Error(tr("topics.theResponseBelongsToAnotherProjectOrYear2"));
       next = { board, loading: false, polling: false, error: "" };
     } catch (error) {
       next = {

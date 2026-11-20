@@ -1,3 +1,4 @@
+import { t as msg } from "../../shared/i18n";
 import dagre from "@dagrejs/dagre";
 import { MarkerType, type Node, type Edge } from "@xyflow/react";
 import {
@@ -12,13 +13,13 @@ export type GraphData = {
   navigable: boolean;
   selected: boolean;
   children: number;
-  direction?: string;
+  direction?: "dependency" | "incoming";
   onContract?: (cell: string) => void;
   [key: string]: unknown;
 };
 export const projectScope = "@project";
 export const basename = (p: string) =>
-  p === "." ? "Проект" : p.split("/").at(-1) || "Проект";
+  p === "." ? msg("overview.project") : p.split("/").at(-1) || msg("overview.project");
 export function ownerForPath(schema: SchemaCell[], p: string) {
   const cells = buildArchitectureIndex(schema).cells;
   return (
@@ -47,7 +48,7 @@ function layoutOverviewGraph(
       ? id
       : ids.find((c) => id.startsWith(c + "/")) ||
         (id === scope && group ? container : null);
-  const external = new Map<string, string>(),
+  const external = new Map<string, "dependency" | "incoming">(),
     edgeMap = new Map<string, Edge>();
   for (const relation of index.edges) {
     const a = owner(relation.source),
@@ -55,11 +56,11 @@ function layoutOverviewGraph(
     let source = a,
       target = b;
     if (a && !b) {
-      external.set(relation.target, "Зависимость");
+      external.set(relation.target, "dependency");
       target = relation.target;
     }
     if (b && !a) {
-      external.set(relation.source, "Входящая");
+      external.set(relation.source, "incoming");
       source = relation.source;
     }
     if (!source || !target || source === target) continue;
@@ -97,8 +98,8 @@ function layoutOverviewGraph(
     .filter((e) => central.has(e.source) && central.has(e.target))
     .forEach((e) => g.setEdge(e.source, e.target));
   dagre.layout(g);
-  const incoming = [...external].filter(([, d]) => d === "Входящая"),
-    outgoing = [...external].filter(([, d]) => d !== "Входящая");
+  const incoming = [...external].filter(([, d]) => d === "incoming"),
+    outgoing = [...external].filter(([, d]) => d !== "incoming");
   const gx = incoming.length ? 225 : 24,
     gy = 20,
     w = (g.graph().width || 200) + 48,
@@ -137,7 +138,7 @@ function layoutOverviewGraph(
       draggable: false,
     }),
   );
-  const add = (entries: [string, string][], left: boolean) =>
+  const add = (entries: [string, "dependency" | "incoming"][], left: boolean) =>
     entries.forEach(([id, direction], i) =>
       nodes.push({
         id,

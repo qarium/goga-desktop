@@ -1,3 +1,5 @@
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import {
   useEffect,
   useLayoutEffect,
@@ -25,16 +27,17 @@ function TopicLines({
   topic: Topic;
   currentBranch: string;
 }) {
+  useLocale();
   return (
     <span className="topic-select-lines">
       <span className="topic-select-line">
-        <span className="topic-select-key">Топик</span>
+        <span className="topic-select-key">{tr("topics.topic2")}</span>
         <span className="topic-select-value" title={topic.topic}>
           {topic.topic}
         </span>
       </span>
       <span className="topic-select-line">
-        <span className="topic-select-key">Ветка</span>
+        <span className="topic-select-key">{tr("topics.branch")}</span>
         <span
           className="topic-select-value topic-select-branch"
           title={topic.branch}
@@ -43,7 +46,7 @@ function TopicLines({
         </span>
       </span>
       {topic.branch === currentBranch && (
-        <span className="topic-select-current">Текущая ветка</span>
+        <span className="topic-select-current">{tr("topics.currentBranch")}</span>
       )}
     </span>
   );
@@ -56,6 +59,7 @@ export function TopicSelect({
   currentBranch,
   disabled = false,
 }: TopicSelectProps) {
+  useLocale();
   const id = useId();
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
@@ -243,9 +247,7 @@ export function TopicSelect({
         className="topic-select-label"
         id={`${id}-label`}
         htmlFor={`${id}-trigger`}
-      >
-        Топик проекта
-      </label>
+      >{tr("topics.projectTopic")}</label>
       <button
         id={`${id}-trigger`}
         ref={trigger}
@@ -272,7 +274,7 @@ export function TopicSelect({
             />
           ) : (
             <span>
-              {topics.length ? "Выберите топик" : "Нет существующих топиков"}
+              {topics.length ? tr("launch.selectATopic") : tr("topics.noExistingTopics")}
             </span>
           )}
         </span>

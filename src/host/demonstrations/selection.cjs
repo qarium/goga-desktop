@@ -1,4 +1,5 @@
 "use strict";
+const { text: t } = require("./messages.cjs");
 
 // Fixed host-owned read, executed in an isolated world of this page. Neither a
 // renderer-supplied expression nor a remote page's copy handler is evaluated.
@@ -25,7 +26,7 @@ const inspectSelection = `(() => {
   return textResult(selection ? selection.toString() : "");
 })()`;
 const unavailable = () =>
-  Error("Страница изменилась. Повторите копирование выделенного текста.");
+  Error(t("hostTerminal.pageChanged"));
 
 async function readSelection(command, live) {
   await command("Page.enable");
@@ -55,7 +56,7 @@ async function readSelection(command, live) {
     if (!live() || result.exceptionDetails) throw unavailable();
     const value = result.result?.value;
     if (value?.kind === "oversized")
-      throw Error("Выделенный текст слишком большой для копирования.");
+      throw Error(t("hostTerminal.selectionTooLarge"));
     if (
       !value ||
       !["text", "frame"].includes(value.kind) ||
@@ -86,7 +87,7 @@ async function readSelection(command, live) {
       }
     }
     if (!focused)
-      throw Error("Не удалось прочитать выделение во вложенной странице.");
+      throw Error(t("hostTerminal.subframeSelectionFailed"));
     tree = focused.tree;
     value = focused.value;
   }
@@ -94,7 +95,7 @@ async function readSelection(command, live) {
     typeof value.text !== "string" ||
     Buffer.byteLength(value.text, "utf8") > 1024 * 1024
   )
-    throw Error("Выделенный текст слишком большой для копирования.");
+    throw Error(t("hostTerminal.selectionTooLarge"));
   const after = (await command("Page.getFrameTree")).frameTree;
   const frames = new Map();
   function collect(t) {

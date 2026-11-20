@@ -584,3 +584,20 @@ it("discards an old streamed image when the active tab changes during decode", a
   expect(requested).toEqual(["one", "two"]);
   expect(image.getAttribute("src")).toBe("blob:2");
 });
+
+it("uses the chosen interface language on first paint and sends only new viewer labels after a change", async () => {
+  const { setLocale } = await import("../src/shared/i18n");
+  const f = fixture(), { url, cookie } = await f.claim();
+  setLocale("en");
+  const html = await (await fetch(url, { headers: { cookie } })).text();
+  expect(html).toContain('lang="en"');
+  expect(html).toContain('aria-label="New tab"');
+  const status = async (language: string) => (await fetch(new URL("status", url), { headers: { cookie, "x-viewer-language": language } })).json();
+  expect((await status("en")).ui).toBeUndefined();
+  setLocale("ru");
+  const next = await status("en");
+  expect(next.ui.language).toBe("ru");
+  expect(next.ui.viewerReload).toBe("Обновить страницу");
+  expect(next.url).toBe("http://fixture.invalid/one");
+  expect(f.control).not.toHaveBeenCalled();
+});

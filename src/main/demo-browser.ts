@@ -1,3 +1,4 @@
+import { getLocale, t } from "../shared/i18n";
 import { randomBytes } from "node:crypto";
 import {
   createServer,
@@ -106,21 +107,55 @@ function action(value: unknown): DemoBrowserAction | null {
     ? { op: "input", tabId: id.data, ...parsed.data }
     : null;
 }
-const html = `<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Демонстрация · Goga Desktop</title><link rel="stylesheet" href="viewer.css"><main><header><h1>Демонстрация</h1><span id="message" role="status">Подключаемся к показу…</span></header><div class="tab-strip"><div id="tabs" role="tablist" aria-label="Вкладки страниц"></div><button type="button" id="new-tab" aria-label="Новая вкладка" title="Новая вкладка">+</button></div><form><button type="button" id="reload">Обновить страницу</button><label for="address">Адрес страницы</label><input id="address" autocomplete="off" spellcheck="false" placeholder="https://"><button>Перейти</button></form><img id="frame" tabindex="0" alt="Интерактивная область показа"><p>Нажмите на показ, чтобы управлять страницей с клавиатуры. Escape возвращает к адресу.</p></main><script src="viewer.js" defer></script></html>`;
+const escapeHTML = (s: string) => s.replace(/[&<>"']/g, char => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[char]!));
+const viewerText = () => ({
+  language: getLocale(),
+  viewerTitle: t("native.viewerTitle"),
+  viewerStarting: t("native.viewerStarting"),
+  viewerTabs: t("native.viewerTabs"),
+  viewerNewTab: t("native.viewerNewTab"),
+  viewerReload: t("native.viewerReload"),
+  viewerAddress: t("native.viewerAddress"),
+  viewerGo: t("native.viewerGo"),
+  viewerImage: t("native.viewerImage"),
+  viewerHint: t("native.viewerHint"),
+  viewerCloseTab: t("native.viewerCloseTab"),
+  viewerEnded: t("native.viewerEnded"),
+  viewerShowing: t("native.viewerShowing"),
+  viewerNoFrame: t("native.viewerNoFrame"),
+  viewerUnavailable: t("native.viewerUnavailable"),
+  viewerActionFailed: t("native.viewerActionFailed"),
+});
+const html = () => `<!doctype html><html lang="${getLocale()}"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escapeHTML(t("native.viewerTitle"))} · Goga Desktop</title><link rel="stylesheet" href="viewer.css"><main><header><h1>${escapeHTML(t("native.viewerTitle"))}</h1><span id="message" role="status">${escapeHTML(t("native.viewerStarting"))}</span></header><div class="tab-strip"><div id="tabs" role="tablist" aria-label="${escapeHTML(t("native.viewerTabs"))}"></div><button type="button" id="new-tab" aria-label="${escapeHTML(t("native.viewerNewTab"))}" title="${escapeHTML(t("native.viewerNewTab"))}">+</button></div><form><button type="button" id="reload">${escapeHTML(t("native.viewerReload"))}</button><label for="address">${escapeHTML(t("native.viewerAddress"))}</label><input id="address" autocomplete="off" spellcheck="false" placeholder="https://"><button>${escapeHTML(t("native.viewerGo"))}</button></form><img id="frame" tabindex="0" alt="${escapeHTML(t("native.viewerImage"))}"><p>${escapeHTML(t("native.viewerHint"))}</p></main><script src="viewer.js" defer></script></html>`;
 const css = `*{box-sizing:border-box}body{margin:0;background:#10151c;color:#ecf1f7;font:15px/1.45 system-ui,sans-serif}main{width:min(100%,1550px);margin:auto;padding:18px}header,form{display:flex;align-items:center;gap:10px;flex-wrap:wrap}header{justify-content:space-between}h1{font-size:21px;margin:0}p,#message{color:#b5c6d7}form{margin:15px 0}input,button{font:inherit;border:1px solid #485766;background:#1e2936;color:inherit;border-radius:6px;padding:6px 10px}input{flex:1;min-width:120px}button{cursor:pointer}img{display:block;width:auto;max-width:100%;height:auto;max-height:76vh;margin:auto}img:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid #64d7cc}.tab-strip,#tabs,.tab{display:flex;align-items:center;gap:4px}.tab-strip{margin-top:15px}#tabs{flex:1;min-width:0;overflow-x:auto}.tab{flex:none;border:1px solid #485766;border-radius:6px;max-width:300px}.tab button{border:0;background:transparent}.tab [role=tab]{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:70px}.tab:has([aria-selected=true]){background:#294651;border-color:#64d7cc}.tab-close{padding:6px 8px}#new-tab{flex:none}`;
-const js = `'use strict';
+const js = () => `'use strict';
+let labels=${JSON.stringify(viewerText())},messageKey='viewerStarting';
+function showMessage(key){messageKey=key;message.textContent=labels[key];}
+function updateLanguage(next){
+  if(!next||next.language===labels.language)return;
+  labels=next;tabSignature='';document.documentElement.lang=labels.language;
+  document.title=labels.viewerTitle+' · Goga Desktop';
+  document.querySelector('h1').textContent=labels.viewerTitle;
+  document.querySelector('#tabs').setAttribute('aria-label',labels.viewerTabs);
+  const add=document.querySelector('#new-tab');add.title=labels.viewerNewTab;add.setAttribute('aria-label',labels.viewerNewTab);
+  document.querySelector('#reload').textContent=labels.viewerReload;
+  document.querySelector('label[for=address]').textContent=labels.viewerAddress;
+  document.querySelector('form button:not([type])').textContent=labels.viewerGo;
+  document.querySelector('p').textContent=labels.viewerHint;
+  image.alt=labels.viewerImage;showMessage(messageKey);
+}
 const image=document.querySelector('#frame'),field=document.querySelector('#address'),message=document.querySelector('#message');
 let active=true,dirty=false,current='',previousImage='',tail=Promise.resolve(),queued=0,tabSignature='',currentTabId=null;
 function renderTabs(status){
   const tabs=Array.isArray(status.tabs)?status.tabs:[],signature=JSON.stringify([tabs,status.activeTabId]);if(signature===tabSignature)return;tabSignature=signature;
   const list=document.querySelector('#tabs');list.replaceChildren();
   for(const tab of tabs){
-    const item=document.createElement('div'),select=document.createElement('button'),close=document.createElement('button'),title=tab.title||'Новая вкладка';item.className='tab';
+    const item=document.createElement('div'),select=document.createElement('button'),close=document.createElement('button'),title=tab.title||labels.viewerNewTab;item.className='tab';
     select.type=close.type='button';select.setAttribute('role','tab');select.setAttribute('aria-selected',String(tab.tabId===status.activeTabId));select.textContent=title;select.title=tab.url||title;select.onclick=()=>{dirty=false;send({op:'tab-select',tabId:tab.tabId});};
-    close.className='tab-close';close.textContent='×';close.setAttribute('aria-label','Закрыть вкладку '+title);close.onclick=()=>{dirty=false;send({op:'tab-close',tabId:tab.tabId});};item.append(select,close);list.append(item);
+    close.className='tab-close';close.textContent='×';close.setAttribute('aria-label',labels.viewerCloseTab.replace('{title}',()=>title));close.onclick=()=>{dirty=false;send({op:'tab-close',tabId:tab.tabId});};item.append(select,close);list.append(item);
   }
 }
-function ended(){active=false;message.textContent='Этот показ завершён. Вернитесь в Goga Desktop.';document.querySelectorAll('button,input').forEach(x=>x.disabled=true);image.removeAttribute('src');if(previousImage)URL.revokeObjectURL(previousImage);}
+function ended(){active=false;showMessage('viewerEnded');document.querySelectorAll('button,input').forEach(x=>x.disabled=true);image.removeAttribute('src');if(previousImage)URL.revokeObjectURL(previousImage);}
 async function call(path,opts={}){const r=await fetch(path,{cache:'no-store',credentials:'same-origin',...opts});if([403,410].includes(r.status)){ended();throw Error();}if(!r.ok)throw Error();return r;}
 // Metadata updates do not pace the image: each visible viewer pulls the latest
 // available frame, with at most one request/decode in flight.
@@ -147,8 +182,8 @@ async function pull(){
     const decoded=new Image();decoded.src=src;await decoded.decode();
     if(!valid())return;
     image.src=src;if(previousImage)URL.revokeObjectURL(previousImage);
-    previousImage=src;src='';cursor=next;message.textContent='Идёт показ';
-  }catch{if(valid()){message.textContent='Кадр пока недоступен.';delay=350;}}
+    previousImage=src;src='';cursor=next;showMessage('viewerShowing');
+  }catch{if(valid()){showMessage('viewerNoFrame');delay=350;}}
   finally{
     if(src)URL.revokeObjectURL(src);
     pulling=false;if(active&&!document.hidden&&currentTabId)setTimeout(pull,delay);
@@ -156,16 +191,16 @@ async function pull(){
 }
 document.addEventListener('visibilitychange',()=>{if(document.hidden)clearPage();else void pull();});
 async function update(){if(!active)return;if(!document.hidden)try{
-  const status=await (await call('status')).json(),nextTabId=status.activeTabId??null;
+  const status=await (await call('status',{headers:{'x-viewer-language':labels.language}})).json(),nextTabId=status.activeTabId??null;updateLanguage(status.ui);
   if(nextTabId!==currentTabId){clearPage();dirty=false;currentTabId=nextTabId;void pull();}
   current=status.url||'';if(!dirty)field.value=current;renderTabs(status);
-}catch{if(active)message.textContent='Показ пока недоступен.';}if(active)setTimeout(update,450);}
+}catch{if(active)showMessage('viewerUnavailable');}if(active)setTimeout(update,450);}
 function send(payload){if(!active||queued>=24)return;
   if(payload.op==='input'){
     if(document.hidden||!previousImage||!currentTabId)return;
     payload={...payload,tabId:currentTabId};
   }
-  queued++;tail=tail.then(()=>call('control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).catch(()=>{if(active)message.textContent='Не удалось выполнить действие.';}).finally(()=>queued--);}
+  queued++;tail=tail.then(()=>call('control',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)})).catch(()=>{if(active)showMessage('viewerActionFailed');}).finally(()=>queued--);}
 field.oninput=()=>dirty=true;field.onblur=()=>{if(dirty){dirty=false;field.value=current;}};
 field.onkeydown=e=>{if(e.key==='Escape'){e.preventDefault();dirty=false;field.value=current;field.blur();}};
 document.querySelector('form').onsubmit=e=>{e.preventDefault();const url=field.value;dirty=false;send({op:'navigate',url});};
@@ -349,11 +384,11 @@ export function createDemoBrowser(d: Options) {
     }
     const state = await live();
     if (!state) return reply(res, 410);
-    if (!resource) return reply(res, 200, "text/html; charset=utf-8", html);
+    if (!resource) return reply(res, 200, "text/html; charset=utf-8", html());
     if (resource === "viewer.css")
       return reply(res, 200, "text/css; charset=utf-8", css);
     if (resource === "viewer.js")
-      return reply(res, 200, "text/javascript; charset=utf-8", js);
+      return reply(res, 200, "text/javascript; charset=utf-8", js());
     if (resource === "status")
       return reply(
         res,
@@ -361,6 +396,7 @@ export function createDemoBrowser(d: Options) {
         "application/json",
         JSON.stringify({
           url: webAddress(state.url),
+          ...(typeof req.headers["x-viewer-language"] === "string" && req.headers["x-viewer-language"] !== getLocale() ? { ui: viewerText() } : {}),
           ...(state.tabs
             ? {
                 tabs: state.tabs.map((tab) => ({
@@ -388,7 +424,7 @@ export function createDemoBrowser(d: Options) {
     return (address ??= new Promise<string>((resolve, reject) => {
       const onError = () => {
         address = undefined;
-        reject(Error("Не удалось подготовить браузерный просмотр."));
+        reject(Error(t("native.viewerPrepareFailed")));
       };
       server.once("error", onError);
       server.listen(0, "127.0.0.1", () => {
@@ -400,18 +436,18 @@ export function createDemoBrowser(d: Options) {
   }
   async function open(showId: string) {
     if (closed || !showId || !(await d.status(showId)) || closed)
-      throw Error("Этот показ завершён.");
+      throw Error(t("native.demoEnded"));
     const base = await listen();
     expire();
     if (closed || tickets.size >= 64)
-      throw Error("Не удалось открыть просмотр.");
+      throw Error(t("native.viewerOpenFailed"));
     const k = token();
     tickets.set(k, { show: showId, expires: now() + 45000 });
     try {
       await d.openExternal(base + "/open/" + k);
     } catch {
       tickets.delete(k);
-      throw Error("Не удалось открыть внешний браузер.");
+      throw Error(t("native.browserOpenFailed"));
     }
   }
   async function close() {

@@ -1,3 +1,6 @@
+import { HintButton } from "../ActionHint";
+import { t } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import { useEffect, useRef, useState, type KeyboardEvent } from "react";
 import { createPortal } from "react-dom";
 import { MonitorPlay } from "lucide-react";
@@ -45,6 +48,7 @@ export function DemoRunTab({
   onModalChange: (open: boolean) => void;
   onError: (error: string) => void;
 }) {
+  useLocale();
   const [confirm, setConfirm] = useState(false),
     [busy, setBusy] = useState(false);
   const flight = useRef(false),
@@ -102,29 +106,29 @@ export function DemoRunTab({
           onClick={onSelect}
         >
           <MonitorPlay size={16} aria-hidden="true" />
-          <span>Демонстрация</span>
+          <span>{t("general.demonstration")}</span>
         </button>
-        <button
+        <HintButton
           type="button"
           className="close-tab"
-          aria-label="Закрыть вкладку Демонстрация"
-          title="Закрыть вкладку"
+          aria-label={t("general.closeDemonstrationTab")}
+          hint={t("general.closeTab")}
           aria-busy={busy}
           disabled={disabled || busy}
           onClick={() => setConfirm(true)}
         >
           ×
-        </button>
+        </HintButton>
       </div>
       {confirm &&
         createPortal(
           <DemoConfirm
             q={{
               action: "stop",
-              title: "Завершить показ?",
+              title: t("general.endDemonstration2"),
               detail:
-                "Страница закроется вместе с несохранёнными изменениями. Агент потеряет доступ.",
-              submit: "Завершить показ",
+                t("general.thePageWillCloseAndAnyUnsavedChangesWill"),
+              submit: t("general.endDemonstration3"),
             }}
             cancel={() => setConfirm(false)}
             submit={() => void stop()}

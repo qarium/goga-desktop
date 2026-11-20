@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import {
   HistoryScrollPane,
@@ -28,6 +30,7 @@ export function HistoryDocument({
   contextLabel: string;
   children: ReactNode;
 }) {
+  useLocale();
   const root = useRef<HTMLDivElement>(null);
   const dialog = useRef<HTMLDialogElement>(null);
   const scroll = useRef<HistoryScrollHandle>(null);
@@ -74,7 +77,7 @@ export function HistoryDocument({
         ?.closest(".app-shell")
         ?.querySelector<HTMLElement>(":scope > .main-area");
     if (!node || !workspace || !active) {
-      setError("Не удалось определить рабочую область для просмотра.");
+      setError(msg("project.couldNotIdentifyTheWorkspaceForThisView"));
       return;
     }
     const parent = root.current?.closest<HTMLDialogElement>(
@@ -125,7 +128,7 @@ export function HistoryDocument({
       node.classList.remove("history-reader-expanded");
       node.removeAttribute("style");
       node.open = true;
-      setError("Не удалось развернуть документ. Обычный просмотр доступен.");
+      setError(msg("project.couldNotExpandTheDocumentTheRegularViewIsAvailable"));
     }
   };
   return (
@@ -136,7 +139,7 @@ export function HistoryDocument({
         className="history-reader"
         role={expanded ? "dialog" : "region"}
         aria-modal={expanded || undefined}
-        aria-label={`Просмотр ${title}`}
+        aria-label={msg("project.view", { title: String(title) })}
         onCancel={(event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -146,7 +149,7 @@ export function HistoryDocument({
         {expanded && (
           <div className="history-reader-context">
             <span>{contextLabel}</span>
-            <span>Только просмотр · Esc — свернуть</span>
+            <span>{msg("project.readOnlyEscToCollapse")}</span>
           </div>
         )}
         <div className="history-reader-body">
@@ -164,7 +167,7 @@ export function HistoryDocument({
             positionKey={identity}
             positions={positions}
             active={ready}
-            label="Содержимое артефакта"
+            label={msg("project.artifactContents")}
             showTopButton={readable}
             actions={
               readable && (
@@ -173,12 +176,12 @@ export function HistoryDocument({
                   ref={toggle}
                   disabled={!active}
                   aria-label={
-                    expanded ? "Свернуть документ" : "Развернуть документ"
+                    expanded ? msg("project.collapseDocument") : msg("project.expandDocument")
                   }
                   aria-expanded={expanded}
                   onClick={() => (expanded ? collapse() : expand())}
                 >
-                  {expanded ? "Свернуть" : "Развернуть"}
+                  {expanded ? msg("project.collapse") : msg("project.expand")}
                 </button>
               )
             }

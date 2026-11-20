@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import {
   withNativeGitCompletion,
   deferNativeGitRecovery,
@@ -30,7 +31,7 @@ import { sanitizeRepositoryLog } from "./repository-actions";
 
 const external = () =>
   Error(
-    "Происхождение слияния не подтверждено журналом Desktop. Продолжите внешнюю операцию в терминале.",
+    gitMessage("gitHost.theDesktopJournalCannotVerifyTheOriginOfThe"),
   );
 function indexEntries(state: NativeGitState) {
   const result = new Map<string, string[]>();
@@ -115,7 +116,7 @@ export class NativeGitMergeOperations extends GitMergeSafety {
       )
     )
       throw Error(
-        "Внешние filters/merge drivers не поддерживаются для безопасного завершения слияния.",
+        gitMessage("gitHost.externalFiltersAndMergeDriversAreNotSupportedFor"),
       );
     const ref = `refs/heads/${snapshot.branch}`;
     if (
@@ -132,7 +133,7 @@ export class NativeGitMergeOperations extends GitMergeSafety {
         .some((s) => /^[a-z] |^S /.test(s))
     )
       throw Error(
-        "Индекс скрывает изменения: assume-unchanged/skip-worktree не поддерживаются.",
+        gitMessage("gitHost.theIndexHidesChangesAssumeUnchangedSkipWorktreeAre"),
       );
     const source = oid(
       (
@@ -167,7 +168,7 @@ export class NativeGitMergeOperations extends GitMergeSafety {
       )
     )
       throw Error(
-        "Посторонние staged изменения не принадлежат исходному слиянию. Уберите их перед продолжением или отменой.",
+        gitMessage("gitHost.unrelatedStagedChangesDoNotBelongToTheOriginal"),
       );
     const ownedPaths = changedIndex(record.recovery, record.checkpoint);
     const paths: string[] = [],
@@ -184,7 +185,7 @@ export class NativeGitMergeOperations extends GitMergeSafety {
       if (info?.isDirectory()) {
         if (!ownedPaths.has(name))
           throw Error(
-            "Пользовательский каталог не принадлежит исходному слиянию.",
+            gitMessage("gitHost.aUserDirectoryDoesNotBelongToTheOriginal"),
           );
         await this.checkOwnedMergeDirectory(ctx, name, currentPaths, {
           paths: checkpointPaths,
@@ -225,14 +226,14 @@ export class NativeGitMergeOperations extends GitMergeSafety {
       )
     )
       throw Error(
-        "В результат слияния внесены посторонние рабочие изменения. Сохраните их отдельно перед отменой.",
+        gitMessage("gitHost.theMergeResultContainsUnrelatedWorkingChangesSaveThem"),
       );
     if (
       action === "continue" &&
       snapshot.files.some((f) => f.kind === "conflict")
     )
       throw Error(
-        "Сначала разрешите все конфликты: индекс содержит unmerged пути.",
+        gitMessage("gitHost.resolveAllConflictsFirstTheIndexContainsUnmergedPaths"),
       );
     if (action === "abort") {
       await this.checkMergeDestinations(ctx, {
@@ -266,7 +267,7 @@ export class NativeGitMergeOperations extends GitMergeSafety {
       const info = await handle.stat();
       if (!info.isFile() || info.nlink !== 1 || info.size > 16384)
         throw Error(
-          "Сообщение слияния превышает размер предпросмотра; завершите его в терминале.",
+          gitMessage("gitHost.theMergeMessageExceedsThePreviewLimitFinishIn"),
         );
       const buffer = Buffer.alloc(16385);
       const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
@@ -292,7 +293,7 @@ export class NativeGitMergeOperations extends GitMergeSafety {
                 raw,
               )
             ).stdout;
-      if (!value.trim()) throw Error("Пустое сообщение слияния.");
+      if (!value.trim()) throw Error(gitMessage("gitHost.emptyMergeMessage"));
       return value;
     } finally {
       await handle.close();
@@ -349,8 +350,8 @@ export class NativeGitMergeOperations extends GitMergeSafety {
           ).stdout.trim() === "true",
         effects:
           request.action === "continue"
-            ? "Git создаст merge-коммит из исходного слияния и разрешённых конфликтов. Посторонние staged изменения запрещены; хуки отключены. Git обновит индекс и reflog штатно."
-            : "Git отменит исходное слияние; решения его конфликтов будут отброшены. Несвязанные правки проверяются и сохраняются; исходный снимок остаётся до проверки результата.",
+            ? gitMessage("gitHost.gitWillCreateAMergeCommitFromTheOriginal")
+            : gitMessage("gitHost.gitWillAbortTheOriginalMergeAndDiscardIts"),
       };
       if (
         (await this.capture(ctx, request.scope)).fingerprint !==
@@ -557,9 +558,9 @@ export class NativeGitMergeOperations extends GitMergeSafety {
         message:
           result.outcome === "completed"
             ? ticket.request.action === "continue"
-              ? "Слияние завершено штатным Git; результат проверен."
-              : "Слияние отменено штатным Git; несвязанные изменения сохранены и проверены."
-            : "Результат операции не подтверждён. Материалы восстановления сохранены; автоматический повтор запрещён.",
+              ? gitMessage("gitHost.gitCompletedTheMergeAndTheResultWasVerified")
+              : gitMessage("gitHost.gitAbortedTheMergeUnrelatedChangesWerePreservedAnd")
+            : gitMessage("gitHost.theOperationResultCouldNotBeVerifiedRecoveryData"),
         log: sanitize(
           [...lines, ...(cleanup ? [cleanup.message] : [])].join("\n"),
         ),

@@ -16,7 +16,8 @@ import { GitWorkspaceReader } from "../src/host/git-workspace-reader";
 import { GitConflictReader } from "../src/host/git-conflicts";
 import type { GitCommitContext } from "../src/host/git-workspace-actions";
 import { withTrustedGitIndex } from "../src/host/git-index-scope";
-import type { GitConflictResolution } from "../src/shared/git-conflict-save";
+import { getLocale, setLocale } from "../src/shared/i18n";
+import type { GitConflictResolution, GitConflictSaveResult } from "../src/shared/git-conflict-save";
 import { NativeGitConflictActions } from "../src/host/git-native-conflict-save";
 import {
   createNativeGitCapability,
@@ -991,6 +992,41 @@ it("recovery retains submitted bytes even after a later external work edit", asy
   expect(await fs.readFile(path.join(staging, "original"), "utf8")).toBe(
     "manual working\n",
   );
+});
+
+it("keeps Git output and host redactions intact when the language changes before final recovery cleanup", async () => {
+  const previous = getLocale();
+  const f = await fixture();
+  const p = await f.prepare();
+  const original = f.runner.commandBytes.bind(f.runner);
+  let expected = "";
+  const spy = vi.spyOn(f.runner, "commandBytes").mockImplementation(async (request) => {
+    const result = await original(request);
+    if (!request.args.includes("--refresh")) return result;
+    const gitDir = path.join(f.root, ".git");
+    const stage = (await fs.readdir(gitDir)).find(name => name.startsWith("goga-native-resolution-"));
+    expect(stage).toBeTruthy();
+    // Git output can look exactly like a translated Desktop diagnostic.
+    expected = "git-output\nRecovery data: " + path.join(gitDir, stage!) + "\nконец\r\n";
+    return { ...result, stdout: Buffer.concat([result.stdout, Buffer.from(expected + "private-fixture-value")]) };
+  });
+  try {
+    setLocale("ru");
+    f.seams.contextResult = (value: GitConflictSaveResult) => {
+      setLocale("en");
+      return { ...value, log: value.log.replace("private-fixture-value", "[redacted]") };
+    };
+    const r = await f.actions.execute(p.token);
+    expect(expected).not.toBe("");
+    expect(r.status, r.log).toBe("saved");
+    expect(r.recoveryPath).toBeUndefined();
+    expect(r.log).toContain(expected + "[redacted]");
+    expect(r.log).not.toContain("private-fixture-value");
+    expect(r.log).not.toContain("Материалы восстановления:");
+  } finally {
+    spy.mockRestore();
+    setLocale(previous);
+  }
 });
 
 it("context-returned cleanup failure retains native recovery and sanitized diagnostics", async () => {

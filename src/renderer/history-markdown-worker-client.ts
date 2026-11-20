@@ -1,3 +1,4 @@
+import { t as msg } from "../shared/i18n";
 import type { Token } from "marked";
 import {
   MARKDOWN_MAX_CHARACTERS,
@@ -10,11 +11,11 @@ export function lexHistoryMarkdown(
 ): Promise<Token[]> {
   return new Promise((resolve, reject) => {
     if (signal.aborted) {
-      reject(Error("Разбор отменён"));
+      reject(Error(msg("workspace.parsingCanceled")));
       return;
     }
     if (text.length > MARKDOWN_MAX_CHARACTERS) {
-      reject(Error("Большой Markdown"));
+      reject(Error(msg("workspace.largeMarkdownDocument")));
       return;
     }
     let worker: Worker;
@@ -24,7 +25,7 @@ export function lexHistoryMarkdown(
         { type: "module" },
       );
     } catch {
-      reject(Error("Разбор Markdown недоступен"));
+      reject(Error(msg("workspace.markdownParsingUnavailable")));
       return;
     }
     let done = false;
@@ -40,26 +41,26 @@ export function lexHistoryMarkdown(
       if (error) reject(error);
       else resolve(tokens!);
     };
-    const abort = () => finish(Error("Разбор отменён"));
+    const abort = () => finish(Error(msg("workspace.parsingCanceled")));
     const timer = setTimeout(
-      () => finish(Error("Превышено время разбора Markdown")),
+      () => finish(Error(msg("workspace.markdownParsingTimedOut"))),
       MARKDOWN_PARSE_TIMEOUT,
     );
     signal.addEventListener("abort", abort, { once: true });
     worker.onmessage = (event) => {
       if (event.data?.ok && Array.isArray(event.data.tokens))
         finish(undefined, event.data.tokens);
-      else finish(Error("Слишком сложный Markdown"));
+      else finish(Error(msg("workspace.markdownIsTooComplex")));
     };
     worker.onerror = (event) => {
       event.preventDefault();
-      finish(Error("Не удалось разобрать Markdown"));
+      finish(Error(msg("workspace.couldNotParseMarkdown")));
     };
-    worker.onmessageerror = () => finish(Error("Не удалось получить Markdown"));
+    worker.onmessageerror = () => finish(Error(msg("workspace.couldNotGetMarkdown")));
     try {
       worker.postMessage({ text });
     } catch {
-      finish(Error("Не удалось отправить Markdown на разбор"));
+      finish(Error(msg("workspace.couldNotSubmitMarkdownForParsing")));
     }
   });
 }

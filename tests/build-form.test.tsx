@@ -821,3 +821,20 @@ it("uses the same badge markup for topic-create and build-launch reasons", async
   expect(reason.classList.contains("action-reason")).toBe(true);
   expect(reason.querySelector(":scope > .action-reason-text")).not.toBeNull();
 });
+
+it("reformats a missing plan from its stable reason without rereading or losing the form", async () => {
+  const { getLocale, setLocale } = await import("../src/shared/i18n");
+  const previous = getLocale();
+  try {
+    setLocale("en");
+    api.readBuildPlan.mockRejectedValue(new Error("[build-plan:missing]"));
+    mount();
+    const message = await screen.findByText("No plan has been created for the current topic yet. Choose another file.");
+    expect(message.getAttribute("role")).toBe("status");
+    const reads = api.readBuildPlan.mock.calls.length, contexts = api.buildContext.mock.calls.length;
+    act(() => setLocale("ru"));
+    expect(screen.getByText("План для текущего топика ещё не создан. Выберите другой файл.").getAttribute("role")).toBe("status");
+    expect(api.buildContext.mock.calls.length).toBe(contexts);
+    expect(api.readBuildPlan.mock.calls.length).toBe(reads);
+  } finally { act(() => setLocale(previous)); }
+});

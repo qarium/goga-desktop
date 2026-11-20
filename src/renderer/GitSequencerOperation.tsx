@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import {
   verifiedNativeSequenceResult,
   nativeSequenceDiagnostics,
@@ -118,18 +120,18 @@ function diagnostics(value: unknown, verified: boolean): string {
       ? (value as Record<string, unknown>)
       : {};
   const bool = (field: string) =>
-    v[field] === true ? "да" : v[field] === false ? "нет" : "не подтверждено";
+    v[field] === true ? msg("git.yes") : v[field] === false ? msg("git.no") : msg("git.unconfirmed");
   const str = (field: string) =>
-    typeof v[field] === "string" ? (v[field] as string) : "не подтверждено";
+    typeof v[field] === "string" ? (v[field] as string) : msg("git.unconfirmed");
   const locks = (field: string) => {
     const entries = v[field];
-    if (!Array.isArray(entries)) return "не проверены";
+    if (!Array.isArray(entries)) return msg("git.notChecked");
     const observed = entries.filter(
       (entry): entry is string => typeof entry === "string",
     );
     if (observed.length !== entries.length)
-      return `наблюдаемые имена: ${observed.length ? observed.join(", ") : "не получены"}; список неполон или не проверен, наличие и владение не подтверждены`;
-    return observed.length ? observed.join(", ") : "нет";
+      return msg("git.observedNamesTheListIsIncompleteOrUnverifiedAndPresence", { value1: String(observed.length ? observed.join(", ") : msg("git.notReceived")) });
+    return observed.length ? observed.join(", ") : msg("git.no");
   };
   const recoveryVerified =
     v.recoveryStatus === "retained" &&
@@ -137,34 +139,34 @@ function diagnostics(value: unknown, verified: boolean): string {
     (v.lastKnownRecoveryPath === undefined ||
       v.lastKnownRecoveryPath === v.recoveryPath);
   const recovery = recoveryVerified
-    ? `Проверенные материалы восстановления: ${str("recoveryPath")}`
+    ? msg("git.verifiedRecoveryFiles", { value1: String(str("recoveryPath")) })
     : v.recoveryStatus === "missing"
-      ? "Материалы восстановления отсутствуют; сохранность не подтверждена."
+      ? msg("git.recoveryFilesAreMissingTheirIntegrityIsUnconfirmed")
       : v.recoveryStatus === "unverified"
-        ? "Наличие, владение или целостность материалов восстановления не проверены."
+        ? msg("git.presenceOwnershipOrIntegrityOfRecoveryFilesWereNotVerified")
         : v.recoveryStatus === "not-created"
-          ? "Материалы восстановления не создавались."
-          : "Состояние материалов восстановления не подтверждено.";
+          ? msg("git.noRecoveryFilesWereCreated")
+          : msg("git.recoveryStateIsUnconfirmed");
   return [
     verified
       ? v.status === "conflict"
-        ? "Следующий конфликт: операция не завершена. Обновлённое состояние доступно в редакторе конфликтов."
+        ? msg("git.anotherConflictOccurredTheOperationIsNotFinishedTheUpdated")
         : v.action === "abort"
-          ? "Отмена операции подтверждена."
-          : "Завершение операции подтверждено."
-      : "Результат не подтверждён. Проверьте состояние Git; ответ не подтверждает отсутствие изменений. Автоматического повтора не будет.",
-    `Заявление хоста: ${str("status")} · ${str("message")}`,
+          ? msg("git.abortConfirmed")
+          : msg("git.completionConfirmed")
+      : msg("git.theResultIsUnconfirmedCheckTheGitStateTheResponse"),
+    msg("git.hostReport", { value1: String(str("status")), value2: String(str("message")) }),
     typeof v.log === "string" && v.log,
-    `Изменения: ${bool("changed")}\nЗапись начата: ${bool("mutationStarted")}\nРабочая папка восстановлена: ${bool("worktreeRestored")}\nРабочая папка обновлена: ${bool("worktreeUpdated")}\nШаг публикации объектов: ${bool("objectsPublished")}\nОпубликованных файлов объектов: ${typeof v.publishedObjectCount === "number" && Number.isSafeInteger(v.publishedObjectCount) && v.publishedObjectCount >= 0 ? v.publishedObjectCount : "не подтверждено"}\nИндекс опубликован: ${bool("indexPublished")}\nВетка опубликована: ${bool("branchPublished")}\nМетаданные опубликованы: ${bool("metadataPublished")}\nМетаданные удалены: ${bool("metadataCleared")}`,
-    "Незавершённый шаг публикации объектов не означает, что объекты не записывались. Количество включает созданные файлы с ошибкой записи или fsync и не подтверждает их сохранность.",
+    msg("git.changesWriteStartedWorkingDirectoryRestoredWorkingDirectoryUpdatedObject2", { value1: String(bool("changed")), value2: String(bool("mutationStarted")), value3: String(bool("worktreeRestored")), value4: String(bool("worktreeUpdated")), value5: String(bool("objectsPublished")), value6: String(typeof v.publishedObjectCount === "number" && Number.isSafeInteger(v.publishedObjectCount) && v.publishedObjectCount >= 0 ? v.publishedObjectCount : msg("git.unconfirmed")), value7: String(bool("indexPublished")), value8: String(bool("branchPublished")), value9: String(bool("metadataPublished")), value10: String(bool("metadataCleared")) }),
+    msg("git.anUnfinishedObjectPublicationStepDoesNotMeanNothingWas"),
     recovery,
     typeof v.lastKnownRecoveryPath === "string" &&
-      `Последний известный путь (не подтверждает сохранность): ${v.lastKnownRecoveryPath}`,
+      msg("git.lastKnownPathIntegrityUnconfirmed", { lastKnownRecoveryPath: String(v.lastKnownRecoveryPath) }),
     !recoveryVerified &&
       typeof v.recoveryPath === "string" &&
-      `Наблюдаемый путь восстановления (сохранность не подтверждена): ${v.recoveryPath}`,
-    `Блокировка сохранена: ${bool("lockRetained")}\nСохранённые блокировки: ${locks("retainedLocks")}\nНепроверенные блокировки: ${locks("uncheckedLocks")}. Их наличие и владелец не подтверждены.`,
-    "Исходные reflog не дополняются; журнал восстановления не заменяет native reflog. Автоматического восстановления или удаления блокировок нет.",
+      msg("git.observedRecoveryPathIntegrityUnconfirmed", { recoveryPath: String(v.recoveryPath) }),
+    msg("git.lockRetainedRetainedLocksUnverifiedLocksTheirPresenceAndOwnership", { value1: String(bool("lockRetained")), value2: String(locks("retainedLocks")), value3: String(locks("uncheckedLocks")) }),
+    msg("git.originalReflogsAreNotAppendedToTheRecoveryLogIs"),
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -296,7 +298,7 @@ export function useGitSequencerOperation(options: Options) {
       const checked = previewSchema.safeParse(raw);
       if (!checked.success)
         throw Error(
-          "Подтверждение Git содержит непроверенные поля. Обновите изменения и повторите проверку.",
+          msg("git.gitConfirmationContainsUnverifiedFieldsRefreshChangesAndCheckAgain"),
         );
       const value = checked.data;
       if (
@@ -311,7 +313,7 @@ export function useGitSequencerOperation(options: Options) {
           : snapshot.branch !== null && value.branch !== snapshot.branch)
       )
         throw Error(
-          "Подтверждение устарело или относится к другому контексту, состоянию либо действию. Обновите изменения и повторите проверку.",
+          msg("git.confirmationIsOutdatedOrBelongsToADifferentContextState"),
         );
       bound.current = { freshness: issued.freshness, read: issuedRead };
       setPreview(value);
@@ -382,7 +384,7 @@ export function useGitSequencerOperation(options: Options) {
         identity.data.operation !== submitted.operation
       )
         throw Error(
-          "Результат относится к другому контексту или действию; его данные не показаны.",
+          msg("git.theResultBelongsToAnotherContextOrActionItsData"),
         );
       const verified = verifiedResult(value, submitted);
       setResult(diagnostics(value, verified));
@@ -395,7 +397,7 @@ export function useGitSequencerOperation(options: Options) {
       ) {
         setRereadAfter(latest.current.getIssuedReadVersion());
         setResult(
-          `${topicError(error)}\n\nРезультат не подтверждён. Проверьте состояние Git: операция могла выполниться; отсутствие записи, сохранность материалов восстановления и снятие блокировок не подтверждены. Автоматического повтора не будет.`,
+          msg("git.resultUnconfirmedCheckTheGitStateTheOperationMayHave", { value1: String(topicError(error)) }),
         );
       }
     } finally {
@@ -432,22 +434,21 @@ export function GitSequencerOperationFooter({
   sequencer: SequencerState;
   unresolved: boolean;
 }) {
+  useLocale();
   if (!sequencer.supported)
     return (
-      <p>
-        Продолжение и отмена этой операции недоступны в этой версии подключения.
-      </p>
+      <p>{msg("git.continuingAndAbortingThisOperationAreUnavailableWithThisConnection")}</p>
     );
   return (
     <div className="git-merge-operation-footer">
       <p role={sequencer.pending === "execute" ? "status" : undefined}>
         {sequencer.pending === "execute"
-          ? "Выполняется операция Git… Просмотр можно закрыть; запись не отменяется."
+          ? msg("git.gitOperationInProgressYouCanCloseTheViewWriting")
           : sequencer.needsRefresh
-            ? "Сначала обновите изменения и проверьте состояние Git. Для повторной попытки нужна новая проверка."
+            ? msg("git.refreshChangesAndCheckTheGitStateFirstANew")
             : unresolved
-              ? "Сначала разрешите и отдельно сохраните все файлы: остались конфликты или несохранённые черновики."
-              : "Сохранение файла и продолжение операции — отдельные действия."}
+              ? msg("git.resolveAndSaveEachFileFirstConflictsOrUnsavedDrafts")
+              : msg("git.savingAFileAndContinuingAnOperationAreSeparateActions")}
       </p>
       <div>
         <button
@@ -455,16 +456,14 @@ export function GitSequencerOperationFooter({
           className="danger"
           disabled={!sequencer.canStart}
           onClick={() => void sequencer.prepare("abort")}
-        >
-          Отменить {sequencer.operation}…
+        >{msg("git.abort")}{sequencer.operation}…
         </button>
         <button
           type="button"
           className="primary"
           disabled={!sequencer.canStart || unresolved}
           onClick={() => void sequencer.prepare("continue")}
-        >
-          Продолжить {sequencer.operation}…
+        >{msg("git.continue2")}{sequencer.operation}…
         </button>
       </div>
     </div>
@@ -475,6 +474,7 @@ export function GitSequencerOperationDialogs({
 }: {
   sequencer: SequencerState;
 }) {
+  useLocale();
   const escape = (e: React.KeyboardEvent, close: () => void) => {
     if (e.key === "Escape") {
       e.preventDefault();
@@ -486,66 +486,58 @@ export function GitSequencerOperationDialogs({
     operation = s.displayOperation,
     label =
       s.action === "continue"
-        ? `Продолжить ${operation}`
-        : `Отменить ${operation}`;
+        ? msg("git.continue3", { operation: String(operation) })
+        : msg("git.abort2", { operation: String(operation) });
   return (
     <>
       {s.action && (
         <div onKeyDown={(e) => escape(e, s.close)}>
           <TopicModal
             title={label + (s.action === "abort" ? "?" : "")}
-            closeLabel={`Закрыть подтверждение ${operation}`}
+            closeLabel={msg("git.closeConfirmation", { operation: String(operation) })}
             className="git-merge-operation-modal"
             onClose={s.close}
           >
             <div className="git-merge-operation-form">
               {s.pending === "prepare" ? (
-                <LoadingState label="Проверяем операцию Git…" />
+                <LoadingState label={msg("git.checkingGitOperation2")} />
               ) : (
                 <>
                   <div className="git-merge-operation-details">
                     {s.action === "abort" && (
-                      <p className="git-conflict-warning">
-                        Будут восстановлены указанный исходный коммит и дерево.
-                        Сохранённые и ручные решения конфликтов будут удалены;
-                        посторонние правки блокируют отмену. Несохранённые
-                        черновики удаляются только после подтверждённого успеха.
-                      </p>
+                      <p className="git-conflict-warning">{msg("git.theSpecifiedOriginalCommitAndTreeWillBeRestoredSaved")}</p>
                     )}
                     {p && (
                       <>
                         <dl>
-                          <dt>Контекст</dt>
+                          <dt>{msg("git.context")}</dt>
                           <dd>
                             {typeof p.scope === "string"
-                              ? `Основная папка · ${p.scope}`
+                              ? msg("git.originalFolder", { scope: String(p.scope) })
                               : `${p.scope.projectId} / ${p.scope.year} / ${p.scope.topic} · ${p.scope.contextId}`}
                           </dd>
-                          <dt>Рабочая папка</dt>
+                          <dt>{msg("git.workingDirectory")}</dt>
                           <dd>{p.root}</dd>
-                          <dt>Ветка</dt>
+                          <dt>{msg("git.branch2")}</dt>
                           <dd>{p.branch}</dd>
                           <dt>HEAD</dt>
                           <dd>{p.head}</dd>
-                          <dt>Исходный коммит для отмены</dt>
+                          <dt>{msg("git.originalCommitToRestore")}</dt>
                           <dd>{p.original}</dd>
-                          <dt>Текущий коммит операции</dt>
+                          <dt>{msg("git.currentOperationCommit")}</dt>
                           <dd>{p.current}</dd>
                         </dl>
                         {p.requiresCommitWarning && (
-                          <p className="git-conflict-warning">
-                            Будет создан коммит; исходный --no-commit определить
-                            невозможно.
-                          </p>
+                          <p className="git-conflict-warning">{msg("git.aCommitWillBeCreatedTheOriginalNoCommitSetting")}</p>
                         )}
                         <p>{p.effects}</p>
                         {p.action === "abort" &&
                           !!p.discardedResolutionPaths?.length && (
                             <section
-                              aria-label="Решения, которые будут удалены"
+                              aria-label={msg("git.resolutionsToDiscard")}
                               className="git-conflict-warning"
                             >
-                              <strong>Будут удалены решения в файлах:</strong>
+                              <strong>{msg("git.resolutionsInTheseFilesWillBeDiscarded")}</strong>
                               <ul>
                                 {p.discardedResolutionPaths.map((n) => (
                                   <li key={n}>
@@ -555,7 +547,7 @@ export function GitSequencerOperationDialogs({
                               </ul>
                             </section>
                           )}
-                        <strong>Затронутые пути: {p.paths.length}</strong>
+                        <strong>{msg("git.affectedPaths")}{p.paths.length}</strong>
                         <ul>
                           {p.paths.map((n) => (
                             <li key={n}>
@@ -565,40 +557,25 @@ export function GitSequencerOperationDialogs({
                         </ul>
                       </>
                     )}
-                    <p>
-                      Поддерживаются проверенные линейные последовательности и
-                      существующие текстовые файлы в установленных пределах.
-                      Продолжение создаёт коммиты до следующего конфликта либо
-                      завершения. Пропуск пустых коммитов, mainline и
-                      нестандартные параметры не выполняются автоматически.
-                    </p>
-                    <p>
-                      Исходные reflog не дополняются. Материалы восстановления
-                      сохраняются; они не заменяют native reflog.
-                    </p>
+                    <p>{msg("git.verifiedLinearSequencesAndExistingTextFilesAreSupportedWithin")}</p>
+                    <p>{msg("git.originalReflogsAreNotAppendedToRecoveryFilesAreKept2")}</p>
                   </div>
                   <div className="git-merge-operation-confirm">
-                    <p className="hint">
-                      Git-хуки отключены. Результат не публикуется на сервер.
-                    </p>
+                    <p className="hint">{msg("git.gitHooksAreDisabledNothingIsPushedToTheServer")}</p>
                     {!p && (
                       <p>
                         {s.expired
-                          ? "Срок подтверждения истёк. Проверьте операцию заново."
-                          : "Подтверждение недоступно. Закройте окно и обновите изменения."}
+                          ? msg("git.confirmationExpiredCheckTheOperationAgain")
+                          : msg("git.confirmationUnavailableCloseThisDialogAndRefreshChanges")}
                       </p>
                     )}
                     <div className="git-branch-dialog-actions">
-                      <button type="button" onClick={s.close}>
-                        Отмена
-                      </button>
+                      <button type="button" onClick={s.close}>{msg("git.cancel")}</button>
                       {s.expired && (
                         <button
                           type="button"
                           onClick={() => void s.prepare(s.action!)}
-                        >
-                          Проверить заново
-                        </button>
+                        >{msg("git.checkAgain")}</button>
                       )}
                       <button
                         type="button"
@@ -621,8 +598,8 @@ export function GitSequencerOperationDialogs({
       {!!s.result && (
         <div onKeyDown={(e) => escape(e, s.closeResult)}>
           <TopicModal
-            title={`Результат операции ${operation}`}
-            closeLabel={`Закрыть результат ${operation}`}
+            title={msg("git.result2", { operation: String(operation) })}
+            closeLabel={msg("git.closeResult", { operation: String(operation) })}
             className="git-workspace-error"
             onClose={s.closeResult}
           >

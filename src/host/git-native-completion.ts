@@ -1,3 +1,4 @@
+import { t as gitMessage } from "../shared/i18n";
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { NativeGitOperationResult } from "../shared/git-native-operation";
 
@@ -7,7 +8,7 @@ type Deferred = {
 };
 const boundary = new AsyncLocalStorage<Deferred[]>();
 const message =
-  "Завершающая проверка Git или освобождение контекста не подтверждены. Материалы восстановления сохранены; автоматический повтор запрещён.";
+  gitMessage("gitHost.finalGitVerificationOrContextReleaseCouldNotBe");
 
 /** Host-only completion scope. Nested handoffs share the OUTERMOST lease, so an
  * inner successful command cannot discard recovery before its caller returns. */
@@ -16,7 +17,7 @@ export function deferNativeGitRecovery(
   initial: NativeGitOperationResult,
 ) {
   const active = boundary.getStore();
-  if (!active) throw Error("Не определена граница завершения операции Git.");
+  if (!active) throw Error(gitMessage("gitHost.couldNotDetermineWhenTheGitOperationCompleted"));
   active.push({ finish, initial: structuredClone(initial) });
 }
 type Result = Record<string, unknown>;

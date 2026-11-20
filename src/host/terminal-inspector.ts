@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { TerminalInspectorError } from "./terminal-errors";
 import {
   execFileSync,
@@ -229,7 +230,7 @@ export function createIsolatedTerminalInspector(
   let disposed = false;
   let preparing: Promise<void> | undefined;
   const get = () => {
-    if (disposed) throw Error("Системный адаптер процессов терминала закрыт.");
+    if (disposed) throw Error(t("hostTerminal.inspectorClosed"));
     if (reader) return reader;
     if (preparing) throw new TerminalInspectorError("unavailable");
     const source = createTerminalInspector(helper, options);

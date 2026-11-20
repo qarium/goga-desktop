@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import {dashboardRecoveryAllowed} from "../shared/dashboard-connection";
 import { createHash } from "node:crypto";
 import {
@@ -364,7 +365,7 @@ export class NotificationMonitor {
       await this.options.add(parsed.data);
       return true;
     } catch {
-      if (valid()) this.error(input.runId, "Не удалось сохранить уведомление.");
+      if (valid()) this.error(input.runId, t("native.noticeSaveFailed"));
       return false;
     }
   }
@@ -403,7 +404,7 @@ export class NotificationMonitor {
         this.stop(observer);
         this.error(
           observer.run.id,
-          "Источник запуска изменился. Наблюдение остановлено; данные доступны только для чтения.",
+          t("native.noticeSourceChanged"),
         );
         return;
       }
@@ -476,7 +477,7 @@ export class NotificationMonitor {
       if (this.live(observer))
         this.error(
           observer.run.id,
-          "Не удалось обновить состояние уведомлений.",
+          t("native.noticeUpdateFailed"),
         );
     } finally {
       clearTimeout(deadline);

@@ -1,3 +1,6 @@
+import { IconButton } from "./OverviewIconButton";
+import { t as msg } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import {
   useCallback,
   useEffect,
@@ -67,6 +70,7 @@ export function FileTree({
   load: (p: string) => Promise<unknown>;
   dirty: string[];
 }) {
+  useLocale();
   const ref = useRef<HTMLDivElement>(null);
   const anchor = useRef<string | null>(null);
   useEffect(() => {
@@ -98,7 +102,7 @@ export function FileTree({
       getItem: (id) =>
         entries[id] ?? {
           path: id,
-          name: id.split("/").at(-1) || "Проект",
+          name: id.split("/").at(-1) || msg("overview.project"),
           kind: "directory",
         },
       getChildren: (id) => directories[id]?.entries.map((e) => e.path) || [],
@@ -140,7 +144,7 @@ export function FileTree({
   useEffect(() => {
     tree.rebuildTree();
   }, [tree, directories, scope]);
-  const container = tree.getContainerProps("Файлы проекта");
+  const container = tree.getContainerProps(msg("overview.projectFiles"));
   const attach = useCallback(
     (el: HTMLDivElement | null) => {
       ref.current = el;
@@ -263,26 +267,26 @@ export function FileTree({
               )}
               <span className="ov-tree-name">{e.name}</span>
               {dirty.includes(e.path) && (
-                <i title="Не сохранено" className="ov-dirty" />
+                <i title={msg("overview.notSaved")} className="ov-dirty" />
               )}
               {folder && hasContract(e.path) && (
-                <button
+                <IconButton
                   className="ov-contract-action"
-                  title={"Контракт " + e.path}
-                  aria-label={"Показать контракт папки " + e.path}
+                  hint={msg("overview.contractAtPath", { path: e.path })}
+                  label={msg("overview.showFolderContract", { path: e.path })}
                   onClick={(event) => {
                     event.stopPropagation();
                     onContract(e.path);
                   }}
                 >
                   <Braces size={14} />
-                </button>
+                </IconButton>
               )}
               {folder && hasContract(e.path) && onNavigate && (
-                <button
+                <IconButton
                   className="ov-contract-action"
-                  title={"Показать на схеме: " + e.path}
-                  aria-label={"Показать папку " + e.path + " на схеме"}
+                  hint={msg("overview.showPathOnGraph", { path: e.path })}
+                  label={msg("overview.showFolderOnGraph", { path: e.path })}
                   onClick={(event) => {
                     event.stopPropagation();
                     onNavigate(e.path);
@@ -290,7 +294,7 @@ export function FileTree({
                   onDoubleClick={(event) => event.stopPropagation()}
                 >
                   <Network size={14} />
-                </button>
+                </IconButton>
               )}
             </div>
           );

@@ -1,3 +1,5 @@
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { createContext, useContext, useRef, useState } from "react";
 import type {
   TopicRemovalPreview,
@@ -59,7 +61,7 @@ export function useTopicRemovalController(
         !latest.current.executor
       )
         throw Error(
-          "Контроллер очистки копии недоступен или подтверждение другого контекста.",
+          tr("topics.theCopyCleanupControllerIsUnavailableOrThe"),
         );
       const r = await latest.current.executor(
         item.owner,
@@ -88,7 +90,7 @@ export function useTopicRemovalController(
     }
   };
   const execute: TopicRemovalExecutor = async (plan, projectName) => {
-    if (flight.current) throw Error("Дождитесь завершения удаления.");
+    if (flight.current) throw Error(tr("topics.waitForRemovalToFinish"));
     flight.current = true;
     setBusy(true);
     publish({ plan, projectName });
@@ -98,7 +100,7 @@ export function useTopicRemovalController(
         token: plan.token,
       });
       if (result.projectId !== plan.projectId)
-        throw Error("Результат другого проекта.");
+        throw Error(tr("topics.resultBelongsToAnotherProject"));
       publish({ plan, projectName, result });
       if (result.topics.status === "success")
         for (const item of result.cleanup) {
@@ -106,13 +108,13 @@ export function useTopicRemovalController(
             item.owner.projectId !== plan.projectId ||
             item.owner.year !== plan.year
           )
-            throw Error("Подтверждение очистки другого контекста.");
+            throw Error(tr("topics.cleanupConfirmationBelongsToAnotherContext"));
           if (item.plan.requiresAheadConfirmation)
             copyResult({
               contextId: item.owner.contextId,
               topic: item.owner.topic,
               status: "needs-confirmation",
-              reason: `Коммитов вне исходной ветки: ${item.plan.aheadCount ?? "не подтверждено"}. Копия сохранена до отдельного согласия.`,
+              reason: tr("topics.commitsOutsideTheOriginalBranchValue1TheCopy", { value1: item.plan.aheadCount ?? tr("launch.notVerified") }),
             });
           else await clean(item, false);
         }
@@ -153,7 +155,7 @@ export function useTopicRemovalController(
         (c) => c.owner.contextId === contextId,
       )?.owner;
       if (!row && !previous)
-        throw Error("Копия больше не найдена. Обновите топики.");
+        throw Error(tr("topics.theCopyWasNotFoundRefreshTopics"));
       const owner = row ? worktreeContextRef(row) : previous!,
         plan = await window.goga.prepareTopicCloneCleanup({ owner });
       const next = current.current!;
@@ -179,7 +181,7 @@ export function useTopicRemovalController(
       const previous = o.result.copies.find((c) => c.contextId === contextId);
       copyResult({
         contextId,
-        topic: previous?.topic ?? "Копия",
+        topic: previous?.topic ?? tr("topics.copy"),
         status: "kept",
         reason: topicError(e),
       });
@@ -206,6 +208,7 @@ export function TopicRemovalPopup({
   controller: ReturnType<typeof useTopicRemovalController>;
   onClosed?: () => void;
 }) {
+  useLocale();
   const o = controller.operation;
   const [acks, setAcks] = useState<Record<string, boolean>>({});
   if (!o) return null;
@@ -216,34 +219,32 @@ export function TopicRemovalPopup({
   };
   return (
     <TopicModal
-      title={`Удаление топиков · ${o.projectName} · ${o.plan.year}`}
+      title={tr("topics.topicRemovalProjectnameYear", { projectName: o.projectName, year: o.plan.year })}
       busy={controller.busy}
       onClose={close}
       className="topic-removal-dialog"
-      closeLabel="Закрыть результат удаления"
+      closeLabel={tr("topics.closeRemovalResult")}
     >
       <div className="topic-removal-body">
         {controller.busy && (
           <p role="status" className="topic-removal-progress">
             <span className="loading-spinner" aria-hidden="true" />
             {o.result
-              ? "Проверяем и очищаем рабочие копии…"
-              : "Выполняем команду Goga…"}
+              ? tr("topics.checkingAndCleaningUpWorkingCopies")
+              : tr("topics.runningTheGogaCommand")}
           </p>
         )}
         {o.error && (
           <p role="alert" className="error">
-            {o.error} Результат требует проверки; команда автоматически не
-            повторяется.
-          </p>
+            {o.error}{tr("topics.checkTheResultTheCommandWillNotBe")}</p>
         )}
         {o.result && (
           <>
             <section
               className="topic-removal-result"
-              aria-label="Удаление топиков"
+              aria-label={tr("topics.topicRemoval")}
             >
-              <h3>Удаление топиков</h3>
+              <h3>{tr("topics.topicRemoval")}</h3>
               <p
                 role={o.result.topics.status === "success" ? "status" : "alert"}
               >
@@ -252,11 +253,11 @@ export function TopicRemovalPopup({
             </section>
             <section
               className="topic-removal-result"
-              aria-label="Рабочие копии"
+              aria-label={tr("topics.workingCopies")}
             >
-              <h3>Рабочие копии</h3>
+              <h3>{tr("topics.workingCopies")}</h3>
               {!o.result.copies.length && !controller.busy && (
-                <p className="hint">Нет копий, требующих очистки.</p>
+                <p className="hint">{tr("topics.thereAreNoCopiesToCleanUp")}</p>
               )}
               {o.result.copies.map((copy) => {
                 const pending = o.result!.cleanup.find(
@@ -277,10 +278,10 @@ export function TopicRemovalPopup({
                       }
                     >
                       {copy.status === "removed"
-                        ? "Копия в Корзине"
+                        ? tr("topics.copyMovedToTrash")
                         : copy.status === "uncertain"
-                          ? "Состояние копии требует проверки"
-                          : "Копия осталась на диске"}
+                          ? tr("topics.workingCopyNeedsVerification")
+                          : tr("topics.copyRemainsOnDisk")}
                     </span>
                     <p className="hint">{copy.reason}</p>
                     {copy.status === "needs-confirmation" && pending && (
@@ -293,8 +294,7 @@ export function TopicRemovalPopup({
                               onChange={(e) =>
                                 setAcks({ ...acks, [ackKey]: e.target.checked })
                               }
-                            />
-                            Подтверждаю удаление непереданных коммитов{" "}
+                            />{tr("topics.iConfirmTheRemovalOfUnpushedCommits")}{" "}
                             {copy.topic}
                           </label>
                         )}
@@ -309,8 +309,7 @@ export function TopicRemovalPopup({
                               !!acks[ackKey],
                             )
                           }
-                        >
-                          Удалить копию {copy.topic}
+                        >{tr("topics.deleteCopy")}{copy.topic}
                         </button>
                       </>
                     )}
@@ -320,8 +319,7 @@ export function TopicRemovalPopup({
                           type="button"
                           disabled={controller.busy}
                           onClick={() => void controller.check(copy.contextId)}
-                        >
-                          Проверить копию {copy.topic}
+                        >{tr("topics.checkCopy")}{copy.topic}
                         </button>
                       )}
                   </div>
@@ -332,9 +330,7 @@ export function TopicRemovalPopup({
         )}
       </div>
       <footer className="topic-removal-actions">
-        <button type="button" disabled={controller.busy} onClick={close}>
-          К топикам
-        </button>
+        <button type="button" disabled={controller.busy} onClick={close}>{tr("topics.backToTopics")}</button>
       </footer>
     </TopicModal>
   );

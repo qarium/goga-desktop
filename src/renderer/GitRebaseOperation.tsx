@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import {
   verifiedNativeSequenceResult,
   nativeSequenceDiagnostics,
@@ -123,18 +125,18 @@ function diagnostics(value: unknown, verified: boolean): string {
       ? (value as Record<string, unknown>)
       : {};
   const bool = (field: string) =>
-    v[field] === true ? "да" : v[field] === false ? "нет" : "не подтверждено";
+    v[field] === true ? msg("git.yes") : v[field] === false ? msg("git.no") : msg("git.unconfirmed");
   const str = (field: string) =>
-    typeof v[field] === "string" ? (v[field] as string) : "не подтверждено";
+    typeof v[field] === "string" ? (v[field] as string) : msg("git.unconfirmed");
   const locks = (field: string) => {
     const entries = v[field];
-    if (!Array.isArray(entries)) return "не проверены";
+    if (!Array.isArray(entries)) return msg("git.notChecked");
     const observed = entries.filter(
       (entry): entry is string => typeof entry === "string",
     );
     if (observed.length !== entries.length)
-      return `наблюдаемые имена: ${observed.length ? observed.join(", ") : "не получены"}; список неполон или не проверен, наличие и владение не подтверждены`;
-    return observed.length ? observed.join(", ") : "нет";
+      return msg("git.observedNamesTheListIsIncompleteOrUnverifiedAndPresence", { value1: String(observed.length ? observed.join(", ") : msg("git.notReceived")) });
+    return observed.length ? observed.join(", ") : msg("git.no");
   };
   const recoveryVerified =
     v.recoveryStatus === "retained" &&
@@ -142,34 +144,34 @@ function diagnostics(value: unknown, verified: boolean): string {
     (v.lastKnownRecoveryPath === undefined ||
       v.lastKnownRecoveryPath === v.recoveryPath);
   const recovery = recoveryVerified
-    ? `Проверенные материалы восстановления: ${str("recoveryPath")}`
+    ? msg("git.verifiedRecoveryFiles", { value1: String(str("recoveryPath")) })
     : v.recoveryStatus === "missing"
-      ? "Материалы восстановления отсутствуют; сохранность не подтверждена."
+      ? msg("git.recoveryFilesAreMissingTheirIntegrityIsUnconfirmed")
       : v.recoveryStatus === "unverified"
-        ? "Наличие, владение или целостность материалов восстановления не проверены."
+        ? msg("git.presenceOwnershipOrIntegrityOfRecoveryFilesWereNotVerified")
         : v.recoveryStatus === "not-created"
-          ? "Материалы восстановления не создавались."
-          : "Состояние материалов восстановления не подтверждено.";
+          ? msg("git.noRecoveryFilesWereCreated")
+          : msg("git.recoveryStateIsUnconfirmed");
   return [
     verified
       ? v.status === "conflict"
-        ? "Следующий конфликт: rebase не завершён. Обновлённое состояние доступно в редакторе конфликтов."
+        ? msg("git.anotherConflictOccurredTheRebaseIsNotCompleteTheUpdated")
         : v.action === "abort"
-          ? "Отмена rebase подтверждена."
-          : "Завершение rebase подтверждено."
-      : "Результат не подтверждён. Проверьте состояние Git; ответ не подтверждает отсутствие изменений. Автоматического повтора не будет.",
-    `Заявление хоста: ${str("status")} · ${str("message")}`,
+          ? msg("git.rebaseAbortConfirmed")
+          : msg("git.rebaseCompletionConfirmed")
+      : msg("git.theResultIsUnconfirmedCheckTheGitStateTheResponse"),
+    msg("git.hostReport", { value1: String(str("status")), value2: String(str("message")) }),
     typeof v.log === "string" && v.log,
-    `Изменения: ${bool("changed")}\nЗапись начата: ${bool("mutationStarted")}\nРабочая папка восстановлена: ${bool("worktreeRestored")}\nРабочая папка обновлена: ${bool("worktreeUpdated")}\nШаг публикации объектов: ${bool("objectsPublished")}\nОпубликованных файлов объектов: ${typeof v.publishedObjectCount === "number" && Number.isSafeInteger(v.publishedObjectCount) && v.publishedObjectCount >= 0 ? v.publishedObjectCount : "не подтверждено"}\nИндекс опубликован: ${bool("indexPublished")}\nHEAD опубликован: ${bool("headPublished")}\nВетка опубликована: ${bool("branchPublished")}\nМетаданные опубликованы: ${bool("metadataPublished")}\nМетаданные удалены: ${bool("metadataCleared")}`,
-    "Незавершённый шаг публикации объектов не означает, что объекты не записывались. Количество включает созданные файлы с ошибкой записи или fsync и не подтверждает их сохранность.",
+    msg("git.changesWriteStartedWorkingDirectoryRestoredWorkingDirectoryUpdatedObject", { value1: String(bool("changed")), value2: String(bool("mutationStarted")), value3: String(bool("worktreeRestored")), value4: String(bool("worktreeUpdated")), value5: String(bool("objectsPublished")), value6: String(typeof v.publishedObjectCount === "number" && Number.isSafeInteger(v.publishedObjectCount) && v.publishedObjectCount >= 0 ? v.publishedObjectCount : msg("git.unconfirmed")), value7: String(bool("indexPublished")), value8: String(bool("headPublished")), value9: String(bool("branchPublished")), value10: String(bool("metadataPublished")), value11: String(bool("metadataCleared")) }),
+    msg("git.anUnfinishedObjectPublicationStepDoesNotMeanNothingWas"),
     recovery,
     typeof v.lastKnownRecoveryPath === "string" &&
-      `Последний известный путь (не подтверждает сохранность): ${v.lastKnownRecoveryPath}`,
+      msg("git.lastKnownPathIntegrityUnconfirmed", { lastKnownRecoveryPath: String(v.lastKnownRecoveryPath) }),
     !recoveryVerified &&
       typeof v.recoveryPath === "string" &&
-      `Наблюдаемый путь восстановления (сохранность не подтверждена): ${v.recoveryPath}`,
-    `Блокировка сохранена: ${bool("lockRetained")}\nСохранённые блокировки: ${locks("retainedLocks")}\nНепроверенные блокировки: ${locks("uncheckedLocks")}. Их наличие и владелец не подтверждены.`,
-    "Исходные reflog не дополняются; журнал восстановления не заменяет native reflog. Автоматического восстановления или удаления блокировок нет.",
+      msg("git.observedRecoveryPathIntegrityUnconfirmed", { recoveryPath: String(v.recoveryPath) }),
+    msg("git.lockRetainedRetainedLocksUnverifiedLocksTheirPresenceAndOwnership", { value1: String(bool("lockRetained")), value2: String(locks("retainedLocks")), value3: String(locks("uncheckedLocks")) }),
+    msg("git.originalReflogsAreNotAppendedToTheRecoveryLogIs"),
   ]
     .filter(Boolean)
     .join("\n\n");
@@ -294,7 +296,7 @@ export function useGitRebaseOperation(options: Options) {
       const checked = previewSchema.safeParse(raw);
       if (!checked.success)
         throw Error(
-          "Подтверждение rebase содержит непроверенные поля. Обновите изменения и повторите проверку.",
+          msg("git.rebaseConfirmationContainsUnverifiedFieldsRefreshChangesAndCheckAgain"),
         );
       const value = checked.data;
       if (
@@ -308,7 +310,7 @@ export function useGitRebaseOperation(options: Options) {
           : snapshot.branch !== null && value.branch !== snapshot.branch)
       )
         throw Error(
-          "Подтверждение устарело или относится к другому контексту, состоянию либо действию. Обновите изменения и повторите проверку.",
+          msg("git.confirmationIsOutdatedOrBelongsToADifferentContextState"),
         );
       bound.current = { freshness: issued.freshness, read: issuedRead };
       setPreview(value);
@@ -372,7 +374,7 @@ export function useGitRebaseOperation(options: Options) {
         identity.data.action !== submitted.action
       )
         throw Error(
-          "Результат относится к другому контексту или действию; его данные не показаны.",
+          msg("git.theResultBelongsToAnotherContextOrActionItsData"),
         );
       const verified = verifiedResult(value, submitted);
       setResult(diagnostics(value, verified));
@@ -381,7 +383,7 @@ export function useGitRebaseOperation(options: Options) {
       if (alive.current) {
         setRereadAfter(latest.current.getIssuedReadVersion());
         setResult(
-          `${topicError(error)}\n\nРезультат не подтверждён. Проверьте состояние Git: операция могла выполниться; отсутствие записи, сохранность материалов восстановления и снятие блокировок не подтверждены. Автоматического повтора не будет.`,
+          msg("git.resultUnconfirmedCheckTheGitStateTheOperationMayHave", { value1: String(topicError(error)) }),
         );
       }
     } finally {
@@ -415,20 +417,21 @@ export function GitRebaseOperationFooter({
   rebase: RebaseState;
   unresolved: boolean;
 }) {
+  useLocale();
   if (!rebase.supported)
     return (
-      <p>Продолжение и отмена rebase недоступны в этой версии подключения.</p>
+      <p>{msg("git.continuingAndAbortingARebaseAreUnavailableWithThisConnection")}</p>
     );
   return (
     <div className="git-merge-operation-footer">
       <p role={rebase.pending === "execute" ? "status" : undefined}>
         {rebase.pending === "execute"
-          ? "Выполняется операция rebase… Просмотр можно закрыть; запись не отменяется."
+          ? msg("git.rebaseInProgressYouCanCloseThisViewWritingContinues")
           : rebase.needsRefresh
-            ? "Сначала обновите изменения и проверьте состояние Git. Для повторной попытки нужна новая проверка."
+            ? msg("git.refreshChangesAndCheckTheGitStateFirstANew")
             : unresolved
-              ? "Сначала разрешите и отдельно сохраните все файлы: остались конфликты или несохранённые черновики."
-              : "Сохранение файла и продолжение rebase — отдельные действия. Доступен ограниченный линейный rebase --merge/--apply."}
+              ? msg("git.resolveAndSaveEachFileFirstConflictsOrUnsavedDrafts")
+              : msg("git.savingAFileAndContinuingARebaseAreSeparateActions")}
       </p>
       <div>
         <button
@@ -436,22 +439,19 @@ export function GitRebaseOperationFooter({
           className="danger"
           disabled={!rebase.canStart}
           onClick={() => void rebase.prepare("abort")}
-        >
-          Отменить rebase…
-        </button>
+        >{msg("git.abortRebase")}</button>
         <button
           type="button"
           className="primary"
           disabled={!rebase.canStart || unresolved}
           onClick={() => void rebase.prepare("continue")}
-        >
-          Продолжить rebase…
-        </button>
+        >{msg("git.continueRebase")}</button>
       </div>
     </div>
   );
 }
 export function GitRebaseOperationDialogs({ rebase }: { rebase: RebaseState }) {
+  useLocale();
   const escape = (event: React.KeyboardEvent, close: () => void) => {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -467,56 +467,50 @@ export function GitRebaseOperationDialogs({ rebase }: { rebase: RebaseState }) {
           <TopicModal
             title={
               rebase.action === "continue"
-                ? "Продолжить rebase"
-                : "Отменить rebase?"
+                ? msg("git.continueRebase2")
+                : msg("git.abortRebase2")
             }
-            closeLabel="Закрыть подтверждение rebase"
+            closeLabel={msg("git.closeRebaseConfirmation")}
             className="git-merge-operation-modal"
             onClose={rebase.close}
           >
             <div className="git-merge-operation-form">
               {rebase.pending === "prepare" ? (
-                <LoadingState label="Проверяем операцию rebase…" />
+                <LoadingState label={msg("git.checkingRebase")} />
               ) : (
                 <>
                   <div className="git-merge-operation-details">
                     {rebase.action === "abort" && (
-                      <p className="git-conflict-warning">
-                        Сохранённые и ручные решения в файлах конфликтов будут
-                        удалены: вернутся исходное дерево и ветка до rebase.
-                        Посторонние правки блокируют отмену и не отбрасываются.
-                        Несохранённые черновики решений в памяти будут удалены
-                        только после успешной отмены.
-                      </p>
+                      <p className="git-conflict-warning">{msg("git.savedAndManualConflictResolutionsWillBeLostTheOriginal")}</p>
                     )}
                     {p && (
                       <>
                         <dl>
-                          <dt>Контекст</dt>
+                          <dt>{msg("git.context")}</dt>
                           <dd>
                             {typeof p.scope === "string"
-                              ? `Основная папка · ${p.scope}`
+                              ? msg("git.originalFolder", { scope: String(p.scope) })
                               : `${p.scope.projectId} / ${p.scope.year} / ${p.scope.topic} · ${p.scope.contextId}`}
                           </dd>
-                          <dt>Рабочая папка</dt>
+                          <dt>{msg("git.workingDirectory")}</dt>
                           <dd>{p.root}</dd>
-                          <dt>Исходная ветка</dt>
+                          <dt>{msg("git.originalBranch")}</dt>
                           <dd>{p.branch}</dd>
-                          <dt>Способ rebase</dt>
+                          <dt>{msg("git.rebaseMode")}</dt>
                           <dd>rebase --{p.backend}</dd>
                           <dt>HEAD</dt>
                           <dd>{p.head}</dd>
-                          <dt>Исходный коммит</dt>
+                          <dt>{msg("git.originalCommit")}</dt>
                           <dd>{p.original}</dd>
                         </dl>
                         <p>{p.effects}</p>
                         {p.action === "abort" &&
                           !!p.discardedResolutionPaths?.length && (
                             <section
-                              aria-label="Решения, которые будут удалены"
+                              aria-label={msg("git.resolutionsToDiscard")}
                               className="git-conflict-warning"
                             >
-                              <strong>Будут удалены решения в файлах:</strong>
+                              <strong>{msg("git.resolutionsInTheseFilesWillBeDiscarded")}</strong>
                               <ul>
                                 {p.discardedResolutionPaths.map((path) => (
                                   <li key={path}>
@@ -526,7 +520,7 @@ export function GitRebaseOperationDialogs({ rebase }: { rebase: RebaseState }) {
                               </ul>
                             </section>
                           )}
-                        <strong>Затронутые пути: {p.paths.length}</strong>
+                        <strong>{msg("git.affectedPaths")}{p.paths.length}</strong>
                         <ul>
                           {p.paths.map((path) => (
                             <li key={path}>
@@ -537,59 +531,33 @@ export function GitRebaseOperationDialogs({ rebase }: { rebase: RebaseState }) {
                       </>
                     )}
                     {rebase.action === "continue" ? (
-                      <p>
-                        Поддерживается ограниченный rebase --merge/--apply:
-                        проверенная линейная последовательность (до 128 picks, с
-                        ограничением размера) до следующего конфликта или
-                        завершения; существующие текстовые пути без изменения
-                        структуры. Backend не меняется. Другие операции здесь не
-                        поддерживаются. Если native Git не может подтвердить
-                        патчи и результат слияния, операция отклоняется.
-                        {p?.backend === "merge" &&
-                          " Для --merge необходим Git merge-file --diff-algorithm=histogram."}
+                      <p>{msg("git.limitedRebaseMergeApplySupportAVerifiedLinearSequenceUp")}{p?.backend === "merge" &&
+                          msg("git.mergeRequiresGitMergeFileDiffAlgorithmHistogram")}
                       </p>
                     ) : (
-                      <p>
-                        Отмена поддерживается для подтверждённых конфликтов
-                        rebase --merge/--apply, в том числе после их разрешения.
-                        Почтовый git am не считается rebase.
-                      </p>
+                      <p>{msg("git.abortIsAvailableForVerifiedRebaseMergeApplyConflictsIncluding")}</p>
                     )}
                     {rebase.action === "continue" && (
-                      <p>
-                        Исходные автор и сообщение коммита сохраняются. Если
-                        следующий pick конфликтует, rebase останется
-                        незавершённым: новый конфликт появится в редакторе после
-                        обновления.
-                      </p>
+                      <p>{msg("git.theOriginalAuthorAndCommitMessageAreKeptIfThe")}</p>
                     )}
-                    <p>
-                      Исходные reflog не дополняются. Материалы восстановления
-                      сохраняются; это не эквивалент native reflog.
-                    </p>
+                    <p>{msg("git.originalReflogsAreNotAppendedToRecoveryFilesAreKept")}</p>
                   </div>
                   <div className="git-merge-operation-confirm">
-                    <p className="hint">
-                      Git-хуки отключены. Результат не публикуется на сервер.
-                    </p>
+                    <p className="hint">{msg("git.gitHooksAreDisabledNothingIsPushedToTheServer")}</p>
                     {!p && (
                       <p>
                         {rebase.expired
-                          ? "Срок подтверждения истёк. Проверьте операцию заново."
-                          : "Подтверждение недоступно. Закройте окно и обновите изменения."}
+                          ? msg("git.confirmationExpiredCheckTheOperationAgain")
+                          : msg("git.confirmationUnavailableCloseThisDialogAndRefreshChanges")}
                       </p>
                     )}
                     <div className="git-branch-dialog-actions">
-                      <button type="button" onClick={rebase.close}>
-                        Отмена
-                      </button>
+                      <button type="button" onClick={rebase.close}>{msg("git.cancel")}</button>
                       {rebase.expired && (
                         <button
                           type="button"
                           onClick={() => void rebase.prepare(rebase.action!)}
-                        >
-                          Проверить заново
-                        </button>
+                        >{msg("git.checkAgain")}</button>
                       )}
                       <button
                         type="button"
@@ -600,8 +568,8 @@ export function GitRebaseOperationDialogs({ rebase }: { rebase: RebaseState }) {
                         onClick={() => void rebase.execute()}
                       >
                         {rebase.action === "continue"
-                          ? "Продолжить rebase"
-                          : "Отменить rebase"}
+                          ? msg("git.continueRebase2")
+                          : msg("git.abortRebase3")}
                       </button>
                     </div>
                   </div>
@@ -614,8 +582,8 @@ export function GitRebaseOperationDialogs({ rebase }: { rebase: RebaseState }) {
       {!!rebase.result && (
         <div onKeyDown={(e) => escape(e, rebase.closeResult)}>
           <TopicModal
-            title="Результат операции rebase"
-            closeLabel="Закрыть результат rebase"
+            title={msg("git.rebaseResult")}
+            closeLabel={msg("git.closeRebaseResult")}
             className="git-workspace-error"
             onClose={rebase.closeResult}
           >

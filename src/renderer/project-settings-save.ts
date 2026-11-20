@@ -1,6 +1,7 @@
+import { t as msg } from "../shared/i18n";
 import type { ScopeRef } from "../shared/context";
-import type { ProjectSettings, ProjectSettingsView } from "../shared/types";
-import { preparationErrorMessage } from "./preparation-error";
+import type { ProjectSettings, ProjectSettingsView, ProjectSettingsSaveResponse } from "../shared/types";
+
 
 const equal = (a: unknown, b: unknown) =>
   JSON.stringify(a) === JSON.stringify(b);
@@ -25,9 +26,9 @@ export function reconcileProjectSettings(
   const mine = { ...latest, env: [] } as ProjectSettings;
   const current = { ...latest, env: [] } as ProjectSettings;
   for (const [key, label] of [
-    ["executable", "Исполняемый файл"],
-    ["profile", "Профиль"],
-    ["startupTimeoutMinutes", "Тайм-аут запуска"],
+    ["executable", msg("workspace.executable")],
+    ["profile", msg("workspace.profile")],
+    ["startupTimeoutMinutes", msg("workspace.startupTimeout")],
   ] as const) {
     const values = select(base[key], draft[key], latest[key], label);
     Object.assign(mine, { [key]: values[0] });
@@ -40,7 +41,7 @@ export function reconcileProjectSettings(
       value.env.some((row) => !/^[A-Za-z_][A-Za-z0-9_]{0,127}$/.test(row.key))
     )
       throw Error(
-        "Укажите уникальные корректные имена переменных. Введённые значения сохранены в форме.",
+        msg("workspace.enterValidUniqueVariableNamesYourValuesAreStillIn"),
       );
     return map;
   }
@@ -52,7 +53,7 @@ export function reconcileProjectSettings(
       b.get(key),
       d.get(key),
       l.get(key),
-      `Переменная ${key}`,
+      msg("workspace.variable", { key: String(key) }),
     );
     if (m) mine.env.push({ ...m });
     if (c) current.env.push({ ...c });
@@ -65,7 +66,7 @@ interface Api {
     scope: ScopeRef,
     value: ProjectSettings,
     version: string,
-  ): Promise<ProjectSettingsView>;
+  ): Promise<ProjectSettingsSaveResponse>;
 }
 /** Retry only a confirmed CAS refusal, after a fresh read and three-way reconciliation. */
 export async function saveProjectSettingsReconciled(
@@ -77,21 +78,9 @@ export async function saveProjectSettingsReconciled(
   let captured = base,
     desired = draft;
   for (let attempt = 0; attempt < 3; attempt++) {
-    try {
-      return {
-        document: await api.saveProjectSettings(
-          scope,
-          desired,
-          captured.version,
-        ),
-        conflict: undefined,
-      };
-    } catch (error) {
-      if (
-        preparationErrorMessage(error) !==
-        "Настройки изменены извне. Откройте их заново."
-      )
-        throw error;
+    const result = await api.saveProjectSettings(scope, desired, captured.version);
+    if (!("code" in result)) return { document: result, conflict: undefined };
+    if (result.code === "settings-version-conflict") {
       const latest = await api.readProjectSettings(scope);
       const conflict = reconcileProjectSettings(
         captured.value,
@@ -104,6 +93,6 @@ export async function saveProjectSettingsReconciled(
     }
   }
   throw Error(
-    "Настройки сейчас меняются в другом окне. Ваш ввод сохранён; повторите сохранение после завершения изменений.",
+    msg("workspace.settingsAreBeingChangedInAnotherWindowYourInputWas"),
   );
 }

@@ -1,10 +1,24 @@
+import legacyRussianLabels from "../../locales/legacy-topic-board-v1.json";
+import { t as tr } from "../shared/i18n";
 import type { TopicBoardRecord } from "../shared/topics";
 
 export interface TopicsBoardPreferences {
   schemaVersion: 1;
   view: "table" | "board";
-  columns: Array<{ id: string; name: string }>;
+  columns: Array<{ id: string; name: string; builtInName?: boolean }>;
   statusCategory: Record<string, string | null>;
+}
+const defaultLabelKeys = { planned: "planned", working: "inProgress", completed: "completed" } as const;
+export function columnDisplayName(column: TopicsBoardPreferences["columns"][number]) {
+  return column.builtInName && Object.hasOwn(defaultLabelKeys, column.id)
+    ? tr(`topics.${defaultLabelKeys[column.id as keyof typeof defaultLabelKeys]}` as const) : column.name;
+}
+// Original v1 profiles stored the Russian default literally. Only recognize a
+// known ID and its exact legacy label; never match a custom column by its name.
+export function migrateColumn(column: TopicsBoardPreferences["columns"][number]) {
+  const key = Object.hasOwn(defaultLabelKeys, column.id) && defaultLabelKeys[column.id as keyof typeof defaultLabelKeys];
+  return key && column.builtInName === undefined && column.name === legacyRussianLabels[key]
+    ? { ...column, builtInName: true } : column;
 }
 export const initialStatusCategory: Record<string, string> = {
   empty: "planned",
@@ -21,11 +35,9 @@ export function defaultBoardPreferences(): TopicsBoardPreferences {
   return {
     schemaVersion: 1,
     view: "board",
-    columns: [
-      { id: "planned", name: "Запланировано" },
-      { id: "working", name: "В работе" },
-      { id: "completed", name: "Завершено" },
-    ],
+    columns: Object.entries(defaultLabelKeys).map(([id, key]) => ({
+      id, name: tr(`topics.${key}` as const), builtInName: true,
+    })),
     statusCategory: Object.assign(Object.create(null), initialStatusCategory),
   };
 }
@@ -94,8 +106,8 @@ export function projectTopicsBoard(
       })),
   });
   return {
-    columns: prefs.columns.map((c) => build(c.id, c.name)),
-    unassigned: build(null, "Без категории"),
+    columns: prefs.columns.map((c) => build(c.id, columnDisplayName(c))),
+    unassigned: build(null, tr("topics.unassigned")),
   };
 }
 export function assignStatus(
@@ -108,12 +120,12 @@ export function assignStatus(
     status.length > 256 ||
     (column !== null && !prefs.columns.some((c) => c.id === column))
   )
-    throw Error("Недопустимый статус или колонка.");
+    throw Error(tr("topics.invalidStatusOrColumn"));
   if (
     !Object.hasOwn(prefs.statusCategory, status) &&
     Object.keys(prefs.statusCategory).length >= 1000
   )
-    throw Error("Слишком много настроенных статусов.");
+    throw Error(tr("topics.tooManyConfiguredStatuses"));
   return {
     ...prefs,
     statusCategory: { ...prefs.statusCategory, [status]: column },
@@ -126,15 +138,15 @@ function columnName(
 ) {
   const clean = name.trim();
   if (!clean || clean.length > 64)
-    throw Error("Название колонки: от 1 до 64 символов.");
+    throw Error(tr("topics.columnNamesMustBeBetween1And64"));
   if (
     prefs.columns.some(
       (c) =>
         c.id !== exclude &&
-        c.name.toLocaleLowerCase() === clean.toLocaleLowerCase(),
+        columnDisplayName(c).toLocaleLowerCase() === clean.toLocaleLowerCase(),
     )
   )
-    throw Error("Колонка с таким названием уже есть.");
+    throw Error(tr("topics.aColumnWithThisNameAlreadyExists"));
   return clean;
 }
 export function addBoardColumn(
@@ -149,7 +161,7 @@ export function addBoardColumn(
     id === "unassigned" ||
     prefs.columns.some((c) => c.id === id)
   )
-    throw Error("Нельзя добавить колонку.");
+    throw Error(tr("topics.couldNotAddColumn"));
   return {
     ...prefs,
     columns: [...prefs.columns, { id, name: columnName(prefs, name) }],
@@ -161,18 +173,18 @@ export function renameBoardColumn(
   name: string,
 ) {
   if (!prefs.columns.some((c) => c.id === id))
-    throw Error("Колонка отсутствует.");
+    throw Error(tr("topics.columnNotFound"));
   const clean = columnName(prefs, name, id);
   return {
     ...prefs,
     columns: prefs.columns.map((c) =>
-      c.id === id ? { ...c, name: clean } : c,
+      c.id === id ? { ...c, name: clean, ...(Object.hasOwn(defaultLabelKeys, id) && { builtInName: false }) } : c,
     ),
   };
 }
 export function removeBoardColumn(prefs: TopicsBoardPreferences, id: string) {
   if (!prefs.columns.some((c) => c.id === id))
-    throw Error("Колонка отсутствует.");
+    throw Error(tr("topics.columnNotFound"));
   return {
     ...prefs,
     columns: prefs.columns.filter((c) => c.id !== id),
@@ -196,7 +208,7 @@ export function reorderBoardColumn(
     index < 0 ||
     index >= prefs.columns.length
   )
-    throw Error("Недопустимый порядок колонок.");
+    throw Error(tr("topics.invalidColumnOrder"));
   const columns = [...prefs.columns],
     [column] = columns.splice(from, 1);
   columns.splice(index, 0, column!);

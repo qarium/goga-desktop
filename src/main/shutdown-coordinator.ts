@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import { TerminalInspectorError } from "../host/terminal-errors";
 import { TerminalStopError } from "../host/terminal-processes";
 import { ShutdownKeepError } from "../host/shutdown";
@@ -60,7 +61,7 @@ export class ShutdownCoordinator {
           ? new ShutdownKeepError("incomplete")
           : Error("Shutdown incomplete");
     };
-    let phase = "Подготовка к выходу";
+    let phase = t("native.phasePrepare");
     const snapshot = () => {
       let inventoryComplete =
         prepared.length === this.dependencies.participants.length;
@@ -94,17 +95,17 @@ export class ShutdownCoordinator {
         const component =
           participant.kind &&
           {
-            "project-creation": "Создание проектов",
-            runs: "Конвейеры и сборки",
-            terminals: "Терминалы",
-            demonstrations: "Демонстрации",
+            "project-creation": t("native.phaseProjects"),
+            runs: t("native.phaseRuns"),
+            terminals: t("native.phaseTerminals"),
+            demonstrations: t("native.phaseDemonstrations"),
           }[participant.kind];
-        phase = `Подготовка к выходу${component ? ` · ${component}` : ""}`;
+        phase = [t("native.phasePrepare"), component].filter(Boolean).join(" · ");
         const lease = await participant.prepare();
         prepared.push(lease);
         itemIds.set(lease, new Set(lease.items.map((item) => item.id)));
       }
-      phase = "Подтверждение выхода";
+      phase = t("native.phaseConfirm");
       if (prepared.some((p) => p.requiresConfirmation)) {
         const answer = await this.dependencies.confirm(
           prepared.flatMap((p) => p.items),
@@ -113,7 +114,7 @@ export class ShutdownCoordinator {
         keep = answer === "keep";
       }
       // Validate ALL previews before the first participant can signal anything.
-      phase = "Проверка процессов перед завершением";
+      phase = t("native.phaseVerify");
       for (const participant of prepared) participant.validate();
       for (const participant of prepared) {
         const capability = [
@@ -128,11 +129,11 @@ export class ShutdownCoordinator {
           throw new ShutdownKeepError("incomplete");
       }
       if (keep) {
-        phase = "Проверка возможности сохранения процессов";
+        phase = t("native.phaseCanKeep");
         for (const participant of prepared)
           if (participant.keep) await participant.validateKeep!();
       }
-      phase = "Завершение процессов";
+      phase = t("native.phaseStop");
       // Keep mode must stop ordinary terminals before the first detach. The
       // boolean stop mode retains the original participant order unchanged.
       for (const participant of prepared) {
@@ -141,7 +142,7 @@ export class ShutdownCoordinator {
         verify(participant);
       }
       if (keep) {
-        phase = "Сохранение запущенных процессов";
+        phase = t("native.phaseKeep");
         for (const participant of prepared) {
           if (!participant.keep) continue;
           keepAttempted.add(participant);
@@ -158,7 +159,7 @@ export class ShutdownCoordinator {
         (!keptState.inventoryComplete || keptState.remaining.length)
       )
         throw new ShutdownKeepError("incomplete");
-      phase = "Сохранение состояния и закрытие приложения";
+      phase = t("native.phaseFinalize");
       await this.dependencies.finalize();
       this.completed = { status: "success", ...(keptState ?? snapshot()) };
       return this.completed;
@@ -171,8 +172,8 @@ export class ShutdownCoordinator {
             : "failed",
         ...state,
         message:
-          "Выход не завершён. Приложение остаётся открытым; уже завершённые процессы не запускаются повторно." +
-          `\nЭтап: ${phase}.` +
+          t("native.quitIncomplete") +
+          t("native.quitPhase", { phase }) +
           (error instanceof TerminalStopError ||
           error instanceof TerminalInspectorError ||
           error instanceof ShutdownKeepError

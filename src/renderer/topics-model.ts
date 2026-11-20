@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import type {
   TopicBoardRecord,
   TopicBoardSnapshot,
@@ -276,8 +277,8 @@ export const createTopicExplanation = (
 ) =>
   publish
     ? switchAfter
-      ? "Сначала создадим топик с коммитом задачи и опубликуем ветку на origin, затем отдельно переключимся. Если переключение не удастся, опубликованный топик останется."
-      : "Создадим топик с коммитом задачи и опубликуем ветку на origin. Текущая ветка не изменится."
+      ? tr("topics.createTheTopicWithATaskCommitAnd")
+      : tr("topics.createTheTopicWithATaskCommitAnd2")
     : switchAfter
-      ? "После создания переключимся на новый топик. Задачу можно оставить пустой; введённый текст останется незакоммиченным."
-      : "Создадим топик локально с коммитом задачи. Вы останетесь на текущей ветке; публикации не будет.";
+      ? tr("topics.switchToTheNewTopicAfterCreatingIt")
+      : tr("topics.createTheTopicLocallyWithATaskCommit");

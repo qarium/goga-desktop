@@ -1,3 +1,6 @@
+import { HintButton } from "../ActionHint";
+import { t } from "../../shared/i18n";
+import { useLocale } from "../useLocale";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import {
   Cable,
@@ -51,6 +54,7 @@ function PageAddress({
   copyAvailable: boolean;
   onCopyError: (error: unknown) => void;
 }) {
+  useLocale();
   const [draft, setDraft] = useState<string | null>(null),
     [open, setOpen] = useState(false),
     input = useRef<HTMLInputElement>(null),
@@ -115,18 +119,18 @@ function PageAddress({
   }
   return (
     <div className={"demo-page-address" + (open ? " is-open" : "")}>
-      <button
+      <HintButton
         ref={toggle}
         type="button"
         className="demo-tool demo-address-open"
-        aria-label="Показать адрес страницы"
-        title="Показать адрес страницы"
+        aria-label={t("general.showPageAddress")}
+        hint={t("general.showPageAddress")}
         aria-expanded={open}
         aria-controls={id}
         onClick={() => setOpen((value) => !value)}
       >
         <Link size={14} aria-hidden />
-      </button>
+      </HintButton>
       <div className="demo-address-field" id={id}>
         <input
           ref={input}
@@ -137,9 +141,9 @@ function PageAddress({
           spellCheck={false}
           autoComplete="off"
           autoCapitalize="none"
-          aria-label="Адрес страницы"
-          title="Адрес страницы. Enter — перейти, Escape — отменить ввод."
-          placeholder="Введите http:// или https://"
+          aria-label={t("general.pageAddress")}
+          title={t("general.pageAddressEnterToNavigateEscapeToCancel")}
+          placeholder={t("general.enterAnHttpOrHttpsAddress")}
           value={draft ?? value ?? ""}
           readOnly={busy}
           onChange={(e) => setDraft(e.target.value)}
@@ -162,11 +166,11 @@ function PageAddress({
           }}
         />
         <span className="demo-address-copy">
-          <button
+          <HintButton
             type="button"
             className="demo-tool"
-            aria-label="Скопировать адрес страницы"
-            title={copied ? "Скопировано" : "Скопировать адрес страницы"}
+            aria-label={t("general.copyPageAddress")}
+            hint={copied ? t("general.copied") : t("general.copyPageAddress")}
             disabled={busy || copying || !value || !copyAvailable}
             aria-busy={copying}
             onClick={() => void copyAddress()}
@@ -176,9 +180,9 @@ function PageAddress({
             ) : (
               <Copy size={14} aria-hidden />
             )}
-          </button>
+          </HintButton>
           <span className="demo-copy-feedback" role="status">
-            {copied ? "Скопировано" : ""}
+            {copied ? t("general.copied") : ""}
           </span>
         </span>
       </div>
@@ -194,6 +198,7 @@ function Expanded({
   close: () => void;
   id: string;
 }) {
+  useLocale();
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => {
     const el = ref.current!;
@@ -205,7 +210,7 @@ function Expanded({
       className="demo-full"
       id={id}
       ref={ref}
-      aria-label="Развёрнутый показ"
+      aria-label={t("general.expandedDemonstration")}
       data-testid="demo-expanded"
       onCancel={(e) => {
         e.preventDefault();
@@ -226,6 +231,7 @@ export function DemoPanel({
   showId: string;
   onSettings: () => void;
 }) {
+  useLocale();
   const snap = useDemoValue(store, () => store.state),
     failure = useDemoValue(store, () => store.error);
   const [q, setQ] = useState<Question | null>(null),
@@ -281,9 +287,9 @@ export function DemoPanel({
         notify({
           text:
             cmd.action === "browser"
-              ? "Показ открыт в основном браузере."
+              ? t("general.demonstrationOpenInTheDefaultBrowser")
               : cmd.action === "reload"
-                ? "Страница обновлена."
+                ? t("general.pageReloaded")
                 : "",
           bad: false,
         });
@@ -298,24 +304,24 @@ export function DemoPanel({
   const disabled = !!busy || !!failure;
   const status =
     phase === "connected"
-      ? "Агент подключён"
+      ? t("general.agentConnected")
       : phase === "connecting"
-        ? "Агент подключается…"
+        ? t("general.agentConnecting")
         : phase === "waiting"
-          ? "Ожидаем агента"
+          ? t("general.waitingForAgent")
           : owner
-            ? "Порт привязан к показу «" + owner.label + "»"
-            : "Порт не привязан";
+            ? t("general.portAssigned", {name: owner.label})
+            : t("general.portNotAssigned");
   const shortStatus =
     phase === "connected"
-      ? "Агент"
+      ? t("general.agent")
       : phase === "connecting"
-        ? "Подключение"
+        ? t("general.connection")
         : phase === "waiting"
-          ? "Ожидание"
+          ? t("general.waiting")
           : owner
-            ? "Другой показ"
-            : "Свободен";
+            ? t("general.otherDemonstration")
+            : t("general.available");
   const info = (
     <div className="demo-connection-info">
       <span
@@ -354,16 +360,10 @@ export function DemoPanel({
       setQ({
         cmd,
         action: cmd.action,
-        title: "Переключить порт на этот показ?",
+        title: t("general.switchThePortToThisDemonstration"),
         detail:
-          "Порт " +
-          snap.port +
-          " перейдёт от показа «" +
-          owner.label +
-          "» к показу «" +
-          show.label +
-          "». Агент прежнего показа отключится. Обе страницы останутся открытыми.",
-        submit: "Переключить порт",
+          t("general.transferPortConsent", {port: snap.port, from: owner.label, to: show.label}),
+        submit: t("general.switchPort"),
       });
   }
   const location = (
@@ -405,40 +405,40 @@ export function DemoPanel({
     />
   );
   const toolbar = (
-    <header className="demo-bar" role="toolbar" aria-label="Управление показом">
+    <header className="demo-bar" role="toolbar" aria-label={t("general.demonstrationControls")}>
       {info}
       {tabs}
       {location}
       <div className="demo-actions">
-        <button
+        <HintButton
           className="demo-tool"
-          aria-label="Обновить страницу"
-          title="Обновить страницу. Несохранённый ввод может быть потерян."
+          aria-label={t("general.reloadPage")}
+          hint={t("general.reloadPageUnsavedInputMayBeLost")}
           disabled={disabled}
           onClick={() => void act({ action: "reload", showId })}
         >
           <RefreshCw size={14} aria-hidden />
-        </button>
+        </HintButton>
         {!owned && (
-          <button
+          <HintButton
             className="demo-tool"
             aria-label={
-              owner ? "Переключить порт сюда" : "Подключить порт к этому показу"
+              owner ? t("general.switchPortHere") : t("general.connectThePortToThisDemonstration")
             }
-            title={
-              owner ? "Переключить порт сюда" : "Подключить порт к этому показу"
+            hint={
+              owner ? t("general.switchPortHere") : t("general.connectThePortToThisDemonstration")
             }
             disabled={disabled || (!!snap.access.owner && !owner)}
             onClick={switchPort}
           >
             <Cable size={14} aria-hidden />
-          </button>
+          </HintButton>
         )}
         {phase === "connected" && (
-          <button
+          <HintButton
             className="demo-tool"
-            aria-label="Передать управление"
-            title="Передать управление"
+            aria-label={t("general.transferControl")}
+            hint={t("general.transferControl")}
             disabled={disabled || !snap.access.connectionId}
             onClick={() => {
               if (snap.access.connectionId)
@@ -449,21 +449,21 @@ export function DemoPanel({
                     connectionId: snap.access.connectionId,
                   },
                   action: "handoff",
-                  title: "Передать управление другому агенту?",
+                  title: t("general.transferControlToAnotherAgent"),
                   detail:
-                    "Текущий агент отключится. Следующий клиент на этом порту получит управление автоматически. Страница останется открытой.",
-                  submit: "Отключить и ждать нового",
+                    t("general.theCurrentAgentWillDisconnectTheNextClientOn"),
+                  submit: t("general.disconnectAndWaitForAnotherAgent"),
                 });
             }}
           >
             <UserRoundPlus size={14} aria-hidden />
-          </button>
+          </HintButton>
         )}
-        <button
+        <HintButton
           className="demo-tool"
           data-testid={expanded ? "demo-collapse" : undefined}
-          aria-label={expanded ? "Свернуть показ" : "Развернуть показ"}
-          title={expanded ? "Свернуть показ" : "Развернуть показ"}
+          aria-label={expanded ? t("general.collapseDemonstration") : t("general.expandDemonstration")}
+          hint={expanded ? t("general.collapseDemonstration") : t("general.expandDemonstration")}
           aria-expanded={expanded}
           aria-controls="cdp-demo-section"
           onClick={() => setExpanded((value) => !value)}
@@ -473,7 +473,7 @@ export function DemoPanel({
           ) : (
             <Maximize2 size={14} aria-hidden />
           )}
-        </button>
+        </HintButton>
       </div>
     </header>
   );
@@ -485,16 +485,14 @@ export function DemoPanel({
       {failure ||
         notice.text ||
         (busy === "navigate"
-          ? "Переходим по адресу…"
+          ? t("general.navigating")
           : !owned
             ? owner
-              ? "Порт привязан к показу «" +
-                owner.label +
-                "». Этой страницей можно управлять вручную."
-              : "Порт свободен. Подключите его для управления агентом."
+              ? t("general.portAssignedManual", {name: owner.label})
+              : t("general.portAvailableConnectItToAllowAnAgentTo")
             : phase === "waiting"
-              ? "Первый клиент на этом порту автоматически получит управление."
-              : "Выделяйте текст мышью; ⌘C/Ctrl+C — копировать. Shift+Tab — к управлению.")}
+              ? t("general.theFirstClientOnThisPortWillGainControl")
+              : t("general.dragToSelectTextUseCCtrlCTo"))}
     </span>
   );
   const content = (
@@ -511,15 +509,13 @@ export function DemoPanel({
               onSettings();
             }}
           >
-            <Settings size={14} aria-hidden /> Настройки порта
-          </button>
+            <Settings size={14} aria-hidden /> {t("general.portSettings")}</button>
           <button
             className="demo-action"
             disabled={disabled}
             onClick={() => void act({ action: "browser", showId })}
           >
-            <ExternalLink size={14} aria-hidden /> Открыть в браузере
-          </button>
+            <ExternalLink size={14} aria-hidden /> {t("general.openInBrowser")}</button>
         </div>
       </footer>
     </>

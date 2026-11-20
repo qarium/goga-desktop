@@ -1,3 +1,4 @@
+import { t } from "../shared/i18n";
 import type { TerminalSessionRef } from "../shared/terminal";
 
 export interface TerminalTransportSource {
@@ -94,7 +95,7 @@ export class TerminalTransport {
       )
     )
       throw Error(
-        "Экран сессии уже существует; нужна подтверждённая новая сессия.",
+        t("hostTerminal.screenExists"),
       );
     this.used.add(key);
     if (!this.current || this.current.isLost) {
@@ -121,7 +122,7 @@ export class TerminalTransport {
       this.assertReady(entry);
     } catch {
       this.remove(entry);
-      throw Error("Экран терминала недоступен.");
+      throw Error(t("hostTerminal.screenUnavailable"));
     }
     return {
       assertReady: () => this.assertReady(entry),
@@ -156,15 +157,15 @@ export class TerminalTransport {
   };
   private assertReady(entry: Entry) {
     if (entry.disposed || entry.failed || entry.view.isLost)
-      throw Error("Экран терминала утрачен; требуется обновление сессии.");
+      throw Error(t("hostTerminal.screenLost"));
   }
   private bind(entry: Entry, source: TerminalTransportSource) {
     this.assertReady(entry);
-    if (entry.bound || entry.ended) throw Error("Экран сессии уже подключён.");
+    if (entry.bound || entry.ended) throw Error(t("hostTerminal.screenAlreadyAttached"));
     // Only a successfully spawned replacement retires its old completed screen.
     for (const other of [...this.entries.values()]) {
       if (other !== entry && other.ref.sessionId === entry.ref.sessionId) {
-        if (!other.ended) throw Error("Предыдущая сессия ещё работает.");
+        if (!other.ended) throw Error(t("hostTerminal.previousRunning"));
         this.remove(other);
       }
     }
@@ -189,12 +190,12 @@ export class TerminalTransport {
       this.assertReady(entry);
     } catch {
       this.fail(entry);
-      throw Error("Терминальный транспорт недоступен.");
+      throw Error(t("hostTerminal.transportUnavailable"));
     }
   }
   private output(entry: Entry, text: string) {
     if (entry.disposed || !entry.bound || entry.ended)
-      throw Error("Терминальный поток уже закрыт.");
+      throw Error(t("hostTerminal.streamClosed"));
     if (entry.draining) return;
     if (
       typeof text !== "string" ||
@@ -202,7 +203,7 @@ export class TerminalTransport {
       entry.pending !== undefined
     ) {
       this.fail(entry);
-      throw Error("Терминальный поток нарушил ограничение буфера.");
+      throw Error(t("hostTerminal.bufferExceeded"));
     }
     try {
       if (!this.offer(entry, text)) {
@@ -211,7 +212,7 @@ export class TerminalTransport {
       }
     } catch {
       this.fail(entry);
-      throw Error("Терминальный транспорт недоступен.");
+      throw Error(t("hostTerminal.transportUnavailable"));
     }
   }
   private offer(entry: Entry, text: string): boolean {
@@ -257,7 +258,7 @@ export class TerminalTransport {
   private remove(entry: Entry) {
     if (entry.disposed) return;
     if (entry.bound && !entry.ended)
-      throw Error("Нельзя удалить экран работающей сессии.");
+      throw Error(t("hostTerminal.screenActive"));
     entry.disposed = true;
     entry.pending = undefined;
     this.entries.delete(this.key(entry.ref));
@@ -284,7 +285,7 @@ export class TerminalTransport {
   ): void {
     try {
       const entry = this.entries.get(this.key(ref));
-      if (!entry || !entry.bound) throw Error("Экран сессии отсутствует.");
+      if (!entry || !entry.bound) throw Error(t("hostTerminal.screenMissing"));
       this.assertReady(entry);
       for (const view of this.views) if (view !== entry.view) view.hide();
       entry.view.show(ref, bounds, interactive);

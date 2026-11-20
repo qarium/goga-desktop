@@ -9,10 +9,6 @@
   gap: 16px;
   max-width: min(560px, calc(100vw - 40px));
   padding: 16px;
-  background: var(--surface);
-  border: 1px solid #886b3b;
-  border-radius: 8px;
-  color: #edc384;
   font-size: 13px;
   line-height: 1.6;
   overflow-wrap: anywhere;
@@ -99,7 +95,7 @@
   border-color: #c67476;
 }
 .creation-field-error {
-  color: #f1a4aa;
+  color: var(--feedback-error-fg);
   line-height: 1.6;
   font-size: 12px;
   margin: 0;
@@ -225,10 +221,6 @@
   gap: 12px;
   margin-top: 22px;
   padding: 16px;
-  border: 1px solid #73464c;
-  border-radius: 7px;
-  background: #302029;
-  color: #f3b6bc;
 }
 .creation-error svg {
   flex-shrink: 0;

@@ -1,3 +1,4 @@
+import { t as tr } from "../shared/i18n";
 import type { GitUpdateAttemptInput } from "./git-native-update-handoff";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
@@ -49,7 +50,7 @@ interface Dependencies {
 }
 const changed = () =>
   Error(
-    "Владелец, ветка или настройки Git изменились. Повторите действие после проверки.",
+    tr("host.ownerBranchOrGitSettingsChangedVerifyThemAndRetry"),
   );
 const oid = (value: string) =>
   z
@@ -69,13 +70,13 @@ export function sanitizeRepositoryLog(
     .filter(Boolean)
     .sort((a, b) => b.length - a.length)) {
     for (const variant of new Set([secret, encodeURIComponent(secret)]))
-      text = text.split(variant).join("[скрыто]");
+      text = text.split(variant).join(tr("host.hidden"));
   }
   return text
-    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, "$1[скрыто]@")
+    .replace(/([a-z][a-z0-9+.-]*:\/\/)[^\s/@]+@/gi, tr("host.1Hidden"))
     .replace(
       /([?&](?:token|password|secret|key|access_token)=)[^\s&#]+/gi,
-      "$1[скрыто]",
+      tr("host.1Hidden2"),
     )
     .slice(-65536);
 }
@@ -86,7 +87,7 @@ export function repositoryActionFailure(
   secrets: string[] = [],
 ): RepositoryActionResult {
   const message = sanitizeRepositoryLog(
-    error instanceof Error ? error.message : "Операция не выполнена.",
+    error instanceof Error ? error.message : tr("host.operationFailed"),
     secrets,
   );
   return {
@@ -94,7 +95,7 @@ export function repositoryActionFailure(
     ...(request.context ? { contextId: request.context.contextId } : {}),
     action: request.action,
     status: "error",
-    log: sanitizeRepositoryLog(`${log}\nОшибка: ${message}`, secrets),
+    log: sanitizeRepositoryLog(tr("host.logNerrorMessage", { log: log, message: message }), secrets),
     error: message.split("\n")[0].slice(0, 500),
   };
 }
@@ -164,7 +165,7 @@ export class RepositoryActions {
           : owners.length !== 0
       )
         throw Error(
-          "Владелец топика изменился или неоднозначен. Обновите карточку и выберите рабочую копию заново.",
+          tr("host.topicOwnershipChangedOrIsAmbiguousRefreshTheCardAnd"),
         );
     }
     if (this.owner && !nativeOwnerAdmitted) {
@@ -179,7 +180,7 @@ export class RepositoryActions {
     ).trim();
     if (!ref.startsWith("refs/heads/"))
       throw Error(
-        "В основной папке не выбрана локальная ветка (detached HEAD).",
+        tr("host.noLocalBranchIsCheckedOutInTheOriginalFolder"),
       );
     return ref.slice(11);
   }
@@ -192,7 +193,7 @@ export class RepositoryActions {
       /[\x00-\x20\x7f]/.test(branch)
     )
       throw Error(
-        "База должна быть однозначной локальной веткой, не тегом или произвольной ссылкой.",
+        tr("host.theBaseMustBeAnUnambiguousLocalBranchNotA"),
       );
     const ref = `refs/heads/${branch}`;
     await this.git(["check-ref-format", ref], cwd);
@@ -217,13 +218,13 @@ export class RepositoryActions {
       rows.some((row) => row[0] === `refs/tags/${branch}`)
     )
       throw Error(
-        "Базовая ветка отсутствует, символическая или неоднозначна с тегом.",
+        tr("host.theBaseBranchIsMissingSymbolicOrAmbiguousWithA"),
       );
     return { branch, ref, oid: oid(match[1]) };
   }
   private async remote(name: string, push: boolean, cwd = this.project.path) {
     if (!/^[a-zA-Z0-9][a-zA-Z0-9._/-]*$/.test(name) || name === ".")
-      throw Error("Upstream remote отсутствует или неоднозначен.");
+      throw Error(tr("host.theUpstreamRemoteIsMissingOrAmbiguous"));
     const prefix = `remote.${name}.`;
     const raw = await this.git(
       ["config", "--local", "--includes", "--null", "--list"],
@@ -245,12 +246,12 @@ export class RepositoryActions {
       )
     )
       throw Error(
-        `Remote ${name} отсутствует или содержит небезопасные настройки.`,
+        tr("host.remoteNameIsMissingOrHasUnsafeSettings", { name: name }),
       );
     for (const key of ["url", "pushurl", "fetch"]) {
       const values = rows.filter(([k]) => k === prefix + key);
       if (values.length > 1 || (key === "url" && values.length !== 1))
-        throw Error(`Remote ${name} неоднозначен.`);
+        throw Error(tr("host.remoteNameIsAmbiguous", { name: name }));
     }
     const endpoint = (
       await this.git(
@@ -264,12 +265,12 @@ export class RepositoryActions {
       /[\x00-\x20\x7f]/.test(endpoint) ||
       endpoint.includes("::")
     )
-      throw Error(`Remote ${name} содержит недопустимый адрес.`);
+      throw Error(tr("host.remoteNameHasAnInvalidAddress", { name: name }));
     return JSON.stringify([rows, endpoint]);
   }
   private async publish(branch: string, expected?: string) {
     this.lines.push(
-      `Публикация ветки ${branch} из оригинального проекта в origin…`,
+      tr("host.publishingBranchBranchFromTheOriginalProjectToOrigin", { branch: branch }),
     );
     const source = await this.directBranch(branch);
     if (expected && source.oid !== expected) throw changed();
@@ -299,7 +300,7 @@ export class RepositoryActions {
     );
     await this.verify();
     if ((await this.remote("origin", true)) !== endpoint) throw changed();
-    this.lines.push("Публикация завершена.");
+    this.lines.push(tr("host.publicationComplete"));
   }
   private async refreshBase(
     value: string,
@@ -312,7 +313,7 @@ export class RepositoryActions {
     },
     allowLocalBase = false,
   ) {
-    const branchLabel = source ? "ветки топика" : "базовой ветки";
+    const branchLabel = source ? tr("host.topicBranch") : tr("host.baseBranch");
     const cwd = source?.cwd ?? this.project.path;
     const git = (args: string[], _cwd = cwd, output = false) =>
       this.git(args, _cwd, output);
@@ -354,7 +355,7 @@ export class RepositoryActions {
           throw error;
         }
         throw Error(
-          "В оригинальном репозитории уже идёт операция Git; обновление базы не выполнено.",
+          tr("host.aGitOperationIsAlreadyInProgressInTheOriginal2"),
         );
       }
       for (const file of ["packed-refs.lock", `${base.ref}.lock`]) {
@@ -366,12 +367,12 @@ export class RepositoryActions {
           if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
           throw error;
         }
-        throw Error("Базовая ветка занята операцией Git.");
+        throw Error(tr("host.theBaseBranchIsBusyWithAGitOperation"));
       }
     };
     await assertIdle();
     this.lines.push(
-      `Обновление ${branchLabel} ${base.branch} из ${source?.remote ?? "upstream"} (fast-forward-only)…`,
+      tr("host.updatingBranchlabelBranchFromValue3FastForwardOnly", { branchLabel: branchLabel, branch: base.branch, value3: source?.remote ?? "upstream" }),
     );
     const upstream = async () =>
       (
@@ -394,16 +395,16 @@ export class RepositoryActions {
       if ((await this.directBranch(base.branch, cwd)).oid !== base.oid)
         throw changed();
       this.lines.push(
-        `Используется локальная база ${base.branch}; публикация ветки на remote не требуется.`,
+        tr("host.usingLocalBaseBranchTheBranchDoesNotHaveTo", { branch: base.branch }),
       );
       return base;
     };
     if (!tracking?.[1] || !tracking[2]) {
       if (allowLocalBase) return localBase();
-      throw Error(`У ветки ${base.branch} отсутствует однозначный upstream.`);
+      throw Error(tr("host.branchBranchHasNoUnambiguousUpstream", { branch: base.branch }));
     }
     if (!tracking[2].startsWith("refs/heads/"))
-      throw Error(`У ветки ${base.branch} отсутствует однозначный upstream.`);
+      throw Error(tr("host.branchBranchHasNoUnambiguousUpstream", { branch: base.branch }));
     await git(["check-ref-format", tracking[2]]);
     if (
       allowLocalBase &&
@@ -483,7 +484,7 @@ export class RepositoryActions {
         )
           throw reverseError;
         throw Error(
-          `Истории ${branchLabel} ${base.branch} и ${source?.remote ?? "upstream"} разошлись. Выполните слияние или другую проверенную операцию вручную; fast-forward-only не изменял ветку.`,
+          tr("host.theHistoriesOfBranchlabelBranchAndValue3HaveDivergedMerge", { branchLabel: branchLabel, branch: base.branch, value3: source?.remote ?? "upstream" }),
         );
       }
       next = base.oid;
@@ -500,7 +501,7 @@ export class RepositoryActions {
       );
       if (elsewhere)
         throw Error(
-          "Базовая ветка открыта в другой рабочей копии; обновите её там вручную.",
+          tr("host.theBaseBranchIsCheckedOutInAnotherWorkingCopy"),
         );
     };
     await assertNotElsewhere();
@@ -549,8 +550,8 @@ export class RepositoryActions {
       throw changed();
     this.lines.push(
       source
-        ? `Ветка топика ${base.branch} обновлена.`
-        : `Базовая ветка ${base.branch} обновлена.`,
+        ? tr("host.topicBranchBranchUpdated", { branch: base.branch })
+        : tr("host.baseBranchBranchUpdated", { branch: base.branch }),
     );
     return { ...base, oid: next };
   }
@@ -566,7 +567,7 @@ export class RepositoryActions {
       .split("\n");
     if (!sourceRows.includes(sourceRef)) {
       this.lines.push(
-        "Одноимённой ветки в исходном проекте пока нет; будет передана ветка копии.",
+        tr("host.thereIsNoMatchingBranchInTheOriginalProjectYet"),
       );
       return;
     }
@@ -586,7 +587,7 @@ export class RepositoryActions {
         throw changed();
     };
     await verifySource();
-    this.lines.push("Получение одноимённой ветки: исходный проект → копия…");
+    this.lines.push(tr("host.fetchingTheMatchingBranchFromTheOriginalProjectIntoThe"));
     // Object-only fetch: no FETCH_HEAD or persistent scratch/tracking references.
     // The original direct ref is pinned/rechecked; native Git seals the exact OID.
     await this.git(
@@ -621,7 +622,7 @@ export class RepositoryActions {
         owner.path,
       );
       this.lines.push(
-        "Копия уже содержит коммиты исходной ветки; её файлы не изменялись.",
+        tr("host.theCopyAlreadyContainsTheSourceBranchCommitsItsFiles"),
       );
       return;
     } catch (error) {
@@ -630,7 +631,7 @@ export class RepositoryActions {
     }
     if (!this.deps.mergeTopic)
       throw Error(
-        "Безопасное получение коммитов недоступно; экспорт не выполнялся.",
+        tr("host.cannotSafelyFetchCommitsNothingWasExported"),
       );
     const merged = await this.deps.mergeTopic(
       worktreeContextRef(owner),
@@ -640,14 +641,14 @@ export class RepositoryActions {
     this.lines.push(merged.log);
     if (merged.outcome === "conflicts")
       throw Error(
-        "В копии возникли конфликты. Решите их в разделе «Изменения» и завершите слияние, затем повторите синхронизацию. Обратная передача не выполнялась.",
+        tr("host.theCopyHasConflictsResolveThemInChangesFinishThe"),
       );
     if (merged.outcome !== "completed" || merged.lockRetained)
       throw Error(
-        "Получение коммитов требует проверки результата; обратная передача не выполнялась.",
+        tr("host.theResultOfFetchingCommitsNeedsVerificationTheReturnTransfer"),
       );
     await verifySource();
-    this.lines.push("Коммиты исходной ветки включены в копию.");
+    this.lines.push(tr("host.theCopyIncludesTheSourceBranchCommits"));
   }
   private async updateCloneTracking(branch: string, next: string) {
     const ref = `refs/remotes/origin/${branch}`;
@@ -667,7 +668,7 @@ export class RepositoryActions {
     const existing = rows.find((row) => row[0] === ref);
     if (existing?.[2])
       throw Error(
-        "Базовая ссылка origin в клоне символическая; обновление запрещено.",
+        tr("host.theCloneSOriginBaseRefIsSymbolicUpdatingIs"),
       );
     const previous = existing ? oid(existing[1]) : "0".repeat(next.length);
     if (existing)
@@ -681,7 +682,7 @@ export class RepositoryActions {
       this.owner!.path,
       true,
     );
-    this.lines.push(`База origin/${branch} в клоне обновлена.`);
+    this.lines.push(tr("host.theCloneSBaseOriginBranchWasUpdated", { branch: branch }));
   }
   private async propagateOriginal(
     branch: string,
@@ -701,7 +702,7 @@ export class RepositoryActions {
           this.lines.push(
             result.stdout,
             result.stderr,
-            "goga topics propagate завершена.",
+            tr("host.gogaTopicsPropagateCompleted"),
           );
         } catch (error) {
           // Keep CLI diagnostics even if returning to the original branch fails.
@@ -729,10 +730,10 @@ export class RepositoryActions {
       target.baseRef.startsWith("refs/")
     )
       throw Error(
-        "Публиковать можно только собственную локальную ветку выбранного топика в локальную ветку назначения.",
+        tr("host.onlyTheSelectedTopicSOwnLocalBranchCanBe"),
       );
     if (target.branch === target.baseRef)
-      throw Error("Ветка назначения должна отличаться от ветки топика.");
+      throw Error(tr("host.theDestinationBranchMustDifferFromTheTopicBranch"));
     const source = await this.directBranch(
       target.branch,
       this.owner?.path ?? this.project.path,
@@ -771,7 +772,7 @@ export class RepositoryActions {
     await guard();
     let imported: string | undefined;
     if (this.owner) {
-      this.lines.push("Синхронизация топика в локальный origin…");
+      this.lines.push(tr("host.syncingTopicToLocalOrigin"));
       const result = await this.deps.sync(
         this.project,
         request.context!,
@@ -782,10 +783,10 @@ export class RepositoryActions {
       if (result.status !== "synced" || !result.importedOid)
         throw Error(
           result.error ??
-            "Синхронизация не завершена; публикация не выполнялась.",
+            tr("host.syncDidNotFinishNothingWasPublished"),
         );
       imported = result.importedOid;
-      this.lines.push("Синхронизация топика завершена.");
+      this.lines.push(tr("host.topicSyncComplete"));
     }
     await guard(imported);
     await this.propagateOriginal(
@@ -802,9 +803,9 @@ export class RepositoryActions {
         "-y",
       ],
       () => guard(imported),
-      `Публикация топика ${target.branch} в ветку ${base.branch}: goga topics propagate (оригинальный проект)…`,
+      tr("host.publishingTopicBranchToBranchValue2GogaTopicsPropagateOriginal", { branch: target.branch, value2: base.branch }),
     );
-    this.lines.push("Публикация топика завершена.");
+    this.lines.push(tr("host.topicPublicationComplete"));
   }
   async run(request: RepositoryActionRequest): Promise<RepositoryActionResult> {
     try {
@@ -823,7 +824,7 @@ export class RepositoryActions {
       await this.verify();
       if (request.action === "propagate" && !this.owner && !request.propagation)
         throw Error(
-          "Применение топика к базе доступно только в выбранном контексте топика.",
+          tr("host.propagatingToBaseRequiresASelectedTopicContext"),
         );
       if (
         this.owner &&
@@ -832,18 +833,18 @@ export class RepositoryActions {
         ))
       )
         throw Error(
-          "У клона отсутствует локальный origin; настройки не изменялись.",
+          tr("host.theCloneHasNoLocalOriginSettingsWereNotChanged"),
         );
       if (request.action === "propagate" && request.propagation) {
         await this.propagateSelected(request);
       } else if (request.action === "update-remote") {
         if (!this.owner)
-          throw Error("Обновление из remote доступно только в топике.");
+          throw Error(tr("host.updatingFromRemoteRequiresATopic"));
         const branch = this.owner.branch;
         if ((await this.currentBranch(this.owner.path)) !== branch)
           throw changed();
         this.lines.push(
-          `Получение ветки ${branch} из origin оригинального проекта…`,
+          tr("host.fetchingBranchBranchFromTheOriginalProjectSOrigin", { branch: branch }),
         );
         const hasOrigin = (await this.git(["remote"]))
           .trim()
@@ -879,7 +880,7 @@ export class RepositoryActions {
         )
           throw changed();
         this.lines.push(
-          "Получение обновлённой ветки в клон через локальный origin…",
+          tr("host.fetchingTheUpdatedBranchIntoTheCloneThroughItsLocal"),
         );
         await this.refreshBase(branch, {
           remote: "origin",
@@ -892,17 +893,17 @@ export class RepositoryActions {
               throw changed();
           },
         });
-        this.lines.push("Топик обновлён из исходного проекта без публикации.");
+        this.lines.push(tr("host.topicUpdatedFromTheOriginalProjectWithoutPublishing"));
       } else if (request.action === "update-base") {
         if (!this.owner)
-          throw Error("Обновление из базовой ветки доступно только в топике.");
+          throw Error(tr("host.updatingFromTheBaseBranchRequiresATopic"));
         this.lines.push(
-          "Чтение эффективной конфигурации: goga config topics (клон)…",
+          tr("host.readingEffectiveConfigurationGogaConfigTopicsClone"),
         );
         const output = await this.deps.goga(["config", "topics"]);
         const document = parseDocument(output.stdout, { uniqueKeys: true });
         if (document.errors.length)
-          throw Error("Некорректная эффективная конфигурация topics.");
+          throw Error(tr("host.invalidEffectiveTopicsConfiguration"));
         const parsed = z
           .object({
             base_ref: z.string().min(1),
@@ -911,7 +912,7 @@ export class RepositoryActions {
           .safeParse(document.toJS({ maxAliasCount: 10 }));
         if (!parsed.success)
           throw Error(
-            "В эффективной конфигурации topics отсутствует base_ref или неверен тип/стратегия update.",
+            tr("host.theEffectiveTopicsConfigurationIsMissingBaseRefOrHas"),
           );
         const base = await this.refreshBase(
           parsed.data.base_ref,
@@ -924,9 +925,9 @@ export class RepositoryActions {
             this.git(args, cwd),
           ))
         )
-          throw Error("У клона отсутствует локальный origin.");
+          throw Error(tr("host.theCloneHasNoLocalOrigin"));
         const cloneRef = `refs/desktop/repository-actions/${randomUUID()}`;
-        this.lines.push("Получение обновлённой базы в клон…");
+        this.lines.push(tr("host.fetchingTheUpdatedBaseIntoTheClone"));
         await this.git(
           [
             "-c",
@@ -961,7 +962,7 @@ export class RepositoryActions {
         )
           throw changed();
         this.lines.push(
-          "Обновление топика: goga topics update (клон, без публикации)…",
+          tr("host.updatingTopicGogaTopicsUpdateCloneWithoutPublishing"),
         );
         // Native Goga reads topics.update.strategy itself; there is no --strategy option.
         const updateArgs = [
@@ -983,11 +984,11 @@ export class RepositoryActions {
         this.lines.push(
           result.stdout,
           result.stderr,
-          "Обновление топика завершено.",
+          tr("host.topicUpdateComplete"),
         );
       } else if (this.owner) {
         if (request.action === "sync") await this.receiveTopicBranch();
-        this.lines.push("Синхронизация топика в локальный origin…");
+        this.lines.push(tr("host.syncingTopicToLocalOrigin"));
         const result = await this.deps.sync(
           this.project,
           request.context!,
@@ -998,9 +999,9 @@ export class RepositoryActions {
         if (result.status !== "synced" || !result.importedOid)
           throw Error(
             result.error ??
-              "Синхронизация не завершена; следующие шаги не выполнялись.",
+              tr("host.syncDidNotFinishLaterStepsWereNotExecuted"),
           );
-        this.lines.push("Синхронизация топика завершена.");
+        this.lines.push(tr("host.topicSyncComplete"));
         await this.verify();
         if (request.action === "publish")
           await this.publish(this.owner.branch, result.importedOid);
@@ -1031,9 +1032,9 @@ export class RepositoryActions {
               )
                 throw changed();
             },
-            "Применение топика к базе: goga topics propagate (оригинальный проект, с публикацией базы)…",
+            tr("host.propagatingTopicToBaseGogaTopicsPropagateOriginalProjectPublishing"),
           );
-          this.lines.push("Применение топика к базе завершено.");
+          this.lines.push(tr("host.propagationToBaseComplete"));
         }
       } else if (request.action === "publish")
         await this.publish(await this.currentBranch());

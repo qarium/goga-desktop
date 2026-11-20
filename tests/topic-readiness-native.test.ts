@@ -558,12 +558,22 @@ nativeDescribe("catalog-known optional task data", { timeout: 30000 }, () => {
   it("allows fresh plan-only identity after exact native source catalog confirmation", async () => {
     const f = await plannedFixture();
     const before = await f.snapshot();
-    expect(
-      (await nativeRows(f)).filter(
-        (r: any) =>
-          r.branch === f.identity.branch && r.topic === f.identity.topic,
-      ),
-    ).toEqual([expect.objectContaining({ todo: null, statuses: ["planned"] })]);
+    // This fixture commits a plan without a todo; it does not define a status
+    // vocabulary. Installed Goga tools determine the status identifiers.
+    const nativeMatches = (await nativeRows(f)).filter(
+      (r: { branch: string; topic: string }) =>
+        r.branch === f.identity.branch && r.topic === f.identity.topic,
+    );
+    expect(nativeMatches).toHaveLength(1);
+    expect(nativeMatches[0].todo).toBeNull();
+    expect(nativeMatches[0].statuses).toEqual(expect.arrayContaining([expect.any(String)]));
+    const desktop = await f.service.readTopicTable(f.project.id, f.identity.year);
+    const selected = desktop.records.filter(
+      r => r.branch === f.identity.branch && r.topic === f.identity.topic,
+    );
+    expect(selected).toHaveLength(1);
+    expect(selected[0]).toMatchObject({ todo: null });
+    expect(selected[0]!.statuses).toEqual(nativeMatches[0].statuses);
     f.calls.splice(0);
     await expect(
       f.service.checkTopicContextReadiness(f.identity),

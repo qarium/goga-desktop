@@ -1,3 +1,4 @@
+import { t as tr } from "./i18n";
 /** Docker 27 env-file scanner: maximum content bytes, excluding the LF. */
 export const MAX_ENV_LINE_BYTES = 65535;
 
@@ -18,20 +19,20 @@ export function assertEnvironmentValue(value: string): void {
       const next = value.charCodeAt(++i);
       if (!(next >= 0xdc00 && next <= 0xdfff))
         throw new Error(
-          "Некорректный Unicode (UTF-16). Исправьте значение переменной.",
+          tr("host.invalidUnicodeUtf16CorrectTheVariableValue"),
         );
     } else if (unit >= 0xdc00 && unit <= 0xdfff) {
       throw new Error(
-        "Некорректный Unicode (UTF-16). Исправьте значение переменной.",
+        tr("host.invalidUnicodeUtf16CorrectTheVariableValue"),
       );
     }
   }
   if (/[\0\r\n]/.test(value))
     throw new Error(
-      "Переносы строк и нулевой символ недопустимы. Вставка отклонена; прежнее значение сохранено.",
+      tr("host.lineBreaksAndNullCharactersAreNotAllowedPasteWas"),
     );
   if (utf8Bytes(value) > 65536)
-    throw new Error("Значение переменной превышает допустимый размер UTF-8.");
+    throw new Error(tr("host.theVariableValueExceedsTheUtf8SizeLimit"));
 }
 
 // Python json.dumps(..., ensure_ascii=True, separators=(',', ':')) counts
@@ -76,6 +77,6 @@ export function assertEnvironmentTransport(rows: readonly Entry[]): void {
     size.rawLineBytes.some((bytes) => bytes > MAX_ENV_LINE_BYTES)
   )
     throw new Error(
-      "Суммарный размер runtime-переменных превышает лимит Docker. Уменьшите значения или отключите runtime для ненужных переменных.",
+      tr("host.theTotalSizeOfRuntimeVariablesExceedsTheDockerLimit"),
     );
 }

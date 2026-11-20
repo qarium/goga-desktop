@@ -1,3 +1,6 @@
+import { HintButton } from "./ActionHint";
+import { t as tr } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useId } from "react";
 import type { TopicContextIdentity, WorktreeRecord } from "../shared/worktrees";
 import { contextRef } from "./topic-context";
@@ -19,12 +22,13 @@ export function TopicQuickSync({
   record?: WorktreeRecord;
   onStarted?: () => void;
 }) {
+  useLocale();
   if (typeof window.goga.runRepositoryAction === "function" && record)
     return (
       <RepositoryActions
         project={{
           id: record.projectId,
-          name: record.projectPath.split("/").pop() || "Проект",
+          name: record.projectPath.split("/").pop() || tr("topics.project"),
           path: record.projectPath,
         }}
         selected={record}
@@ -41,6 +45,7 @@ function LegacyTopicQuickSync({
   identity: TopicContextIdentity;
   record?: WorktreeRecord;
 }) {
+  useLocale();
   const id = useId();
   const reason = topicSyncUnavailable(record);
   const available =
@@ -48,25 +53,25 @@ function LegacyTopicQuickSync({
     typeof window.goga.syncTopicContext === "function" &&
     typeof window.goga.topicSyncStatus === "function";
   const sync = useTopicSync(available && record ? contextRef(record) : null);
-  const label = `Синхронизировать коммиты · ${identity.topic}/${identity.year}/${identity.branch}`;
+  const label = tr("topics.syncCommitsTopicYearBranch", { topic: identity.topic, year: identity.year, branch: identity.branch });
   const retry = sync.state?.status === "error" || sync.failedAction;
   const error = sync.error || sync.state?.error;
   const pending = topicSyncPending(sync);
   const unavailable =
     reason ||
-    (!available ? "Синхронизация недоступна в этой версии хоста." : "");
+    (!available ? tr("topics.syncIsUnavailableInThisHostVersion") : "");
   const status = available ? topicSyncLabel(sync) : unavailable;
   const idle =
     !available ||
     (!pending && !error && (!sync.state || sync.state.status === "new"));
   const compact =
     error || sync.state?.status === "error"
-      ? "Ошибка"
+      ? tr("launch.error")
       : sync.busy || sync.state?.status === "syncing"
-        ? "Синхронизация…"
+        ? tr("topics.syncing")
         : sync.state?.status === "waiting"
-          ? "В очереди"
-          : "Готово";
+          ? tr("topics.queued")
+          : tr("topics.done");
   return (
     <div
       className="topic-quick-sync"
@@ -82,11 +87,11 @@ function LegacyTopicQuickSync({
           event.stopPropagation();
       }}
     >
-      <button
+      <HintButton
         type="button"
         className="topic-quick-sync-button"
         aria-label={label}
-        title={`${label} — ${unavailable || (retry ? "Повторить синхронизацию" : status)}`}
+        hint={`${label} — ${unavailable || (retry ? tr("topics.retrySync") : status)}`}
         aria-describedby={id}
         disabled={!available || pending}
         onClick={() => void sync.sync()}
@@ -103,7 +108,7 @@ function LegacyTopicQuickSync({
         >
           <path d="M20 7v5h-5M4 17v-5h5M6 7a7 7 0 0 1 12-2l2 2M4 17l2 2a7 7 0 0 0 12-2" />
         </svg>
-      </button>
+      </HintButton>
       <span
         id={id}
         className={`topic-quick-sync-status${idle ? " sr-only" : ""}`}

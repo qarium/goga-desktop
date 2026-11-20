@@ -1,3 +1,5 @@
+import { t as msg } from "../shared/i18n";
+import { useLocale } from "./useLocale";
 import { useEffect, useRef, useState } from "react";
 import type { WorktreeRecord } from "../shared/worktrees";
 import { TopicModal } from "./TopicsCommon";
@@ -9,6 +11,7 @@ export function ContextMigration({
   record: WorktreeRecord;
   onMigrated: (record: WorktreeRecord) => void;
 }) {
+  useLocale();
   const [confirm, setConfirm] = useState(false),
     [busy, setBusy] = useState(false),
     [error, setError] = useState("");
@@ -35,7 +38,7 @@ export function ContextMigration({
       if (!mounted.current) return;
       if (next.storageKind !== "clone" || next.state !== "ready")
         throw Error(
-          "Автономный клон пока не готов. Прежняя копия не изменена.",
+          msg("workspace.theStandaloneCloneIsNotReadyThePreviousWorkingCopy"),
         );
       setConfirm(false);
       onMigrated(next);
@@ -49,35 +52,22 @@ export function ContextMigration({
   return (
     <section
       className="context-compatibility"
-      aria-label="Совместимость рабочей копии"
+      aria-label={msg("workspace.workingCopyCompatibility")}
     >
-      <p className="topic-warning">
-        Это прежняя linked-worktree копия. История доступна; новые запуски
-        требуют автономного клона.
-      </p>
+      <p className="topic-warning">{msg("workspace.thisIsALegacyLinkedWorktreeHistoryIsAvailableBut")}</p>
       <button
         type="button"
         disabled={busy || typeof window.goga.migrateTopicContext !== "function"}
         onClick={() => setConfirm(true)}
-      >
-        Создать автономный клон…
-      </button>
+      >{msg("workspace.createStandaloneClone")}</button>
       {confirm && (
         <TopicModal
-          title="Создать отдельный автономный клон?"
+          title={msg("workspace.createASeparateStandaloneClone")}
           busy={busy}
           onClose={() => setConfirm(false)}
         >
-          <p>
-            Будет создан отдельный автономный клон топика {record.topic}. Старая
-            linked-копия останется без изменений: без конвертации, удаления и
-            переноса незакоммиченных файлов.
-          </p>
-          <p className="hint">
-            В случае ошибки прежний контекст и черновики сохраняются. После
-            неопределённого результата повтор сначала проверяет фактическое
-            состояние.
-          </p>
+          <p>{msg("workspace.aSeparateStandaloneCloneWillBeCreatedForTopic")}{record.topic}{msg("workspace.theOldLinkedWorktreeWillNotBeConvertedOrDeleted")}</p>
+          <p className="hint">{msg("workspace.thePreviousContextAndDraftsWillBeKeptIfAn")}</p>
           {error && (
             <p className="error" role="alert">
               {error}
@@ -88,17 +78,13 @@ export function ContextMigration({
               type="button"
               disabled={busy}
               onClick={() => setConfirm(false)}
-            >
-              Отмена
-            </button>
+            >{msg("workspace.cancel")}</button>
             <button
               type="button"
               className="primary"
               disabled={busy}
               onClick={() => void migrate()}
-            >
-              Подтвердить создание клона
-            </button>
+            >{msg("workspace.confirmCloneCreation")}</button>
           </div>
         </TopicModal>
       )}
