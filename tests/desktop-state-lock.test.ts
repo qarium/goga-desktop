@@ -412,7 +412,7 @@ it("keeps exact-version conflict protection across separate processes", async ()
   await Promise.all(exited);
   expect(results.filter((result) => result === "saved")).toHaveLength(1);
   expect(
-    results.filter((result) => /изменены извне/.test(result)),
+    results.filter((result) => result === "Settings changed externally. Reopen them."),
   ).toHaveLength(1);
   expect(["alpha", "beta"]).toContain((await f.store.read("p")).value.profile);
 });
