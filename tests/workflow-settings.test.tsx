@@ -76,6 +76,16 @@ async function openSettings(primary = false) {
   click("Рабочие процессы");
   await waitFor(() => expect(api.listProjectWorkflows).toHaveBeenCalled());
 }
+async function resumeAfterWorkflowSave(readsBeforeReturn: number) {
+  // A workflow save invalidates the hidden draft without loading its catalog
+  // until the user returns. The visible read must still supersede stale work.
+  await act(async () => {});
+  expect(api.discover).toHaveBeenCalledTimes(readsBeforeReturn);
+  await openPrototypeLaunch();
+  await waitFor(() =>
+    expect(api.discover).toHaveBeenCalledTimes(readsBeforeReturn + 1),
+  );
+}
 async function setup() {
   render(<App />);
   await openFirstProject();
@@ -491,7 +501,7 @@ it("retains workflow state through actual settings component remount", async () 
     (screen.getByLabelText("Имя рабочего процесса") as HTMLInputElement).value,
   ).toBe("typing");
 });
-it("refreshes App launch discovery only after successful save and rejects a pending stale preview", async () => {
+it("refreshes launch discovery on return after a successful workflow save and rejects a stale preview", async () => {
   render(<App />);
   await openFirstProject();
   await openPrototypeLaunch();
@@ -522,8 +532,7 @@ it("refreshes App launch discovery only after successful save and rejects a pend
   api.discover.mockImplementationOnce(() => new Promise((r) => (discover = r)));
   await screen.findByRole("button", { name: "Сохранить" });
   click("Сохранить");
-  await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
-  await openPrototypeLaunch();
+  await resumeAfterWorkflowSave(1);
   await act(async () =>
     stale({
       token: "stale",
@@ -744,8 +753,7 @@ it.each(["success", "failure"])(
     replace(raw);
     await screen.findByRole("button", { name: "Сохранить" });
     click("Сохранить");
-    await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
-    await openPrototypeLaunch();
+    await resumeAfterWorkflowSave(1);
     openCatalog(
       await screen.findByRole("combobox", { name: "Рабочий процесс" }),
     );
@@ -775,8 +783,7 @@ it("releases the discovery lock if refresh supersedes a pending initial discover
   await create("new-flow");
   await screen.findByRole("button", { name: "Сохранить" });
   click("Сохранить");
-  await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(2));
-  await openPrototypeLaunch();
+  await resumeAfterWorkflowSave(1);
   await screen.findByText("fresh catalog unavailable");
   click("Сбросить");
   await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(3));
@@ -803,8 +810,7 @@ it("supersedes an older Reset discovery when workflow saving starts a refresh", 
   api.discover.mockImplementationOnce(() => new Promise((r) => (refresh = r)));
   await screen.findByRole("button", { name: "Сохранить" });
   click("Сохранить");
-  await waitFor(() => expect(api.discover).toHaveBeenCalledTimes(3));
-  await openPrototypeLaunch();
+  await resumeAfterWorkflowSave(2);
   await act(async () => reset(original));
   expect(api.readTopicTask).toHaveBeenCalledTimes(1);
   fireEvent.click(retainedButton("Сбросить"));
